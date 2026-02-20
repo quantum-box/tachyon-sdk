@@ -1,0 +1,37 @@
+name: Generate SDKs
+
+on:
+  push:
+    paths:
+      - 'openapi.json'
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  generate:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install openapi-generator-cli
+        run: npm install -g @openapitools/openapi-generator-cli
+
+      - name: Generate SDKs
+        run: ./scripts/generate.sh
+
+      - name: Create PR with generated code
+        uses: peter-evans/create-pull-request@v6
+        with:
+          commit-message: "chore: regenerate SDKs from updated OpenAPI spec"
+          title: "chore: regenerate SDKs from updated OpenAPI spec"
+          body: |
+            Auto-generated SDK update from OpenAPI spec changes.
+
+            Please review the generated code before merging.
+          branch: chore/regenerate-sdks
+          delete-branch: true
