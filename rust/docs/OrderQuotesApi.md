@@ -8,6 +8,7 @@ Method | HTTP request | Description
 [**get_quote**](OrderQuotesApi.md#get_quote) | **GET** /v1/order/quotes/{id} | Get a quote by ID
 [**issue_quote**](OrderQuotesApi.md#issue_quote) | **POST** /v1/order/quotes/{id}/issue | Issue a quote to a client
 [**list_quotes**](OrderQuotesApi.md#list_quotes) | **GET** /v1/order/quotes | List all quotes
+[**update_quote**](OrderQuotesApi.md#update_quote) | **PUT** /v1/order/quotes/{id} | Update a quote by ID
 
 
 
@@ -116,6 +117,35 @@ No authorization required
 ### HTTP request headers
 
 - **Content-Type**: Not defined
+- **Accept**: application/json
+
+[[Back to top]](#) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to Model list]](../README.md#documentation-for-models) [[Back to README]](../README.md)
+
+
+## update_quote
+
+> models::QuoteResponse update_quote(id, update_quote_request)
+Update a quote by ID
+
+### Parameters
+
+
+Name | Type | Description  | Required | Notes
+------------- | ------------- | ------------- | ------------- | -------------
+**id** | **String** | Quote ID | [required] |
+**update_quote_request** | [**UpdateQuoteRequest**](UpdateQuoteRequest.md) |  | [required] |
+
+### Return type
+
+[**models::QuoteResponse**](QuoteResponse.md)
+
+### Authorization
+
+No authorization required
+
+### HTTP request headers
+
+- **Content-Type**: application/json
 - **Accept**: application/json
 
 [[Back to top]](#) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to Model list]](../README.md#documentation-for-models) [[Back to README]](../README.md)

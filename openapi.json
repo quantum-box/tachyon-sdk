@@ -3,7 +3,7 @@
   "info": {
     "title": "Tachyon API",
     "description": "Tachyon Platform REST API",
-    "version": "0.48.0"
+    "version": "0.49.3"
   },
   "paths": {
     "/auth/v1beta/sign-in-with-platform": {
@@ -909,7 +909,7 @@
         },
         "responses": {
           "200": {
-            "description": "\u8a55\u4fa1\u7d50\u679c",
+            "description": "評価結果",
             "content": {
               "application/json": {
                 "schema": {
@@ -919,7 +919,7 @@
             }
           },
           "400": {
-            "description": "\u4e0d\u6b63\u306a\u5165\u529b",
+            "description": "不正な入力",
             "content": {
               "application/json": {
                 "schema": {
@@ -929,7 +929,7 @@
             }
           },
           "401": {
-            "description": "\u8a8d\u8a3c\u30a8\u30e9\u30fc",
+            "description": "認証エラー",
             "content": {
               "application/json": {
                 "schema": {
@@ -939,7 +939,7 @@
             }
           },
           "403": {
-            "description": "\u6a29\u9650\u4e0d\u8db3",
+            "description": "権限不足",
             "content": {
               "application/json": {
                 "schema": {
@@ -949,7 +949,7 @@
             }
           },
           "500": {
-            "description": "\u5185\u90e8\u30a8\u30e9\u30fc",
+            "description": "内部エラー",
             "content": {
               "application/json": {
                 "schema": {
@@ -1283,7 +1283,7 @@
           "agent"
         ],
         "summary": "Execute agent",
-        "description": "Execute a task using the agent system. Returns an SSE\nstream of `AgentChunk` events.\n\n## Client-Side Tools\n\nYou can provide custom tool definitions via the\n`client_tools` field. When the LLM decides to call one\nof these tools, the server emits a `tool_call_pending`\nSSE event containing the tool name, arguments, and a\nunique `tool_id`. The client should:\n\n1. Execute the tool locally using the provided arguments\n2. Submit the result via\n   `POST /v1/llms/chatrooms/{chatroom_id}/agent/tool-result`\n   with the matching `tool_id`\n3. The agent resumes processing with the tool result\n\nFor **fire-and-forget** tools (`fire_and_forget: true`),\nthe server immediately returns a success message to the\nLLM without waiting for a result submission. The client\nstill receives the `tool_call_pending` event and can\nexecute the tool, but does not need to submit a result.\n\nTool names must not collide with server built-in tools\n(e.g. `read_file`, `execute_command`). The server\nvalidates this and returns an error if a collision is\ndetected.\n\nWhen `client_tools` is provided, JSON tool call mode\nis automatically enabled \u2014 you do not need to set\n`use_json_tool_calls` separately.",
+        "description": "Execute a task using the agent system. Returns an SSE\nstream of `AgentChunk` events.\n\n## Client-Side Tools\n\nYou can provide custom tool definitions via the\n`client_tools` field. When the LLM decides to call one\nof these tools, the server emits a `tool_call_pending`\nSSE event containing the tool name, arguments, and a\nunique `tool_id`. The client should:\n\n1. Execute the tool locally using the provided arguments\n2. Submit the result via\n   `POST /v1/llms/chatrooms/{chatroom_id}/agent/tool-result`\n   with the matching `tool_id`\n3. The agent resumes processing with the tool result\n\nFor **fire-and-forget** tools (`fire_and_forget: true`),\nthe server immediately returns a success message to the\nLLM without waiting for a result submission. The client\nstill receives the `tool_call_pending` event and can\nexecute the tool, but does not need to submit a result.\n\nTool names must not collide with server built-in tools\n(e.g. `read_file`, `execute_command`). The server\nvalidates this and returns an error if a collision is\ndetected.\n\nWhen `client_tools` is provided, JSON tool call mode\nis automatically enabled — you do not need to set\n`use_json_tool_calls` separately.",
         "operationId": "execute_agent",
         "parameters": [
           {
@@ -1439,7 +1439,7 @@
           {
             "name": "chatroom_id",
             "in": "path",
-            "description": "\u30c1\u30e3\u30c3\u30c8\u30eb\u30fc\u30e0ID",
+            "description": "チャットルームID",
             "required": true,
             "schema": {
               "type": "string"
@@ -1448,7 +1448,7 @@
           {
             "name": "limit",
             "in": "query",
-            "description": "\u53d6\u5f97\u3059\u308b\u30e1\u30c3\u30bb\u30fc\u30b8\u306e\u6700\u5927\u6570",
+            "description": "取得するメッセージの最大数",
             "required": false,
             "schema": {
               "type": [
@@ -1462,7 +1462,7 @@
           {
             "name": "offset",
             "in": "query",
-            "description": "\u53d6\u5f97\u958b\u59cb\u4f4d\u7f6e",
+            "description": "取得開始位置",
             "required": false,
             "schema": {
               "type": [
@@ -1496,7 +1496,7 @@
         ],
         "responses": {
           "200": {
-            "description": "\u30e1\u30c3\u30bb\u30fc\u30b8\u30ed\u30b0\u306e\u53d6\u5f97\u306b\u6210\u529f",
+            "description": "メッセージログの取得に成功",
             "content": {
               "application/json": {
                 "schema": {
@@ -1549,7 +1549,7 @@
         ],
         "responses": {
           "200": {
-            "description": "\u6210\u529f\u30ec\u30b9\u30dd\u30f3\u30b9",
+            "description": "成功レスポンス",
             "content": {
               "application/json": {
                 "schema": {
@@ -1758,7 +1758,7 @@
         ],
         "responses": {
           "200": {
-            "description": "\u30e2\u30c7\u30eb\u4e00\u89a7\u306e\u53d6\u5f97\u306b\u6210\u529f",
+            "description": "モデル一覧の取得に成功",
             "content": {
               "application/json": {
                 "schema": {
@@ -2333,6 +2333,68 @@
         }
       }
     },
+    "/v1/order/products/{id}/variants": {
+      "get": {
+        "tags": [
+          "Order - Products"
+        ],
+        "summary": "List product variants by product ID",
+        "operationId": "list_product_variants",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Product ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Product variant list",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProductVariantListResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/order/purchase-orders": {
       "get": {
         "tags": [
@@ -2596,6 +2658,86 @@
             }
           }
         }
+      },
+      "put": {
+        "tags": [
+          "Order - Quotes"
+        ],
+        "summary": "Update a quote by ID",
+        "operationId": "update_quote",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Quote ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateQuoteRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Quote updated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/QuoteResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
       }
     },
     "/v1/order/quotes/{id}/issue": {
@@ -2680,6 +2822,67 @@
         }
       }
     },
+    "/v1/order/revenue/recurring": {
+      "post": {
+        "tags": [
+          "Order - Revenue"
+        ],
+        "summary": "Calculate recurring revenue for a given period",
+        "operationId": "calculate_recurring_revenue",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RecurringRevenueRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Recurring revenue",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RecurringRevenueResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/order/shipping-destinations": {
       "post": {
         "tags": [
@@ -2730,6 +2933,212 @@
           },
           "500": {
             "description": "Internal error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/payment/providers": {
+      "get": {
+        "tags": [
+          "Payment"
+        ],
+        "summary": "List payment providers by entity ID",
+        "operationId": "list_providers",
+        "parameters": [
+          {
+            "name": "entity_id",
+            "in": "query",
+            "description": "Entity ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Provider list",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProviderListResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/payment/stripe-customer": {
+      "post": {
+        "tags": [
+          "Payment"
+        ],
+        "summary": "Get or create a Stripe customer",
+        "operationId": "get_or_create_stripe_customer",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StripeCustomerRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Stripe customer",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StripeCustomerResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/procurement/variant-links": {
+      "post": {
+        "tags": [
+          "Procurement"
+        ],
+        "summary": "Upsert a variant procurement link",
+        "operationId": "upsert_variant_link",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpsertVariantLinkRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Link created/updated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VariantLinkResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/procurement/variant-links/{id}": {
+      "delete": {
+        "tags": [
+          "Procurement"
+        ],
+        "summary": "Delete a variant procurement link",
+        "operationId": "delete_variant_link",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Link ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Link deleted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeleteResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
             "content": {
               "application/json": {
                 "schema": {
@@ -3240,7 +3649,7 @@
             "items": {
               "$ref": "#/components/schemas/ClientToolDefinition"
             },
-            "description": "User-defined tools executed on the client side.\n\nEach tool must have a unique `name` that does not\ncollide with server built-in tool names. When the LLM\ncalls one of these tools, the server emits a\n`tool_call_pending` SSE event and blocks until the\nclient submits the result via\n`POST /v1/llms/chatrooms/{chatroom_id}/agent/tool-result`\n(timeout: 5 minutes).\n\nTools with `fire_and_forget: true` do not block \u2014 the\nserver immediately returns a success to the LLM and the\nclient can execute the tool asynchronously.\n\nExample:\n```json\n{\n  \"client_tools\": [\n    {\n      \"name\": \"send_slack_message\",\n      \"description\": \"Send a message to a Slack channel\",\n      \"parameters\": {\n        \"type\": \"object\",\n        \"properties\": {\n          \"channel\": { \"type\": \"string\" },\n          \"text\": { \"type\": \"string\" }\n        },\n        \"required\": [\"channel\", \"text\"]\n      },\n      \"fire_and_forget\": false\n    }\n  ]\n}\n```"
+            "description": "User-defined tools executed on the client side.\n\nEach tool must have a unique `name` that does not\ncollide with server built-in tool names. When the LLM\ncalls one of these tools, the server emits a\n`tool_call_pending` SSE event and blocks until the\nclient submits the result via\n`POST /v1/llms/chatrooms/{chatroom_id}/agent/tool-result`\n(timeout: 5 minutes).\n\nTools with `fire_and_forget: true` do not block — the\nserver immediately returns a success to the LLM and the\nclient can execute the tool asynchronously.\n\nExample:\n```json\n{\n  \"client_tools\": [\n    {\n      \"name\": \"send_slack_message\",\n      \"description\": \"Send a message to a Slack channel\",\n      \"parameters\": {\n        \"type\": \"object\",\n        \"properties\": {\n          \"channel\": { \"type\": \"string\" },\n          \"text\": { \"type\": \"string\" }\n        },\n        \"required\": [\"channel\", \"text\"]\n      },\n      \"fire_and_forget\": false\n    }\n  ]\n}\n```"
           },
           "max_requests": {
             "type": "integer",
@@ -3259,7 +3668,7 @@
               "string",
               "null"
             ],
-            "description": "Model identifier. Accepts `provider/model` or just `model` (provider auto-detected).\n\nExamples:\n- `anthropic/claude-3-sonnet-20241022`\n- `openai/gpt-4`\n- `google_ai/gemini-pro`\n\nAuto-detection shortcuts:\n- `gpt-*` \u2192 OpenAI\n- `claude-*` \u2192 Anthropic\n- `gemini*` \u2192 Google AI"
+            "description": "Model identifier. Accepts `provider/model` or just `model` (provider auto-detected).\n\nExamples:\n- `anthropic/claude-3-sonnet-20241022`\n- `openai/gpt-4`\n- `google_ai/gemini-pro`\n\nAuto-detection shortcuts:\n- `gpt-*` → OpenAI\n- `claude-*` → Anthropic\n- `gemini*` → Google AI"
           },
           "task": {
             "type": "string",
@@ -3287,7 +3696,7 @@
       },
       "AgentMessage": {
         "type": "object",
-        "description": "\u30a8\u30fc\u30b8\u30a7\u30f3\u30c8\u30e1\u30c3\u30bb\u30fc\u30b8\u30ec\u30b9\u30dd\u30f3\u30b9\u7528\u306e\u30e2\u30c7\u30eb",
+        "description": "エージェントメッセージレスポンス用のモデル",
         "required": [
           "message_type",
           "content",
@@ -3535,6 +3944,48 @@
           "url": {
             "type": "string",
             "description": "OAuth authorization URL"
+          }
+        }
+      },
+      "BillingAddressRequest": {
+        "type": "object",
+        "description": "Billing address input",
+        "properties": {
+          "city": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "country": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "line1": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "line2": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "postalCode": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "state": {
+            "type": [
+              "string",
+              "null"
+            ]
           }
         }
       },
@@ -4046,7 +4497,7 @@
               "integer",
               "null"
             ],
-            "format": "int32",
+            "format": "int64",
             "description": "Capital",
             "minimum": 0
           },
@@ -4660,6 +5111,18 @@
           }
         }
       },
+      "DeleteResponse": {
+        "type": "object",
+        "description": "Delete response",
+        "required": [
+          "success"
+        ],
+        "properties": {
+          "success": {
+            "type": "boolean"
+          }
+        }
+      },
       "DeleteServiceAccountResponse": {
         "type": "object",
         "description": "Response for delete operation",
@@ -4707,7 +5170,7 @@
       },
       "ErrorResponse": {
         "type": "object",
-        "description": "Common error response",
+        "description": "Common error response body for REST APIs",
         "required": [
           "message"
         ],
@@ -5561,6 +6024,76 @@
           }
         }
       },
+      "ProductVariantListResponse": {
+        "type": "object",
+        "description": "Product variant list response",
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ProductVariantResponse"
+            },
+            "description": "Variant items"
+          }
+        }
+      },
+      "ProductVariantResponse": {
+        "type": "object",
+        "description": "Product variant response",
+        "required": [
+          "id",
+          "productId",
+          "tenantId",
+          "code",
+          "name",
+          "status",
+          "metadata",
+          "createdAt",
+          "updatedAt"
+        ],
+        "properties": {
+          "code": {
+            "type": "string",
+            "description": "Variant code"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Created at"
+          },
+          "id": {
+            "type": "string",
+            "description": "Variant ID"
+          },
+          "metadata": {
+            "description": "Arbitrary metadata"
+          },
+          "name": {
+            "type": "string",
+            "description": "Variant name"
+          },
+          "productId": {
+            "type": "string",
+            "description": "Product ID"
+          },
+          "status": {
+            "type": "string",
+            "description": "Variant status"
+          },
+          "tenantId": {
+            "type": "string",
+            "description": "Tenant ID"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Updated at"
+          }
+        }
+      },
       "ProductVariationRequest": {
         "type": "object",
         "description": "Product variation input",
@@ -5620,6 +6153,40 @@
             "type": "integer",
             "format": "int64",
             "description": "Unit amount"
+          }
+        }
+      },
+      "ProviderListResponse": {
+        "type": "object",
+        "description": "Provider list response",
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ProviderMappingResponse"
+            },
+            "description": "Provider mappings"
+          }
+        }
+      },
+      "ProviderMappingResponse": {
+        "type": "object",
+        "description": "Provider mapping response",
+        "required": [
+          "providerName",
+          "providerId"
+        ],
+        "properties": {
+          "providerId": {
+            "type": "string",
+            "description": "Provider's external ID"
+          },
+          "providerName": {
+            "type": "string",
+            "description": "Provider name (e.g. \"stripe\")"
           }
         }
       },
@@ -5847,6 +6414,82 @@
               "null"
             ],
             "description": "Quote URL"
+          }
+        }
+      },
+      "RecurringRevenueRequest": {
+        "type": "object",
+        "description": "Request body for calculating recurring revenue",
+        "required": [
+          "startDate",
+          "endDate",
+          "revenueCycle"
+        ],
+        "properties": {
+          "endDate": {
+            "type": "string",
+            "description": "Period end date (YYYY-MM-DD)"
+          },
+          "revenueCycle": {
+            "type": "string",
+            "description": "Revenue cycle: WEEKLY or MONTHLY"
+          },
+          "startDate": {
+            "type": "string",
+            "description": "Period start date (YYYY-MM-DD)"
+          }
+        }
+      },
+      "RecurringRevenueResponse": {
+        "type": "object",
+        "description": "Recurring revenue response",
+        "required": [
+          "id",
+          "tenantId",
+          "amount",
+          "cycle",
+          "startDate",
+          "endDate",
+          "createdAt"
+        ],
+        "properties": {
+          "amount": {
+            "type": "number",
+            "format": "float",
+            "description": "Revenue amount"
+          },
+          "changePercentage": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "float",
+            "description": "Change percentage from previous period"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Created at"
+          },
+          "cycle": {
+            "type": "string",
+            "description": "Revenue cycle"
+          },
+          "endDate": {
+            "type": "string",
+            "description": "Period end date"
+          },
+          "id": {
+            "type": "string",
+            "description": "Revenue ID"
+          },
+          "startDate": {
+            "type": "string",
+            "description": "Period start date"
+          },
+          "tenantId": {
+            "type": "string",
+            "description": "Tenant ID"
           }
         }
       },
@@ -6085,6 +6728,78 @@
           }
         }
       },
+      "StripeCustomerRequest": {
+        "type": "object",
+        "description": "Request body for getting or creating a Stripe customer",
+        "properties": {
+          "address": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/BillingAddressRequest",
+                "description": "Billing address"
+              }
+            ]
+          },
+          "email": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Billing email"
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Billing name"
+          },
+          "phone": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Phone number"
+          }
+        }
+      },
+      "StripeCustomerResponse": {
+        "type": "object",
+        "description": "Stripe customer response",
+        "required": [
+          "stripeCustomerId"
+        ],
+        "properties": {
+          "defaultPaymentMethodId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Default payment method ID"
+          },
+          "stripeCustomerId": {
+            "type": "string",
+            "description": "Stripe customer ID"
+          },
+          "stripeSubscriptionId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Stripe subscription ID"
+          },
+          "stripeSubscriptionItemId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Stripe subscription item ID"
+          }
+        }
+      },
       "TenantMappingResponse": {
         "type": "object",
         "description": "Tenant mapping info",
@@ -6208,7 +6923,7 @@
           },
           "fire_and_forget": {
             "type": "boolean",
-            "description": "When `true`, the server does not wait for the client\nto submit a tool result \u2014 the LLM continues\nimmediately. The client may still execute the tool\nfor its side effects."
+            "description": "When `true`, the server does not wait for the client\nto submit a tool result — the LLM continues\nimmediately. The client may still execute the tool\nfor its side effects."
           },
           "tool_id": {
             "type": "string",
@@ -6514,6 +7229,43 @@
           }
         }
       },
+      "UpdateQuoteRequest": {
+        "type": "object",
+        "description": "Request body for updating a quote",
+        "properties": {
+          "billingInformationId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Billing information ID"
+          },
+          "lineItems": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/LineItemRequest"
+            },
+            "description": "Updated line items"
+          },
+          "status": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Updated quote status"
+          },
+          "title": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Updated quote title"
+          }
+        }
+      },
       "UpdateServiceAccountRequest": {
         "type": "object",
         "description": "Request to update a service account",
@@ -6523,6 +7275,32 @@
               "string",
               "null"
             ]
+          }
+        }
+      },
+      "UpsertVariantLinkRequest": {
+        "type": "object",
+        "description": "Request body for upserting a variant procurement link",
+        "required": [
+          "variantId",
+          "supplierId",
+          "procurementCode"
+        ],
+        "properties": {
+          "metadata": {
+            "description": "Arbitrary metadata"
+          },
+          "procurementCode": {
+            "type": "string",
+            "description": "Procurement code"
+          },
+          "supplierId": {
+            "type": "string",
+            "description": "Supplier ID"
+          },
+          "variantId": {
+            "type": "string",
+            "description": "Product variant ID"
           }
         }
       },
@@ -6673,6 +7451,43 @@
         }
       },
       "Value": {},
+      "VariantLinkResponse": {
+        "type": "object",
+        "description": "Variant procurement link response",
+        "required": [
+          "id",
+          "tenantId",
+          "variantId",
+          "supplierId",
+          "procurementCode",
+          "metadata"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Link ID"
+          },
+          "metadata": {
+            "description": "Arbitrary metadata"
+          },
+          "procurementCode": {
+            "type": "string",
+            "description": "Procurement code"
+          },
+          "supplierId": {
+            "type": "string",
+            "description": "Supplier ID"
+          },
+          "tenantId": {
+            "type": "string",
+            "description": "Tenant ID"
+          },
+          "variantId": {
+            "type": "string",
+            "description": "Product variant ID"
+          }
+        }
+      },
       "VerifyRequest": {
         "type": "object",
         "required": [
@@ -6743,6 +7558,10 @@
       "description": "Payment checkout API"
     },
     {
+      "name": "Order - Revenue",
+      "description": "Revenue analytics API"
+    },
+    {
       "name": "CRM - Object Mappings",
       "description": "CRM provider object mapping management"
     },
@@ -6777,6 +7596,14 @@
     {
       "name": "Auth - OAuth",
       "description": "OAuth integration"
+    },
+    {
+      "name": "Payment",
+      "description": "Payment and billing management"
+    },
+    {
+      "name": "Procurement",
+      "description": "Procurement variant link management"
     }
   ]
 }

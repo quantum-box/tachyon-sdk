@@ -1,6 +1,6 @@
 # ErrorResponse
 
-Common error response
+Common error response body for REST APIs
 
 ## Properties
 

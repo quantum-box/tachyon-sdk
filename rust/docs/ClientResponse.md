@@ -4,7 +4,7 @@
 
 Name | Type | Description | Notes
 ------------ | ------------- | ------------- | -------------
-**capital** | Option<**i32**> | Capital | [optional]
+**capital** | Option<**i64**> | Capital | [optional]
 **corporate_number** | Option<**String**> | Corporate number | [optional]
 **email** | Option<**String**> | Email address | [optional]
 **fax_number** | Option<**String**> | Fax number | [optional]

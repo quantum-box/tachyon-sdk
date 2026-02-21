@@ -7,6 +7,7 @@ Method | HTTP request | Description
 [**create_product**](OrderProductsApi.md#create_product) | **POST** /v1/order/products | Create a new product
 [**delete_product**](OrderProductsApi.md#delete_product) | **DELETE** /v1/order/products/{id} | Delete a product by ID
 [**get_product**](OrderProductsApi.md#get_product) | **GET** /v1/order/products/{id} | Get a product by ID
+[**list_product_variants**](OrderProductsApi.md#list_product_variants) | **GET** /v1/order/products/{id}/variants | List product variants by product ID
 [**list_products**](OrderProductsApi.md#list_products) | **GET** /v1/order/products | List all products with pagination
 [**update_product**](OrderProductsApi.md#update_product) | **PUT** /v1/order/products/{id} | Update a product by ID
 
@@ -213,6 +214,75 @@ No authorization required
 | Status code | Description | Response headers |
 |-------------|-------------|------------------|
 **200** | Product found |  -  |
+**403** | Forbidden |  -  |
+**404** | Not found |  -  |
+**500** | Internal error |  -  |
+
+[[Back to top]](#) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to Model list]](../README.md#documentation-for-models) [[Back to README]](../README.md)
+
+# **list_product_variants**
+> ProductVariantListResponse list_product_variants(id)
+
+List product variants by product ID
+
+### Example
+
+
+```python
+import tachyon_sdk
+from tachyon_sdk.models.product_variant_list_response import ProductVariantListResponse
+from tachyon_sdk.rest import ApiException
+from pprint import pprint
+
+# Defining the host is optional and defaults to http://localhost
+# See configuration.py for a list of all supported configuration parameters.
+configuration = tachyon_sdk.Configuration(
+    host = "http://localhost"
+)
+
+
+# Enter a context with an instance of the API client
+with tachyon_sdk.ApiClient(configuration) as api_client:
+    # Create an instance of the API class
+    api_instance = tachyon_sdk.OrderProductsApi(api_client)
+    id = 'id_example' # str | Product ID
+
+    try:
+        # List product variants by product ID
+        api_response = api_instance.list_product_variants(id)
+        print("The response of OrderProductsApi->list_product_variants:\n")
+        pprint(api_response)
+    except Exception as e:
+        print("Exception when calling OrderProductsApi->list_product_variants: %s\n" % e)
+```
+
+
+
+### Parameters
+
+
+Name | Type | Description  | Notes
+------------- | ------------- | ------------- | -------------
+ **id** | **str**| Product ID | 
+
+### Return type
+
+[**ProductVariantListResponse**](ProductVariantListResponse.md)
+
+### Authorization
+
+No authorization required
+
+### HTTP request headers
+
+ - **Content-Type**: Not defined
+ - **Accept**: application/json
+
+### HTTP response details
+
+| Status code | Description | Response headers |
+|-------------|-------------|------------------|
+**200** | Product variant list |  -  |
 **403** | Forbidden |  -  |
 **404** | Not found |  -  |
 **500** | Internal error |  -  |

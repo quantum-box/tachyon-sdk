@@ -7,6 +7,7 @@ All URIs are relative to *http://localhost*
 | [**createProduct**](OrderProductsApi.md#createproductoperation) | **POST** /v1/order/products | Create a new product |
 | [**deleteProduct**](OrderProductsApi.md#deleteproduct) | **DELETE** /v1/order/products/{id} | Delete a product by ID |
 | [**getProduct**](OrderProductsApi.md#getproduct) | **GET** /v1/order/products/{id} | Get a product by ID |
+| [**listProductVariants**](OrderProductsApi.md#listproductvariants) | **GET** /v1/order/products/{id}/variants | List product variants by product ID |
 | [**listProducts**](OrderProductsApi.md#listproducts) | **GET** /v1/order/products | List all products with pagination |
 | [**updateProduct**](OrderProductsApi.md#updateproductoperation) | **PUT** /v1/order/products/{id} | Update a product by ID |
 
@@ -209,6 +210,74 @@ No authorization required
 | Status code | Description | Response headers |
 |-------------|-------------|------------------|
 | **200** | Product found |  -  |
+| **403** | Forbidden |  -  |
+| **404** | Not found |  -  |
+| **500** | Internal error |  -  |
+
+[[Back to top]](#) [[Back to API list]](../README.md#api-endpoints) [[Back to Model list]](../README.md#models) [[Back to README]](../README.md)
+
+
+## listProductVariants
+
+> ProductVariantListResponse listProductVariants(id)
+
+List product variants by product ID
+
+### Example
+
+```ts
+import {
+  Configuration,
+  OrderProductsApi,
+} from '@tachyon/sdk';
+import type { ListProductVariantsRequest } from '@tachyon/sdk';
+
+async function example() {
+  console.log("🚀 Testing @tachyon/sdk SDK...");
+  const api = new OrderProductsApi();
+
+  const body = {
+    // string | Product ID
+    id: id_example,
+  } satisfies ListProductVariantsRequest;
+
+  try {
+    const data = await api.listProductVariants(body);
+    console.log(data);
+  } catch (error) {
+    console.error(error);
+  }
+}
+
+// Run the test
+example().catch(console.error);
+```
+
+### Parameters
+
+
+| Name | Type | Description  | Notes |
+|------------- | ------------- | ------------- | -------------|
+| **id** | `string` | Product ID | [Defaults to `undefined`] |
+
+### Return type
+
+[**ProductVariantListResponse**](ProductVariantListResponse.md)
+
+### Authorization
+
+No authorization required
+
+### HTTP request headers
+
+- **Content-Type**: Not defined
+- **Accept**: `application/json`
+
+
+### HTTP response details
+| Status code | Description | Response headers |
+|-------------|-------------|------------------|
+| **200** | Product variant list |  -  |
 | **403** | Forbidden |  -  |
 | **404** | Not found |  -  |
 | **500** | Internal error |  -  |

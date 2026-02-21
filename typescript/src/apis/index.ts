@@ -20,4 +20,7 @@ export * from './OrderClientsApi';
 export * from './OrderProductsApi';
 export * from './OrderPurchaseOrdersApi';
 export * from './OrderQuotesApi';
+export * from './OrderRevenueApi';
 export * from './OrderShippingApi';
+export * from './PaymentApi';
+export * from './ProcurementApi';

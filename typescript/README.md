@@ -97,6 +97,7 @@ All URIs are relative to *http://localhost*
 *OrderProductsApi* | [**createProduct**](docs/OrderProductsApi.md#createproductoperation) | **POST** /v1/order/products | Create a new product
 *OrderProductsApi* | [**deleteProduct**](docs/OrderProductsApi.md#deleteproduct) | **DELETE** /v1/order/products/{id} | Delete a product by ID
 *OrderProductsApi* | [**getProduct**](docs/OrderProductsApi.md#getproduct) | **GET** /v1/order/products/{id} | Get a product by ID
+*OrderProductsApi* | [**listProductVariants**](docs/OrderProductsApi.md#listproductvariants) | **GET** /v1/order/products/{id}/variants | List product variants by product ID
 *OrderProductsApi* | [**listProducts**](docs/OrderProductsApi.md#listproducts) | **GET** /v1/order/products | List all products with pagination
 *OrderProductsApi* | [**updateProduct**](docs/OrderProductsApi.md#updateproductoperation) | **PUT** /v1/order/products/{id} | Update a product by ID
 *OrderPurchaseOrdersApi* | [**getPurchaseOrder**](docs/OrderPurchaseOrdersApi.md#getpurchaseorder) | **GET** /v1/order/purchase-orders/{id} | Get a purchase order by ID
@@ -105,7 +106,13 @@ All URIs are relative to *http://localhost*
 *OrderQuotesApi* | [**getQuote**](docs/OrderQuotesApi.md#getquote) | **GET** /v1/order/quotes/{id} | Get a quote by ID
 *OrderQuotesApi* | [**issueQuote**](docs/OrderQuotesApi.md#issuequoteoperation) | **POST** /v1/order/quotes/{id}/issue | Issue a quote to a client
 *OrderQuotesApi* | [**listQuotes**](docs/OrderQuotesApi.md#listquotes) | **GET** /v1/order/quotes | List all quotes
+*OrderQuotesApi* | [**updateQuote**](docs/OrderQuotesApi.md#updatequoteoperation) | **PUT** /v1/order/quotes/{id} | Update a quote by ID
+*OrderRevenueApi* | [**calculateRecurringRevenue**](docs/OrderRevenueApi.md#calculaterecurringrevenue) | **POST** /v1/order/revenue/recurring | Calculate recurring revenue for a given period
 *OrderShippingApi* | [**registerShippingDestination**](docs/OrderShippingApi.md#registershippingdestinationoperation) | **POST** /v1/order/shipping-destinations | Register a shipping destination for a quote
+*PaymentApi* | [**getOrCreateStripeCustomer**](docs/PaymentApi.md#getorcreatestripecustomer) | **POST** /v1/payment/stripe-customer | Get or create a Stripe customer
+*PaymentApi* | [**listProviders**](docs/PaymentApi.md#listproviders) | **GET** /v1/payment/providers | List payment providers by entity ID
+*ProcurementApi* | [**deleteVariantLink**](docs/ProcurementApi.md#deletevariantlink) | **DELETE** /v1/procurement/variant-links/{id} | Delete a variant procurement link
+*ProcurementApi* | [**upsertVariantLink**](docs/ProcurementApi.md#upsertvariantlinkoperation) | **POST** /v1/procurement/variant-links | Upsert a variant procurement link
 
 
 ### Models
@@ -140,6 +147,7 @@ All URIs are relative to *http://localhost*
 - [Ask](docs/Ask.md)
 - [AttemptCompletionResult](docs/AttemptCompletionResult.md)
 - [AuthUrlResponse](docs/AuthUrlResponse.md)
+- [BillingAddressRequest](docs/BillingAddressRequest.md)
 - [ChatCompletionChunkResponse](docs/ChatCompletionChunkResponse.md)
 - [ChatCompletionRequest](docs/ChatCompletionRequest.md)
 - [ChatCompletionResponse](docs/ChatCompletionResponse.md)
@@ -169,6 +177,7 @@ All URIs are relative to *http://localhost*
 - [CreateUserRequest](docs/CreateUserRequest.md)
 - [CreateUserResponse](docs/CreateUserResponse.md)
 - [DeleteProductResponse](docs/DeleteProductResponse.md)
+- [DeleteResponse](docs/DeleteResponse.md)
 - [DeleteServiceAccountResponse](docs/DeleteServiceAccountResponse.md)
 - [DeltaMessage](docs/DeltaMessage.md)
 - [ErrorResponse](docs/ErrorResponse.md)
@@ -203,11 +212,17 @@ All URIs are relative to *http://localhost*
 - [PolicyResponse](docs/PolicyResponse.md)
 - [ProductListResponse](docs/ProductListResponse.md)
 - [ProductResponse](docs/ProductResponse.md)
+- [ProductVariantListResponse](docs/ProductVariantListResponse.md)
+- [ProductVariantResponse](docs/ProductVariantResponse.md)
 - [ProductVariationRequest](docs/ProductVariationRequest.md)
+- [ProviderListResponse](docs/ProviderListResponse.md)
+- [ProviderMappingResponse](docs/ProviderMappingResponse.md)
 - [PurchaseOrderListResponse](docs/PurchaseOrderListResponse.md)
 - [PurchaseOrderResponse](docs/PurchaseOrderResponse.md)
 - [QuoteListResponse](docs/QuoteListResponse.md)
 - [QuoteResponse](docs/QuoteResponse.md)
+- [RecurringRevenueRequest](docs/RecurringRevenueRequest.md)
+- [RecurringRevenueResponse](docs/RecurringRevenueResponse.md)
 - [RegisterShippingDestinationRequest](docs/RegisterShippingDestinationRequest.md)
 - [ResponseFormat](docs/ResponseFormat.md)
 - [Role](docs/Role.md)
@@ -218,6 +233,8 @@ All URIs are relative to *http://localhost*
 - [SignInWithPlatformRequest](docs/SignInWithPlatformRequest.md)
 - [SignInWithPlatformResponse](docs/SignInWithPlatformResponse.md)
 - [SoftwareDeliveryResponse](docs/SoftwareDeliveryResponse.md)
+- [StripeCustomerRequest](docs/StripeCustomerRequest.md)
+- [StripeCustomerResponse](docs/StripeCustomerResponse.md)
 - [TenantMappingResponse](docs/TenantMappingResponse.md)
 - [Text](docs/Text.md)
 - [Thinking](docs/Thinking.md)
@@ -233,12 +250,15 @@ All URIs are relative to *http://localhost*
 - [UpdateChatroomResponse](docs/UpdateChatroomResponse.md)
 - [UpdateProductRequest](docs/UpdateProductRequest.md)
 - [UpdateProductVariationRequest](docs/UpdateProductVariationRequest.md)
+- [UpdateQuoteRequest](docs/UpdateQuoteRequest.md)
 - [UpdateServiceAccountRequest](docs/UpdateServiceAccountRequest.md)
+- [UpsertVariantLinkRequest](docs/UpsertVariantLinkRequest.md)
 - [Usage](docs/Usage.md)
 - [User](docs/User.md)
 - [UserListResponse](docs/UserListResponse.md)
 - [UserMessage](docs/UserMessage.md)
 - [UserResponse](docs/UserResponse.md)
+- [VariantLinkResponse](docs/VariantLinkResponse.md)
 - [VerifyRequest](docs/VerifyRequest.md)
 - [VerifyResponse](docs/VerifyResponse.md)
 
@@ -253,7 +273,7 @@ This TypeScript SDK client supports the [Fetch API](https://fetch.spec.whatwg.or
 and is automatically generated by the
 [OpenAPI Generator](https://openapi-generator.tech) project:
 
-- API version: `0.48.0`
+- API version: `0.49.3`
 - Package version: `0.1.0`
 - Generator version: `7.20.0`
 - Build package: `org.openapitools.codegen.languages.TypeScriptFetchClientCodegen`

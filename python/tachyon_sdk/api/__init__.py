@@ -14,7 +14,10 @@ from tachyon_sdk.api.order_clients_api import OrderClientsApi
 from tachyon_sdk.api.order_products_api import OrderProductsApi
 from tachyon_sdk.api.order_purchase_orders_api import OrderPurchaseOrdersApi
 from tachyon_sdk.api.order_quotes_api import OrderQuotesApi
+from tachyon_sdk.api.order_revenue_api import OrderRevenueApi
 from tachyon_sdk.api.order_shipping_api import OrderShippingApi
+from tachyon_sdk.api.payment_api import PaymentApi
+from tachyon_sdk.api.procurement_api import ProcurementApi
 from tachyon_sdk.api.agent_api import AgentApi
 from tachyon_sdk.api.chat_api import ChatApi
 from tachyon_sdk.api.chatroom_api import ChatroomApi
