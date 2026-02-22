@@ -5,6 +5,7 @@
 Name | Type | Description | Notes
 ------------ | ------------- | ------------- | -------------
 **args** | **String** |  | 
+**is_client_tool** | Option<**bool**> | When `true`, this tool call targets a client-defined tool. | [optional]
 **tool_call_id** | **String** |  | 
 **tool_name** | **String** |  | 
 **r#type** | **Type** |  (enum: tool-call) | 

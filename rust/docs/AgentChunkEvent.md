@@ -6,6 +6,7 @@
 |---- | -----|
 | AgentChunkEventOneOf | Agent chunk event types for streaming responses. |
 | AgentChunkEventOneOf1 | Agent chunk event types for streaming responses. |
+| AgentChunkEventOneOf10 | Agent chunk event types for streaming responses. |
 | AgentChunkEventOneOf2 | Agent chunk event types for streaming responses. |
 | AgentChunkEventOneOf3 | Agent chunk event types for streaming responses. |
 | AgentChunkEventOneOf4 | Agent chunk event types for streaming responses. |

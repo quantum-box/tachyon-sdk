@@ -3,7 +3,7 @@
   "info": {
     "title": "Tachyon API",
     "description": "Tachyon Platform REST API",
-    "version": "0.49.3"
+    "version": "0.51.0"
   },
   "paths": {
     "/auth/v1beta/sign-in-with-platform": {
@@ -243,6 +243,320 @@
         }
       }
     },
+    "/v1/auth/api-keys/verify": {
+      "post": {
+        "tags": [
+          "Auth - API Keys"
+        ],
+        "summary": "Verify a public API key",
+        "operationId": "verify_api_key",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/VerifyApiKeyRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "API key valid",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VerifyApiKeyResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request"
+          },
+          "401": {
+            "description": "Invalid API key"
+          }
+        }
+      }
+    },
+    "/v1/auth/oauth-tokens": {
+      "get": {
+        "tags": [
+          "Auth - OAuth Tokens"
+        ],
+        "summary": "List all OAuth tokens",
+        "operationId": "list_oauth_tokens",
+        "responses": {
+          "200": {
+            "description": "OAuth token list",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OAuthTokenListResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Auth - OAuth Tokens"
+        ],
+        "summary": "Save an OAuth token",
+        "operationId": "save_oauth_token",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SaveOAuthTokenRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "OAuth token saved",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OAuthTokenResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request"
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        }
+      }
+    },
+    "/v1/auth/oauth-tokens/{provider}": {
+      "get": {
+        "tags": [
+          "Auth - OAuth Tokens"
+        ],
+        "summary": "Get an OAuth token by provider",
+        "operationId": "get_oauth_token_by_provider",
+        "parameters": [
+          {
+            "name": "provider",
+            "in": "path",
+            "description": "OAuth provider name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OAuth token found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OAuthTokenDetailResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Token not found"
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "Auth - OAuth Tokens"
+        ],
+        "summary": "Delete an OAuth token",
+        "operationId": "delete_oauth_token",
+        "parameters": [
+          {
+            "name": "provider",
+            "in": "path",
+            "description": "OAuth provider name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OAuth token deleted"
+          },
+          "403": {
+            "description": "Forbidden"
+          },
+          "404": {
+            "description": "Token not found"
+          }
+        }
+      }
+    },
+    "/v1/auth/operators": {
+      "post": {
+        "tags": [
+          "Auth - Operators"
+        ],
+        "summary": "Create an operator under a platform",
+        "operationId": "create_operator",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateOperatorRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Operator created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreateOperatorResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request"
+          }
+        }
+      }
+    },
+    "/v1/auth/operators/by-alias": {
+      "get": {
+        "tags": [
+          "Auth - Operators"
+        ],
+        "summary": "Get an operator by alias within a platform",
+        "operationId": "get_operator_by_alias",
+        "parameters": [
+          {
+            "name": "platform_id",
+            "in": "query",
+            "description": "Platform ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "alias",
+            "in": "query",
+            "description": "Operator alias (username)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Operator found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OperatorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Operator not found"
+          }
+        }
+      }
+    },
+    "/v1/auth/operators/by-user": {
+      "get": {
+        "tags": [
+          "Auth - Operators"
+        ],
+        "summary": "Find operators accessible to a user under a platform",
+        "operationId": "find_operators_by_user",
+        "parameters": [
+          {
+            "name": "platform_id",
+            "in": "query",
+            "description": "Platform ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "user_id",
+            "in": "query",
+            "description": "User ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Operators found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OperatorListResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/auth/operators/{id}": {
+      "get": {
+        "tags": [
+          "Auth - Operators"
+        ],
+        "summary": "Get an operator by ID",
+        "operationId": "get_operator_by_id",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Operator ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Operator found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OperatorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Operator not found"
+          }
+        }
+      }
+    },
     "/v1/auth/policies/check": {
       "post": {
         "tags": [
@@ -273,6 +587,43 @@
           },
           "400": {
             "description": "Bad request"
+          }
+        }
+      }
+    },
+    "/v1/auth/policies/check-for-resource": {
+      "post": {
+        "tags": [
+          "Auth - Policies"
+        ],
+        "summary": "Check permission for a specific resource",
+        "operationId": "check_policy_for_resource",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CheckPolicyForResourceRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Permission check result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CheckPolicyForResourceResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request"
+          },
+          "403": {
+            "description": "Forbidden"
           }
         }
       }
@@ -592,6 +943,173 @@
         }
       }
     },
+    "/v1/auth/user-policies/attach": {
+      "post": {
+        "tags": [
+          "Auth - User Policies"
+        ],
+        "summary": "Attach a policy to a user",
+        "operationId": "attach_user_policy",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AttachUserPolicyRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Policy attached"
+          },
+          "400": {
+            "description": "Bad request"
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        }
+      }
+    },
+    "/v1/auth/user-policies/attach-with-scope": {
+      "post": {
+        "tags": [
+          "Auth - User Policies"
+        ],
+        "summary": "Attach a policy to a user with resource scope",
+        "operationId": "attach_user_policy_with_scope",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AttachUserPolicyWithScopeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Scoped policy attached"
+          },
+          "400": {
+            "description": "Bad request"
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        }
+      }
+    },
+    "/v1/auth/user-policies/detach": {
+      "post": {
+        "tags": [
+          "Auth - User Policies"
+        ],
+        "summary": "Detach a policy from a user",
+        "operationId": "detach_user_policy",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DetachUserPolicyRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Policy detached"
+          },
+          "400": {
+            "description": "Bad request"
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        }
+      }
+    },
+    "/v1/auth/user-policies/detach-with-scope": {
+      "post": {
+        "tags": [
+          "Auth - User Policies"
+        ],
+        "summary": "Detach a scoped policy from a user",
+        "operationId": "detach_user_policy_with_scope",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DetachUserPolicyWithScopeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Scoped policy detached"
+          },
+          "400": {
+            "description": "Bad request"
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        }
+      }
+    },
+    "/v1/auth/user-policy-mappings": {
+      "get": {
+        "tags": [
+          "Auth - User Policies"
+        ],
+        "summary": "Find user policy mappings by resource scope",
+        "operationId": "find_user_policy_mappings",
+        "parameters": [
+          {
+            "name": "tenantId",
+            "in": "query",
+            "description": "Tenant ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "resourceScope",
+            "in": "query",
+            "description": "Resource scope in TRN format",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "User policy mappings",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserPolicyMappingListResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request"
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        }
+      }
+    },
     "/v1/auth/users": {
       "get": {
         "tags": [
@@ -630,6 +1148,78 @@
         }
       }
     },
+    "/v1/auth/users/invite": {
+      "post": {
+        "tags": [
+          "Auth - Users"
+        ],
+        "summary": "Invite a user to a tenant",
+        "operationId": "invite_user",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/InviteUserRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "User invited",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request"
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        }
+      }
+    },
+    "/v1/auth/users/search/by-username": {
+      "get": {
+        "tags": [
+          "Auth - Users"
+        ],
+        "summary": "Find a user by username",
+        "operationId": "find_user_by_username",
+        "parameters": [
+          {
+            "name": "username",
+            "in": "query",
+            "description": "Username to search for",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "User found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "User not found"
+          }
+        }
+      }
+    },
     "/v1/auth/users/{id}": {
       "get": {
         "tags": [
@@ -651,6 +1241,146 @@
         "responses": {
           "200": {
             "description": "User found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "User not found"
+          }
+        }
+      }
+    },
+    "/v1/auth/users/{user_id}/policies": {
+      "get": {
+        "tags": [
+          "Auth - User Policies"
+        ],
+        "summary": "List policies attached to a user",
+        "operationId": "list_user_policies",
+        "parameters": [
+          {
+            "name": "user_id",
+            "in": "path",
+            "description": "User ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "tenantId",
+            "in": "query",
+            "description": "Optional tenant ID filter",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "User policy list",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserPolicyListResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        }
+      }
+    },
+    "/v1/auth/users/{user_id}/role": {
+      "put": {
+        "tags": [
+          "Auth - Users"
+        ],
+        "summary": "Update a user's role in a specific tenant",
+        "operationId": "update_user_role",
+        "parameters": [
+          {
+            "name": "user_id",
+            "in": "path",
+            "description": "User ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateUserRoleRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Role updated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request"
+          },
+          "404": {
+            "description": "User not found"
+          }
+        }
+      }
+    },
+    "/v1/auth/users/{user_id}/tenants": {
+      "post": {
+        "tags": [
+          "Auth - Users"
+        ],
+        "summary": "Add a user to a tenant (grant tenant access)",
+        "operationId": "add_user_to_tenant",
+        "parameters": [
+          {
+            "name": "user_id",
+            "in": "path",
+            "description": "User ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AddUserToTenantRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "User added to tenant",
             "content": {
               "application/json": {
                 "schema": {
@@ -3271,6 +4001,18 @@
           }
         }
       },
+      "AddUserToTenantRequest": {
+        "type": "object",
+        "description": "Request DTO for adding a user to a tenant",
+        "required": [
+          "tenantId"
+        ],
+        "properties": {
+          "tenantId": {
+            "type": "string"
+          }
+        }
+      },
       "AddressRequest": {
         "type": "object",
         "description": "Address input",
@@ -3597,6 +4339,33 @@
               }
             ],
             "description": "Usage statistics"
+          },
+          {
+            "type": "object",
+            "description": "Emitted when a tool job is created, before sync polling begins.\nFrontend can use the job_id to subscribe to the tool job's\nown SSE stream for real-time progress.",
+            "required": [
+              "tool_id",
+              "job_id",
+              "provider",
+              "type"
+            ],
+            "properties": {
+              "job_id": {
+                "type": "string"
+              },
+              "provider": {
+                "type": "string"
+              },
+              "tool_id": {
+                "type": "string"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "tool_job_started"
+                ]
+              }
+            }
           }
         ],
         "description": "Agent chunk event types for streaming responses."
@@ -3908,6 +4677,57 @@
           },
           "text": {
             "type": "string"
+          }
+        }
+      },
+      "AttachUserPolicyRequest": {
+        "type": "object",
+        "description": "Request to attach a policy to a user",
+        "required": [
+          "userId",
+          "policyId",
+          "tenantId"
+        ],
+        "properties": {
+          "policyId": {
+            "type": "string",
+            "description": "Policy ID to attach"
+          },
+          "tenantId": {
+            "type": "string",
+            "description": "Tenant ID (operator)"
+          },
+          "userId": {
+            "type": "string",
+            "description": "User ID"
+          }
+        }
+      },
+      "AttachUserPolicyWithScopeRequest": {
+        "type": "object",
+        "description": "Request to attach a policy with resource scope",
+        "required": [
+          "userId",
+          "policyId",
+          "tenantId",
+          "resourceScope"
+        ],
+        "properties": {
+          "policyId": {
+            "type": "string",
+            "description": "Policy ID to attach"
+          },
+          "resourceScope": {
+            "type": "string",
+            "description": "Resource scope in TRN format"
+          },
+          "tenantId": {
+            "type": "string",
+            "description": "Tenant ID (operator)"
+          },
+          "userId": {
+            "type": "string",
+            "description": "User ID"
           }
         }
       },
@@ -4390,6 +5210,36 @@
           }
         }
       },
+      "CheckPolicyForResourceRequest": {
+        "type": "object",
+        "description": "Request to check policy for a specific resource",
+        "required": [
+          "action",
+          "resourceTrn"
+        ],
+        "properties": {
+          "action": {
+            "type": "string",
+            "description": "Action name (e.g., \"library:UpdateRepo\")"
+          },
+          "resourceTrn": {
+            "type": "string",
+            "description": "Target resource TRN (e.g., \"trn:library:repo:rp_xxx\")"
+          }
+        }
+      },
+      "CheckPolicyForResourceResponse": {
+        "type": "object",
+        "description": "Response for resource-level policy check",
+        "required": [
+          "allowed"
+        ],
+        "properties": {
+          "allowed": {
+            "type": "boolean"
+          }
+        }
+      },
       "CheckoutRequest": {
         "type": "object",
         "description": "Request body for payment checkout",
@@ -4813,6 +5663,58 @@
           }
         }
       },
+      "CreateOperatorRequest": {
+        "type": "object",
+        "description": "Request body for creating an operator",
+        "required": [
+          "platformId",
+          "operatorName",
+          "newOperatorOwnerMethod",
+          "newOperatorOwnerId"
+        ],
+        "properties": {
+          "newOperatorOwnerId": {
+            "type": "string"
+          },
+          "newOperatorOwnerMethod": {
+            "type": "string"
+          },
+          "newOperatorOwnerPassword": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "operatorAlias": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "operatorName": {
+            "type": "string"
+          },
+          "platformId": {
+            "type": "string"
+          }
+        }
+      },
+      "CreateOperatorResponse": {
+        "type": "object",
+        "description": "Response for creating an operator",
+        "required": [
+          "operator",
+          "ownerId"
+        ],
+        "properties": {
+          "operator": {
+            "$ref": "#/components/schemas/OperatorResponse"
+          },
+          "ownerId": {
+            "type": "string"
+          }
+        }
+      },
       "CreateProductRequest": {
         "type": "object",
         "description": "Request body for creating a product",
@@ -5168,6 +6070,57 @@
           }
         }
       },
+      "DetachUserPolicyRequest": {
+        "type": "object",
+        "description": "Request to detach a policy from a user",
+        "required": [
+          "userId",
+          "policyId",
+          "tenantId"
+        ],
+        "properties": {
+          "policyId": {
+            "type": "string",
+            "description": "Policy ID to detach"
+          },
+          "tenantId": {
+            "type": "string",
+            "description": "Tenant ID (operator)"
+          },
+          "userId": {
+            "type": "string",
+            "description": "User ID"
+          }
+        }
+      },
+      "DetachUserPolicyWithScopeRequest": {
+        "type": "object",
+        "description": "Request to detach a policy with resource scope",
+        "required": [
+          "userId",
+          "policyId",
+          "tenantId",
+          "resourceScope"
+        ],
+        "properties": {
+          "policyId": {
+            "type": "string",
+            "description": "Policy ID to detach"
+          },
+          "resourceScope": {
+            "type": "string",
+            "description": "Resource scope in TRN format"
+          },
+          "tenantId": {
+            "type": "string",
+            "description": "Tenant ID (operator)"
+          },
+          "userId": {
+            "type": "string",
+            "description": "User ID"
+          }
+        }
+      },
       "ErrorResponse": {
         "type": "object",
         "description": "Common error response body for REST APIs",
@@ -5324,6 +6277,44 @@
           },
           "paginator": {
             "$ref": "#/components/schemas/OffsetPaginator"
+          }
+        }
+      },
+      "InviteUserRequest": {
+        "type": "object",
+        "description": "Request DTO for inviting a user",
+        "required": [
+          "tenantId"
+        ],
+        "properties": {
+          "inviteeEmail": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Email to invite (mutually exclusive with invitee_id)"
+          },
+          "inviteeId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "User ID to invite (mutually exclusive with invitee_email)"
+          },
+          "notifyUser": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "platformId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "tenantId": {
+            "type": "string"
           }
         }
       },
@@ -5595,6 +6586,91 @@
           }
         }
       },
+      "OAuthTokenDetailResponse": {
+        "type": "object",
+        "description": "Response for OAuth token detail",
+        "required": [
+          "provider",
+          "providerUserId",
+          "accessToken",
+          "expiresAt"
+        ],
+        "properties": {
+          "accessToken": {
+            "type": "string"
+          },
+          "expiresAt": {
+            "type": "string"
+          },
+          "provider": {
+            "type": "string"
+          },
+          "providerUserId": {
+            "type": "string"
+          },
+          "refreshToken": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "OAuthTokenListResponse": {
+        "type": "object",
+        "description": "Response for OAuth token list",
+        "required": [
+          "tokens"
+        ],
+        "properties": {
+          "tokens": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/OAuthTokenResponse"
+            }
+          }
+        }
+      },
+      "OAuthTokenResponse": {
+        "type": "object",
+        "description": "Response for an OAuth token",
+        "required": [
+          "provider",
+          "providerUserId",
+          "accessToken",
+          "tokenType",
+          "expiresAt"
+        ],
+        "properties": {
+          "accessToken": {
+            "type": "string"
+          },
+          "expiresAt": {
+            "type": "string"
+          },
+          "provider": {
+            "type": "string"
+          },
+          "providerUserId": {
+            "type": "string"
+          },
+          "refreshToken": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "scope": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "tokenType": {
+            "type": "string"
+          }
+        }
+      },
       "ObjectMappingItemResponse": {
         "type": "object",
         "description": "Single item in object mapping list",
@@ -5699,6 +6775,45 @@
           }
         }
       },
+      "OperatorListResponse": {
+        "type": "object",
+        "description": "Response for list of operators",
+        "required": [
+          "operators"
+        ],
+        "properties": {
+          "operators": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/OperatorResponse"
+            }
+          }
+        }
+      },
+      "OperatorResponse": {
+        "type": "object",
+        "description": "Response DTO for an operator",
+        "required": [
+          "id",
+          "name",
+          "operatorName",
+          "platformId"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "operatorName": {
+            "type": "string"
+          },
+          "platformId": {
+            "type": "string"
+          }
+        }
+      },
       "Part": {
         "oneOf": [
           {
@@ -5768,6 +6883,10 @@
             "properties": {
               "args": {
                 "type": "string"
+              },
+              "is_client_tool": {
+                "type": "boolean",
+                "description": "When `true`, this tool call targets a client-defined tool."
               },
               "tool_call_id": {
                 "type": "string"
@@ -6583,6 +7702,49 @@
           "tool"
         ]
       },
+      "SaveOAuthTokenRequest": {
+        "type": "object",
+        "description": "Request to save an OAuth token",
+        "required": [
+          "provider",
+          "accessToken",
+          "expiresIn",
+          "providerUserId"
+        ],
+        "properties": {
+          "accessToken": {
+            "type": "string",
+            "description": "Access token"
+          },
+          "expiresIn": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Token expiration in seconds"
+          },
+          "provider": {
+            "type": "string",
+            "description": "OAuth provider name (e.g., \"github\")"
+          },
+          "providerUserId": {
+            "type": "string",
+            "description": "Provider user ID"
+          },
+          "refreshToken": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Refresh token (optional)"
+          },
+          "scope": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "OAuth scope (optional)"
+          }
+        }
+      },
       "ServiceAccountListResponse": {
         "type": "object",
         "description": "Response for service account list",
@@ -6887,6 +8049,10 @@
           "tool_name"
         ],
         "properties": {
+          "is_client_tool": {
+            "type": "boolean",
+            "description": "When `true`, this tool call targets a client-defined tool.\nThe client should handle it locally and submit the result\nvia the tool-result endpoint (unless `fire_and_forget`)."
+          },
           "tool_id": {
             "type": "string"
           },
@@ -7278,6 +8444,22 @@
           }
         }
       },
+      "UpdateUserRoleRequest": {
+        "type": "object",
+        "description": "Request DTO for updating user role",
+        "required": [
+          "tenantId",
+          "role"
+        ],
+        "properties": {
+          "role": {
+            "type": "string"
+          },
+          "tenantId": {
+            "type": "string"
+          }
+        }
+      },
       "UpsertVariantLinkRequest": {
         "type": "object",
         "description": "Request body for upserting a variant procurement link",
@@ -7372,6 +8554,12 @@
           },
           "role": {
             "type": "string"
+          },
+          "tenants": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
           }
         }
       },
@@ -7411,6 +8599,66 @@
             "type": "string"
           },
           "user_id": {
+            "type": "string"
+          }
+        }
+      },
+      "UserPolicyListResponse": {
+        "type": "object",
+        "description": "Response for user policy list",
+        "required": [
+          "policyIds"
+        ],
+        "properties": {
+          "policyIds": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "UserPolicyMappingListResponse": {
+        "type": "object",
+        "description": "Response for user policy mappings list",
+        "required": [
+          "mappings"
+        ],
+        "properties": {
+          "mappings": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/UserPolicyMappingResponse"
+            }
+          }
+        }
+      },
+      "UserPolicyMappingResponse": {
+        "type": "object",
+        "description": "Response for user policy mapping",
+        "required": [
+          "userId",
+          "tenantId",
+          "policyId",
+          "assignedAt"
+        ],
+        "properties": {
+          "assignedAt": {
+            "type": "string"
+          },
+          "policyId": {
+            "type": "string"
+          },
+          "resourceScope": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "tenantId": {
+            "type": "string"
+          },
+          "userId": {
             "type": "string"
           }
         }
@@ -7485,6 +8733,44 @@
           "variantId": {
             "type": "string",
             "description": "Product variant ID"
+          }
+        }
+      },
+      "VerifyApiKeyRequest": {
+        "type": "object",
+        "description": "Request to verify a public API key",
+        "required": [
+          "tenantId",
+          "apiKey"
+        ],
+        "properties": {
+          "apiKey": {
+            "type": "string",
+            "description": "Public API key value"
+          },
+          "tenantId": {
+            "type": "string",
+            "description": "Tenant ID (operator)"
+          }
+        }
+      },
+      "VerifyApiKeyResponse": {
+        "type": "object",
+        "description": "Response for API key verification",
+        "required": [
+          "serviceAccountId",
+          "tenantId",
+          "name"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "serviceAccountId": {
+            "type": "string"
+          },
+          "tenantId": {
+            "type": "string"
           }
         }
       },
@@ -7594,8 +8880,20 @@
       "description": "Policy and action management"
     },
     {
+      "name": "Auth - User Policies",
+      "description": "User policy attachment management"
+    },
+    {
       "name": "Auth - OAuth",
       "description": "OAuth integration"
+    },
+    {
+      "name": "Auth - OAuth Tokens",
+      "description": "OAuth token management"
+    },
+    {
+      "name": "Auth - Operators",
+      "description": "Operator management"
     },
     {
       "name": "Payment",

@@ -127,8 +127,11 @@ impl From<&str> for ContentType {
 
 pub mod agent_api;
 pub mod auth_api_keys_api;
+pub mod auth_o_auth_tokens_api;
+pub mod auth_operators_api;
 pub mod auth_policies_api;
 pub mod auth_service_accounts_api;
+pub mod auth_user_policies_api;
 pub mod auth_users_api;
 pub mod auth_verify_api;
 pub mod chat_api;
