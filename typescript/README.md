@@ -61,6 +61,16 @@ All URIs are relative to *http://localhost*
 *AgentApi* | [**getAgentStatus**](docs/AgentApi.md#getagentstatus) | **GET** /v1/llms/chatrooms/{chatroom_id}/agent/status | Get agent status
 *AuthAPIKeysApi* | [**createApiKey**](docs/AuthAPIKeysApi.md#createapikeyoperation) | **POST** /v1/auth/service-accounts/{service_account_id}/api-keys | Create a new API key for a service account
 *AuthAPIKeysApi* | [**listApiKeys**](docs/AuthAPIKeysApi.md#listapikeys) | **GET** /v1/auth/service-accounts/{service_account_id}/api-keys | List API keys for a service account
+*AuthAPIKeysApi* | [**verifyApiKey**](docs/AuthAPIKeysApi.md#verifyapikeyoperation) | **POST** /v1/auth/api-keys/verify | Verify a public API key
+*AuthOAuthTokensApi* | [**deleteOauthToken**](docs/AuthOAuthTokensApi.md#deleteoauthtoken) | **DELETE** /v1/auth/oauth-tokens/{provider} | Delete an OAuth token
+*AuthOAuthTokensApi* | [**getOauthTokenByProvider**](docs/AuthOAuthTokensApi.md#getoauthtokenbyprovider) | **GET** /v1/auth/oauth-tokens/{provider} | Get an OAuth token by provider
+*AuthOAuthTokensApi* | [**listOauthTokens**](docs/AuthOAuthTokensApi.md#listoauthtokens) | **GET** /v1/auth/oauth-tokens | List all OAuth tokens
+*AuthOAuthTokensApi* | [**saveOauthToken**](docs/AuthOAuthTokensApi.md#saveoauthtoken) | **POST** /v1/auth/oauth-tokens | Save an OAuth token
+*AuthOperatorsApi* | [**createOperator**](docs/AuthOperatorsApi.md#createoperatoroperation) | **POST** /v1/auth/operators | Create an operator under a platform
+*AuthOperatorsApi* | [**findOperatorsByUser**](docs/AuthOperatorsApi.md#findoperatorsbyuser) | **GET** /v1/auth/operators/by-user | Find operators accessible to a user under a platform
+*AuthOperatorsApi* | [**getOperatorByAlias**](docs/AuthOperatorsApi.md#getoperatorbyalias) | **GET** /v1/auth/operators/by-alias | Get an operator by alias within a platform
+*AuthOperatorsApi* | [**getOperatorById**](docs/AuthOperatorsApi.md#getoperatorbyid) | **GET** /v1/auth/operators/{id} | Get an operator by ID
+*AuthPoliciesApi* | [**checkPolicyForResource**](docs/AuthPoliciesApi.md#checkpolicyforresourceoperation) | **POST** /v1/auth/policies/check-for-resource | Check permission for a specific resource
 *AuthPoliciesApi* | [**evaluatePoliciesBatch**](docs/AuthPoliciesApi.md#evaluatepoliciesbatchoperation) | **POST** /v1/auth/policies/check | Evaluate multiple policy actions in batch
 *AuthPoliciesApi* | [**getPolicy**](docs/AuthPoliciesApi.md#getpolicy) | **GET** /v1/auth/policies/{id} | Get a policy by ID
 *AuthPoliciesApi* | [**listActions**](docs/AuthPoliciesApi.md#listactions) | **GET** /v1/auth/actions | List all registered actions
@@ -69,9 +79,19 @@ All URIs are relative to *http://localhost*
 *AuthServiceAccountsApi* | [**getServiceAccount**](docs/AuthServiceAccountsApi.md#getserviceaccount) | **GET** /v1/auth/service-accounts/{id} | Get a service account by ID
 *AuthServiceAccountsApi* | [**listServiceAccounts**](docs/AuthServiceAccountsApi.md#listserviceaccounts) | **GET** /v1/auth/service-accounts | List all service accounts
 *AuthServiceAccountsApi* | [**updateServiceAccount**](docs/AuthServiceAccountsApi.md#updateserviceaccountoperation) | **PUT** /v1/auth/service-accounts/{id} | Update a service account
+*AuthUserPoliciesApi* | [**attachUserPolicy**](docs/AuthUserPoliciesApi.md#attachuserpolicyoperation) | **POST** /v1/auth/user-policies/attach | Attach a policy to a user
+*AuthUserPoliciesApi* | [**attachUserPolicyWithScope**](docs/AuthUserPoliciesApi.md#attachuserpolicywithscopeoperation) | **POST** /v1/auth/user-policies/attach-with-scope | Attach a policy to a user with resource scope
+*AuthUserPoliciesApi* | [**detachUserPolicy**](docs/AuthUserPoliciesApi.md#detachuserpolicyoperation) | **POST** /v1/auth/user-policies/detach | Detach a policy from a user
+*AuthUserPoliciesApi* | [**detachUserPolicyWithScope**](docs/AuthUserPoliciesApi.md#detachuserpolicywithscopeoperation) | **POST** /v1/auth/user-policies/detach-with-scope | Detach a scoped policy from a user
+*AuthUserPoliciesApi* | [**findUserPolicyMappings**](docs/AuthUserPoliciesApi.md#finduserpolicymappings) | **GET** /v1/auth/user-policy-mappings | Find user policy mappings by resource scope
+*AuthUserPoliciesApi* | [**listUserPolicies**](docs/AuthUserPoliciesApi.md#listuserpolicies) | **GET** /v1/auth/users/{user_id}/policies | List policies attached to a user
+*AuthUsersApi* | [**addUserToTenant**](docs/AuthUsersApi.md#addusertotenantoperation) | **POST** /v1/auth/users/{user_id}/tenants | Add a user to a tenant (grant tenant access)
 *AuthUsersApi* | [**createUser**](docs/AuthUsersApi.md#createuseroperation) | **POST** /auth/v1beta/users | 
+*AuthUsersApi* | [**findUserByUsername**](docs/AuthUsersApi.md#finduserbyusername) | **GET** /v1/auth/users/search/by-username | Find a user by username
 *AuthUsersApi* | [**getUser**](docs/AuthUsersApi.md#getuser) | **GET** /v1/auth/users/{id} | Get a user by ID
+*AuthUsersApi* | [**inviteUser**](docs/AuthUsersApi.md#inviteuseroperation) | **POST** /v1/auth/users/invite | Invite a user to a tenant
 *AuthUsersApi* | [**listUsers**](docs/AuthUsersApi.md#listusers) | **GET** /v1/auth/users | List all users in an operator
+*AuthUsersApi* | [**updateUserRole**](docs/AuthUsersApi.md#updateuserroleoperation) | **PUT** /v1/auth/users/{user_id}/role | Update a user\&#39;s role in a specific tenant
 *AuthVerifyApi* | [**signInWithPlatform**](docs/AuthVerifyApi.md#signinwithplatformoperation) | **POST** /auth/v1beta/sign-in-with-platform | 
 *AuthVerifyApi* | [**verify**](docs/AuthVerifyApi.md#verifyoperation) | **POST** /auth/v1beta/verify | 
 *CRMObjectMappingsApi* | [**createObjectMapping**](docs/CRMObjectMappingsApi.md#createobjectmappingoperation) | **POST** /v1/crm/object-mappings | Create an object mapping
@@ -121,12 +141,14 @@ All URIs are relative to *http://localhost*
 - [ActionEvaluationResult](docs/ActionEvaluationResult.md)
 - [ActionListResponse](docs/ActionListResponse.md)
 - [ActionResponse](docs/ActionResponse.md)
+- [AddUserToTenantRequest](docs/AddUserToTenantRequest.md)
 - [AddressRequest](docs/AddressRequest.md)
 - [AddressResponse](docs/AddressResponse.md)
 - [AgentChunk](docs/AgentChunk.md)
 - [AgentChunkEvent](docs/AgentChunkEvent.md)
 - [AgentChunkEventOneOf](docs/AgentChunkEventOneOf.md)
 - [AgentChunkEventOneOf1](docs/AgentChunkEventOneOf1.md)
+- [AgentChunkEventOneOf10](docs/AgentChunkEventOneOf10.md)
 - [AgentChunkEventOneOf2](docs/AgentChunkEventOneOf2.md)
 - [AgentChunkEventOneOf3](docs/AgentChunkEventOneOf3.md)
 - [AgentChunkEventOneOf4](docs/AgentChunkEventOneOf4.md)
@@ -145,6 +167,8 @@ All URIs are relative to *http://localhost*
 - [ApiKeyListResponse](docs/ApiKeyListResponse.md)
 - [ApiKeyResponse](docs/ApiKeyResponse.md)
 - [Ask](docs/Ask.md)
+- [AttachUserPolicyRequest](docs/AttachUserPolicyRequest.md)
+- [AttachUserPolicyWithScopeRequest](docs/AttachUserPolicyWithScopeRequest.md)
 - [AttemptCompletionResult](docs/AttemptCompletionResult.md)
 - [AuthUrlResponse](docs/AuthUrlResponse.md)
 - [BillingAddressRequest](docs/BillingAddressRequest.md)
@@ -157,6 +181,8 @@ All URIs are relative to *http://localhost*
 - [ChatRoom](docs/ChatRoom.md)
 - [ChatroomNameGeneration](docs/ChatroomNameGeneration.md)
 - [ChatroomsChatroomIdMessagesGetResponse](docs/ChatroomsChatroomIdMessagesGetResponse.md)
+- [CheckPolicyForResourceRequest](docs/CheckPolicyForResourceRequest.md)
+- [CheckPolicyForResourceResponse](docs/CheckPolicyForResourceResponse.md)
 - [CheckoutRequest](docs/CheckoutRequest.md)
 - [CheckoutResponse](docs/CheckoutResponse.md)
 - [Choice](docs/Choice.md)
@@ -170,6 +196,8 @@ All URIs are relative to *http://localhost*
 - [CreateChatRoomResponse](docs/CreateChatRoomResponse.md)
 - [CreateClientRequest](docs/CreateClientRequest.md)
 - [CreateObjectMappingRequest](docs/CreateObjectMappingRequest.md)
+- [CreateOperatorRequest](docs/CreateOperatorRequest.md)
+- [CreateOperatorResponse](docs/CreateOperatorResponse.md)
 - [CreateProductRequest](docs/CreateProductRequest.md)
 - [CreateQuoteRequest](docs/CreateQuoteRequest.md)
 - [CreateServiceAccountRequest](docs/CreateServiceAccountRequest.md)
@@ -180,6 +208,8 @@ All URIs are relative to *http://localhost*
 - [DeleteResponse](docs/DeleteResponse.md)
 - [DeleteServiceAccountResponse](docs/DeleteServiceAccountResponse.md)
 - [DeltaMessage](docs/DeltaMessage.md)
+- [DetachUserPolicyRequest](docs/DetachUserPolicyRequest.md)
+- [DetachUserPolicyWithScopeRequest](docs/DetachUserPolicyWithScopeRequest.md)
 - [ErrorResponse](docs/ErrorResponse.md)
 - [EvaluateActionsRequest](docs/EvaluateActionsRequest.md)
 - [EvaluateActionsResponse](docs/EvaluateActionsResponse.md)
@@ -189,6 +219,7 @@ All URIs are relative to *http://localhost*
 - [FunctionCall](docs/FunctionCall.md)
 - [FunctionCallResponse](docs/FunctionCallResponse.md)
 - [GetChatroomsResponse](docs/GetChatroomsResponse.md)
+- [InviteUserRequest](docs/InviteUserRequest.md)
 - [IssueQuoteRequest](docs/IssueQuoteRequest.md)
 - [LineItemRequest](docs/LineItemRequest.md)
 - [LineItemResponse](docs/LineItemResponse.md)
@@ -198,10 +229,15 @@ All URIs are relative to *http://localhost*
 - [ModelInfo](docs/ModelInfo.md)
 - [ModelsResponse](docs/ModelsResponse.md)
 - [OAuthCallbackResponse](docs/OAuthCallbackResponse.md)
+- [OAuthTokenDetailResponse](docs/OAuthTokenDetailResponse.md)
+- [OAuthTokenListResponse](docs/OAuthTokenListResponse.md)
+- [OAuthTokenResponse](docs/OAuthTokenResponse.md)
 - [ObjectMappingItemResponse](docs/ObjectMappingItemResponse.md)
 - [ObjectMappingListResponse](docs/ObjectMappingListResponse.md)
 - [ObjectMappingResponse](docs/ObjectMappingResponse.md)
 - [OffsetPaginator](docs/OffsetPaginator.md)
+- [OperatorListResponse](docs/OperatorListResponse.md)
+- [OperatorResponse](docs/OperatorResponse.md)
 - [Part](docs/Part.md)
 - [PartOneOf](docs/PartOneOf.md)
 - [PartOneOf1](docs/PartOneOf1.md)
@@ -226,6 +262,7 @@ All URIs are relative to *http://localhost*
 - [RegisterShippingDestinationRequest](docs/RegisterShippingDestinationRequest.md)
 - [ResponseFormat](docs/ResponseFormat.md)
 - [Role](docs/Role.md)
+- [SaveOAuthTokenRequest](docs/SaveOAuthTokenRequest.md)
 - [ServiceAccountListResponse](docs/ServiceAccountListResponse.md)
 - [ServiceAccountResponse](docs/ServiceAccountResponse.md)
 - [ShippingAvailabilityResponse](docs/ShippingAvailabilityResponse.md)
@@ -252,13 +289,19 @@ All URIs are relative to *http://localhost*
 - [UpdateProductVariationRequest](docs/UpdateProductVariationRequest.md)
 - [UpdateQuoteRequest](docs/UpdateQuoteRequest.md)
 - [UpdateServiceAccountRequest](docs/UpdateServiceAccountRequest.md)
+- [UpdateUserRoleRequest](docs/UpdateUserRoleRequest.md)
 - [UpsertVariantLinkRequest](docs/UpsertVariantLinkRequest.md)
 - [Usage](docs/Usage.md)
 - [User](docs/User.md)
 - [UserListResponse](docs/UserListResponse.md)
 - [UserMessage](docs/UserMessage.md)
+- [UserPolicyListResponse](docs/UserPolicyListResponse.md)
+- [UserPolicyMappingListResponse](docs/UserPolicyMappingListResponse.md)
+- [UserPolicyMappingResponse](docs/UserPolicyMappingResponse.md)
 - [UserResponse](docs/UserResponse.md)
 - [VariantLinkResponse](docs/VariantLinkResponse.md)
+- [VerifyApiKeyRequest](docs/VerifyApiKeyRequest.md)
+- [VerifyApiKeyResponse](docs/VerifyApiKeyResponse.md)
 - [VerifyRequest](docs/VerifyRequest.md)
 - [VerifyResponse](docs/VerifyResponse.md)
 
@@ -273,7 +316,7 @@ This TypeScript SDK client supports the [Fetch API](https://fetch.spec.whatwg.or
 and is automatically generated by the
 [OpenAPI Generator](https://openapi-generator.tech) project:
 
-- API version: `0.49.3`
+- API version: `0.51.0`
 - Package version: `0.1.0`
 - Generator version: `7.20.0`
 - Build package: `org.openapitools.codegen.languages.TypeScriptFetchClientCodegen`

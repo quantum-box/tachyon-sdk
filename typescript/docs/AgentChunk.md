@@ -7,6 +7,7 @@ A streaming chunk with optional agent metadata.  When `agent` is `None`, the chu
 
 Name | Type
 ------------ | -------------
+`isClientTool` | boolean
 `toolId` | string
 `toolName` | string
 `type` | string
@@ -27,6 +28,8 @@ Name | Type
 `promptTokens` | number
 `totalCost` | number
 `totalTokens` | number
+`jobId` | string
+`provider` | string
 `agent` | [AgentSource](AgentSource.md)
 
 ## Example
@@ -36,6 +39,7 @@ import type { AgentChunk } from '@tachyon/sdk'
 
 // TODO: Update the object below with actual values
 const example = {
+  "isClientTool": null,
   "toolId": null,
   "toolName": null,
   "type": null,
@@ -56,6 +60,8 @@ const example = {
   "promptTokens": null,
   "totalCost": null,
   "totalTokens": null,
+  "jobId": null,
+  "provider": null,
   "agent": null,
 } satisfies AgentChunk
 

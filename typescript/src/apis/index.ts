@@ -2,8 +2,11 @@
 /* eslint-disable */
 export * from './AgentApi';
 export * from './AuthAPIKeysApi';
+export * from './AuthOAuthTokensApi';
+export * from './AuthOperatorsApi';
 export * from './AuthPoliciesApi';
 export * from './AuthServiceAccountsApi';
+export * from './AuthUserPoliciesApi';
 export * from './AuthUsersApi';
 export * from './AuthVerifyApi';
 export * from './CRMObjectMappingsApi';

@@ -7,6 +7,7 @@ Represents a tool call event
 
 Name | Type
 ------------ | -------------
+`isClientTool` | boolean
 `toolId` | string
 `toolName` | string
 
@@ -17,6 +18,7 @@ import type { ToolCall } from '@tachyon/sdk'
 
 // TODO: Update the object below with actual values
 const example = {
+  "isClientTool": null,
   "toolId": null,
   "toolName": null,
 } satisfies ToolCall

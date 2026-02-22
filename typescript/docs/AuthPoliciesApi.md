@@ -4,10 +4,78 @@ All URIs are relative to *http://localhost*
 
 | Method | HTTP request | Description |
 |------------- | ------------- | -------------|
+| [**checkPolicyForResource**](AuthPoliciesApi.md#checkpolicyforresourceoperation) | **POST** /v1/auth/policies/check-for-resource | Check permission for a specific resource |
 | [**evaluatePoliciesBatch**](AuthPoliciesApi.md#evaluatepoliciesbatchoperation) | **POST** /v1/auth/policies/check | Evaluate multiple policy actions in batch |
 | [**getPolicy**](AuthPoliciesApi.md#getpolicy) | **GET** /v1/auth/policies/{id} | Get a policy by ID |
 | [**listActions**](AuthPoliciesApi.md#listactions) | **GET** /v1/auth/actions | List all registered actions |
 
+
+
+## checkPolicyForResource
+
+> CheckPolicyForResourceResponse checkPolicyForResource(checkPolicyForResourceRequest)
+
+Check permission for a specific resource
+
+### Example
+
+```ts
+import {
+  Configuration,
+  AuthPoliciesApi,
+} from '@tachyon/sdk';
+import type { CheckPolicyForResourceOperationRequest } from '@tachyon/sdk';
+
+async function example() {
+  console.log("🚀 Testing @tachyon/sdk SDK...");
+  const api = new AuthPoliciesApi();
+
+  const body = {
+    // CheckPolicyForResourceRequest
+    checkPolicyForResourceRequest: ...,
+  } satisfies CheckPolicyForResourceOperationRequest;
+
+  try {
+    const data = await api.checkPolicyForResource(body);
+    console.log(data);
+  } catch (error) {
+    console.error(error);
+  }
+}
+
+// Run the test
+example().catch(console.error);
+```
+
+### Parameters
+
+
+| Name | Type | Description  | Notes |
+|------------- | ------------- | ------------- | -------------|
+| **checkPolicyForResourceRequest** | [CheckPolicyForResourceRequest](CheckPolicyForResourceRequest.md) |  | |
+
+### Return type
+
+[**CheckPolicyForResourceResponse**](CheckPolicyForResourceResponse.md)
+
+### Authorization
+
+No authorization required
+
+### HTTP request headers
+
+- **Content-Type**: `application/json`
+- **Accept**: `application/json`
+
+
+### HTTP response details
+| Status code | Description | Response headers |
+|-------------|-------------|------------------|
+| **200** | Permission check result |  -  |
+| **400** | Bad request |  -  |
+| **403** | Forbidden |  -  |
+
+[[Back to top]](#) [[Back to API list]](../README.md#api-endpoints) [[Back to Model list]](../README.md#models) [[Back to README]](../README.md)
 
 
 ## evaluatePoliciesBatch

@@ -6,6 +6,7 @@ Represents a tool call event
 
 Name | Type | Description | Notes
 ------------ | ------------- | ------------- | -------------
+**is_client_tool** | **bool** | When &#x60;true&#x60;, this tool call targets a client-defined tool. The client should handle it locally and submit the result via the tool-result endpoint (unless &#x60;fire_and_forget&#x60;). | [optional] 
 **tool_id** | **str** |  | 
 **tool_name** | **str** |  | 
 

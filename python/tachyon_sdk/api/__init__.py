@@ -2,8 +2,11 @@
 
 # import apis into api package
 from tachyon_sdk.api.auth_api_keys_api import AuthAPIKeysApi
+from tachyon_sdk.api.auth_o_auth_tokens_api import AuthOAuthTokensApi
+from tachyon_sdk.api.auth_operators_api import AuthOperatorsApi
 from tachyon_sdk.api.auth_policies_api import AuthPoliciesApi
 from tachyon_sdk.api.auth_service_accounts_api import AuthServiceAccountsApi
+from tachyon_sdk.api.auth_user_policies_api import AuthUserPoliciesApi
 from tachyon_sdk.api.auth_users_api import AuthUsersApi
 from tachyon_sdk.api.auth_verify_api import AuthVerifyApi
 from tachyon_sdk.api.crm_object_mappings_api import CRMObjectMappingsApi

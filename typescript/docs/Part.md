@@ -11,6 +11,7 @@ Name | Type
 `image` | string
 `file` | string
 `args` | string
+`isClientTool` | boolean
 `toolCallId` | string
 `toolName` | string
 `result` | string
@@ -27,6 +28,7 @@ const example = {
   "image": null,
   "file": null,
   "args": null,
+  "isClientTool": null,
   "toolCallId": null,
   "toolName": null,
   "result": null,

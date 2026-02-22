@@ -6,6 +6,7 @@
 Name | Type | Description | Notes
 ------------ | ------------- | ------------- | -------------
 **args** | **str** |  | 
+**is_client_tool** | **bool** | When &#x60;true&#x60;, this tool call targets a client-defined tool. | [optional] 
 **tool_call_id** | **str** |  | 
 **tool_name** | **str** |  | 
 **type** | **str** |  | 
