@@ -4,10 +4,80 @@ All URIs are relative to *http://localhost*
 
 Method | HTTP request | Description
 ------------- | ------------- | -------------
+[**check_policy_for_resource**](AuthPoliciesApi.md#check_policy_for_resource) | **POST** /v1/auth/policies/check-for-resource | Check permission for a specific resource
 [**evaluate_policies_batch**](AuthPoliciesApi.md#evaluate_policies_batch) | **POST** /v1/auth/policies/check | Evaluate multiple policy actions in batch
 [**get_policy**](AuthPoliciesApi.md#get_policy) | **GET** /v1/auth/policies/{id} | Get a policy by ID
 [**list_actions**](AuthPoliciesApi.md#list_actions) | **GET** /v1/auth/actions | List all registered actions
 
+
+# **check_policy_for_resource**
+> CheckPolicyForResourceResponse check_policy_for_resource(check_policy_for_resource_request)
+
+Check permission for a specific resource
+
+### Example
+
+
+```python
+import tachyon_sdk
+from tachyon_sdk.models.check_policy_for_resource_request import CheckPolicyForResourceRequest
+from tachyon_sdk.models.check_policy_for_resource_response import CheckPolicyForResourceResponse
+from tachyon_sdk.rest import ApiException
+from pprint import pprint
+
+# Defining the host is optional and defaults to http://localhost
+# See configuration.py for a list of all supported configuration parameters.
+configuration = tachyon_sdk.Configuration(
+    host = "http://localhost"
+)
+
+
+# Enter a context with an instance of the API client
+with tachyon_sdk.ApiClient(configuration) as api_client:
+    # Create an instance of the API class
+    api_instance = tachyon_sdk.AuthPoliciesApi(api_client)
+    check_policy_for_resource_request = tachyon_sdk.CheckPolicyForResourceRequest() # CheckPolicyForResourceRequest | 
+
+    try:
+        # Check permission for a specific resource
+        api_response = api_instance.check_policy_for_resource(check_policy_for_resource_request)
+        print("The response of AuthPoliciesApi->check_policy_for_resource:\n")
+        pprint(api_response)
+    except Exception as e:
+        print("Exception when calling AuthPoliciesApi->check_policy_for_resource: %s\n" % e)
+```
+
+
+
+### Parameters
+
+
+Name | Type | Description  | Notes
+------------- | ------------- | ------------- | -------------
+ **check_policy_for_resource_request** | [**CheckPolicyForResourceRequest**](CheckPolicyForResourceRequest.md)|  | 
+
+### Return type
+
+[**CheckPolicyForResourceResponse**](CheckPolicyForResourceResponse.md)
+
+### Authorization
+
+No authorization required
+
+### HTTP request headers
+
+ - **Content-Type**: application/json
+ - **Accept**: application/json
+
+### HTTP response details
+
+| Status code | Description | Response headers |
+|-------------|-------------|------------------|
+**200** | Permission check result |  -  |
+**400** | Bad request |  -  |
+**403** | Forbidden |  -  |
+
+[[Back to top]](#) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to Model list]](../README.md#documentation-for-models) [[Back to README]](../README.md)
 
 # **evaluate_policies_batch**
 > EvaluatePoliciesBatchResponse evaluate_policies_batch(evaluate_policies_batch_request)

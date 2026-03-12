@@ -7,6 +7,7 @@
 Name | Type
 ------------ | -------------
 `args` | string
+`isClientTool` | boolean
 `toolCallId` | string
 `toolName` | string
 `type` | string
@@ -19,6 +20,7 @@ import type { PartOneOf3 } from '@tachyon/sdk'
 // TODO: Update the object below with actual values
 const example = {
   "args": null,
+  "isClientTool": null,
   "toolCallId": null,
   "toolName": null,
   "type": null,

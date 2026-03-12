@@ -6,7 +6,8 @@ Agent chunk event types for streaming responses.
 
 Name | Type | Description | Notes
 ------------ | ------------- | ------------- | -------------
-**tool_id** | **str** | Unique identifier for this tool call. Use this value as &#x60;tool_id&#x60; when submitting the result. | 
+**is_client_tool** | **bool** | When &#x60;true&#x60;, this tool call targets a client-defined tool. The client should handle it locally and submit the result via the tool-result endpoint (unless &#x60;fire_and_forget&#x60;). | [optional] 
+**tool_id** | **str** |  | 
 **tool_name** | **str** | Name of the client-defined tool the LLM wants to call. | 
 **type** | **str** |  | 
 **args** | **object** |  | 
@@ -26,6 +27,8 @@ Name | Type | Description | Notes
 **prompt_tokens** | **int** |  | 
 **total_cost** | **float** |  | [optional] 
 **total_tokens** | **int** |  | 
+**job_id** | **str** |  | 
+**provider** | **str** |  | 
 
 ## Example
 

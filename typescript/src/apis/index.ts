@@ -2,8 +2,13 @@
 /* eslint-disable */
 export * from './AgentApi';
 export * from './AuthAPIKeysApi';
+export * from './AuthOAuth2ClientsApi';
+export * from './AuthOAuth2ConsentsApi';
+export * from './AuthOAuthTokensApi';
+export * from './AuthOperatorsApi';
 export * from './AuthPoliciesApi';
 export * from './AuthServiceAccountsApi';
+export * from './AuthUserPoliciesApi';
 export * from './AuthUsersApi';
 export * from './AuthVerifyApi';
 export * from './CRMObjectMappingsApi';
@@ -13,6 +18,7 @@ export * from './DefaultApi';
 export * from './DeliveryShippingApi';
 export * from './DeliverySoftwareApi';
 export * from './FeatureFlagsApi';
+export * from './IntegrationsApi';
 export * from './ModelsApi';
 export * from './OauthApi';
 export * from './OrderCheckoutApi';

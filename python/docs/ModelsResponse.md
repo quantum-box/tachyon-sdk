@@ -5,8 +5,8 @@
 
 Name | Type | Description | Notes
 ------------ | ------------- | ------------- | -------------
-**models** | [**List[ModelInfo]**](ModelInfo.md) |  | 
-**total_count** | **int** |  | 
+**models** | [**List[ModelInfo]**](ModelInfo.md) | List of available models. | 
+**total_count** | **int** | Total number of models returned. | 
 
 ## Example
 

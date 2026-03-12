@@ -1,7 +1,7 @@
 
 # AgentExecuteRequest
 
-TODO: add English documentation
+Request body for executing an agent task.
 
 ## Properties
 

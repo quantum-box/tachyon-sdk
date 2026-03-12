@@ -11,9 +11,11 @@ Name | Type
 `image` | string
 `file` | string
 `args` | string
+`isClientTool` | boolean
 `toolCallId` | string
 `toolName` | string
 `result` | string
+`command` | string
 
 ## Example
 
@@ -27,9 +29,11 @@ const example = {
   "image": null,
   "file": null,
   "args": null,
+  "isClientTool": null,
   "toolCallId": null,
   "toolName": null,
   "result": null,
+  "command": null,
 } satisfies Part
 
 console.log(example)

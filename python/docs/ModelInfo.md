@@ -5,13 +5,13 @@
 
 Name | Type | Description | Notes
 ------------ | ------------- | ------------- | -------------
-**context_window** | **int** |  | [optional] 
-**description** | **str** |  | [optional] 
-**id** | **str** |  | 
-**max_output_tokens** | **int** |  | [optional] 
-**name** | **str** |  | 
-**provider** | **str** |  | 
-**supported_features** | **List[str]** |  | 
+**context_window** | **int** | Maximum context window size in tokens. | [optional] 
+**description** | **str** | Human-readable description of the model. | [optional] 
+**id** | **str** | Unique model identifier in &#x60;provider/model-name&#x60; format. | 
+**max_output_tokens** | **int** | Maximum number of output tokens. | [optional] 
+**name** | **str** | Model name. | 
+**provider** | **str** | Provider name (e.g. anthropic, openai, google_ai). | 
+**supported_features** | [**List[SupportedFeature]**](SupportedFeature.md) | List of features supported by this model. | 
 
 ## Example
 

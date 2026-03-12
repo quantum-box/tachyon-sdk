@@ -7,6 +7,7 @@ Tool call initiation
 
 Name | Type
 ------------ | -------------
+`isClientTool` | boolean
 `toolId` | string
 `toolName` | string
 `type` | string
@@ -18,6 +19,7 @@ import type { AgentChunkEventOneOf } from '@tachyon/sdk'
 
 // TODO: Update the object below with actual values
 const example = {
+  "isClientTool": null,
   "toolId": null,
   "toolName": null,
   "type": null,

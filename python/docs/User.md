@@ -9,6 +9,7 @@ Name | Type | Description | Notes
 **id** | **str** |  | 
 **name** | **str** |  | [optional] 
 **role** | **str** |  | 
+**tenants** | **List[str]** |  | [optional] 
 
 ## Example
 
