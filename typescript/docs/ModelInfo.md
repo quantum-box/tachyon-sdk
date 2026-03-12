@@ -12,7 +12,7 @@ Name | Type
 `maxOutputTokens` | number
 `name` | string
 `provider` | string
-`supportedFeatures` | Array&lt;string&gt;
+`supportedFeatures` | [Array&lt;SupportedFeature&gt;](SupportedFeature.md)
 
 ## Example
 
@@ -22,12 +22,12 @@ import type { ModelInfo } from '@tachyon/sdk'
 // TODO: Update the object below with actual values
 const example = {
   "contextWindow": 200000,
-  "description": Claude 3 Sonnet model optimized for general-purpose tasks,
-  "id": anthropic/claude-3-sonnet-20241022,
-  "maxOutputTokens": 4096,
-  "name": claude-3-sonnet-20241022,
+  "description": Claude Sonnet 4 — balanced intelligence and speed,
+  "id": anthropic/claude-sonnet-4-20250514,
+  "maxOutputTokens": 16384,
+  "name": claude-sonnet-4-20250514,
   "provider": anthropic,
-  "supportedFeatures": [chat, streaming, function_calling],
+  "supportedFeatures": [streaming, function_calling, vision, system_prompt, agent],
 } satisfies ModelInfo
 
 console.log(example)

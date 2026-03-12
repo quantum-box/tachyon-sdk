@@ -6,6 +6,7 @@ All URIs are relative to *http://localhost*
 |------------- | ------------- | -------------|
 | [**createApiKey**](AuthAPIKeysApi.md#createapikeyoperation) | **POST** /v1/auth/service-accounts/{service_account_id}/api-keys | Create a new API key for a service account |
 | [**listApiKeys**](AuthAPIKeysApi.md#listapikeys) | **GET** /v1/auth/service-accounts/{service_account_id}/api-keys | List API keys for a service account |
+| [**verifyApiKey**](AuthAPIKeysApi.md#verifyapikeyoperation) | **POST** /v1/auth/api-keys/verify | Verify a public API key |
 
 
 
@@ -144,6 +145,73 @@ No authorization required
 |-------------|-------------|------------------|
 | **200** | API key list |  -  |
 | **403** | Forbidden |  -  |
+
+[[Back to top]](#) [[Back to API list]](../README.md#api-endpoints) [[Back to Model list]](../README.md#models) [[Back to README]](../README.md)
+
+
+## verifyApiKey
+
+> VerifyApiKeyResponse verifyApiKey(verifyApiKeyRequest)
+
+Verify a public API key
+
+### Example
+
+```ts
+import {
+  Configuration,
+  AuthAPIKeysApi,
+} from '@tachyon/sdk';
+import type { VerifyApiKeyOperationRequest } from '@tachyon/sdk';
+
+async function example() {
+  console.log("🚀 Testing @tachyon/sdk SDK...");
+  const api = new AuthAPIKeysApi();
+
+  const body = {
+    // VerifyApiKeyRequest
+    verifyApiKeyRequest: ...,
+  } satisfies VerifyApiKeyOperationRequest;
+
+  try {
+    const data = await api.verifyApiKey(body);
+    console.log(data);
+  } catch (error) {
+    console.error(error);
+  }
+}
+
+// Run the test
+example().catch(console.error);
+```
+
+### Parameters
+
+
+| Name | Type | Description  | Notes |
+|------------- | ------------- | ------------- | -------------|
+| **verifyApiKeyRequest** | [VerifyApiKeyRequest](VerifyApiKeyRequest.md) |  | |
+
+### Return type
+
+[**VerifyApiKeyResponse**](VerifyApiKeyResponse.md)
+
+### Authorization
+
+No authorization required
+
+### HTTP request headers
+
+- **Content-Type**: `application/json`
+- **Accept**: `application/json`
+
+
+### HTTP response details
+| Status code | Description | Response headers |
+|-------------|-------------|------------------|
+| **200** | API key valid |  -  |
+| **400** | Bad request |  -  |
+| **401** | Invalid API key |  -  |
 
 [[Back to top]](#) [[Back to API list]](../README.md#api-endpoints) [[Back to Model list]](../README.md#models) [[Back to README]](../README.md)
 

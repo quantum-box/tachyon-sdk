@@ -2,13 +2,19 @@
 
 # import apis into api package
 from tachyon_sdk.api.auth_api_keys_api import AuthAPIKeysApi
+from tachyon_sdk.api.auth_o_auth2_clients_api import AuthOAuth2ClientsApi
+from tachyon_sdk.api.auth_o_auth2_consents_api import AuthOAuth2ConsentsApi
+from tachyon_sdk.api.auth_o_auth_tokens_api import AuthOAuthTokensApi
+from tachyon_sdk.api.auth_operators_api import AuthOperatorsApi
 from tachyon_sdk.api.auth_policies_api import AuthPoliciesApi
 from tachyon_sdk.api.auth_service_accounts_api import AuthServiceAccountsApi
+from tachyon_sdk.api.auth_user_policies_api import AuthUserPoliciesApi
 from tachyon_sdk.api.auth_users_api import AuthUsersApi
 from tachyon_sdk.api.auth_verify_api import AuthVerifyApi
 from tachyon_sdk.api.crm_object_mappings_api import CRMObjectMappingsApi
 from tachyon_sdk.api.delivery_shipping_api import DeliveryShippingApi
 from tachyon_sdk.api.delivery_software_api import DeliverySoftwareApi
+from tachyon_sdk.api.integrations_api import IntegrationsApi
 from tachyon_sdk.api.order_checkout_api import OrderCheckoutApi
 from tachyon_sdk.api.order_clients_api import OrderClientsApi
 from tachyon_sdk.api.order_products_api import OrderProductsApi

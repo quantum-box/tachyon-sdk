@@ -1,0 +1,39 @@
+# CreateClientResponse
+
+Response for newly created OAuth2 client (includes plain-text secret)
+
+## Properties
+
+Name | Type | Description | Notes
+------------ | ------------- | ------------- | -------------
+**allowed_scopes** | **List[str]** |  | 
+**client_id** | **str** |  | 
+**client_secret** | **str** |  | 
+**created_at** | **str** |  | 
+**grant_types** | **List[str]** |  | 
+**id** | **str** |  | 
+**name** | **str** |  | 
+**redirect_uris** | **List[str]** |  | 
+**status** | **str** |  | 
+**use_tachyon_user_pool** | **bool** |  | 
+
+## Example
+
+```python
+from tachyon_sdk.models.create_client_response import CreateClientResponse
+
+# TODO update the JSON string below
+json = "{}"
+# create an instance of CreateClientResponse from a JSON string
+create_client_response_instance = CreateClientResponse.from_json(json)
+# print the JSON string representation of the object
+print(CreateClientResponse.to_json())
+
+# convert the object into a dict
+create_client_response_dict = create_client_response_instance.to_dict()
+# create an instance of CreateClientResponse from a dict
+create_client_response_from_dict = CreateClientResponse.from_dict(create_client_response_dict)
+```
+[[Back to Model list]](../README.md#documentation-for-models) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to README]](../README.md)
+
+
