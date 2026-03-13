@@ -277,9 +277,7 @@ async fn run_logs(
             break;
         }
 
-        if logs.next_token.is_some() {
-            next_token = logs.next_token;
-        }
+        next_token = logs.next_token;
 
         if follow {
             sleep(Duration::from_secs(2)).await;
