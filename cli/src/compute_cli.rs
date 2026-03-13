@@ -108,9 +108,7 @@ async fn fetch_builds(
     let status = response.status();
     if !status.is_success() {
         let body = response.text().await.unwrap_or_default();
-        return Err(anyhow!(
-            "list builds failed: status={status}, body={body}"
-        ));
+        return Err(anyhow!("list builds failed: status={status}, body={body}"));
     }
     let list: ListBuildsResponse = response
         .json()
@@ -130,21 +128,18 @@ async fn fetch_build_logs(
         config.api_url.trim_end_matches('/'),
         build_id
     );
-    let url = match next_token {
-        Some(token) => format!("{base_url}?next_token={token}"),
-        None => base_url,
-    };
-    let response = client
-        .get(&url)
+    let mut request = client.get(&base_url);
+    if let Some(token) = next_token {
+        request = request.query(&[("next_token", token)]);
+    }
+    let response = request
         .send()
         .await
-        .with_context(|| format!("failed to GET {url}"))?;
+        .with_context(|| format!("failed to GET {base_url}"))?;
     let status = response.status();
     if !status.is_success() {
         let body = response.text().await.unwrap_or_default();
-        return Err(anyhow!(
-            "fetch logs failed: status={status}, body={body}"
-        ));
+        return Err(anyhow!("fetch logs failed: status={status}, body={body}"));
     }
     response
         .json()
@@ -221,8 +216,9 @@ async fn run_status(config: &Config, app_id: &str, limit: usize) -> Result<()> {
     );
 
     for build in builds_to_show {
-        let branch = if build.source_branch.len() > branch_width {
-            format!("{}...", &build.source_branch[..branch_width - 3])
+        let branch = if build.source_branch.chars().count() > branch_width {
+            let truncated: String = build.source_branch.chars().take(branch_width - 3).collect();
+            format!("{truncated}...")
         } else {
             build.source_branch.clone()
         };
@@ -269,14 +265,9 @@ async fn run_logs(
     let mut next_token: Option<String> = None;
 
     loop {
-        let logs = fetch_build_logs(
-            &client,
-            config,
-            &resolved_build_id,
-            next_token.as_deref(),
-        )
-        .await
-        .with_context(|| format!("failed to fetch logs for build {resolved_build_id}"))?;
+        let logs = fetch_build_logs(&client, config, &resolved_build_id, next_token.as_deref())
+            .await
+            .with_context(|| format!("failed to fetch logs for build {resolved_build_id}"))?;
 
         for line in &logs.lines {
             println!("[{}] {}", format_timestamp_ms(line.timestamp), line.message);
@@ -286,7 +277,9 @@ async fn run_logs(
             break;
         }
 
-        next_token = logs.next_token;
+        if logs.next_token.is_some() {
+            next_token = logs.next_token;
+        }
 
         if follow {
             sleep(Duration::from_secs(2)).await;
@@ -300,9 +293,7 @@ async fn run_logs(
 
 pub async fn run(args: &ComputeArgs, config: &Config) -> Result<()> {
     match &args.command {
-        ComputeCommand::Status { app_id, limit } => {
-            run_status(config, app_id, *limit).await
-        }
+        ComputeCommand::Status { app_id, limit } => run_status(config, app_id, *limit).await,
         ComputeCommand::Logs {
             app_id,
             build_id,

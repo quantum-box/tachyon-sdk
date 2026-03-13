@@ -9,7 +9,11 @@ use config::Config;
 #[command(name = "tachyon", version, about = "Tachyon Platform CLI")]
 struct Cli {
     /// Tachyon API base URL
-    #[arg(long, env = "TACHYON_API_URL", default_value = "https://api.tachyon.run")]
+    #[arg(
+        long,
+        env = "TACHYON_API_URL",
+        default_value = "https://api.tachyon.run"
+    )]
     api_url: String,
 
     /// Tenant ID (x-operator-id header)
