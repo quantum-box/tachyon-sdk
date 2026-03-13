@@ -1,9 +1,8 @@
 mod compute_cli;
-mod config;
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
-use config::Config;
+use tachyon_sdk::apis::configuration::Configuration;
 
 #[derive(Parser)]
 #[command(name = "tachyon", version, about = "Tachyon Platform CLI")]
@@ -38,13 +37,11 @@ enum Commands {
 async fn main() -> Result<()> {
     let cli = Cli::parse();
 
-    let config = Config {
-        api_url: cli.api_url,
-        tenant_id: cli.tenant_id,
-        auth_token: cli.api_key,
-    };
+    let mut config = Configuration::new();
+    config.base_path = cli.api_url;
+    config.bearer_access_token = cli.api_key;
 
     match cli.command {
-        Commands::Compute(args) => compute_cli::run(&args, &config).await,
+        Commands::Compute(args) => compute_cli::run(&args, &config, &cli.tenant_id).await,
     }
 }
