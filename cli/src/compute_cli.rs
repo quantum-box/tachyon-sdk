@@ -3,9 +3,8 @@ use chrono::{DateTime, TimeZone, Utc};
 use clap::{Args, Subcommand};
 use reqwest::{header, Client};
 use serde::Deserialize;
+use tachyon_sdk::apis::configuration::Configuration;
 use tokio::time::{sleep, Duration};
-
-use crate::config::Config;
 
 #[derive(Debug, Clone, Args)]
 pub struct ComputeArgs {
@@ -75,13 +74,14 @@ struct BuildLogLineResponse {
     message: String,
 }
 
-fn build_client(config: &Config) -> Result<Client> {
+/// Build a reqwest client with Tachyon auth headers.
+///
+/// Uses the SDK's [`Configuration`] for the base URL and bearer token, and
+/// `tenant_id` for the required `x-operator-id` header.
+fn build_client(config: &Configuration, tenant_id: &str) -> Result<Client> {
     let mut headers = header::HeaderMap::new();
-    headers.insert(
-        "x-operator-id",
-        header::HeaderValue::from_str(&config.tenant_id)?,
-    );
-    if let Some(token) = &config.auth_token {
+    headers.insert("x-operator-id", header::HeaderValue::from_str(tenant_id)?);
+    if let Some(token) = &config.bearer_access_token {
         headers.insert(
             header::AUTHORIZATION,
             header::HeaderValue::from_str(&format!("Bearer {token}"))?,
@@ -92,12 +92,12 @@ fn build_client(config: &Config) -> Result<Client> {
 
 async fn fetch_builds(
     client: &Client,
-    config: &Config,
+    config: &Configuration,
     app_id: &str,
 ) -> Result<Vec<BuildResponse>> {
     let url = format!(
         "{}/v1/compute/apps/{}/builds",
-        config.api_url.trim_end_matches('/'),
+        config.base_path.trim_end_matches('/'),
         app_id
     );
     let response = client
@@ -119,13 +119,13 @@ async fn fetch_builds(
 
 async fn fetch_build_logs(
     client: &Client,
-    config: &Config,
+    config: &Configuration,
     build_id: &str,
     next_token: Option<&str>,
 ) -> Result<BuildLogsResponse> {
     let base_url = format!(
         "{}/v1/compute/builds/{}/logs",
-        config.api_url.trim_end_matches('/'),
+        config.base_path.trim_end_matches('/'),
         build_id
     );
     let mut request = client.get(&base_url);
@@ -169,8 +169,13 @@ fn truncate_sha(sha: &str) -> &str {
     }
 }
 
-async fn run_status(config: &Config, app_id: &str, limit: usize) -> Result<()> {
-    let client = build_client(config)?;
+async fn run_status(
+    config: &Configuration,
+    tenant_id: &str,
+    app_id: &str,
+    limit: usize,
+) -> Result<()> {
+    let client = build_client(config, tenant_id)?;
     let builds = fetch_builds(&client, config, app_id)
         .await
         .with_context(|| format!("failed to fetch builds for app {app_id}"))?;
@@ -241,12 +246,13 @@ async fn run_status(config: &Config, app_id: &str, limit: usize) -> Result<()> {
 }
 
 async fn run_logs(
-    config: &Config,
+    config: &Configuration,
+    tenant_id: &str,
     app_id: &str,
     build_id: Option<&str>,
     follow: bool,
 ) -> Result<()> {
-    let client = build_client(config)?;
+    let client = build_client(config, tenant_id)?;
 
     let resolved_build_id = match build_id {
         Some(id) => id.to_string(),
@@ -291,13 +297,15 @@ async fn run_logs(
     Ok(())
 }
 
-pub async fn run(args: &ComputeArgs, config: &Config) -> Result<()> {
+pub async fn run(args: &ComputeArgs, config: &Configuration, tenant_id: &str) -> Result<()> {
     match &args.command {
-        ComputeCommand::Status { app_id, limit } => run_status(config, app_id, *limit).await,
+        ComputeCommand::Status { app_id, limit } => {
+            run_status(config, tenant_id, app_id, *limit).await
+        }
         ComputeCommand::Logs {
             app_id,
             build_id,
             follow,
-        } => run_logs(config, app_id, build_id.as_deref(), *follow).await,
+        } => run_logs(config, tenant_id, app_id, build_id.as_deref(), *follow).await,
     }
 }
