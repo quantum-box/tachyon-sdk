@@ -15,7 +15,14 @@ serde_repr = "^0.1"
 url = "^2.5"
 reqwest = { version = "^0.13", default-features = false, features = ["json", "multipart", "query", "form"] }
 
+# auth feature dependencies
+async-trait = { version = "0.1", optional = true }
+chrono = { version = "0.4", features = ["serde"], optional = true }
+mockall = { version = "0.13", optional = true }
+
 [features]
 default = ["native-tls"]
 native-tls = ["reqwest/native-tls"]
 rustls = ["reqwest/rustls"]
+auth = ["async-trait", "chrono"]
+test = ["auth", "mockall"]
