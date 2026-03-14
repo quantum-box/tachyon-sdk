@@ -2,17 +2,14 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use super::types::{
-    Identifier, OperatorId, PlatformId, PolicyId,
-    PublicApiKeyId, PublicApiKeyValue, ServiceAccountId,
-    TenantId, UserId,
+    Identifier, OperatorId, PlatformId, PolicyId, PublicApiKeyId,
+    PublicApiKeyValue, ServiceAccountId, TenantId, UserId,
 };
 
 // ───────────────────── DefaultRole ─────────────────────
 
 /// Default role assigned to users within an operator.
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize,
-)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum DefaultRole {
     Owner,
     Manager,
@@ -147,9 +144,7 @@ pub struct OAuth2ClientCreated {
 // ─────────────────── NewOperatorOwnerMethod ────────────
 
 /// How the owner of a new operator is determined.
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize,
-)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum NewOperatorOwnerMethod {
     Inherit,
     Create,

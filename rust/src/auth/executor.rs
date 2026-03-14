@@ -1,8 +1,6 @@
 use super::domain::{ServiceAccount, User};
 use super::error::{AuthError, AuthResult};
-use super::types::{
-    OperatorId, PlatformId, TenantId, UserId,
-};
+use super::types::{OperatorId, PlatformId, TenantId, UserId};
 use std::fmt::Debug;
 
 // ─────────────── ExecutorAction trait ──────────────────
@@ -20,9 +18,7 @@ pub trait ExecutorAction: Debug + Send + Sync + 'static {
     fn get_user_id(&self) -> AuthResult<UserId> {
         let id = self.get_id();
         if id.is_empty() {
-            Err(AuthError::BadRequest(
-                "User id is empty".to_string(),
-            ))
+            Err(AuthError::BadRequest("User id is empty".to_string()))
         } else {
             Ok(UserId::new(id))
         }
@@ -34,9 +30,7 @@ pub trait ExecutorAction: Debug + Send + Sync + 'static {
 /// Trait representing a multi-tenancy context for a
 /// request.
 #[cfg_attr(feature = "test", mockall::automock)]
-pub trait MultiTenancyAction:
-    Debug + Send + Sync + 'static
-{
+pub trait MultiTenancyAction: Debug + Send + Sync + 'static {
     fn platform_id(&self) -> Option<PlatformId>;
     fn operator_id(&self) -> Option<OperatorId>;
     fn get_operator_id(&self) -> AuthResult<OperatorId>;
@@ -66,12 +60,8 @@ impl ExecutorAction for Executor {
     fn has_tenant_id(&self, tenant_id: &TenantId) -> bool {
         match self {
             Self::SystemUser => true,
-            Self::User(u) => {
-                u.tenants.iter().any(|t| t == tenant_id)
-            }
-            Self::ServiceAccount(sa) => {
-                sa.tenant_id == *tenant_id
-            }
+            Self::User(u) => u.tenants.iter().any(|t| t == tenant_id),
+            Self::ServiceAccount(sa) => sa.tenant_id == *tenant_id,
             Self::None => false,
         }
     }
@@ -136,9 +126,7 @@ impl MultiTenancyAction for MultiTenancy {
 
     fn get_operator_id(&self) -> AuthResult<OperatorId> {
         self.operator.clone().ok_or_else(|| {
-            AuthError::BadRequest(
-                "Operator ID is required".to_string(),
-            )
+            AuthError::BadRequest("Operator ID is required".to_string())
         })
     }
 }

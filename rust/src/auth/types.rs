@@ -8,8 +8,14 @@ use std::str::FromStr;
 macro_rules! def_sdk_id {
     ($name:ident, $prefix:expr) => {
         #[derive(
-            Clone, Eq, PartialEq, Hash, Ord, PartialOrd,
-            Serialize, Deserialize,
+            Clone,
+            Eq,
+            PartialEq,
+            Hash,
+            Ord,
+            PartialOrd,
+            Serialize,
+            Deserialize,
         )]
         #[serde(transparent)]
         pub struct $name(String);
@@ -32,19 +38,13 @@ macro_rules! def_sdk_id {
         }
 
         impl fmt::Debug for $name {
-            fn fmt(
-                &self,
-                f: &mut fmt::Formatter<'_>,
-            ) -> fmt::Result {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
                 write!(f, "{}({})", stringify!($name), self.0)
             }
         }
 
         impl fmt::Display for $name {
-            fn fmt(
-                &self,
-                f: &mut fmt::Formatter<'_>,
-            ) -> fmt::Result {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
                 f.write_str(&self.0)
             }
         }
@@ -115,9 +115,7 @@ pub type PlatformId = TenantId;
 pub type OperatorId = TenantId;
 
 /// Validated identifier string (e.g. operator alias).
-#[derive(
-    Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize,
-)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct Identifier(String);
 
