@@ -123,8 +123,7 @@ fn save_credentials(creds: &StoredCredentials) -> Result<()> {
             .with_context(|| format!("failed to create {}", parent.display()))?;
     }
     let data = serde_json::to_string_pretty(creds)?;
-    std::fs::write(&path, data)
-        .with_context(|| format!("failed to write {}", path.display()))?;
+    std::fs::write(&path, data).with_context(|| format!("failed to write {}", path.display()))?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -170,7 +169,11 @@ async fn exchange_code(
 /// Poll the callback relay endpoint until the authorization code is available.
 async fn poll_for_code(api_url: &str, state: &str) -> Result<String> {
     let client = Client::new();
-    let poll_url = format!("{}/v1/auth/cli/poll?state={}", api_url.trim_end_matches('/'), state);
+    let poll_url = format!(
+        "{}/v1/auth/cli/poll?state={}",
+        api_url.trim_end_matches('/'),
+        state
+    );
     let deadline = tokio::time::Instant::now() + POLL_TIMEOUT;
 
     loop {
@@ -186,10 +189,8 @@ async fn poll_for_code(api_url: &str, state: &str) -> Result<String> {
         };
 
         if resp.status() == reqwest::StatusCode::OK {
-            let poll_resp: PollResponse = resp
-                .json()
-                .await
-                .context("failed to parse poll response")?;
+            let poll_resp: PollResponse =
+                resp.json().await.context("failed to parse poll response")?;
             return Ok(poll_resp.code);
         }
         // 204 No Content or other = not ready yet, keep polling

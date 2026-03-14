@@ -63,7 +63,8 @@ async fn main() -> Result<()> {
 
     match cli.command {
         Commands::Login => {
-            let redirect_uri = format!("{}/v1/auth/cli/callback", cli.api_url.trim_end_matches('/'));
+            let redirect_uri =
+                format!("{}/v1/auth/cli/callback", cli.api_url.trim_end_matches('/'));
             let oauth_config = auth::OAuthConfig {
                 cognito_domain: cli.cognito_domain,
                 client_id: cli.cognito_client_id,
