@@ -1,7 +1,7 @@
 #![allow(unused_imports)]
 #![allow(clippy::too_many_arguments)]
 
-extern crate reqwest;
+pub extern crate reqwest;
 extern crate serde;
 extern crate serde_json;
 extern crate serde_repr;
