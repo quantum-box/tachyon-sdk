@@ -32,6 +32,10 @@ struct Cli {
     #[arg(long, env = "TACHYON_COGNITO_CLIENT_ID")]
     cognito_client_id: Option<String>,
 
+    /// OAuth redirect URI (default: http://localhost/callback)
+    #[arg(long, env = "TACHYON_REDIRECT_URI")]
+    redirect_uri: Option<String>,
+
     #[command(subcommand)]
     command: Commands,
 }
@@ -66,6 +70,9 @@ async fn main() -> Result<()> {
             let oauth_config = auth::OAuthConfig {
                 cognito_domain,
                 client_id,
+                redirect_uri: cli
+                    .redirect_uri
+                    .unwrap_or_else(|| auth::OAuthConfig::default().redirect_uri),
                 scopes: vec!["openid".into(), "profile".into(), "email".into()],
             };
             auth::login(&oauth_config).await
