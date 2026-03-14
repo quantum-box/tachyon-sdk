@@ -4,19 +4,20 @@ use rand::Rng;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::io::Write;
 use std::path::PathBuf;
+use std::time::Duration;
 
-/// Default redirect URI — Cognito redirects here after login.
-/// The page won't load (no server), but the authorization code is visible
-/// in the browser address bar for the user to copy.
-const DEFAULT_REDIRECT_URI: &str = "http://localhost/callback";
+/// Polling interval when waiting for the callback relay.
+const POLL_INTERVAL: Duration = Duration::from_secs(2);
+/// Maximum time to wait for the user to complete login.
+const POLL_TIMEOUT: Duration = Duration::from_secs(300);
 
 /// Cognito OAuth configuration.
 #[derive(Debug, Clone)]
 pub struct OAuthConfig {
     pub cognito_domain: String,
     pub client_id: String,
+    pub client_secret: String,
     pub redirect_uri: String,
     pub scopes: Vec<String>,
 }
@@ -27,11 +28,11 @@ impl OAuthConfig {
         format!(
             "{}/oauth2/authorize?response_type=code&client_id={}&redirect_uri={}&scope={}&state={}&code_challenge={}&code_challenge_method=S256",
             self.cognito_domain,
-            self.client_id,
+            urlencoding::encode(&self.client_id),
             urlencoding::encode(&self.redirect_uri),
             scopes,
-            state,
-            code_challenge,
+            urlencoding::encode(state),
+            urlencoding::encode(code_challenge),
         )
     }
 
@@ -45,7 +46,8 @@ impl Default for OAuthConfig {
         Self {
             cognito_domain: String::new(),
             client_id: String::new(),
-            redirect_uri: DEFAULT_REDIRECT_URI.to_string(),
+            client_secret: String::new(),
+            redirect_uri: String::new(),
             scopes: vec!["openid".into(), "profile".into(), "email".into()],
         }
     }
@@ -69,6 +71,12 @@ struct TokenResponse {
     id_token: Option<String>,
     expires_in: Option<i64>,
     token_type: String,
+}
+
+/// Response from the poll endpoint.
+#[derive(Debug, Deserialize)]
+struct PollResponse {
+    code: String,
 }
 
 /// Generate a random string for PKCE code_verifier and state.
@@ -125,72 +133,6 @@ fn save_credentials(creds: &StoredCredentials) -> Result<()> {
     Ok(())
 }
 
-/// Extract the authorization code from user input.
-///
-/// Accepts either:
-/// - A full redirect URL containing `?code=...&state=...`
-/// - Just the raw authorization code string
-fn extract_code_from_input(input: &str, expected_state: &str) -> Result<String> {
-    let trimmed = input.trim();
-
-    // If the input looks like a URL, extract `code` and `state` from query params
-    if trimmed.starts_with("http://") || trimmed.starts_with("https://") {
-        let query = trimmed
-            .split_once('?')
-            .map(|(_, q)| q)
-            .ok_or_else(|| anyhow!("URL has no query parameters — expected ?code=..."))?;
-
-        let params: Vec<(&str, &str)> = query
-            .split('&')
-            .filter_map(|p| p.split_once('='))
-            .collect();
-
-        // Check for OAuth error in redirect
-        if let Some((_, error)) = params.iter().find(|(k, _)| *k == "error") {
-            let desc = params
-                .iter()
-                .find(|(k, _)| *k == "error_description")
-                .map(|(_, v)| urlencoding::decode(v).unwrap_or_default().into_owned())
-                .unwrap_or_default();
-            return Err(anyhow!("OAuth error: {error} — {desc}"));
-        }
-
-        let code = params
-            .iter()
-            .find(|(k, _)| *k == "code")
-            .map(|(_, v)| v.to_string())
-            .ok_or_else(|| anyhow!("no 'code' parameter found in the URL"))?;
-
-        // Validate state if present
-        if let Some((_, state)) = params.iter().find(|(k, _)| *k == "state") {
-            if *state != expected_state {
-                return Err(anyhow!(
-                    "state mismatch: expected {expected_state}, got {state}"
-                ));
-            }
-        }
-
-        Ok(code)
-    } else {
-        // Treat as a raw authorization code
-        if trimmed.is_empty() {
-            return Err(anyhow!("no input provided"));
-        }
-        Ok(trimmed.to_string())
-    }
-}
-
-/// Prompt the user to paste input and read a line from stdin.
-fn prompt_input(prompt: &str) -> Result<String> {
-    print!("{prompt}");
-    std::io::stdout().flush()?;
-    let mut line = String::new();
-    std::io::stdin()
-        .read_line(&mut line)
-        .context("failed to read from stdin")?;
-    Ok(line)
-}
-
 /// Exchange authorization code for tokens at the Cognito token endpoint.
 async fn exchange_code(
     oauth_config: &OAuthConfig,
@@ -203,6 +145,7 @@ async fn exchange_code(
         .form(&[
             ("grant_type", "authorization_code"),
             ("client_id", &oauth_config.client_id),
+            ("client_secret", &oauth_config.client_secret),
             ("code", code),
             ("redirect_uri", &oauth_config.redirect_uri),
             ("code_verifier", code_verifier),
@@ -224,13 +167,42 @@ async fn exchange_code(
         .context("failed to parse token response")
 }
 
-/// Run the full OAuth login flow (no local server — SSH-friendly).
+/// Poll the callback relay endpoint until the authorization code is available.
+async fn poll_for_code(api_url: &str, state: &str) -> Result<String> {
+    let client = Client::new();
+    let poll_url = format!("{}/v1/auth/cli/poll?state={}", api_url.trim_end_matches('/'), state);
+    let deadline = tokio::time::Instant::now() + POLL_TIMEOUT;
+
+    loop {
+        if tokio::time::Instant::now() > deadline {
+            return Err(anyhow!("login timed out — no response within 5 minutes"));
+        }
+
+        tokio::time::sleep(POLL_INTERVAL).await;
+
+        let resp = match client.get(&poll_url).send().await {
+            Ok(r) => r,
+            Err(_) => continue, // Network error, retry
+        };
+
+        if resp.status() == reqwest::StatusCode::OK {
+            let poll_resp: PollResponse = resp
+                .json()
+                .await
+                .context("failed to parse poll response")?;
+            return Ok(poll_resp.code);
+        }
+        // 204 No Content or other = not ready yet, keep polling
+    }
+}
+
+/// Run the full OAuth login flow.
 ///
 /// 1. Display the authorization URL for the user to open in a browser
-/// 2. After login, the browser redirects to the redirect URI with the code in the URL
-/// 3. User pastes the redirect URL (or just the code) back into the CLI
+/// 2. Browser redirects to the API callback relay after login
+/// 3. CLI polls the relay endpoint to retrieve the authorization code
 /// 4. CLI exchanges the code for tokens and saves them
-pub async fn login(oauth_config: &OAuthConfig) -> Result<()> {
+pub async fn login(oauth_config: &OAuthConfig, api_url: &str) -> Result<()> {
     let state = random_string(16);
     let (code_verifier, code_challenge) = pkce_pair();
 
@@ -241,20 +213,9 @@ pub async fn login(oauth_config: &OAuthConfig) -> Result<()> {
     println!();
     println!("  {auth_url}");
     println!();
-    println!("After logging in, your browser will redirect to a URL starting with:");
-    println!("  {}", oauth_config.redirect_uri);
-    println!();
-    println!("The page may not load — that is expected.");
-    println!("Copy the full URL from your browser's address bar and paste it below.");
-    println!();
+    println!("Waiting for login to complete...");
 
-    let input = tokio::task::spawn_blocking(|| {
-        prompt_input("Paste the redirect URL (or authorization code): ")
-    })
-    .await
-    .context("prompt task panicked")??;
-
-    let code = extract_code_from_input(&input, &state)?;
+    let code = poll_for_code(api_url, &state).await?;
 
     println!("Exchanging authorization code for tokens...");
 
@@ -297,42 +258,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_extract_code_from_full_url() {
-        let state = "abc123";
-        let url = "http://localhost/callback?code=AUTH_CODE_XYZ&state=abc123";
-        let code = extract_code_from_input(url, state).unwrap();
-        assert_eq!(code, "AUTH_CODE_XYZ");
-    }
-
-    #[test]
-    fn test_extract_code_from_url_state_mismatch() {
-        let url = "http://localhost/callback?code=AUTH_CODE_XYZ&state=wrong";
-        let result = extract_code_from_input(url, "expected");
-        assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("state mismatch"));
-    }
-
-    #[test]
-    fn test_extract_code_from_raw_code() {
-        let code = extract_code_from_input("  AUTH_CODE_XYZ  ", "any_state").unwrap();
-        assert_eq!(code, "AUTH_CODE_XYZ");
-    }
-
-    #[test]
-    fn test_extract_code_from_empty_input() {
-        let result = extract_code_from_input("", "state");
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_extract_code_from_url_with_error() {
-        let url = "http://localhost/callback?error=access_denied&error_description=User+cancelled";
-        let result = extract_code_from_input(url, "state");
-        assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("access_denied"));
-    }
-
-    #[test]
     fn test_pkce_pair_produces_valid_output() {
         let (verifier, challenge) = pkce_pair();
         assert!(!verifier.is_empty());
@@ -348,7 +273,8 @@ mod tests {
         let config = OAuthConfig {
             cognito_domain: "https://auth.example.com".to_string(),
             client_id: "test-client".to_string(),
-            redirect_uri: "http://localhost/callback".to_string(),
+            client_secret: "test-secret".to_string(),
+            redirect_uri: "https://api.example.com/v1/auth/cli/callback".to_string(),
             scopes: vec!["openid".into(), "profile".into()],
         };
         let url = config.authorize_url("STATE", "CHALLENGE");

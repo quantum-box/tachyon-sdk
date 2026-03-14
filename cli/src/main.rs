@@ -5,6 +5,13 @@ use anyhow::Result;
 use clap::{Parser, Subcommand};
 use tachyon_sdk::apis::configuration::Configuration;
 
+/// Default Cognito domain for the Tachyon production environment.
+const DEFAULT_COGNITO_DOMAIN: &str = "https://auth-pool.n1.tachy.one";
+/// Default Cognito client ID (tachyon-app-client).
+const DEFAULT_COGNITO_CLIENT_ID: &str = "5002hok6cj8mjmt3gepdpdq98i";
+/// Default Cognito client secret (tachyon-app-client).
+const DEFAULT_COGNITO_CLIENT_SECRET: &str = "3epft46iie79jshd4gkpeuj62q1pcmthequ1skbbd9dj1rdojrf";
+
 #[derive(Parser)]
 #[command(name = "tachyon", version, about = "Tachyon Platform CLI")]
 struct Cli {
@@ -12,7 +19,7 @@ struct Cli {
     #[arg(
         long,
         env = "TACHYON_API_URL",
-        default_value = "https://api.tachyon.run"
+        default_value = "https://api.n1.tachy.one"
     )]
     api_url: String,
 
@@ -25,16 +32,16 @@ struct Cli {
     api_key: Option<String>,
 
     /// Cognito domain URL (e.g. https://your-domain.auth.ap-northeast-1.amazoncognito.com)
-    #[arg(long, env = "TACHYON_COGNITO_DOMAIN")]
-    cognito_domain: Option<String>,
+    #[arg(long, env = "TACHYON_COGNITO_DOMAIN", default_value = DEFAULT_COGNITO_DOMAIN)]
+    cognito_domain: String,
 
     /// Cognito OAuth client ID
-    #[arg(long, env = "TACHYON_COGNITO_CLIENT_ID")]
-    cognito_client_id: Option<String>,
+    #[arg(long, env = "TACHYON_COGNITO_CLIENT_ID", default_value = DEFAULT_COGNITO_CLIENT_ID)]
+    cognito_client_id: String,
 
-    /// OAuth redirect URI (default: http://localhost/callback)
-    #[arg(long, env = "TACHYON_REDIRECT_URI")]
-    redirect_uri: Option<String>,
+    /// Cognito OAuth client secret
+    #[arg(long, env = "TACHYON_COGNITO_CLIENT_SECRET", default_value = DEFAULT_COGNITO_CLIENT_SECRET)]
+    cognito_client_secret: String,
 
     #[command(subcommand)]
     command: Commands,
@@ -56,26 +63,15 @@ async fn main() -> Result<()> {
 
     match cli.command {
         Commands::Login => {
-            let cognito_domain = cli.cognito_domain.ok_or_else(|| {
-                anyhow::anyhow!(
-                    "Cognito domain is required for login. Set --cognito-domain or TACHYON_COGNITO_DOMAIN"
-                )
-            })?;
-            let client_id = cli.cognito_client_id.ok_or_else(|| {
-                anyhow::anyhow!(
-                    "Cognito client ID is required for login. Set --cognito-client-id or TACHYON_COGNITO_CLIENT_ID"
-                )
-            })?;
-
+            let redirect_uri = format!("{}/v1/auth/cli/callback", cli.api_url.trim_end_matches('/'));
             let oauth_config = auth::OAuthConfig {
-                cognito_domain,
-                client_id,
-                redirect_uri: cli
-                    .redirect_uri
-                    .unwrap_or_else(|| auth::OAuthConfig::default().redirect_uri),
+                cognito_domain: cli.cognito_domain,
+                client_id: cli.cognito_client_id,
+                client_secret: cli.cognito_client_secret,
+                redirect_uri,
                 scopes: vec!["openid".into(), "profile".into(), "email".into()],
             };
-            auth::login(&oauth_config).await
+            auth::login(&oauth_config, &cli.api_url).await
         }
         Commands::Logout => auth::logout(),
         Commands::Compute(args) => {
