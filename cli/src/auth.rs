@@ -140,7 +140,7 @@ async fn exchange_code(
 ) -> Result<TokenResponse> {
     let client = Client::new();
     let resp = client
-        .post(&oauth_config.token_url())
+        .post(oauth_config.token_url())
         .form(&[
             ("grant_type", "authorization_code"),
             ("client_id", &oauth_config.client_id),
