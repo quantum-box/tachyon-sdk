@@ -1,10 +1,11 @@
-use anyhow::{anyhow, Context, Result};
+use anyhow::{anyhow, Result};
 use chrono::{DateTime, TimeZone, Utc};
 use clap::{Args, Subcommand};
-use reqwest::{header, Client};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use tachyon_sdk::apis::configuration::Configuration;
 use tokio::time::{sleep, Duration};
+
+use crate::client::{print_json, truncate, ApiClient};
 
 #[derive(Debug, Clone, Args)]
 pub struct ComputeArgs {
@@ -14,7 +15,37 @@ pub struct ComputeArgs {
 
 #[derive(Debug, Clone, Subcommand)]
 pub enum ComputeCommand {
-    /// Show build status for a compute app
+    /// List compute apps
+    Apps {
+        #[command(subcommand)]
+        command: AppsCommand,
+    },
+    /// Manage builds
+    Builds {
+        #[command(subcommand)]
+        command: BuildsCommand,
+    },
+    /// Manage deployments
+    Deployments {
+        #[command(subcommand)]
+        command: DeploymentsCommand,
+    },
+    /// Manage environment variables
+    Env {
+        #[command(subcommand)]
+        command: EnvCommand,
+    },
+    /// Manage custom domains
+    Domains {
+        #[command(subcommand)]
+        command: DomainsCommand,
+    },
+    /// Manage scaling configuration
+    Scaling {
+        #[command(subcommand)]
+        command: ScalingCommand,
+    },
+    /// Show build status for a compute app (shortcut for builds list)
     Status {
         /// App ID to show builds for
         app_id: String,
@@ -22,7 +53,7 @@ pub enum ComputeCommand {
         #[arg(long, default_value_t = 10)]
         limit: usize,
     },
-    /// Stream or fetch build logs for a compute app
+    /// Stream or fetch build logs (shortcut for builds logs)
     Logs {
         /// App ID to fetch logs for
         app_id: String,
@@ -35,30 +66,244 @@ pub enum ComputeCommand {
     },
 }
 
-#[derive(Debug, Deserialize)]
+// --- Apps subcommands ---
+
+#[derive(Debug, Clone, Subcommand)]
+pub enum AppsCommand {
+    /// List all compute apps
+    List {
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// Get details of a compute app
+    Get {
+        /// App ID
+        app_id: String,
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// Delete a compute app
+    Delete {
+        /// App ID
+        app_id: String,
+    },
+}
+
+// --- Builds subcommands ---
+
+#[derive(Debug, Clone, Subcommand)]
+pub enum BuildsCommand {
+    /// List builds for an app
+    List {
+        /// App ID
+        app_id: String,
+        /// Maximum number of builds to display
+        #[arg(long, default_value_t = 10)]
+        limit: usize,
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// Get details of a specific build
+    Get {
+        /// Build ID
+        build_id: String,
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// Trigger a new build
+    Trigger {
+        /// App ID
+        app_id: String,
+        /// Branch to build (optional)
+        #[arg(long)]
+        branch: Option<String>,
+    },
+    /// Cancel a running build
+    Cancel {
+        /// Build ID
+        build_id: String,
+    },
+    /// Fetch build logs
+    Logs {
+        /// App ID (used to resolve latest build if --build-id is not given)
+        app_id: String,
+        /// Build ID (defaults to the latest build)
+        #[arg(long)]
+        build_id: Option<String>,
+        /// Keep polling until the build is complete
+        #[arg(long)]
+        follow: bool,
+    },
+}
+
+// --- Deployments subcommands ---
+
+#[derive(Debug, Clone, Subcommand)]
+pub enum DeploymentsCommand {
+    /// List deployments for an app
+    List {
+        /// App ID
+        app_id: String,
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// Get details of a specific deployment
+    Get {
+        /// Deployment ID
+        deployment_id: String,
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// Rollback an app to a previous deployment
+    Rollback {
+        /// App ID
+        app_id: String,
+        /// Deployment ID to roll back to
+        #[arg(long)]
+        deployment_id: String,
+    },
+}
+
+// --- Env subcommands ---
+
+#[derive(Debug, Clone, Subcommand)]
+pub enum EnvCommand {
+    /// List environment variables for an app
+    List {
+        /// App ID
+        app_id: String,
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// Set environment variables for an app
+    Set {
+        /// App ID
+        app_id: String,
+        /// Variables in KEY=VALUE format
+        #[arg(required = true, num_args = 1..)]
+        vars: Vec<String>,
+    },
+    /// Delete an environment variable
+    Delete {
+        /// App ID
+        app_id: String,
+        /// Env var ID to delete
+        env_id: String,
+    },
+}
+
+// --- Domains subcommands ---
+
+#[derive(Debug, Clone, Subcommand)]
+pub enum DomainsCommand {
+    /// List custom domains for an app
+    List {
+        /// App ID
+        app_id: String,
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// Add a custom domain
+    Add {
+        /// App ID
+        app_id: String,
+        /// Domain name
+        domain: String,
+    },
+    /// Verify a custom domain
+    Verify {
+        /// Domain ID
+        domain_id: String,
+    },
+    /// Remove a custom domain
+    Remove {
+        /// Domain ID
+        domain_id: String,
+    },
+}
+
+// --- Scaling subcommands ---
+
+#[derive(Debug, Clone, Subcommand)]
+pub enum ScalingCommand {
+    /// Show current scaling configuration
+    Get {
+        /// App ID
+        app_id: String,
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// Update scaling configuration
+    Update {
+        /// App ID
+        app_id: String,
+        /// Minimum number of instances
+        #[arg(long)]
+        min_instances: Option<i32>,
+        /// Maximum number of instances
+        #[arg(long)]
+        max_instances: Option<i32>,
+    },
+}
+
+// ---- Response types ----
+
+#[derive(Debug, Deserialize, Serialize)]
+struct ListAppsResponse {
+    apps: Vec<AppResponse>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct AppResponse {
+    id: String,
+    name: String,
+    #[serde(default)]
+    framework: Option<String>,
+    #[serde(default)]
+    repository_url: Option<String>,
+    #[serde(default)]
+    status: Option<String>,
+    #[serde(default)]
+    created_at: Option<String>,
+    #[serde(default)]
+    updated_at: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
 struct ListBuildsResponse {
     builds: Vec<BuildResponse>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 struct BuildResponse {
     id: String,
-    #[allow(dead_code)]
     app_id: String,
-    #[allow(dead_code)]
-    trigger: String,
-    source_branch: String,
-    commit_sha: String,
-    #[allow(dead_code)]
+    #[serde(default)]
+    trigger: Option<String>,
+    #[serde(default)]
+    source_branch: Option<String>,
+    #[serde(default)]
+    commit_sha: Option<String>,
+    #[serde(default)]
     commit_message: Option<String>,
     status: String,
-    #[allow(dead_code)]
+    #[serde(default)]
     duration_secs: Option<i32>,
-    #[allow(dead_code)]
+    #[serde(default)]
     error_message: Option<String>,
-    created_at: String,
-    #[allow(dead_code)]
-    updated_at: String,
+    #[serde(default)]
+    created_at: Option<String>,
+    #[serde(default)]
+    updated_at: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -74,78 +319,105 @@ struct BuildLogLineResponse {
     message: String,
 }
 
-/// Build a reqwest client with Tachyon auth headers.
-///
-/// Uses the SDK's [`Configuration`] for the base URL and bearer token, and
-/// `tenant_id` for the required `x-operator-id` header.
-fn build_client(config: &Configuration, tenant_id: &str) -> Result<Client> {
-    let mut headers = header::HeaderMap::new();
-    headers.insert("x-operator-id", header::HeaderValue::from_str(tenant_id)?);
-    if let Some(token) = &config.bearer_access_token {
-        headers.insert(
-            header::AUTHORIZATION,
-            header::HeaderValue::from_str(&format!("Bearer {token}"))?,
-        );
-    }
-    Ok(Client::builder().default_headers(headers).build()?)
+#[derive(Debug, Deserialize, Serialize)]
+struct ListDeploymentsResponse {
+    deployments: Vec<DeploymentResponse>,
 }
 
-async fn fetch_builds(
-    client: &Client,
-    config: &Configuration,
-    app_id: &str,
-) -> Result<Vec<BuildResponse>> {
-    let url = format!(
-        "{}/v1/compute/apps/{}/builds",
-        config.base_path.trim_end_matches('/'),
-        app_id
-    );
-    let response = client
-        .get(&url)
-        .send()
-        .await
-        .with_context(|| format!("failed to GET {url}"))?;
-    let status = response.status();
-    if !status.is_success() {
-        let body = response.text().await.unwrap_or_default();
-        return Err(anyhow!("list builds failed: status={status}, body={body}"));
-    }
-    let list: ListBuildsResponse = response
-        .json()
-        .await
-        .context("failed to parse list builds response")?;
-    Ok(list.builds)
+#[derive(Debug, Deserialize, Serialize)]
+struct DeploymentResponse {
+    id: String,
+    #[serde(default)]
+    app_id: Option<String>,
+    #[serde(default)]
+    build_id: Option<String>,
+    status: String,
+    #[serde(default)]
+    url: Option<String>,
+    #[serde(default)]
+    created_at: Option<String>,
+    #[serde(default)]
+    updated_at: Option<String>,
 }
 
-async fn fetch_build_logs(
-    client: &Client,
-    config: &Configuration,
-    build_id: &str,
-    next_token: Option<&str>,
-) -> Result<BuildLogsResponse> {
-    let base_url = format!(
-        "{}/v1/compute/builds/{}/logs",
-        config.base_path.trim_end_matches('/'),
-        build_id
-    );
-    let mut request = client.get(&base_url);
-    if let Some(token) = next_token {
-        request = request.query(&[("next_token", token)]);
-    }
-    let response = request
-        .send()
-        .await
-        .with_context(|| format!("failed to GET {base_url}"))?;
-    let status = response.status();
-    if !status.is_success() {
-        let body = response.text().await.unwrap_or_default();
-        return Err(anyhow!("fetch logs failed: status={status}, body={body}"));
-    }
-    response
-        .json()
-        .await
-        .context("failed to parse build logs response")
+#[derive(Debug, Deserialize, Serialize)]
+struct ListEnvVarsResponse {
+    env_vars: Vec<EnvVarResponse>,
 }
+
+#[derive(Debug, Deserialize, Serialize)]
+struct EnvVarResponse {
+    id: String,
+    key: String,
+    #[serde(default)]
+    value: Option<String>,
+    #[serde(default)]
+    is_secret: Option<bool>,
+}
+
+#[derive(Debug, Serialize)]
+struct SetEnvVarsRequest {
+    env_vars: Vec<SetEnvVarEntry>,
+}
+
+#[derive(Debug, Serialize)]
+struct SetEnvVarEntry {
+    key: String,
+    value: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    is_secret: Option<bool>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct ListDomainsResponse {
+    domains: Vec<CustomDomainResponse>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct CustomDomainResponse {
+    id: String,
+    domain: String,
+    #[serde(default)]
+    status: Option<String>,
+    #[serde(default)]
+    verified: Option<bool>,
+    #[serde(default)]
+    created_at: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct AddDomainRequest {
+    domain: String,
+}
+
+#[derive(Debug, Serialize)]
+struct RollbackRequest {
+    deployment_id: String,
+}
+
+#[derive(Debug, Serialize)]
+struct TriggerBuildRequest {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    branch: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct ScalingConfigResponse {
+    #[serde(default)]
+    min_instances: Option<i32>,
+    #[serde(default)]
+    max_instances: Option<i32>,
+}
+
+#[derive(Debug, Serialize)]
+struct UpdateScalingRequest {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    min_instances: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    max_instances: Option<i32>,
+}
+
+// ---- Formatting helpers ----
 
 fn format_timestamp_ms(millis: i64) -> String {
     match Utc.timestamp_millis_opt(millis) {
@@ -169,111 +441,198 @@ fn truncate_sha(sha: &str) -> &str {
     }
 }
 
-async fn run_status(
-    config: &Configuration,
-    tenant_id: &str,
-    app_id: &str,
-    limit: usize,
-) -> Result<()> {
-    let client = build_client(config, tenant_id)?;
-    let builds = fetch_builds(&client, config, app_id)
-        .await
-        .with_context(|| format!("failed to fetch builds for app {app_id}"))?;
+// ---- Command handlers ----
 
-    if builds.is_empty() {
-        println!("No builds found for app {app_id}");
+async fn run_apps_list(api: &ApiClient, json: bool) -> Result<()> {
+    let resp: ListAppsResponse = api.get("/v1/compute/apps").await?;
+    if json {
+        return print_json(&resp.apps);
+    }
+    if resp.apps.is_empty() {
+        println!("No apps found.");
         return Ok(());
     }
-
-    let builds_to_show = &builds[..builds.len().min(limit)];
-
-    let id_width = 26;
-    let status_width = 11;
-    let branch_width = 20;
-    let commit_width = 8;
-    let created_width = 19;
-
     println!(
-        "{:<id_width$}  {:<status_width$}  {:<branch_width$}  {:<commit_width$}  {:<created_width$}",
-        "BUILD ID",
-        "STATUS",
-        "BRANCH",
-        "COMMIT",
-        "CREATED AT",
-        id_width = id_width,
-        status_width = status_width,
-        branch_width = branch_width,
-        commit_width = commit_width,
-        created_width = created_width,
+        "{:<28}  {:<24}  {:<12}  {:<10}  CREATED AT",
+        "ID", "NAME", "FRAMEWORK", "STATUS"
     );
     println!(
-        "{:-<id_width$}  {:-<status_width$}  {:-<branch_width$}  {:-<commit_width$}  {:-<created_width$}",
-        "",
-        "",
-        "",
-        "",
-        "",
-        id_width = id_width,
-        status_width = status_width,
-        branch_width = branch_width,
-        commit_width = commit_width,
-        created_width = created_width,
+        "{:-<28}  {:-<24}  {:-<12}  {:-<10}  {:-<19}",
+        "", "", "", "", ""
     );
-
-    for build in builds_to_show {
-        let branch = if build.source_branch.chars().count() > branch_width {
-            let truncated: String = build.source_branch.chars().take(branch_width - 3).collect();
-            format!("{truncated}...")
-        } else {
-            build.source_branch.clone()
-        };
+    for app in &resp.apps {
         println!(
-            "{:<id_width$}  {:<status_width$}  {:<branch_width$}  {:<commit_width$}  {:<created_width$}",
-            build.id,
-            build.status,
-            branch,
-            truncate_sha(&build.commit_sha),
-            format_created_at(&build.created_at),
-            id_width = id_width,
-            status_width = status_width,
-            branch_width = branch_width,
-            commit_width = commit_width,
-            created_width = created_width,
+            "{:<28}  {:<24}  {:<12}  {:<10}  {}",
+            app.id,
+            truncate(&app.name, 24),
+            app.framework.as_deref().unwrap_or("-"),
+            app.status.as_deref().unwrap_or("-"),
+            app.created_at
+                .as_deref()
+                .map(format_created_at)
+                .unwrap_or_else(|| "-".to_string()),
         );
     }
-
     Ok(())
 }
 
-async fn run_logs(
-    config: &Configuration,
-    tenant_id: &str,
+async fn run_apps_get(api: &ApiClient, app_id: &str, json: bool) -> Result<()> {
+    let app: AppResponse = api.get(&format!("/v1/compute/apps/{app_id}")).await?;
+    if json {
+        return print_json(&app);
+    }
+    println!("ID:         {}", app.id);
+    println!("Name:       {}", app.name);
+    println!("Framework:  {}", app.framework.as_deref().unwrap_or("-"));
+    println!(
+        "Repository: {}",
+        app.repository_url.as_deref().unwrap_or("-")
+    );
+    println!("Status:     {}", app.status.as_deref().unwrap_or("-"));
+    println!(
+        "Created:    {}",
+        app.created_at
+            .as_deref()
+            .map(format_created_at)
+            .unwrap_or_else(|| "-".to_string())
+    );
+    println!(
+        "Updated:    {}",
+        app.updated_at
+            .as_deref()
+            .map(format_created_at)
+            .unwrap_or_else(|| "-".to_string())
+    );
+    Ok(())
+}
+
+async fn run_apps_delete(api: &ApiClient, app_id: &str) -> Result<()> {
+    api.delete(&format!("/v1/compute/apps/{app_id}")).await?;
+    println!("App {app_id} deleted.");
+    Ok(())
+}
+
+async fn run_builds_list(api: &ApiClient, app_id: &str, limit: usize, json: bool) -> Result<()> {
+    let resp: ListBuildsResponse = api
+        .get(&format!("/v1/compute/apps/{app_id}/builds"))
+        .await?;
+    if json {
+        let builds = &resp.builds[..resp.builds.len().min(limit)];
+        return print_json(&builds);
+    }
+    if resp.builds.is_empty() {
+        println!("No builds found for app {app_id}");
+        return Ok(());
+    }
+    let builds = &resp.builds[..resp.builds.len().min(limit)];
+    println!(
+        "{:<26}  {:<11}  {:<20}  {:<8}  {:<19}",
+        "BUILD ID", "STATUS", "BRANCH", "COMMIT", "CREATED AT"
+    );
+    println!(
+        "{:-<26}  {:-<11}  {:-<20}  {:-<8}  {:-<19}",
+        "", "", "", "", ""
+    );
+    for build in builds {
+        println!(
+            "{:<26}  {:<11}  {:<20}  {:<8}  {:<19}",
+            build.id,
+            build.status,
+            truncate(build.source_branch.as_deref().unwrap_or("-"), 20),
+            truncate_sha(build.commit_sha.as_deref().unwrap_or("-")),
+            build
+                .created_at
+                .as_deref()
+                .map(format_created_at)
+                .unwrap_or_else(|| "-".to_string()),
+        );
+    }
+    Ok(())
+}
+
+async fn run_builds_get(api: &ApiClient, build_id: &str, json: bool) -> Result<()> {
+    let build: BuildResponse = api.get(&format!("/v1/compute/builds/{build_id}")).await?;
+    if json {
+        return print_json(&build);
+    }
+    println!("ID:       {}", build.id);
+    println!("App ID:   {}", build.app_id);
+    println!("Status:   {}", build.status);
+    println!(
+        "Branch:   {}",
+        build.source_branch.as_deref().unwrap_or("-")
+    );
+    println!("Commit:   {}", build.commit_sha.as_deref().unwrap_or("-"));
+    println!(
+        "Message:  {}",
+        build.commit_message.as_deref().unwrap_or("-")
+    );
+    println!("Trigger:  {}", build.trigger.as_deref().unwrap_or("-"));
+    if let Some(dur) = build.duration_secs {
+        println!("Duration: {dur}s");
+    }
+    if let Some(err) = &build.error_message {
+        println!("Error:    {err}");
+    }
+    println!(
+        "Created:  {}",
+        build
+            .created_at
+            .as_deref()
+            .map(format_created_at)
+            .unwrap_or_else(|| "-".to_string())
+    );
+    Ok(())
+}
+
+async fn run_builds_trigger(api: &ApiClient, app_id: &str, branch: Option<&str>) -> Result<()> {
+    let req = TriggerBuildRequest {
+        branch: branch.map(String::from),
+    };
+    let build: BuildResponse = api
+        .post(&format!("/v1/compute/apps/{app_id}/builds"), &req)
+        .await?;
+    println!("Build triggered: {}", build.id);
+    println!("Status: {}", build.status);
+    Ok(())
+}
+
+async fn run_builds_cancel(api: &ApiClient, build_id: &str) -> Result<()> {
+    api.post_no_body(&format!("/v1/compute/builds/{build_id}/cancel"))
+        .await?;
+    println!("Build {build_id} cancelled.");
+    Ok(())
+}
+
+async fn run_builds_logs(
+    api: &ApiClient,
     app_id: &str,
     build_id: Option<&str>,
     follow: bool,
 ) -> Result<()> {
-    let client = build_client(config, tenant_id)?;
-
     let resolved_build_id = match build_id {
         Some(id) => id.to_string(),
         None => {
-            let builds = fetch_builds(&client, config, app_id)
-                .await
-                .with_context(|| format!("failed to fetch builds for app {app_id}"))?;
-            let latest = builds
+            let resp: ListBuildsResponse = api
+                .get(&format!("/v1/compute/apps/{app_id}/builds"))
+                .await?;
+            resp.builds
                 .into_iter()
                 .next()
-                .ok_or_else(|| anyhow!("no builds found for app {app_id}"))?;
-            latest.id
+                .ok_or_else(|| anyhow!("no builds found for app {app_id}"))?
+                .id
         }
     };
 
     let mut next_token: Option<String> = None;
-
     loop {
-        let logs = fetch_build_logs(&client, config, &resolved_build_id, next_token.as_deref())
-            .await
-            .with_context(|| format!("failed to fetch logs for build {resolved_build_id}"))?;
+        let path = format!("/v1/compute/builds/{resolved_build_id}/logs");
+        let logs: BuildLogsResponse = if let Some(token) = &next_token {
+            api.get_query(&path, &[("next_token", token.as_str())])
+                .await?
+        } else {
+            api.get(&path).await?
+        };
 
         for line in &logs.lines {
             println!("[{}] {}", format_timestamp_ms(line.timestamp), line.message);
@@ -282,30 +641,338 @@ async fn run_logs(
         if logs.is_complete {
             break;
         }
-
         if logs.next_token.is_some() {
             next_token = logs.next_token;
         }
-
         if follow {
             sleep(Duration::from_secs(2)).await;
         } else {
             break;
         }
     }
-
     Ok(())
 }
 
+async fn run_deployments_list(api: &ApiClient, app_id: &str, json: bool) -> Result<()> {
+    let resp: ListDeploymentsResponse = api
+        .get(&format!("/v1/compute/apps/{app_id}/deployments"))
+        .await?;
+    if json {
+        return print_json(&resp.deployments);
+    }
+    if resp.deployments.is_empty() {
+        println!("No deployments found for app {app_id}");
+        return Ok(());
+    }
+    println!(
+        "{:<28}  {:<12}  {:<28}  {:<40}  CREATED AT",
+        "DEPLOYMENT ID", "STATUS", "BUILD ID", "URL"
+    );
+    println!(
+        "{:-<28}  {:-<12}  {:-<28}  {:-<40}  {:-<19}",
+        "", "", "", "", ""
+    );
+    for dep in &resp.deployments {
+        println!(
+            "{:<28}  {:<12}  {:<28}  {:<40}  {}",
+            dep.id,
+            dep.status,
+            dep.build_id.as_deref().unwrap_or("-"),
+            truncate(dep.url.as_deref().unwrap_or("-"), 40),
+            dep.created_at
+                .as_deref()
+                .map(format_created_at)
+                .unwrap_or_else(|| "-".to_string()),
+        );
+    }
+    Ok(())
+}
+
+async fn run_deployments_get(api: &ApiClient, deployment_id: &str, json: bool) -> Result<()> {
+    let dep: DeploymentResponse = api
+        .get(&format!("/v1/compute/deployments/{deployment_id}"))
+        .await?;
+    if json {
+        return print_json(&dep);
+    }
+    println!("ID:       {}", dep.id);
+    println!("Status:   {}", dep.status);
+    println!("App ID:   {}", dep.app_id.as_deref().unwrap_or("-"));
+    println!("Build ID: {}", dep.build_id.as_deref().unwrap_or("-"));
+    println!("URL:      {}", dep.url.as_deref().unwrap_or("-"));
+    println!(
+        "Created:  {}",
+        dep.created_at
+            .as_deref()
+            .map(format_created_at)
+            .unwrap_or_else(|| "-".to_string())
+    );
+    Ok(())
+}
+
+async fn run_deployments_rollback(
+    api: &ApiClient,
+    app_id: &str,
+    deployment_id: &str,
+) -> Result<()> {
+    let req = RollbackRequest {
+        deployment_id: deployment_id.to_string(),
+    };
+    let dep: DeploymentResponse = api
+        .post(&format!("/v1/compute/apps/{app_id}/rollback"), &req)
+        .await?;
+    println!("Rollback initiated. New deployment: {}", dep.id);
+    println!("Status: {}", dep.status);
+    Ok(())
+}
+
+async fn run_env_list(api: &ApiClient, app_id: &str, json: bool) -> Result<()> {
+    let resp: ListEnvVarsResponse = api.get(&format!("/v1/compute/apps/{app_id}/env")).await?;
+    if json {
+        return print_json(&resp.env_vars);
+    }
+    if resp.env_vars.is_empty() {
+        println!("No environment variables set for app {app_id}");
+        return Ok(());
+    }
+    println!("{:<28}  {:<24}  {:<8}  VALUE", "ID", "KEY", "SECRET");
+    println!("{:-<28}  {:-<24}  {:-<8}  {:-<40}", "", "", "", "");
+    for var in &resp.env_vars {
+        let is_secret = var.is_secret.unwrap_or(false);
+        let value = if is_secret {
+            "********".to_string()
+        } else {
+            var.value.as_deref().unwrap_or("-").to_string()
+        };
+        println!(
+            "{:<28}  {:<24}  {:<8}  {}",
+            var.id,
+            var.key,
+            if is_secret { "yes" } else { "no" },
+            value,
+        );
+    }
+    Ok(())
+}
+
+async fn run_env_set(api: &ApiClient, app_id: &str, vars: &[String]) -> Result<()> {
+    let entries: Vec<SetEnvVarEntry> = vars
+        .iter()
+        .map(|v| {
+            let (key, value) = v
+                .split_once('=')
+                .ok_or_else(|| anyhow!("invalid env var format: '{v}' (expected KEY=VALUE)"))?;
+            Ok(SetEnvVarEntry {
+                key: key.to_string(),
+                value: value.to_string(),
+                is_secret: None,
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+
+    let req = SetEnvVarsRequest { env_vars: entries };
+    let resp: ListEnvVarsResponse = api
+        .put(&format!("/v1/compute/apps/{app_id}/env"), &req)
+        .await?;
+    println!("Set {} environment variable(s).", resp.env_vars.len());
+    Ok(())
+}
+
+async fn run_env_delete(api: &ApiClient, app_id: &str, env_id: &str) -> Result<()> {
+    api.delete(&format!("/v1/compute/apps/{app_id}/env/{env_id}"))
+        .await?;
+    println!("Environment variable {env_id} deleted.");
+    Ok(())
+}
+
+async fn run_domains_list(api: &ApiClient, app_id: &str, json: bool) -> Result<()> {
+    let resp: ListDomainsResponse = api
+        .get(&format!("/v1/compute/apps/{app_id}/domains"))
+        .await?;
+    if json {
+        return print_json(&resp.domains);
+    }
+    if resp.domains.is_empty() {
+        println!("No custom domains for app {app_id}");
+        return Ok(());
+    }
+    println!(
+        "{:<28}  {:<40}  {:<10}  {:<8}  CREATED AT",
+        "ID", "DOMAIN", "STATUS", "VERIFIED"
+    );
+    println!(
+        "{:-<28}  {:-<40}  {:-<10}  {:-<8}  {:-<19}",
+        "", "", "", "", ""
+    );
+    for d in &resp.domains {
+        println!(
+            "{:<28}  {:<40}  {:<10}  {:<8}  {}",
+            d.id,
+            d.domain,
+            d.status.as_deref().unwrap_or("-"),
+            d.verified
+                .map(|v| if v { "yes" } else { "no" })
+                .unwrap_or("-"),
+            d.created_at
+                .as_deref()
+                .map(format_created_at)
+                .unwrap_or_else(|| "-".to_string()),
+        );
+    }
+    Ok(())
+}
+
+async fn run_domains_add(api: &ApiClient, app_id: &str, domain: &str) -> Result<()> {
+    let req = AddDomainRequest {
+        domain: domain.to_string(),
+    };
+    let resp: CustomDomainResponse = api
+        .post(&format!("/v1/compute/apps/{app_id}/domains"), &req)
+        .await?;
+    println!("Domain added: {} (ID: {})", resp.domain, resp.id);
+    Ok(())
+}
+
+async fn run_domains_verify(api: &ApiClient, domain_id: &str) -> Result<()> {
+    api.post_no_body(&format!("/v1/compute/domains/{domain_id}/verify"))
+        .await?;
+    println!("Domain {domain_id} verification initiated.");
+    Ok(())
+}
+
+async fn run_domains_remove(api: &ApiClient, domain_id: &str) -> Result<()> {
+    api.delete(&format!("/v1/compute/domains/{domain_id}"))
+        .await?;
+    println!("Domain {domain_id} removed.");
+    Ok(())
+}
+
+async fn run_scaling_get(api: &ApiClient, app_id: &str, json: bool) -> Result<()> {
+    // Scaling info is part of app details; fetch app and display scaling-relevant fields
+    let app: serde_json::Value = api.get(&format!("/v1/compute/apps/{app_id}")).await?;
+    if json {
+        return print_json(&app);
+    }
+    println!("App ID: {app_id}");
+    if let Some(scaling) = app.get("scaling") {
+        println!(
+            "Min instances: {}",
+            scaling
+                .get("min_instances")
+                .and_then(|v| v.as_i64())
+                .map(|v| v.to_string())
+                .unwrap_or_else(|| "-".to_string())
+        );
+        println!(
+            "Max instances: {}",
+            scaling
+                .get("max_instances")
+                .and_then(|v| v.as_i64())
+                .map(|v| v.to_string())
+                .unwrap_or_else(|| "-".to_string())
+        );
+    } else {
+        println!("No scaling configuration found.");
+    }
+    Ok(())
+}
+
+async fn run_scaling_update(
+    api: &ApiClient,
+    app_id: &str,
+    min_instances: Option<i32>,
+    max_instances: Option<i32>,
+) -> Result<()> {
+    if min_instances.is_none() && max_instances.is_none() {
+        return Err(anyhow!(
+            "at least one of --min-instances or --max-instances is required"
+        ));
+    }
+    let req = UpdateScalingRequest {
+        min_instances,
+        max_instances,
+    };
+    let resp: ScalingConfigResponse = api
+        .patch(&format!("/v1/compute/apps/{app_id}/scaling"), &req)
+        .await?;
+    println!("Scaling updated.");
+    if let Some(min) = resp.min_instances {
+        println!("Min instances: {min}");
+    }
+    if let Some(max) = resp.max_instances {
+        println!("Max instances: {max}");
+    }
+    Ok(())
+}
+
+// ---- Entry point ----
+
 pub async fn run(args: &ComputeArgs, config: &Configuration, tenant_id: &str) -> Result<()> {
+    let api = ApiClient::new(config, tenant_id)?;
+
     match &args.command {
+        ComputeCommand::Apps { command } => match command {
+            AppsCommand::List { json } => run_apps_list(&api, *json).await,
+            AppsCommand::Get { app_id, json } => run_apps_get(&api, app_id, *json).await,
+            AppsCommand::Delete { app_id } => run_apps_delete(&api, app_id).await,
+        },
+        ComputeCommand::Builds { command } => match command {
+            BuildsCommand::List {
+                app_id,
+                limit,
+                json,
+            } => run_builds_list(&api, app_id, *limit, *json).await,
+            BuildsCommand::Get { build_id, json } => run_builds_get(&api, build_id, *json).await,
+            BuildsCommand::Trigger { app_id, branch } => {
+                run_builds_trigger(&api, app_id, branch.as_deref()).await
+            }
+            BuildsCommand::Cancel { build_id } => run_builds_cancel(&api, build_id).await,
+            BuildsCommand::Logs {
+                app_id,
+                build_id,
+                follow,
+            } => run_builds_logs(&api, app_id, build_id.as_deref(), *follow).await,
+        },
+        ComputeCommand::Deployments { command } => match command {
+            DeploymentsCommand::List { app_id, json } => {
+                run_deployments_list(&api, app_id, *json).await
+            }
+            DeploymentsCommand::Get {
+                deployment_id,
+                json,
+            } => run_deployments_get(&api, deployment_id, *json).await,
+            DeploymentsCommand::Rollback {
+                app_id,
+                deployment_id,
+            } => run_deployments_rollback(&api, app_id, deployment_id).await,
+        },
+        ComputeCommand::Env { command } => match command {
+            EnvCommand::List { app_id, json } => run_env_list(&api, app_id, *json).await,
+            EnvCommand::Set { app_id, vars } => run_env_set(&api, app_id, vars).await,
+            EnvCommand::Delete { app_id, env_id } => run_env_delete(&api, app_id, env_id).await,
+        },
+        ComputeCommand::Domains { command } => match command {
+            DomainsCommand::List { app_id, json } => run_domains_list(&api, app_id, *json).await,
+            DomainsCommand::Add { app_id, domain } => run_domains_add(&api, app_id, domain).await,
+            DomainsCommand::Verify { domain_id } => run_domains_verify(&api, domain_id).await,
+            DomainsCommand::Remove { domain_id } => run_domains_remove(&api, domain_id).await,
+        },
+        ComputeCommand::Scaling { command } => match command {
+            ScalingCommand::Get { app_id, json } => run_scaling_get(&api, app_id, *json).await,
+            ScalingCommand::Update {
+                app_id,
+                min_instances,
+                max_instances,
+            } => run_scaling_update(&api, app_id, *min_instances, *max_instances).await,
+        },
+        // Legacy shortcuts
         ComputeCommand::Status { app_id, limit } => {
-            run_status(config, tenant_id, app_id, *limit).await
+            run_builds_list(&api, app_id, *limit, false).await
         }
         ComputeCommand::Logs {
             app_id,
             build_id,
             follow,
-        } => run_logs(config, tenant_id, app_id, build_id.as_deref(), *follow).await,
+        } => run_builds_logs(&api, app_id, build_id.as_deref(), *follow).await,
     }
 }
