@@ -1,0 +1,7 @@
+{
+  "private": true,
+  "name": "@anthropic-ja/tachyon-sdk",
+  "workspaces": [
+    "packages/*"
+  ]
+}
