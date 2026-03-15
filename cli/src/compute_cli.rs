@@ -453,8 +453,8 @@ async fn run_apps_list(api: &ApiClient, json: bool) -> Result<()> {
         return Ok(());
     }
     println!(
-        "{:<28}  {:<24}  {:<12}  {:<10}  {}",
-        "ID", "NAME", "FRAMEWORK", "STATUS", "CREATED AT"
+        "{:<28}  {:<24}  {:<12}  {:<10}  CREATED AT",
+        "ID", "NAME", "FRAMEWORK", "STATUS"
     );
     println!(
         "{:-<28}  {:-<24}  {:-<12}  {:-<10}  {:-<19}",
@@ -665,8 +665,8 @@ async fn run_deployments_list(api: &ApiClient, app_id: &str, json: bool) -> Resu
         return Ok(());
     }
     println!(
-        "{:<28}  {:<12}  {:<28}  {:<40}  {}",
-        "DEPLOYMENT ID", "STATUS", "BUILD ID", "URL", "CREATED AT"
+        "{:<28}  {:<12}  {:<28}  {:<40}  CREATED AT",
+        "DEPLOYMENT ID", "STATUS", "BUILD ID", "URL"
     );
     println!(
         "{:-<28}  {:-<12}  {:-<28}  {:-<40}  {:-<19}",
@@ -735,7 +735,7 @@ async fn run_env_list(api: &ApiClient, app_id: &str, json: bool) -> Result<()> {
         println!("No environment variables set for app {app_id}");
         return Ok(());
     }
-    println!("{:<28}  {:<24}  {:<8}  {}", "ID", "KEY", "SECRET", "VALUE");
+    println!("{:<28}  {:<24}  {:<8}  VALUE", "ID", "KEY", "SECRET");
     println!("{:-<28}  {:-<24}  {:-<8}  {:-<40}", "", "", "", "");
     for var in &resp.env_vars {
         let is_secret = var.is_secret.unwrap_or(false);
@@ -797,8 +797,8 @@ async fn run_domains_list(api: &ApiClient, app_id: &str, json: bool) -> Result<(
         return Ok(());
     }
     println!(
-        "{:<28}  {:<40}  {:<10}  {:<8}  {}",
-        "ID", "DOMAIN", "STATUS", "VERIFIED", "CREATED AT"
+        "{:<28}  {:<40}  {:<10}  {:<8}  CREATED AT",
+        "ID", "DOMAIN", "STATUS", "VERIFIED"
     );
     println!(
         "{:-<28}  {:-<40}  {:-<10}  {:-<8}  {:-<19}",

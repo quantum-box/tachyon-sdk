@@ -174,8 +174,8 @@ async fn run_integrations_list(api: &ApiClient, json: bool) -> Result<()> {
         return Ok(());
     }
     println!(
-        "{:<28}  {:<20}  {:<16}  {:<12}  {}",
-        "ID", "NAME", "PROVIDER", "STATUS", "CREATED AT"
+        "{:<28}  {:<20}  {:<16}  {:<12}  CREATED AT",
+        "ID", "NAME", "PROVIDER", "STATUS"
     );
     println!(
         "{:-<28}  {:-<20}  {:-<16}  {:-<12}  {:-<19}",
@@ -217,8 +217,8 @@ async fn run_connections_list(api: &ApiClient, json: bool) -> Result<()> {
         return Ok(());
     }
     println!(
-        "{:<28}  {:<16}  {:<12}  {:<20}  {}",
-        "ID", "PROVIDER", "STATUS", "ACCOUNT", "CREATED AT"
+        "{:<28}  {:<16}  {:<12}  {:<20}  CREATED AT",
+        "ID", "PROVIDER", "STATUS", "ACCOUNT"
     );
     println!(
         "{:-<28}  {:-<16}  {:-<12}  {:-<20}  {:-<19}",

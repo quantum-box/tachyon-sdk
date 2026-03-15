@@ -228,10 +228,7 @@ async fn run_operators_list(api: &ApiClient, json: bool) -> Result<()> {
         println!("No operators found.");
         return Ok(());
     }
-    println!(
-        "{:<28}  {:<24}  {:<20}  {}",
-        "ID", "NAME", "ALIAS", "CREATED AT"
-    );
+    println!("{:<28}  {:<24}  {:<20}  CREATED AT", "ID", "NAME", "ALIAS");
     println!("{:-<28}  {:-<24}  {:-<20}  {:-<19}", "", "", "", "");
     for op in &ops {
         println!(
@@ -281,8 +278,8 @@ async fn run_users_list(api: &ApiClient, json: bool) -> Result<()> {
         return Ok(());
     }
     println!(
-        "{:<28}  {:<24}  {:<30}  {:<10}  {}",
-        "ID", "USERNAME", "EMAIL", "ROLE", "CREATED AT"
+        "{:<28}  {:<24}  {:<30}  {:<10}  CREATED AT",
+        "ID", "USERNAME", "EMAIL", "ROLE"
     );
     println!(
         "{:-<28}  {:-<24}  {:-<30}  {:-<10}  {:-<19}",
@@ -338,7 +335,7 @@ async fn run_users_policies(api: &ApiClient, user_id: &str, json: bool) -> Resul
         println!("No policies attached to user {user_id}");
         return Ok(());
     }
-    println!("{:<28}  {:<24}  {}", "POLICY ID", "NAME", "SCOPE");
+    println!("{:<28}  {:<24}  SCOPE", "POLICY ID", "NAME");
     println!("{:-<28}  {:-<24}  {:-<20}", "", "", "");
     for p in &policies {
         println!(
@@ -361,8 +358,8 @@ async fn run_service_accounts_list(api: &ApiClient, json: bool) -> Result<()> {
         return Ok(());
     }
     println!(
-        "{:<28}  {:<24}  {:<40}  {}",
-        "ID", "NAME", "DESCRIPTION", "CREATED AT"
+        "{:<28}  {:<24}  {:<40}  CREATED AT",
+        "ID", "NAME", "DESCRIPTION"
     );
     println!("{:-<28}  {:-<24}  {:-<40}  {:-<19}", "", "", "", "");
     for sa in &accs {
@@ -400,10 +397,7 @@ async fn run_service_accounts_api_keys(api: &ApiClient, id: &str, json: bool) ->
         println!("No API keys found for service account {id}");
         return Ok(());
     }
-    println!(
-        "{:<28}  {:<20}  {:<16}  {}",
-        "ID", "NAME", "PREFIX", "CREATED AT"
-    );
+    println!("{:<28}  {:<20}  {:<16}  CREATED AT", "ID", "NAME", "PREFIX");
     println!("{:-<28}  {:-<20}  {:-<16}  {:-<19}", "", "", "", "");
     for k in &keys {
         println!(
@@ -444,7 +438,7 @@ async fn run_policies_actions(api: &ApiClient, json: bool) -> Result<()> {
         println!("No actions found.");
         return Ok(());
     }
-    println!("{:<40}  {}", "ACTION", "DESCRIPTION");
+    println!("{:<40}  DESCRIPTION", "ACTION");
     println!("{:-<40}  {:-<40}", "", "");
     for a in &actions {
         println!(

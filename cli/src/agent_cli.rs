@@ -232,8 +232,8 @@ async fn run_sessions_list(api: &ApiClient, json: bool) -> Result<()> {
         return Ok(());
     }
     println!(
-        "{:<28}  {:<28}  {:<12}  {}",
-        "ID", "AGENT ID", "STATUS", "CREATED AT"
+        "{:<28}  {:<28}  {:<12}  CREATED AT",
+        "ID", "AGENT ID", "STATUS"
     );
     println!("{:-<28}  {:-<28}  {:-<12}  {:-<19}", "", "", "", "");
     for s in &sessions {
@@ -257,10 +257,7 @@ async fn run_protocols_list(api: &ApiClient, json: bool) -> Result<()> {
         println!("No agent protocols found.");
         return Ok(());
     }
-    println!(
-        "{:<28}  {:<24}  {:<16}  {}",
-        "ID", "NAME", "MODEL", "DESCRIPTION"
-    );
+    println!("{:<28}  {:<24}  {:<16}  DESCRIPTION", "ID", "NAME", "MODEL");
     println!("{:-<28}  {:-<24}  {:-<16}  {:-<40}", "", "", "", "");
     for p in &protocols {
         println!(
@@ -301,8 +298,8 @@ async fn run_workers_list(api: &ApiClient, json: bool) -> Result<()> {
         return Ok(());
     }
     println!(
-        "{:<28}  {:<20}  {:<12}  {:<20}  {}",
-        "ID", "NAME", "STATUS", "LAST HEARTBEAT", "CREATED AT"
+        "{:<28}  {:<20}  {:<12}  {:<20}  CREATED AT",
+        "ID", "NAME", "STATUS", "LAST HEARTBEAT"
     );
     println!(
         "{:-<28}  {:-<20}  {:-<12}  {:-<20}  {:-<19}",
@@ -358,8 +355,8 @@ async fn run_worktrees_list(api: &ApiClient, json: bool) -> Result<()> {
         return Ok(());
     }
     println!(
-        "{:<28}  {:<12}  {:<24}  {}",
-        "TASK ID", "STATUS", "BRANCH", "REPOSITORY"
+        "{:<28}  {:<12}  {:<24}  REPOSITORY",
+        "TASK ID", "STATUS", "BRANCH"
     );
     println!("{:-<28}  {:-<12}  {:-<24}  {:-<40}", "", "", "", "");
     for w in &worktrees {
@@ -397,8 +394,8 @@ async fn run_memory_list(api: &ApiClient, json: bool) -> Result<()> {
         return Ok(());
     }
     println!(
-        "{:<28}  {:<12}  {:<50}  {}",
-        "ID", "STATUS", "CONTENT", "CREATED AT"
+        "{:<28}  {:<12}  {:<50}  CREATED AT",
+        "ID", "STATUS", "CONTENT"
     );
     println!("{:-<28}  {:-<12}  {:-<50}  {:-<19}", "", "", "", "");
     for m in &memories {
@@ -466,7 +463,7 @@ async fn run_models_list(api: &ApiClient, json: bool) -> Result<()> {
         println!("No models available.");
         return Ok(());
     }
-    println!("{:<32}  {:<24}  {}", "ID", "NAME", "PROVIDER");
+    println!("{:<32}  {:<24}  PROVIDER", "ID", "NAME");
     println!("{:-<32}  {:-<24}  {:-<16}", "", "", "");
     for m in &models {
         println!(

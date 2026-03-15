@@ -153,8 +153,8 @@ async fn run_deployments_list(api: &ApiClient, json: bool) -> Result<()> {
         return Ok(());
     }
     println!(
-        "{:<28}  {:<20}  {:<12}  {:<12}  {:<16}  {}",
-        "ID", "SERVICE", "ENVIRONMENT", "STATUS", "VERSION", "CREATED AT"
+        "{:<28}  {:<20}  {:<12}  {:<12}  {:<16}  CREATED AT",
+        "ID", "SERVICE", "ENVIRONMENT", "STATUS", "VERSION"
     );
     println!(
         "{:-<28}  {:-<20}  {:-<12}  {:-<12}  {:-<16}  {:-<19}",
@@ -198,8 +198,8 @@ async fn run_reports_list(api: &ApiClient, json: bool) -> Result<()> {
         return Ok(());
     }
     println!(
-        "{:<28}  {:<10}  {:<8}  {:<8}  {:<8}  {}",
-        "RUN ID", "STATUS", "TOTAL", "PASSED", "FAILED", "CREATED AT"
+        "{:<28}  {:<10}  {:<8}  {:<8}  {:<8}  CREATED AT",
+        "RUN ID", "STATUS", "TOTAL", "PASSED", "FAILED"
     );
     println!(
         "{:-<28}  {:-<10}  {:-<8}  {:-<8}  {:-<8}  {:-<19}",
@@ -246,8 +246,8 @@ async fn run_tool_jobs_list(api: &ApiClient, json: bool) -> Result<()> {
         return Ok(());
     }
     println!(
-        "{:<28}  {:<16}  {:<12}  {:<20}  {}",
-        "JOB ID", "PROVIDER", "STATUS", "TOOL", "CREATED AT"
+        "{:<28}  {:<16}  {:<12}  {:<20}  CREATED AT",
+        "JOB ID", "PROVIDER", "STATUS", "TOOL"
     );
     println!(
         "{:-<28}  {:-<16}  {:-<12}  {:-<20}  {:-<19}",
