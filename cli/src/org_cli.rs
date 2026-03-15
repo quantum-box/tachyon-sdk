@@ -228,7 +228,10 @@ async fn run_operators_list(api: &ApiClient, json: bool) -> Result<()> {
         println!("No operators found.");
         return Ok(());
     }
-    println!("{:<28}  {:<24}  {:<20}  {}", "ID", "NAME", "ALIAS", "CREATED AT");
+    println!(
+        "{:<28}  {:<24}  {:<20}  {}",
+        "ID", "NAME", "ALIAS", "CREATED AT"
+    );
     println!("{:-<28}  {:-<24}  {:-<20}  {:-<19}", "", "", "", "");
     for op in &ops {
         println!(
@@ -250,10 +253,7 @@ async fn run_operators_get(api: &ApiClient, id: &str, json: bool) -> Result<()> 
     println!("ID:      {}", op.id);
     println!("Name:    {}", op.name.as_deref().unwrap_or("-"));
     println!("Alias:   {}", op.alias.as_deref().unwrap_or("-"));
-    println!(
-        "Created: {}",
-        op.created_at.as_deref().unwrap_or("-")
-    );
+    println!("Created: {}", op.created_at.as_deref().unwrap_or("-"));
     Ok(())
 }
 
@@ -267,10 +267,7 @@ async fn run_operators_by_alias(api: &ApiClient, alias: &str, json: bool) -> Res
     println!("ID:      {}", op.id);
     println!("Name:    {}", op.name.as_deref().unwrap_or("-"));
     println!("Alias:   {}", op.alias.as_deref().unwrap_or("-"));
-    println!(
-        "Created: {}",
-        op.created_at.as_deref().unwrap_or("-")
-    );
+    println!("Created: {}", op.created_at.as_deref().unwrap_or("-"));
     Ok(())
 }
 
@@ -313,10 +310,7 @@ async fn run_users_get(api: &ApiClient, user_id: &str, json: bool) -> Result<()>
     println!("Username: {}", u.username.as_deref().unwrap_or("-"));
     println!("Email:    {}", u.email.as_deref().unwrap_or("-"));
     println!("Role:     {}", u.role.as_deref().unwrap_or("-"));
-    println!(
-        "Created:  {}",
-        u.created_at.as_deref().unwrap_or("-")
-    );
+    println!("Created:  {}", u.created_at.as_deref().unwrap_or("-"));
     Ok(())
 }
 
@@ -390,14 +384,8 @@ async fn run_service_accounts_get(api: &ApiClient, id: &str, json: bool) -> Resu
     }
     println!("ID:          {}", sa.id);
     println!("Name:        {}", sa.name.as_deref().unwrap_or("-"));
-    println!(
-        "Description: {}",
-        sa.description.as_deref().unwrap_or("-")
-    );
-    println!(
-        "Created:     {}",
-        sa.created_at.as_deref().unwrap_or("-")
-    );
+    println!("Description: {}", sa.description.as_deref().unwrap_or("-"));
+    println!("Created:     {}", sa.created_at.as_deref().unwrap_or("-"));
     Ok(())
 }
 
@@ -430,18 +418,13 @@ async fn run_service_accounts_api_keys(api: &ApiClient, id: &str, json: bool) ->
 }
 
 async fn run_policies_get(api: &ApiClient, policy_id: &str, json: bool) -> Result<()> {
-    let p: PolicyResponse = api
-        .get(&format!("/v1/auth/policies/{policy_id}"))
-        .await?;
+    let p: PolicyResponse = api.get(&format!("/v1/auth/policies/{policy_id}")).await?;
     if json {
         return print_json(&p);
     }
     println!("ID:          {}", p.id);
     println!("Name:        {}", p.name.as_deref().unwrap_or("-"));
-    println!(
-        "Description: {}",
-        p.description.as_deref().unwrap_or("-")
-    );
+    println!("Description: {}", p.description.as_deref().unwrap_or("-"));
     println!("Effect:      {}", p.effect.as_deref().unwrap_or("-"));
     if let Some(actions) = &p.actions {
         println!("Actions:     {}", actions.join(", "));

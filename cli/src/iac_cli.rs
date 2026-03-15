@@ -62,9 +62,7 @@ pub enum ConnectionsCommand {
         json: bool,
     },
     /// Disconnect an integration
-    Disconnect {
-        id: String,
-    },
+    Disconnect { id: String },
 }
 
 // ---- Response types ----
@@ -136,12 +134,11 @@ async fn run_oauth_providers(
         println!("  GitHub:");
         println!(
             "    Enabled:   {}",
-            gh.enabled.map(|v| if v { "yes" } else { "no" }).unwrap_or("-")
+            gh.enabled
+                .map(|v| if v { "yes" } else { "no" })
+                .unwrap_or("-")
         );
-        println!(
-            "    Client ID: {}",
-            gh.client_id.as_deref().unwrap_or("-")
-        );
+        println!("    Client ID: {}", gh.client_id.as_deref().unwrap_or("-"));
         if let Some(scopes) = &gh.scopes {
             println!("    Scopes:    {}", scopes.join(", "));
         }
@@ -153,12 +150,11 @@ async fn run_oauth_providers(
         println!("  Linear:");
         println!(
             "    Enabled:   {}",
-            lr.enabled.map(|v| if v { "yes" } else { "no" }).unwrap_or("-")
+            lr.enabled
+                .map(|v| if v { "yes" } else { "no" })
+                .unwrap_or("-")
         );
-        println!(
-            "    Client ID: {}",
-            lr.client_id.as_deref().unwrap_or("-")
-        );
+        println!("    Client ID: {}", lr.client_id.as_deref().unwrap_or("-"));
         if let Some(scopes) = &lr.scopes {
             println!("    Scopes:    {}", scopes.join(", "));
         }
@@ -207,10 +203,7 @@ async fn run_integrations_get(api: &ApiClient, id: &str, json: bool) -> Result<(
     println!("Name:     {}", i.name.as_deref().unwrap_or("-"));
     println!("Provider: {}", i.provider.as_deref().unwrap_or("-"));
     println!("Status:   {}", i.status.as_deref().unwrap_or("-"));
-    println!(
-        "Created:  {}",
-        i.created_at.as_deref().unwrap_or("-")
-    );
+    println!("Created:  {}", i.created_at.as_deref().unwrap_or("-"));
     Ok(())
 }
 
@@ -254,14 +247,8 @@ async fn run_connections_get(api: &ApiClient, id: &str, json: bool) -> Result<()
     println!("ID:       {}", c.id);
     println!("Provider: {}", c.provider.as_deref().unwrap_or("-"));
     println!("Status:   {}", c.status.as_deref().unwrap_or("-"));
-    println!(
-        "Account:  {}",
-        c.account_name.as_deref().unwrap_or("-")
-    );
-    println!(
-        "Created:  {}",
-        c.created_at.as_deref().unwrap_or("-")
-    );
+    println!("Account:  {}", c.account_name.as_deref().unwrap_or("-"));
+    println!("Created:  {}", c.created_at.as_deref().unwrap_or("-"));
     Ok(())
 }
 
@@ -289,9 +276,7 @@ pub async fn run(args: &IacArgs, config: &Configuration, tenant_id: &str) -> Res
         IacCommand::Connections { command } => match command {
             ConnectionsCommand::List { json } => run_connections_list(&api, *json).await,
             ConnectionsCommand::Get { id, json } => run_connections_get(&api, id, *json).await,
-            ConnectionsCommand::Disconnect { id } => {
-                run_connections_disconnect(&api, id).await
-            }
+            ConnectionsCommand::Disconnect { id } => run_connections_disconnect(&api, id).await,
         },
     }
 }

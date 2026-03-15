@@ -74,9 +74,7 @@ pub enum ToolJobsCommand {
         json: bool,
     },
     /// Cancel a tool job
-    Cancel {
-        job_id: String,
-    },
+    Cancel { job_id: String },
     /// List available tool job providers
     Providers {
         #[arg(long)]
@@ -182,23 +180,11 @@ async fn run_deployments_get(api: &ApiClient, id: &str, json: bool) -> Result<()
         return print_json(&d);
     }
     println!("ID:          {}", d.id);
-    println!(
-        "Service:     {}",
-        d.service.as_deref().unwrap_or("-")
-    );
-    println!(
-        "Environment: {}",
-        d.environment.as_deref().unwrap_or("-")
-    );
+    println!("Service:     {}", d.service.as_deref().unwrap_or("-"));
+    println!("Environment: {}", d.environment.as_deref().unwrap_or("-"));
     println!("Status:      {}", d.status.as_deref().unwrap_or("-"));
-    println!(
-        "Version:     {}",
-        d.version.as_deref().unwrap_or("-")
-    );
-    println!(
-        "Created:     {}",
-        d.created_at.as_deref().unwrap_or("-")
-    );
+    println!("Version:     {}", d.version.as_deref().unwrap_or("-"));
+    println!("Created:     {}", d.created_at.as_deref().unwrap_or("-"));
     Ok(())
 }
 
@@ -224,9 +210,15 @@ async fn run_reports_list(api: &ApiClient, json: bool) -> Result<()> {
             "{:<28}  {:<10}  {:<8}  {:<8}  {:<8}  {}",
             r.run_id.as_deref().unwrap_or("-"),
             r.status.as_deref().unwrap_or("-"),
-            r.total.map(|v| v.to_string()).unwrap_or_else(|| "-".to_string()),
-            r.passed.map(|v| v.to_string()).unwrap_or_else(|| "-".to_string()),
-            r.failed.map(|v| v.to_string()).unwrap_or_else(|| "-".to_string()),
+            r.total
+                .map(|v| v.to_string())
+                .unwrap_or_else(|| "-".to_string()),
+            r.passed
+                .map(|v| v.to_string())
+                .unwrap_or_else(|| "-".to_string()),
+            r.failed
+                .map(|v| v.to_string())
+                .unwrap_or_else(|| "-".to_string()),
             r.created_at.as_deref().unwrap_or("-"),
         );
     }
@@ -276,9 +268,7 @@ async fn run_tool_jobs_list(api: &ApiClient, json: bool) -> Result<()> {
 }
 
 async fn run_tool_jobs_get(api: &ApiClient, job_id: &str, json: bool) -> Result<()> {
-    let j: serde_json::Value = api
-        .get(&format!("/v1/agent/tool-jobs/{job_id}"))
-        .await?;
+    let j: serde_json::Value = api.get(&format!("/v1/agent/tool-jobs/{job_id}")).await?;
     if json {
         return print_json(&j);
     }
@@ -294,8 +284,7 @@ async fn run_tool_jobs_cancel(api: &ApiClient, job_id: &str) -> Result<()> {
 }
 
 async fn run_tool_jobs_providers(api: &ApiClient, json: bool) -> Result<()> {
-    let providers: Vec<ToolJobProviderResponse> =
-        api.get("/v1/agent/tool-jobs/providers").await?;
+    let providers: Vec<ToolJobProviderResponse> = api.get("/v1/agent/tool-jobs/providers").await?;
     if json {
         return print_json(&providers);
     }
@@ -305,10 +294,7 @@ async fn run_tool_jobs_providers(api: &ApiClient, json: bool) -> Result<()> {
     }
     for p in &providers {
         println!("Provider: {}", p.name.as_deref().unwrap_or("-"));
-        println!(
-            "  Description: {}",
-            p.description.as_deref().unwrap_or("-")
-        );
+        println!("  Description: {}", p.description.as_deref().unwrap_or("-"));
         if let Some(tools) = &p.tools {
             println!("  Tools: {}", tools.join(", "));
         }

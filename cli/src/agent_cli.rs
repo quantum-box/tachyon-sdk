@@ -275,27 +275,19 @@ async fn run_protocols_list(api: &ApiClient, json: bool) -> Result<()> {
 }
 
 async fn run_protocols_get(api: &ApiClient, id: &str, json: bool) -> Result<()> {
-    let p: ProtocolResponse = api
-        .get(&format!("/v1/llms/agent-protocols/{id}"))
-        .await?;
+    let p: ProtocolResponse = api.get(&format!("/v1/llms/agent-protocols/{id}")).await?;
     if json {
         return print_json(&p);
     }
     println!("ID:          {}", p.id);
     println!("Name:        {}", p.name.as_deref().unwrap_or("-"));
-    println!(
-        "Description: {}",
-        p.description.as_deref().unwrap_or("-")
-    );
+    println!("Description: {}", p.description.as_deref().unwrap_or("-"));
     println!("Model:       {}", p.model.as_deref().unwrap_or("-"));
     if let Some(prompt) = &p.system_prompt {
         println!("System prompt:");
         println!("  {}", prompt.replace('\n', "\n  "));
     }
-    println!(
-        "Created:     {}",
-        p.created_at.as_deref().unwrap_or("-")
-    );
+    println!("Created:     {}", p.created_at.as_deref().unwrap_or("-"));
     Ok(())
 }
 
@@ -330,9 +322,7 @@ async fn run_workers_list(api: &ApiClient, json: bool) -> Result<()> {
 }
 
 async fn run_workers_get(api: &ApiClient, worker_id: &str, json: bool) -> Result<()> {
-    let w: WorkerResponse = api
-        .get(&format!("/v1/agent/workers/{worker_id}"))
-        .await?;
+    let w: WorkerResponse = api.get(&format!("/v1/agent/workers/{worker_id}")).await?;
     if json {
         return print_json(&w);
     }
@@ -343,10 +333,7 @@ async fn run_workers_get(api: &ApiClient, worker_id: &str, json: bool) -> Result
         "Last heartbeat: {}",
         w.last_heartbeat.as_deref().unwrap_or("-")
     );
-    println!(
-        "Created:        {}",
-        w.created_at.as_deref().unwrap_or("-")
-    );
+    println!("Created:        {}", w.created_at.as_deref().unwrap_or("-"));
     Ok(())
 }
 
@@ -388,23 +375,15 @@ async fn run_worktrees_list(api: &ApiClient, json: bool) -> Result<()> {
 }
 
 async fn run_worktrees_get(api: &ApiClient, task_id: &str, json: bool) -> Result<()> {
-    let w: WorktreeResponse = api
-        .get(&format!("/v1/agent/worktrees/{task_id}"))
-        .await?;
+    let w: WorktreeResponse = api.get(&format!("/v1/agent/worktrees/{task_id}")).await?;
     if json {
         return print_json(&w);
     }
     println!("Task ID:    {}", w.task_id.as_deref().unwrap_or("-"));
     println!("Status:     {}", w.status.as_deref().unwrap_or("-"));
     println!("Branch:     {}", w.branch.as_deref().unwrap_or("-"));
-    println!(
-        "Repository: {}",
-        w.repository_url.as_deref().unwrap_or("-")
-    );
-    println!(
-        "Created:    {}",
-        w.created_at.as_deref().unwrap_or("-")
-    );
+    println!("Repository: {}", w.repository_url.as_deref().unwrap_or("-"));
+    println!("Created:    {}", w.created_at.as_deref().unwrap_or("-"));
     Ok(())
 }
 
@@ -449,10 +428,7 @@ async fn run_agent_status(
         return print_json(&status);
     }
     println!("Status:     {}", status.status.as_deref().unwrap_or("-"));
-    println!(
-        "Agent ID:   {}",
-        status.agent_id.as_deref().unwrap_or("-")
-    );
+    println!("Agent ID:   {}", status.agent_id.as_deref().unwrap_or("-"));
     if let Some(sid) = &status.session_id {
         println!("Session ID: {sid}");
     }
@@ -475,10 +451,7 @@ async fn run_agent_messages(
     }
     for msg in &messages {
         let role = msg.get("role").and_then(|v| v.as_str()).unwrap_or("?");
-        let content = msg
-            .get("content")
-            .and_then(|v| v.as_str())
-            .unwrap_or("");
+        let content = msg.get("content").and_then(|v| v.as_str()).unwrap_or("");
         println!("[{role}] {content}");
     }
     Ok(())

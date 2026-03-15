@@ -39,7 +39,9 @@ impl ApiClient {
             let body = resp.text().await.unwrap_or_default();
             return Err(anyhow!("GET {path} failed: status={status}, body={body}"));
         }
-        resp.json().await.with_context(|| format!("parse GET {path}"))
+        resp.json()
+            .await
+            .with_context(|| format!("parse GET {path}"))
     }
 
     /// GET with query parameters.
@@ -61,7 +63,9 @@ impl ApiClient {
             let body = resp.text().await.unwrap_or_default();
             return Err(anyhow!("GET {path} failed: status={status}, body={body}"));
         }
-        resp.json().await.with_context(|| format!("parse GET {path}"))
+        resp.json()
+            .await
+            .with_context(|| format!("parse GET {path}"))
     }
 
     /// POST a JSON body and deserialize the response.
@@ -85,7 +89,9 @@ impl ApiClient {
                 "POST {path} failed: status={status}, body={body_text}"
             ));
         }
-        resp.json().await.with_context(|| format!("parse POST {path}"))
+        resp.json()
+            .await
+            .with_context(|| format!("parse POST {path}"))
     }
 
     /// POST with no response body expected (returns status text).
@@ -100,9 +106,7 @@ impl ApiClient {
         let status = resp.status();
         if !status.is_success() {
             let body = resp.text().await.unwrap_or_default();
-            return Err(anyhow!(
-                "POST {path} failed: status={status}, body={body}"
-            ));
+            return Err(anyhow!("POST {path} failed: status={status}, body={body}"));
         }
         Ok(status.to_string())
     }
@@ -177,7 +181,6 @@ impl ApiClient {
         }
         Ok(())
     }
-
 }
 
 /// Format helper: truncate a string with ellipsis if longer than max_len.

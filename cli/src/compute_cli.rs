@@ -483,10 +483,7 @@ async fn run_apps_get(api: &ApiClient, app_id: &str, json: bool) -> Result<()> {
     }
     println!("ID:         {}", app.id);
     println!("Name:       {}", app.name);
-    println!(
-        "Framework:  {}",
-        app.framework.as_deref().unwrap_or("-")
-    );
+    println!("Framework:  {}", app.framework.as_deref().unwrap_or("-"));
     println!(
         "Repository: {}",
         app.repository_url.as_deref().unwrap_or("-")
@@ -515,12 +512,7 @@ async fn run_apps_delete(api: &ApiClient, app_id: &str) -> Result<()> {
     Ok(())
 }
 
-async fn run_builds_list(
-    api: &ApiClient,
-    app_id: &str,
-    limit: usize,
-    json: bool,
-) -> Result<()> {
+async fn run_builds_list(api: &ApiClient, app_id: &str, limit: usize, json: bool) -> Result<()> {
     let resp: ListBuildsResponse = api
         .get(&format!("/v1/compute/apps/{app_id}/builds"))
         .await?;
@@ -570,18 +562,12 @@ async fn run_builds_get(api: &ApiClient, build_id: &str, json: bool) -> Result<(
         "Branch:   {}",
         build.source_branch.as_deref().unwrap_or("-")
     );
-    println!(
-        "Commit:   {}",
-        build.commit_sha.as_deref().unwrap_or("-")
-    );
+    println!("Commit:   {}", build.commit_sha.as_deref().unwrap_or("-"));
     println!(
         "Message:  {}",
         build.commit_message.as_deref().unwrap_or("-")
     );
-    println!(
-        "Trigger:  {}",
-        build.trigger.as_deref().unwrap_or("-")
-    );
+    println!("Trigger:  {}", build.trigger.as_deref().unwrap_or("-"));
     if let Some(dur) = build.duration_secs {
         println!("Duration: {dur}s");
     }
@@ -711,14 +697,8 @@ async fn run_deployments_get(api: &ApiClient, deployment_id: &str, json: bool) -
     }
     println!("ID:       {}", dep.id);
     println!("Status:   {}", dep.status);
-    println!(
-        "App ID:   {}",
-        dep.app_id.as_deref().unwrap_or("-")
-    );
-    println!(
-        "Build ID: {}",
-        dep.build_id.as_deref().unwrap_or("-")
-    );
+    println!("App ID:   {}", dep.app_id.as_deref().unwrap_or("-"));
+    println!("Build ID: {}", dep.build_id.as_deref().unwrap_or("-"));
     println!("URL:      {}", dep.url.as_deref().unwrap_or("-"));
     println!(
         "Created:  {}",
@@ -747,9 +727,7 @@ async fn run_deployments_rollback(
 }
 
 async fn run_env_list(api: &ApiClient, app_id: &str, json: bool) -> Result<()> {
-    let resp: ListEnvVarsResponse = api
-        .get(&format!("/v1/compute/apps/{app_id}/env"))
-        .await?;
+    let resp: ListEnvVarsResponse = api.get(&format!("/v1/compute/apps/{app_id}/env")).await?;
     if json {
         return print_json(&resp.env_vars);
     }
@@ -832,7 +810,9 @@ async fn run_domains_list(api: &ApiClient, app_id: &str, json: bool) -> Result<(
             d.id,
             d.domain,
             d.status.as_deref().unwrap_or("-"),
-            d.verified.map(|v| if v { "yes" } else { "no" }).unwrap_or("-"),
+            d.verified
+                .map(|v| if v { "yes" } else { "no" })
+                .unwrap_or("-"),
             d.created_at
                 .as_deref()
                 .map(format_created_at)
