@@ -1,5 +1,10 @@
+mod agent_cli;
 mod auth;
+mod client;
 mod compute_cli;
+mod iac_cli;
+mod ops_cli;
+mod org_cli;
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
@@ -53,22 +58,63 @@ enum Commands {
     Login,
     /// Remove stored credentials
     Logout,
-    /// Manage compute apps and builds
+    /// Manage compute apps, builds, deployments, and configuration
     Compute(compute_cli::ComputeArgs),
+    /// Manage organizations, users, service accounts, and policies
+    Org(org_cli::OrgArgs),
+    /// Manage agent sessions, protocols, workers, and memory
+    Agent(agent_cli::AgentArgs),
+    /// Infrastructure-as-Code: integrations, OAuth providers, connections
+    Iac(iac_cli::IacArgs),
+    /// Operations: deployment events, scenario reports, and tool jobs
+    Ops(ops_cli::OpsArgs),
+}
+
+/// Resolve the bearer token from CLI args or stored credentials.
+fn resolve_token(cli: &Cli) -> Option<String> {
+    if cli.api_key.is_some() {
+        return cli.api_key.clone();
+    }
+    match auth::load_credentials() {
+        Ok(Some(creds)) => {
+            if let Some(exp) = creds.expires_at {
+                let now = chrono::Utc::now().timestamp();
+                if now >= exp {
+                    eprintln!(
+                        "Warning: stored token has expired. Run `tachyon login` to re-authenticate."
+                    );
+                }
+            }
+            Some(creds.access_token)
+        }
+        Ok(None) => None,
+        Err(e) => {
+            eprintln!("Warning: failed to load stored credentials: {e}");
+            None
+        }
+    }
+}
+
+/// Build SDK configuration with the resolved token.
+fn build_config(cli: &Cli) -> Configuration {
+    let mut config = Configuration::new();
+    config.base_path = cli.api_url.clone();
+    config.bearer_access_token = resolve_token(cli);
+    config
 }
 
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
 
-    match cli.command {
+    match &cli.command {
         Commands::Login => {
             let redirect_uri =
                 format!("{}/v1/auth/cli/callback", cli.api_url.trim_end_matches('/'));
             let oauth_config = auth::OAuthConfig {
-                cognito_domain: cli.cognito_domain,
-                client_id: cli.cognito_client_id,
-                client_secret: cli.cognito_client_secret,
+                cognito_domain: cli.cognito_domain.clone(),
+                client_id: cli.cognito_client_id.clone(),
+                client_secret: cli.cognito_client_secret.clone(),
                 redirect_uri,
                 scopes: vec!["openid".into(), "profile".into(), "email".into()],
             };
@@ -76,35 +122,24 @@ async fn main() -> Result<()> {
         }
         Commands::Logout => auth::logout(),
         Commands::Compute(args) => {
-            let mut config = Configuration::new();
-            config.base_path = cli.api_url;
-
-            // API key takes precedence; otherwise try stored OAuth token
-            config.bearer_access_token = if cli.api_key.is_some() {
-                cli.api_key
-            } else {
-                match auth::load_credentials() {
-                    Ok(Some(creds)) => {
-                        // Warn if token is expired
-                        if let Some(exp) = creds.expires_at {
-                            let now = chrono::Utc::now().timestamp();
-                            if now >= exp {
-                                eprintln!(
-                                    "Warning: stored token has expired. Run `tachyon login` to re-authenticate."
-                                );
-                            }
-                        }
-                        Some(creds.access_token)
-                    }
-                    Ok(None) => None,
-                    Err(e) => {
-                        eprintln!("Warning: failed to load stored credentials: {e}");
-                        None
-                    }
-                }
-            };
-
-            compute_cli::run(&args, &config, &cli.tenant_id).await
+            let config = build_config(&cli);
+            compute_cli::run(args, &config, &cli.tenant_id).await
+        }
+        Commands::Org(args) => {
+            let config = build_config(&cli);
+            org_cli::run(args, &config, &cli.tenant_id).await
+        }
+        Commands::Agent(args) => {
+            let config = build_config(&cli);
+            agent_cli::run(args, &config, &cli.tenant_id).await
+        }
+        Commands::Iac(args) => {
+            let config = build_config(&cli);
+            iac_cli::run(args, &config, &cli.tenant_id).await
+        }
+        Commands::Ops(args) => {
+            let config = build_config(&cli);
+            ops_cli::run(args, &config, &cli.tenant_id).await
         }
     }
 }
