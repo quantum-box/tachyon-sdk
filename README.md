@@ -16,7 +16,7 @@ Installs `tachyon` to `/usr/local/bin` (or `~/.local/bin` if you lack write perm
 
 ```sh
 # Set credentials
-export TACHYON_API_URL=https://api.tachyon.run
+export TACHYON_API_URL=https://api.n1.tachy.one
 export TACHYON_TENANT_ID=tn_xxxx
 export TACHYON_API_KEY=your-api-key
 
