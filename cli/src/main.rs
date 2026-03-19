@@ -3,6 +3,7 @@ mod auth;
 mod client;
 mod compute_cli;
 mod iac_cli;
+mod install_cli;
 mod ops_cli;
 mod org_cli;
 mod resolve;
@@ -69,6 +70,8 @@ enum Commands {
     Iac(iac_cli::IacArgs),
     /// Operations: deployment events, scenario reports, and tool jobs
     Ops(ops_cli::OpsArgs),
+    /// Update the Tachyon CLI to the latest version
+    Install,
 }
 
 /// Resolve the bearer token from CLI args or stored credentials.
@@ -147,5 +150,6 @@ async fn main() -> Result<()> {
             let tenant_id = resolve::resolve_tenant_id(&config, &cli.tenant_id).await?;
             ops_cli::run(args, &config, &tenant_id).await
         }
+        Commands::Install => install_cli::run().await,
     }
 }
