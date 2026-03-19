@@ -141,7 +141,7 @@ pub async fn run() -> Result<()> {
     let install_directory = install_path
         .parent()
         .map(PathBuf::from)
-        .unwrap_or_else(|| install_dir());
+        .unwrap_or_else(install_dir);
 
     fs::create_dir_all(&install_directory).context("Failed to create install directory")?;
 
