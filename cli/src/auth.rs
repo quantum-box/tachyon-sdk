@@ -116,7 +116,7 @@ pub fn load_credentials() -> Result<Option<StoredCredentials>> {
 }
 
 /// Save credentials to disk.
-fn save_credentials(creds: &StoredCredentials) -> Result<()> {
+pub fn save_credentials(creds: &StoredCredentials) -> Result<()> {
     let path = credentials_path()?;
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)
@@ -195,6 +195,63 @@ async fn poll_for_code(api_url: &str, state: &str) -> Result<String> {
         }
         // 204 No Content or other = not ready yet, keep polling
     }
+}
+
+/// Refresh the access token using a stored refresh token.
+///
+/// Returns updated credentials on success, or an error if the refresh fails
+/// (e.g. the refresh token itself has expired).
+pub async fn refresh_access_token(
+    oauth_config: &OAuthConfig,
+    creds: &StoredCredentials,
+) -> Result<StoredCredentials> {
+    let refresh_token = creds
+        .refresh_token
+        .as_deref()
+        .ok_or_else(|| anyhow!("no refresh token available"))?;
+
+    let client = Client::new();
+    let resp = client
+        .post(oauth_config.token_url())
+        .form(&[
+            ("grant_type", "refresh_token"),
+            ("client_id", &oauth_config.client_id),
+            ("client_secret", &oauth_config.client_secret),
+            ("refresh_token", refresh_token),
+        ])
+        .send()
+        .await
+        .context("failed to request token refresh")?;
+
+    let status = resp.status();
+    if !status.is_success() {
+        let body = resp.text().await.unwrap_or_default();
+        return Err(anyhow!(
+            "token refresh failed: status={status}, body={body}"
+        ));
+    }
+
+    let token_resp: TokenResponse = resp
+        .json()
+        .await
+        .context("failed to parse token refresh response")?;
+
+    let now = chrono::Utc::now().timestamp();
+    let expires_at = token_resp.expires_in.map(|e| now + e);
+
+    let new_creds = StoredCredentials {
+        access_token: token_resp.access_token,
+        // Cognito may not return a new refresh token on refresh; keep the old one.
+        refresh_token: token_resp
+            .refresh_token
+            .or_else(|| creds.refresh_token.clone()),
+        id_token: token_resp.id_token.or_else(|| creds.id_token.clone()),
+        expires_at,
+        token_type: token_resp.token_type,
+    };
+
+    save_credentials(&new_creds)?;
+    Ok(new_creds)
 }
 
 /// Run the full OAuth login flow.
