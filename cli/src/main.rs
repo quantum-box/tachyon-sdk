@@ -75,20 +75,35 @@ enum Commands {
 }
 
 /// Resolve the bearer token from CLI args or stored credentials.
-fn resolve_token(cli: &Cli) -> Option<String> {
+/// If the stored token is expired, attempt to refresh it automatically.
+async fn resolve_token(cli: &Cli) -> Option<String> {
     if cli.api_key.is_some() {
         return cli.api_key.clone();
     }
     match auth::load_credentials() {
         Ok(Some(creds)) => {
-            if let Some(exp) = creds.expires_at {
-                let now = chrono::Utc::now().timestamp();
-                if now >= exp {
-                    eprintln!(
-                        "Warning: stored token has expired. Run `tachyon login` to re-authenticate."
-                    );
+            let expired = creds
+                .expires_at
+                .map(|exp| chrono::Utc::now().timestamp() >= exp)
+                .unwrap_or(false);
+
+            if expired {
+                let oauth_config = build_oauth_config(cli);
+                match auth::refresh_access_token(&oauth_config, &creds).await {
+                    Ok(new_creds) => {
+                        eprintln!("Token refreshed successfully.");
+                        return Some(new_creds.access_token);
+                    }
+                    Err(_) => {
+                        eprintln!(
+                            "Warning: stored token has expired and refresh failed. \
+                             Run `tachyon login` to re-authenticate."
+                        );
+                        return Some(creds.access_token);
+                    }
                 }
             }
+
             Some(creds.access_token)
         }
         Ok(None) => None,
@@ -99,54 +114,69 @@ fn resolve_token(cli: &Cli) -> Option<String> {
     }
 }
 
+/// Build an OAuthConfig from CLI args.
+fn build_oauth_config(cli: &Cli) -> auth::OAuthConfig {
+    let redirect_uri = format!("{}/v1/auth/cli/callback", cli.api_url.trim_end_matches('/'));
+    auth::OAuthConfig {
+        cognito_domain: cli.cognito_domain.clone(),
+        client_id: cli.cognito_client_id.clone(),
+        client_secret: cli.cognito_client_secret.clone(),
+        redirect_uri,
+        scopes: vec!["openid".into(), "profile".into(), "email".into()],
+    }
+}
+
 /// Build SDK configuration with the resolved token.
-fn build_config(cli: &Cli) -> Configuration {
+async fn build_config(cli: &Cli) -> Configuration {
     let mut config = Configuration::new();
     config.base_path = cli.api_url.clone();
-    config.bearer_access_token = resolve_token(cli);
+    config.bearer_access_token = resolve_token(cli).await;
     config
 }
 
 #[tokio::main]
-async fn main() -> Result<()> {
+async fn main() {
+    if let Err(e) = run().await {
+        eprintln!("Error: {e}");
+        // Show the full error chain (causes) without a backtrace.
+        for cause in e.chain().skip(1) {
+            eprintln!("  caused by: {cause}");
+        }
+        std::process::exit(1);
+    }
+}
+
+async fn run() -> Result<()> {
     let cli = Cli::parse();
 
     match &cli.command {
         Commands::Login => {
-            let redirect_uri =
-                format!("{}/v1/auth/cli/callback", cli.api_url.trim_end_matches('/'));
-            let oauth_config = auth::OAuthConfig {
-                cognito_domain: cli.cognito_domain.clone(),
-                client_id: cli.cognito_client_id.clone(),
-                client_secret: cli.cognito_client_secret.clone(),
-                redirect_uri,
-                scopes: vec!["openid".into(), "profile".into(), "email".into()],
-            };
+            let oauth_config = build_oauth_config(&cli);
             auth::login(&oauth_config, &cli.api_url).await
         }
         Commands::Logout => auth::logout(),
         Commands::Compute(args) => {
-            let config = build_config(&cli);
+            let config = build_config(&cli).await;
             let tenant_id = resolve::resolve_tenant_id(&config, &cli.tenant_id).await?;
             compute_cli::run(args, &config, &tenant_id).await
         }
         Commands::Org(args) => {
-            let config = build_config(&cli);
+            let config = build_config(&cli).await;
             let tenant_id = resolve::resolve_tenant_id(&config, &cli.tenant_id).await?;
             org_cli::run(args, &config, &tenant_id).await
         }
         Commands::Agent(args) => {
-            let config = build_config(&cli);
+            let config = build_config(&cli).await;
             let tenant_id = resolve::resolve_tenant_id(&config, &cli.tenant_id).await?;
             agent_cli::run(args, &config, &tenant_id).await
         }
         Commands::Iac(args) => {
-            let config = build_config(&cli);
+            let config = build_config(&cli).await;
             let tenant_id = resolve::resolve_tenant_id(&config, &cli.tenant_id).await?;
             iac_cli::run(args, &config, &tenant_id).await
         }
         Commands::Ops(args) => {
-            let config = build_config(&cli);
+            let config = build_config(&cli).await;
             let tenant_id = resolve::resolve_tenant_id(&config, &cli.tenant_id).await?;
             ops_cli::run(args, &config, &tenant_id).await
         }
