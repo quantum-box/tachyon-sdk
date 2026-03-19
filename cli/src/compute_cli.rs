@@ -6,6 +6,7 @@ use tachyon_sdk::apis::configuration::Configuration;
 use tokio::time::{sleep, Duration};
 
 use crate::client::{print_json, truncate, ApiClient};
+use crate::resolve;
 
 #[derive(Debug, Clone, Args)]
 pub struct ComputeArgs {
@@ -47,7 +48,7 @@ pub enum ComputeCommand {
     },
     /// Show build status for a compute app (shortcut for builds list)
     Status {
-        /// App ID to show builds for
+        /// App ID or name
         app_id: String,
         /// Maximum number of builds to display
         #[arg(long, default_value_t = 10)]
@@ -55,7 +56,7 @@ pub enum ComputeCommand {
     },
     /// Stream or fetch build logs (shortcut for builds logs)
     Logs {
-        /// App ID to fetch logs for
+        /// App ID or name
         app_id: String,
         /// Build ID (defaults to the latest build)
         #[arg(long)]
@@ -78,7 +79,7 @@ pub enum AppsCommand {
     },
     /// Get details of a compute app
     Get {
-        /// App ID
+        /// App ID or name
         app_id: String,
         /// Output as JSON
         #[arg(long)]
@@ -86,7 +87,7 @@ pub enum AppsCommand {
     },
     /// Delete a compute app
     Delete {
-        /// App ID
+        /// App ID or name
         app_id: String,
     },
 }
@@ -97,7 +98,7 @@ pub enum AppsCommand {
 pub enum BuildsCommand {
     /// List builds for an app
     List {
-        /// App ID
+        /// App ID or name
         app_id: String,
         /// Maximum number of builds to display
         #[arg(long, default_value_t = 10)]
@@ -116,7 +117,7 @@ pub enum BuildsCommand {
     },
     /// Trigger a new build
     Trigger {
-        /// App ID
+        /// App ID or name
         app_id: String,
         /// Branch to build (optional)
         #[arg(long)]
@@ -146,7 +147,7 @@ pub enum BuildsCommand {
 pub enum DeploymentsCommand {
     /// List deployments for an app
     List {
-        /// App ID
+        /// App ID or name
         app_id: String,
         /// Output as JSON
         #[arg(long)]
@@ -162,7 +163,7 @@ pub enum DeploymentsCommand {
     },
     /// Rollback an app to a previous deployment
     Rollback {
-        /// App ID
+        /// App ID or name
         app_id: String,
         /// Deployment ID to roll back to
         #[arg(long)]
@@ -176,7 +177,7 @@ pub enum DeploymentsCommand {
 pub enum EnvCommand {
     /// List environment variables for an app
     List {
-        /// App ID
+        /// App ID or name
         app_id: String,
         /// Output as JSON
         #[arg(long)]
@@ -184,7 +185,7 @@ pub enum EnvCommand {
     },
     /// Set environment variables for an app
     Set {
-        /// App ID
+        /// App ID or name
         app_id: String,
         /// Variables in KEY=VALUE format
         #[arg(required = true, num_args = 1..)]
@@ -192,7 +193,7 @@ pub enum EnvCommand {
     },
     /// Delete an environment variable
     Delete {
-        /// App ID
+        /// App ID or name
         app_id: String,
         /// Env var ID to delete
         env_id: String,
@@ -205,7 +206,7 @@ pub enum EnvCommand {
 pub enum DomainsCommand {
     /// List custom domains for an app
     List {
-        /// App ID
+        /// App ID or name
         app_id: String,
         /// Output as JSON
         #[arg(long)]
@@ -213,7 +214,7 @@ pub enum DomainsCommand {
     },
     /// Add a custom domain
     Add {
-        /// App ID
+        /// App ID or name
         app_id: String,
         /// Domain name
         domain: String,
@@ -236,7 +237,7 @@ pub enum DomainsCommand {
 pub enum ScalingCommand {
     /// Show current scaling configuration
     Get {
-        /// App ID
+        /// App ID or name
         app_id: String,
         /// Output as JSON
         #[arg(long)]
@@ -244,7 +245,7 @@ pub enum ScalingCommand {
     },
     /// Update scaling configuration
     Update {
-        /// App ID
+        /// App ID or name
         app_id: String,
         /// Minimum number of instances
         #[arg(long)]
@@ -913,29 +914,43 @@ pub async fn run(args: &ComputeArgs, config: &Configuration, tenant_id: &str) ->
     match &args.command {
         ComputeCommand::Apps { command } => match command {
             AppsCommand::List { json } => run_apps_list(&api, *json).await,
-            AppsCommand::Get { app_id, json } => run_apps_get(&api, app_id, *json).await,
-            AppsCommand::Delete { app_id } => run_apps_delete(&api, app_id).await,
+            AppsCommand::Get { app_id, json } => {
+                let id = resolve::resolve_app_id(&api, app_id).await?;
+                run_apps_get(&api, &id, *json).await
+            }
+            AppsCommand::Delete { app_id } => {
+                let id = resolve::resolve_app_id(&api, app_id).await?;
+                run_apps_delete(&api, &id).await
+            }
         },
         ComputeCommand::Builds { command } => match command {
             BuildsCommand::List {
                 app_id,
                 limit,
                 json,
-            } => run_builds_list(&api, app_id, *limit, *json).await,
+            } => {
+                let id = resolve::resolve_app_id(&api, app_id).await?;
+                run_builds_list(&api, &id, *limit, *json).await
+            }
             BuildsCommand::Get { build_id, json } => run_builds_get(&api, build_id, *json).await,
             BuildsCommand::Trigger { app_id, branch } => {
-                run_builds_trigger(&api, app_id, branch.as_deref()).await
+                let id = resolve::resolve_app_id(&api, app_id).await?;
+                run_builds_trigger(&api, &id, branch.as_deref()).await
             }
             BuildsCommand::Cancel { build_id } => run_builds_cancel(&api, build_id).await,
             BuildsCommand::Logs {
                 app_id,
                 build_id,
                 follow,
-            } => run_builds_logs(&api, app_id, build_id.as_deref(), *follow).await,
+            } => {
+                let id = resolve::resolve_app_id(&api, app_id).await?;
+                run_builds_logs(&api, &id, build_id.as_deref(), *follow).await
+            }
         },
         ComputeCommand::Deployments { command } => match command {
             DeploymentsCommand::List { app_id, json } => {
-                run_deployments_list(&api, app_id, *json).await
+                let id = resolve::resolve_app_id(&api, app_id).await?;
+                run_deployments_list(&api, &id, *json).await
             }
             DeploymentsCommand::Get {
                 deployment_id,
@@ -944,35 +959,63 @@ pub async fn run(args: &ComputeArgs, config: &Configuration, tenant_id: &str) ->
             DeploymentsCommand::Rollback {
                 app_id,
                 deployment_id,
-            } => run_deployments_rollback(&api, app_id, deployment_id).await,
+            } => {
+                let id = resolve::resolve_app_id(&api, app_id).await?;
+                run_deployments_rollback(&api, &id, deployment_id).await
+            }
         },
         ComputeCommand::Env { command } => match command {
-            EnvCommand::List { app_id, json } => run_env_list(&api, app_id, *json).await,
-            EnvCommand::Set { app_id, vars } => run_env_set(&api, app_id, vars).await,
-            EnvCommand::Delete { app_id, env_id } => run_env_delete(&api, app_id, env_id).await,
+            EnvCommand::List { app_id, json } => {
+                let id = resolve::resolve_app_id(&api, app_id).await?;
+                run_env_list(&api, &id, *json).await
+            }
+            EnvCommand::Set { app_id, vars } => {
+                let id = resolve::resolve_app_id(&api, app_id).await?;
+                run_env_set(&api, &id, vars).await
+            }
+            EnvCommand::Delete { app_id, env_id } => {
+                let id = resolve::resolve_app_id(&api, app_id).await?;
+                run_env_delete(&api, &id, env_id).await
+            }
         },
         ComputeCommand::Domains { command } => match command {
-            DomainsCommand::List { app_id, json } => run_domains_list(&api, app_id, *json).await,
-            DomainsCommand::Add { app_id, domain } => run_domains_add(&api, app_id, domain).await,
+            DomainsCommand::List { app_id, json } => {
+                let id = resolve::resolve_app_id(&api, app_id).await?;
+                run_domains_list(&api, &id, *json).await
+            }
+            DomainsCommand::Add { app_id, domain } => {
+                let id = resolve::resolve_app_id(&api, app_id).await?;
+                run_domains_add(&api, &id, domain).await
+            }
             DomainsCommand::Verify { domain_id } => run_domains_verify(&api, domain_id).await,
             DomainsCommand::Remove { domain_id } => run_domains_remove(&api, domain_id).await,
         },
         ComputeCommand::Scaling { command } => match command {
-            ScalingCommand::Get { app_id, json } => run_scaling_get(&api, app_id, *json).await,
+            ScalingCommand::Get { app_id, json } => {
+                let id = resolve::resolve_app_id(&api, app_id).await?;
+                run_scaling_get(&api, &id, *json).await
+            }
             ScalingCommand::Update {
                 app_id,
                 min_instances,
                 max_instances,
-            } => run_scaling_update(&api, app_id, *min_instances, *max_instances).await,
+            } => {
+                let id = resolve::resolve_app_id(&api, app_id).await?;
+                run_scaling_update(&api, &id, *min_instances, *max_instances).await
+            }
         },
         // Legacy shortcuts
         ComputeCommand::Status { app_id, limit } => {
-            run_builds_list(&api, app_id, *limit, false).await
+            let id = resolve::resolve_app_id(&api, app_id).await?;
+            run_builds_list(&api, &id, *limit, false).await
         }
         ComputeCommand::Logs {
             app_id,
             build_id,
             follow,
-        } => run_builds_logs(&api, app_id, build_id.as_deref(), *follow).await,
+        } => {
+            let id = resolve::resolve_app_id(&api, app_id).await?;
+            run_builds_logs(&api, &id, build_id.as_deref(), *follow).await
+        }
     }
 }
