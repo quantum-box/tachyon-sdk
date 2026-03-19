@@ -80,10 +80,7 @@ pub async fn resolve_tenant_id(config: &Configuration, name_or_id: &str) -> Resu
 
     // Try by-alias first (exact match via API)
     if let Ok(op) = api
-        .get_query::<OperatorEntry>(
-            "/v1/auth/operators/by-alias",
-            &[("alias", name_or_id)],
-        )
+        .get_query::<OperatorEntry>("/v1/auth/operators/by-alias", &[("alias", name_or_id)])
         .await
     {
         eprintln!("Resolved tenant '{}' → {}", name_or_id, op.id);
@@ -94,10 +91,7 @@ pub async fn resolve_tenant_id(config: &Configuration, name_or_id: &str) -> Resu
     let ops: Vec<OperatorEntry> = api.get("/v1/auth/operators/by-user").await?;
     let matches: Vec<_> = ops
         .iter()
-        .filter(|o| {
-            o.alias.as_deref() == Some(name_or_id)
-                || o.name.as_deref() == Some(name_or_id)
-        })
+        .filter(|o| o.alias.as_deref() == Some(name_or_id) || o.name.as_deref() == Some(name_or_id))
         .collect();
 
     match matches.len() {
@@ -222,10 +216,7 @@ pub async fn resolve_integration_id(api: &ApiClient, name_or_id: &str) -> Result
     match matches.len() {
         0 => Err(anyhow!("no integration found with name '{name_or_id}'")),
         1 => {
-            eprintln!(
-                "Resolved integration '{}' → {}",
-                name_or_id, matches[0].id
-            );
+            eprintln!("Resolved integration '{}' → {}", name_or_id, matches[0].id);
             Ok(matches[0].id.clone())
         }
         _ => {
@@ -253,9 +244,7 @@ pub async fn resolve_service_account_id(api: &ApiClient, name_or_id: &str) -> Re
         .collect();
 
     match matches.len() {
-        0 => Err(anyhow!(
-            "no service account found with name '{name_or_id}'"
-        )),
+        0 => Err(anyhow!("no service account found with name '{name_or_id}'")),
         1 => {
             eprintln!(
                 "Resolved service account '{}' → {}",
