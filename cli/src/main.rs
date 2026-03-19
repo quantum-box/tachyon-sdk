@@ -5,6 +5,7 @@ mod compute_cli;
 mod iac_cli;
 mod ops_cli;
 mod org_cli;
+mod resolve;
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
@@ -28,7 +29,7 @@ struct Cli {
     )]
     api_url: String,
 
-    /// Tenant ID (x-operator-id header)
+    /// Tenant ID or name/alias (x-operator-id header)
     #[arg(long, env = "TACHYON_TENANT_ID", default_value = "")]
     tenant_id: String,
 
@@ -123,23 +124,28 @@ async fn main() -> Result<()> {
         Commands::Logout => auth::logout(),
         Commands::Compute(args) => {
             let config = build_config(&cli);
-            compute_cli::run(args, &config, &cli.tenant_id).await
+            let tenant_id = resolve::resolve_tenant_id(&config, &cli.tenant_id).await?;
+            compute_cli::run(args, &config, &tenant_id).await
         }
         Commands::Org(args) => {
             let config = build_config(&cli);
-            org_cli::run(args, &config, &cli.tenant_id).await
+            let tenant_id = resolve::resolve_tenant_id(&config, &cli.tenant_id).await?;
+            org_cli::run(args, &config, &tenant_id).await
         }
         Commands::Agent(args) => {
             let config = build_config(&cli);
-            agent_cli::run(args, &config, &cli.tenant_id).await
+            let tenant_id = resolve::resolve_tenant_id(&config, &cli.tenant_id).await?;
+            agent_cli::run(args, &config, &tenant_id).await
         }
         Commands::Iac(args) => {
             let config = build_config(&cli);
-            iac_cli::run(args, &config, &cli.tenant_id).await
+            let tenant_id = resolve::resolve_tenant_id(&config, &cli.tenant_id).await?;
+            iac_cli::run(args, &config, &tenant_id).await
         }
         Commands::Ops(args) => {
             let config = build_config(&cli);
-            ops_cli::run(args, &config, &cli.tenant_id).await
+            let tenant_id = resolve::resolve_tenant_id(&config, &cli.tenant_id).await?;
+            ops_cli::run(args, &config, &tenant_id).await
         }
     }
 }

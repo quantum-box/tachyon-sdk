@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use tachyon_sdk::apis::configuration::Configuration;
 
 use crate::client::{print_json, ApiClient};
+use crate::resolve;
 
 #[derive(Debug, Clone, Args)]
 pub struct IacArgs {
@@ -42,6 +43,7 @@ pub enum IntegrationsCommand {
     },
     /// Get integration details
     Get {
+        /// Integration ID or name
         id: String,
         #[arg(long)]
         json: bool,
@@ -271,7 +273,10 @@ pub async fn run(args: &IacArgs, config: &Configuration, tenant_id: &str) -> Res
         } => run_oauth_providers(&api, tid.as_deref(), tenant_id, *json).await,
         IacCommand::Integrations { command } => match command {
             IntegrationsCommand::List { json } => run_integrations_list(&api, *json).await,
-            IntegrationsCommand::Get { id, json } => run_integrations_get(&api, id, *json).await,
+            IntegrationsCommand::Get { id, json } => {
+                let resolved = resolve::resolve_integration_id(&api, id).await?;
+                run_integrations_get(&api, &resolved, *json).await
+            }
         },
         IacCommand::Connections { command } => match command {
             ConnectionsCommand::List { json } => run_connections_list(&api, *json).await,

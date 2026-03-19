@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use tachyon_sdk::apis::configuration::Configuration;
 
 use crate::client::{print_json, truncate, ApiClient};
+use crate::resolve;
 
 #[derive(Debug, Clone, Args)]
 pub struct OrgArgs {
@@ -101,12 +102,14 @@ pub enum ServiceAccountsCommand {
     },
     /// Get service account details
     Get {
+        /// Service account ID or name
         service_account_id: String,
         #[arg(long)]
         json: bool,
     },
     /// List API keys for a service account
     ApiKeys {
+        /// Service account ID or name
         service_account_id: String,
         #[arg(long)]
         json: bool,
@@ -478,11 +481,17 @@ pub async fn run(args: &OrgArgs, config: &Configuration, tenant_id: &str) -> Res
             ServiceAccountsCommand::Get {
                 service_account_id,
                 json,
-            } => run_service_accounts_get(&api, service_account_id, *json).await,
+            } => {
+                let id = resolve::resolve_service_account_id(&api, service_account_id).await?;
+                run_service_accounts_get(&api, &id, *json).await
+            }
             ServiceAccountsCommand::ApiKeys {
                 service_account_id,
                 json,
-            } => run_service_accounts_api_keys(&api, service_account_id, *json).await,
+            } => {
+                let id = resolve::resolve_service_account_id(&api, service_account_id).await?;
+                run_service_accounts_api_keys(&api, &id, *json).await
+            }
         },
         OrgCommand::Policies { command } => match command {
             PoliciesCommand::Get { policy_id, json } => {

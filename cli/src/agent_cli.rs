@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use tachyon_sdk::apis::configuration::Configuration;
 
 use crate::client::{print_json, truncate, ApiClient};
+use crate::resolve;
 
 #[derive(Debug, Clone, Args)]
 pub struct AgentArgs {
@@ -83,6 +84,7 @@ pub enum ProtocolsCommand {
     },
     /// Get agent protocol details
     Get {
+        /// Protocol ID or name
         id: String,
         #[arg(long)]
         json: bool,
@@ -98,12 +100,14 @@ pub enum WorkersCommand {
     },
     /// Get worker details
     Get {
+        /// Worker ID or name
         worker_id: String,
         #[arg(long)]
         json: bool,
     },
     /// Get worker metrics
     Metrics {
+        /// Worker ID or name
         worker_id: String,
         #[arg(long)]
         json: bool,
@@ -487,15 +491,20 @@ pub async fn run(args: &AgentArgs, config: &Configuration, tenant_id: &str) -> R
         },
         AgentCommand::Protocols { command } => match command {
             ProtocolsCommand::List { json } => run_protocols_list(&api, *json).await,
-            ProtocolsCommand::Get { id, json } => run_protocols_get(&api, id, *json).await,
+            ProtocolsCommand::Get { id, json } => {
+                let resolved = resolve::resolve_protocol_id(&api, id).await?;
+                run_protocols_get(&api, &resolved, *json).await
+            }
         },
         AgentCommand::Workers { command } => match command {
             WorkersCommand::List { json } => run_workers_list(&api, *json).await,
             WorkersCommand::Get { worker_id, json } => {
-                run_workers_get(&api, worker_id, *json).await
+                let id = resolve::resolve_worker_id(&api, worker_id).await?;
+                run_workers_get(&api, &id, *json).await
             }
             WorkersCommand::Metrics { worker_id, json } => {
-                run_workers_metrics(&api, worker_id, *json).await
+                let id = resolve::resolve_worker_id(&api, worker_id).await?;
+                run_workers_metrics(&api, &id, *json).await
             }
         },
         AgentCommand::Worktrees { command } => match command {
