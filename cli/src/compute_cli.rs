@@ -1,7 +1,9 @@
 use anyhow::{anyhow, Result};
 use chrono::{DateTime, TimeZone, Utc};
-use clap::{Args, Subcommand};
+use clap::{Args, Subcommand, ValueEnum};
 use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
+use std::process::Command;
 use tachyon_sdk::apis::configuration::Configuration;
 use tokio::time::{sleep, Duration};
 
@@ -46,6 +48,28 @@ pub enum ComputeCommand {
         #[command(subcommand)]
         command: ScalingCommand,
     },
+    /// Build a Cloudflare Pages app locally (emulates CodeBuild pipeline)
+    Build {
+        /// App to build (tachyon, cms, docs)
+        app: PagesApp,
+        /// Also deploy to Cloudflare Pages preview environment
+        #[arg(long)]
+        deploy: bool,
+        /// Project root directory (defaults to current directory)
+        #[arg(long)]
+        project_dir: Option<PathBuf>,
+    },
+    /// Build and start local preview server (wrangler pages dev)
+    Dev {
+        /// App to preview (tachyon, cms, docs)
+        app: PagesApp,
+        /// Project root directory (defaults to current directory)
+        #[arg(long)]
+        project_dir: Option<PathBuf>,
+        /// Port for the preview server
+        #[arg(long, default_value_t = 8788)]
+        port: u16,
+    },
     /// Show build status for a compute app (shortcut for builds list)
     Status {
         /// App ID or name
@@ -65,6 +89,192 @@ pub enum ComputeCommand {
         #[arg(long)]
         follow: bool,
     },
+}
+
+// --- Pages app target ---
+
+#[derive(Debug, Clone, ValueEnum)]
+pub enum PagesApp {
+    /// Main Tachyon app (@cloudflare/next-on-pages)
+    Tachyon,
+    /// CMS app (@opennextjs/cloudflare)
+    Cms,
+    /// Documentation site (@cloudflare/next-on-pages)
+    Docs,
+}
+
+impl PagesApp {
+    fn name(&self) -> &str {
+        match self {
+            PagesApp::Tachyon => "tachyon",
+            PagesApp::Cms => "cms",
+            PagesApp::Docs => "docs",
+        }
+    }
+
+    fn cf_project_name(&self) -> &str {
+        match self {
+            PagesApp::Tachyon => "tachyon-app",
+            PagesApp::Cms => "tachyon-apps-cms-app",
+            PagesApp::Docs => "tachyon-docs",
+        }
+    }
+
+    /// Returns the pages build command and output directory.
+    fn pages_build_info(&self) -> (&str, &str) {
+        match self {
+            PagesApp::Cms => ("npx opennextjs-cloudflare build", ".open-next/assets"),
+            PagesApp::Tachyon | PagesApp::Docs => {
+                ("npx @cloudflare/next-on-pages", ".vercel/output/static")
+            }
+        }
+    }
+
+    fn preview_command(&self, port: u16) -> String {
+        match self {
+            PagesApp::Cms => {
+                format!("npx opennextjs-cloudflare preview --port {port}")
+            }
+            PagesApp::Tachyon | PagesApp::Docs => {
+                format!("npx wrangler pages dev .vercel/output/static --port {port}")
+            }
+        }
+    }
+}
+
+// --- Local build pipeline ---
+
+fn run_shell(description: &str, cmd: &str, cwd: &std::path::Path) -> Result<()> {
+    println!("  > {cmd}");
+    let status = Command::new("sh")
+        .arg("-c")
+        .arg(cmd)
+        .current_dir(cwd)
+        .status()?;
+    if !status.success() {
+        return Err(anyhow!(
+            "{description} failed with exit code: {:?}",
+            status.code()
+        ));
+    }
+    Ok(())
+}
+
+fn resolve_project_dir(project_dir: Option<&PathBuf>) -> Result<PathBuf> {
+    match project_dir {
+        Some(p) => {
+            let abs = std::fs::canonicalize(p)?;
+            Ok(abs)
+        }
+        None => Ok(std::env::current_dir()?),
+    }
+}
+
+fn run_local_build(app: &PagesApp, project_dir: Option<&PathBuf>, deploy: bool) -> Result<()> {
+    let root = resolve_project_dir(project_dir)?;
+    let app_dir = root.join("apps").join(app.name());
+    if !app_dir.exists() {
+        return Err(anyhow!(
+            "App directory not found: {}. \
+             Make sure you're in the tachyon-apps repository root \
+             or specify --project-dir.",
+            app_dir.display()
+        ));
+    }
+    let (pages_build_cmd, output_dir) = app.pages_build_info();
+
+    println!("=== Cloudflare Pages Build Pipeline ===");
+    println!("  App:     {}", app.name());
+    println!("  Root:    {}", root.display());
+    println!("  Deploy:  {deploy}");
+    println!();
+
+    // Step 1: Install dependencies
+    println!("[1/4] Installing dependencies...");
+    run_shell("yarn install", "yarn install", &root)?;
+    println!();
+
+    // Step 2: Next.js build via turbo
+    println!("[2/4] Building {} (turbo)...", app.name());
+    run_shell(
+        "turbo build",
+        &format!("npx turbo run build --filter={}", app.name()),
+        &root,
+    )?;
+    println!();
+
+    // Step 3: Pages build
+    println!("[3/4] Building for Cloudflare Pages...");
+    run_shell("pages build", pages_build_cmd, &app_dir)?;
+    println!();
+
+    // Step 4: Deploy or finish
+    if deploy {
+        println!("[4/4] Deploying to Cloudflare Pages...");
+        let deploy_cmd = match app {
+            PagesApp::Cms => "npx opennextjs-cloudflare deploy".to_string(),
+            _ => format!(
+                "npx wrangler pages deploy {output_dir} \
+                 --project-name {}",
+                app.cf_project_name()
+            ),
+        };
+        run_shell("pages deploy", &deploy_cmd, &app_dir)?;
+    } else {
+        println!("[4/4] Build complete.");
+        println!("  Output: {}/{output_dir}", app_dir.display());
+        println!();
+        println!("  To preview: tachyon compute dev {}", app.name());
+        println!(
+            "  To deploy:  tachyon compute build {} --deploy",
+            app.name()
+        );
+    }
+
+    println!();
+    println!("=== Done ===");
+    Ok(())
+}
+
+fn run_local_dev(app: &PagesApp, project_dir: Option<&PathBuf>, port: u16) -> Result<()> {
+    let root = resolve_project_dir(project_dir)?;
+    let app_dir = root.join("apps").join(app.name());
+    if !app_dir.exists() {
+        return Err(anyhow!(
+            "App directory not found: {}. \
+             Make sure you're in the tachyon-apps repository root \
+             or specify --project-dir.",
+            app_dir.display()
+        ));
+    }
+    let (pages_build_cmd, _) = app.pages_build_info();
+
+    println!("=== Cloudflare Pages Local Preview ===");
+    println!("  App:  {}", app.name());
+    println!("  Port: {port}");
+    println!();
+
+    // Step 1: Install
+    println!("[1/3] Installing dependencies...");
+    run_shell("yarn install", "yarn install", &root)?;
+    println!();
+
+    // Step 2: Build
+    println!("[2/3] Building {} ...", app.name());
+    run_shell(
+        "turbo build",
+        &format!("npx turbo run build --filter={}", app.name()),
+        &root,
+    )?;
+    run_shell("pages build", pages_build_cmd, &app_dir)?;
+    println!();
+
+    // Step 3: Preview server
+    println!("[3/3] Starting preview server on port {port}...");
+    let preview_cmd = app.preview_command(port);
+    run_shell("preview server", &preview_cmd, &app_dir)?;
+
+    Ok(())
 }
 
 // --- Apps subcommands ---
@@ -909,9 +1119,27 @@ async fn run_scaling_update(
 // ---- Entry point ----
 
 pub async fn run(args: &ComputeArgs, config: &Configuration, tenant_id: &str) -> Result<()> {
+    // Local-only commands (no API call needed)
+    match &args.command {
+        ComputeCommand::Build {
+            app,
+            deploy,
+            project_dir,
+        } => return run_local_build(app, project_dir.as_ref(), *deploy),
+        ComputeCommand::Dev {
+            app,
+            project_dir,
+            port,
+        } => return run_local_dev(app, project_dir.as_ref(), *port),
+        _ => {}
+    }
+
     let api = ApiClient::new(config, tenant_id)?;
 
     match &args.command {
+        ComputeCommand::Build { .. } | ComputeCommand::Dev { .. } => {
+            unreachable!()
+        }
         ComputeCommand::Apps { command } => match command {
             AppsCommand::List { json } => run_apps_list(&api, *json).await,
             AppsCommand::Get { app_id, json } => {
