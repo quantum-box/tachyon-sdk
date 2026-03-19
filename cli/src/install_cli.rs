@@ -89,9 +89,8 @@ pub async fn run() -> Result<()> {
     eprintln!("Updating from v{current_version} to {tag}...");
 
     let artifact = format!("{BIN_NAME}-{os}-{arch}");
-    let download_url = format!(
-        "https://github.com/{REPO}/releases/download/{tag}/{artifact}.tar.gz"
-    );
+    let download_url =
+        format!("https://github.com/{REPO}/releases/download/{tag}/{artifact}.tar.gz");
 
     // Download tarball
     eprintln!("Downloading {artifact}.tar.gz...");
@@ -117,7 +116,12 @@ pub async fn run() -> Result<()> {
     fs::write(&tarball_path, &bytes).context("Failed to write tarball")?;
 
     let status = Command::new("tar")
-        .args(["-xzf", &tarball_path.to_string_lossy(), "-C", &tmp_dir.to_string_lossy()])
+        .args([
+            "-xzf",
+            &tarball_path.to_string_lossy(),
+            "-C",
+            &tmp_dir.to_string_lossy(),
+        ])
         .status()
         .context("Failed to run tar")?;
 
@@ -139,14 +143,18 @@ pub async fn run() -> Result<()> {
         .map(PathBuf::from)
         .unwrap_or_else(|| install_dir());
 
-    fs::create_dir_all(&install_directory)
-        .context("Failed to create install directory")?;
+    fs::create_dir_all(&install_directory).context("Failed to create install directory")?;
 
     let target = install_directory.join(BIN_NAME);
 
     // Replace binary using install command for atomic replacement
     let status = Command::new("install")
-        .args(["-m", "755", &extracted_bin.to_string_lossy(), &target.to_string_lossy()])
+        .args([
+            "-m",
+            "755",
+            &extracted_bin.to_string_lossy(),
+            &target.to_string_lossy(),
+        ])
         .status()
         .context("Failed to install binary")?;
 
