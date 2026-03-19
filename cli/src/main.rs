@@ -116,10 +116,7 @@ async fn resolve_token(cli: &Cli) -> Option<String> {
 
 /// Build an OAuthConfig from CLI args.
 fn build_oauth_config(cli: &Cli) -> auth::OAuthConfig {
-    let redirect_uri = format!(
-        "{}/v1/auth/cli/callback",
-        cli.api_url.trim_end_matches('/')
-    );
+    let redirect_uri = format!("{}/v1/auth/cli/callback", cli.api_url.trim_end_matches('/'));
     auth::OAuthConfig {
         cognito_domain: cli.cognito_domain.clone(),
         client_id: cli.cognito_client_id.clone(),
