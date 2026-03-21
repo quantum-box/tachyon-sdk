@@ -102,20 +102,11 @@ async fn run_integrations_list(
     Ok(())
 }
 
-pub async fn run(
-    args: &IacArgs,
-    config: &Configuration,
-    tenant_id: &str,
-) -> Result<()> {
+pub async fn run(args: &IacArgs, config: &Configuration, tenant_id: &str) -> Result<()> {
     match &args.command {
         IacCommand::Integrations(i) => match &i.command {
             IntegrationsCommand::List { category } => {
-                run_integrations_list(
-                    config,
-                    tenant_id,
-                    category.as_deref(),
-                )
-                .await
+                run_integrations_list(config, tenant_id, category.as_deref()).await
             }
         },
     }

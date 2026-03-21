@@ -150,10 +150,7 @@ async fn run_deployments_list(
     Ok(())
 }
 
-async fn run_tool_jobs_list(
-    config: &Configuration,
-    tenant_id: &str,
-) -> Result<()> {
+async fn run_tool_jobs_list(config: &Configuration, tenant_id: &str) -> Result<()> {
     let client = build_client(config, tenant_id)?;
     let url = api_url(config, "/v1/agent/tool-jobs");
 
@@ -181,8 +178,7 @@ async fn run_tool_jobs_list(
 
     for j in &resp.jobs {
         let prompt_display = if j.prompt.chars().count() > prompt_w {
-            let truncated: String =
-                j.prompt.chars().take(prompt_w - 3).collect();
+            let truncated: String = j.prompt.chars().take(prompt_w - 3).collect();
             format!("{truncated}...")
         } else {
             j.prompt.clone()
@@ -193,30 +189,22 @@ async fn run_tool_jobs_list(
             j.provider,
             j.status,
             prompt_display,
-            &j.created_at
-                [..19.min(j.created_at.len())],
+            &j.created_at[..19.min(j.created_at.len())],
         );
     }
 
     Ok(())
 }
 
-pub async fn run(
-    args: &OpsArgs,
-    config: &Configuration,
-    tenant_id: &str,
-) -> Result<()> {
+pub async fn run(args: &OpsArgs, config: &Configuration, tenant_id: &str) -> Result<()> {
     match &args.command {
         OpsCommand::Deployments(d) => match &d.command {
             DeploymentsCommand::List { limit, offset } => {
-                run_deployments_list(config, tenant_id, *limit, *offset)
-                    .await
+                run_deployments_list(config, tenant_id, *limit, *offset).await
             }
         },
         OpsCommand::ToolJobs(tj) => match &tj.command {
-            ToolJobsCommand::List => {
-                run_tool_jobs_list(config, tenant_id).await
-            }
+            ToolJobsCommand::List => run_tool_jobs_list(config, tenant_id).await,
         },
     }
 }

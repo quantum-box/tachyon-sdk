@@ -129,17 +129,12 @@ async fn run_sessions_list(
     Ok(())
 }
 
-async fn run_models(
-    config: &Configuration,
-    tenant_id: &str,
-    feature: Option<&str>,
-) -> Result<()> {
+async fn run_models(config: &Configuration, tenant_id: &str, feature: Option<&str>) -> Result<()> {
     let client = build_client(config, tenant_id)?;
     let url = api_url(config, "/v1/llms/models");
 
     let resp: ModelsResponse = if let Some(feat) = feature {
-        get_json_with_query(&client, &url, &[("supported_feature", feat)])
-            .await?
+        get_json_with_query(&client, &url, &[("supported_feature", feat)]).await?
     } else {
         get_json(&client, &url).await?
     };
@@ -190,19 +185,13 @@ async fn run_models(
     Ok(())
 }
 
-pub async fn run(
-    args: &AgentArgs,
-    config: &Configuration,
-    tenant_id: &str,
-) -> Result<()> {
+pub async fn run(args: &AgentArgs, config: &Configuration, tenant_id: &str) -> Result<()> {
     match &args.command {
         AgentCommand::Sessions(s) => match &s.command {
             SessionsCommand::List { limit, offset } => {
                 run_sessions_list(config, tenant_id, *limit, *offset).await
             }
         },
-        AgentCommand::Models { feature } => {
-            run_models(config, tenant_id, feature.as_deref()).await
-        }
+        AgentCommand::Models { feature } => run_models(config, tenant_id, feature.as_deref()).await,
     }
 }

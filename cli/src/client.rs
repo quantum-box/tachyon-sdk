@@ -4,13 +4,9 @@ use serde::Deserialize;
 use tachyon_sdk::apis::configuration::Configuration;
 
 /// Build a reqwest client with Tachyon auth headers.
-pub fn build_client(
-    config: &Configuration,
-    tenant_id: &str,
-) -> Result<Client> {
+pub fn build_client(config: &Configuration, tenant_id: &str) -> Result<Client> {
     let mut headers = header::HeaderMap::new();
-    headers
-        .insert("x-operator-id", header::HeaderValue::from_str(tenant_id)?);
+    headers.insert("x-operator-id", header::HeaderValue::from_str(tenant_id)?);
     if let Some(token) = &config.bearer_access_token {
         headers.insert(
             header::AUTHORIZATION,
@@ -21,10 +17,7 @@ pub fn build_client(
 }
 
 /// Helper to GET a URL and return the parsed JSON.
-pub async fn get_json<T: for<'de> Deserialize<'de>>(
-    client: &Client,
-    url: &str,
-) -> Result<T> {
+pub async fn get_json<T: for<'de> Deserialize<'de>>(client: &Client, url: &str) -> Result<T> {
     let response = client
         .get(url)
         .send()
@@ -33,9 +26,7 @@ pub async fn get_json<T: for<'de> Deserialize<'de>>(
     let status = response.status();
     if !status.is_success() {
         let body = response.text().await.unwrap_or_default();
-        return Err(anyhow!(
-            "request failed: status={status}, body={body}"
-        ));
+        return Err(anyhow!("request failed: status={status}, body={body}"));
     }
     response
         .json()
@@ -44,11 +35,7 @@ pub async fn get_json<T: for<'de> Deserialize<'de>>(
 }
 
 /// Helper to GET a URL with query parameters.
-pub async fn get_json_with_query<T, Q>(
-    client: &Client,
-    url: &str,
-    query: &Q,
-) -> Result<T>
+pub async fn get_json_with_query<T, Q>(client: &Client, url: &str, query: &Q) -> Result<T>
 where
     T: for<'de> Deserialize<'de>,
     Q: serde::Serialize + ?Sized,
@@ -62,9 +49,7 @@ where
     let status = response.status();
     if !status.is_success() {
         let body = response.text().await.unwrap_or_default();
-        return Err(anyhow!(
-            "request failed: status={status}, body={body}"
-        ));
+        return Err(anyhow!("request failed: status={status}, body={body}"));
     }
     response
         .json()

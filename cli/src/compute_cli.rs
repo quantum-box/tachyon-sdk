@@ -81,11 +81,7 @@ async fn fetch_builds(
     config: &Configuration,
     app_id: &str,
 ) -> Result<Vec<BuildResponse>> {
-    let url = format!(
-        "{}/v1/compute/apps/{}/builds",
-        api_url(config, ""),
-        app_id
-    );
+    let url = format!("{}/v1/compute/apps/{}/builds", api_url(config, ""), app_id);
     let list: ListBuildsResponse = get_json(client, &url).await?;
     Ok(list.builds)
 }
@@ -102,12 +98,7 @@ async fn fetch_build_logs(
         build_id
     );
     if let Some(token) = next_token {
-        crate::client::get_json_with_query(
-            client,
-            &url,
-            &[("next_token", token)],
-        )
-        .await
+        crate::client::get_json_with_query(client, &url, &[("next_token", token)]).await
     } else {
         get_json(client, &url).await
     }
@@ -115,9 +106,7 @@ async fn fetch_build_logs(
 
 fn format_timestamp_ms(millis: i64) -> String {
     match Utc.timestamp_millis_opt(millis) {
-        chrono::LocalResult::Single(dt) => {
-            dt.format("%Y-%m-%d %H:%M:%S").to_string()
-        }
+        chrono::LocalResult::Single(dt) => dt.format("%Y-%m-%d %H:%M:%S").to_string(),
         _ => format!("{millis}"),
     }
 }
@@ -144,12 +133,9 @@ async fn run_status(
     limit: usize,
 ) -> Result<()> {
     let client = build_client(config, tenant_id)?;
-    let builds =
-        fetch_builds(&client, config, app_id)
-            .await
-            .with_context(|| {
-                format!("failed to fetch builds for app {app_id}")
-            })?;
+    let builds = fetch_builds(&client, config, app_id)
+        .await
+        .with_context(|| format!("failed to fetch builds for app {app_id}"))?;
 
     if builds.is_empty() {
         println!("No builds found for app {app_id}");
@@ -193,11 +179,7 @@ async fn run_status(
 
     for build in builds_to_show {
         let branch = if build.source_branch.chars().count() > branch_width {
-            let truncated: String = build
-                .source_branch
-                .chars()
-                .take(branch_width - 3)
-                .collect();
+            let truncated: String = build.source_branch.chars().take(branch_width - 3).collect();
             format!("{truncated}...")
         } else {
             build.source_branch.clone()
@@ -232,13 +214,13 @@ async fn run_logs(
     let resolved_build_id = match build_id {
         Some(id) => id.to_string(),
         None => {
-            let builds =
-                fetch_builds(&client, config, app_id).await.with_context(
-                    || format!("failed to fetch builds for app {app_id}"),
-                )?;
-            let latest = builds.into_iter().next().ok_or_else(|| {
-                anyhow!("no builds found for app {app_id}")
-            })?;
+            let builds = fetch_builds(&client, config, app_id)
+                .await
+                .with_context(|| format!("failed to fetch builds for app {app_id}"))?;
+            let latest = builds
+                .into_iter()
+                .next()
+                .ok_or_else(|| anyhow!("no builds found for app {app_id}"))?;
             latest.id
         }
     };
@@ -246,23 +228,12 @@ async fn run_logs(
     let mut next_token: Option<String> = None;
 
     loop {
-        let logs = fetch_build_logs(
-            &client,
-            config,
-            &resolved_build_id,
-            next_token.as_deref(),
-        )
-        .await
-        .with_context(|| {
-            format!("failed to fetch logs for build {resolved_build_id}")
-        })?;
+        let logs = fetch_build_logs(&client, config, &resolved_build_id, next_token.as_deref())
+            .await
+            .with_context(|| format!("failed to fetch logs for build {resolved_build_id}"))?;
 
         for line in &logs.lines {
-            println!(
-                "[{}] {}",
-                format_timestamp_ms(line.timestamp),
-                line.message
-            );
+            println!("[{}] {}", format_timestamp_ms(line.timestamp), line.message);
         }
 
         if logs.is_complete {
@@ -283,11 +254,7 @@ async fn run_logs(
     Ok(())
 }
 
-pub async fn run(
-    args: &ComputeArgs,
-    config: &Configuration,
-    tenant_id: &str,
-) -> Result<()> {
+pub async fn run(args: &ComputeArgs, config: &Configuration, tenant_id: &str) -> Result<()> {
     match &args.command {
         ComputeCommand::Status { app_id, limit } => {
             run_status(config, tenant_id, app_id, *limit).await
@@ -296,15 +263,6 @@ pub async fn run(
             app_id,
             build_id,
             follow,
-        } => {
-            run_logs(
-                config,
-                tenant_id,
-                app_id,
-                build_id.as_deref(),
-                *follow,
-            )
-            .await
-        }
+        } => run_logs(config, tenant_id, app_id, build_id.as_deref(), *follow).await,
     }
 }

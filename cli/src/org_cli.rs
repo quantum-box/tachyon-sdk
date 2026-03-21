@@ -154,11 +154,7 @@ struct ServiceAccountResponse {
 
 // ── Runners ──
 
-async fn run_actions(
-    config: &Configuration,
-    tenant_id: &str,
-    context: Option<&str>,
-) -> Result<()> {
+async fn run_actions(config: &Configuration, tenant_id: &str, context: Option<&str>) -> Result<()> {
     let client = build_client(config, tenant_id)?;
     let url = api_url(config, "/v1/auth/actions");
 
@@ -203,17 +199,13 @@ async fn run_actions(
     Ok(())
 }
 
-async fn run_users_list(
-    config: &Configuration,
-    tenant_id: &str,
-) -> Result<()> {
+async fn run_users_list(config: &Configuration, tenant_id: &str) -> Result<()> {
     let client = build_client(config, tenant_id)?;
     let url = api_url(config, "/v1/auth/users");
 
     // operator_id query parameter is required
     let resp: UserListResponse =
-        get_json_with_query(&client, &url, &[("operator_id", tenant_id)])
-            .await?;
+        get_json_with_query(&client, &url, &[("operator_id", tenant_id)]).await?;
 
     if resp.users.is_empty() {
         println!("No users found.");
@@ -258,8 +250,7 @@ async fn run_operators_list(
     let uid = user_id.unwrap_or("us_01hs2yepy5hw4rz8pdq2wywnwt");
     params.push(("user_id", uid));
 
-    let resp: OperatorListResponse =
-        get_json_with_query(&client, &url, &params).await?;
+    let resp: OperatorListResponse = get_json_with_query(&client, &url, &params).await?;
 
     if resp.operators.is_empty() {
         println!("No operators found.");
@@ -284,16 +275,12 @@ async fn run_operators_list(
     Ok(())
 }
 
-async fn run_service_accounts_list(
-    config: &Configuration,
-    tenant_id: &str,
-) -> Result<()> {
+async fn run_service_accounts_list(config: &Configuration, tenant_id: &str) -> Result<()> {
     let client = build_client(config, tenant_id)?;
     let url = api_url(config, "/v1/auth/service-accounts");
 
     let resp: ServiceAccountListResponse =
-        get_json_with_query(&client, &url, &[("operator_id", tenant_id)])
-            .await?;
+        get_json_with_query(&client, &url, &[("operator_id", tenant_id)]).await?;
 
     if resp.service_accounts.is_empty() {
         println!("No service accounts found.");
@@ -318,11 +305,7 @@ async fn run_service_accounts_list(
     Ok(())
 }
 
-pub async fn run(
-    args: &OrgArgs,
-    config: &Configuration,
-    tenant_id: &str,
-) -> Result<()> {
+pub async fn run(args: &OrgArgs, config: &Configuration, tenant_id: &str) -> Result<()> {
     match &args.command {
         OrgCommand::Policies(p) => match &p.command {
             PoliciesCommand::Actions { context } => {
@@ -336,20 +319,10 @@ pub async fn run(
             OperatorsCommand::List {
                 platform_id,
                 user_id,
-            } => {
-                run_operators_list(
-                    config,
-                    tenant_id,
-                    platform_id,
-                    user_id.as_deref(),
-                )
-                .await
-            }
+            } => run_operators_list(config, tenant_id, platform_id, user_id.as_deref()).await,
         },
         OrgCommand::ServiceAccounts(sa) => match &sa.command {
-            ServiceAccountsCommand::List => {
-                run_service_accounts_list(config, tenant_id).await
-            }
+            ServiceAccountsCommand::List => run_service_accounts_list(config, tenant_id).await,
         },
     }
 }
