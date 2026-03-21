@@ -43,6 +43,7 @@ pub enum PoliciesCommand {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct ActionListResponse {
     actions: Vec<ActionResponse>,
     #[allow(dead_code)]
@@ -50,6 +51,7 @@ struct ActionListResponse {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct ActionResponse {
     #[allow(dead_code)]
     id: String,
@@ -113,6 +115,7 @@ struct OperatorListResponse {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct OperatorResponse {
     id: String,
     name: String,
@@ -134,11 +137,13 @@ pub enum ServiceAccountsCommand {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct ServiceAccountListResponse {
     service_accounts: Vec<ServiceAccountResponse>,
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct ServiceAccountResponse {
     id: String,
     #[allow(dead_code)]
