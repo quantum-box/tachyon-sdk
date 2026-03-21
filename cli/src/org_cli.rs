@@ -75,13 +75,17 @@ pub enum UsersCommand {
         #[arg(long)]
         json: bool,
     },
-    /// Invite a user
+    /// Invite a user by ID or email address
     Invite {
-        /// Email address
-        email: String,
-        /// Role (e.g. admin, member)
-        #[arg(long, default_value = "member")]
-        role: String,
+        /// User ID (e.g. us_xxx) or email address
+        identifier: String,
+        /// Notify the user by email
+        #[arg(long)]
+        notify: bool,
+        /// Platform ID (optional, resolved from tenant hierarchy
+        /// if omitted)
+        #[arg(long)]
+        platform_id: Option<String>,
     },
     /// List policies attached to a user
     Policies {
@@ -207,9 +211,17 @@ struct UserPolicyResponse {
 }
 
 #[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 struct InviteUserRequest {
-    email: String,
-    role: String,
+    tenant_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    invitee_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    invitee_email: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    platform_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    notify_user: Option<bool>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -314,13 +326,35 @@ async fn run_users_get(api: &ApiClient, user_id: &str, json: bool) -> Result<()>
     Ok(())
 }
 
-async fn run_users_invite(api: &ApiClient, email: &str, role: &str) -> Result<()> {
+async fn run_users_invite(
+    api: &ApiClient,
+    tenant_id: &str,
+    identifier: &str,
+    notify: bool,
+    platform_id: Option<&str>,
+) -> Result<()> {
+    let is_email = identifier.contains('@');
     let req = InviteUserRequest {
-        email: email.to_string(),
-        role: role.to_string(),
+        tenant_id: tenant_id.to_string(),
+        invitee_id: if is_email {
+            None
+        } else {
+            Some(identifier.to_string())
+        },
+        invitee_email: if is_email {
+            Some(identifier.to_string())
+        } else {
+            None
+        },
+        platform_id: platform_id.map(|s| s.to_string()),
+        notify_user: if notify { Some(true) } else { None },
     };
     let resp: serde_json::Value = api.post("/v1/auth/users/invite", &req).await?;
-    println!("Invitation sent to {email}.");
+    if is_email {
+        println!("Invitation sent to {identifier}.");
+    } else {
+        println!("User {identifier} invited to tenant.");
+    }
     if let Some(id) = resp.get("id").and_then(|v| v.as_str()) {
         println!("User ID: {id}");
     }
@@ -471,7 +505,13 @@ pub async fn run(args: &OrgArgs, config: &Configuration, tenant_id: &str) -> Res
         OrgCommand::Users { command } => match command {
             UsersCommand::List { json } => run_users_list(&api, *json).await,
             UsersCommand::Get { user_id, json } => run_users_get(&api, user_id, *json).await,
-            UsersCommand::Invite { email, role } => run_users_invite(&api, email, role).await,
+            UsersCommand::Invite {
+                identifier,
+                notify,
+                platform_id,
+            } => {
+                run_users_invite(&api, tenant_id, identifier, *notify, platform_id.as_deref()).await
+            }
             UsersCommand::Policies { user_id, json } => {
                 run_users_policies(&api, user_id, *json).await
             }
