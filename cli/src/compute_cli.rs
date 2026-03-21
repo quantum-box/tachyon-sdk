@@ -1,10 +1,12 @@
 use anyhow::{anyhow, Context, Result};
 use chrono::{DateTime, TimeZone, Utc};
 use clap::{Args, Subcommand};
-use reqwest::{header, Client};
+use reqwest::Client;
 use serde::Deserialize;
 use tachyon_sdk::apis::configuration::Configuration;
 use tokio::time::{sleep, Duration};
+
+use crate::client::{api_url, build_client, get_json};
 
 #[derive(Debug, Clone, Args)]
 pub struct ComputeArgs {
@@ -74,22 +76,6 @@ struct BuildLogLineResponse {
     message: String,
 }
 
-/// Build a reqwest client with Tachyon auth headers.
-///
-/// Uses the SDK's [`Configuration`] for the base URL and bearer token, and
-/// `tenant_id` for the required `x-operator-id` header.
-fn build_client(config: &Configuration, tenant_id: &str) -> Result<Client> {
-    let mut headers = header::HeaderMap::new();
-    headers.insert("x-operator-id", header::HeaderValue::from_str(tenant_id)?);
-    if let Some(token) = &config.bearer_access_token {
-        headers.insert(
-            header::AUTHORIZATION,
-            header::HeaderValue::from_str(&format!("Bearer {token}"))?,
-        );
-    }
-    Ok(Client::builder().default_headers(headers).build()?)
-}
-
 async fn fetch_builds(
     client: &Client,
     config: &Configuration,
@@ -97,23 +83,10 @@ async fn fetch_builds(
 ) -> Result<Vec<BuildResponse>> {
     let url = format!(
         "{}/v1/compute/apps/{}/builds",
-        config.base_path.trim_end_matches('/'),
+        api_url(config, ""),
         app_id
     );
-    let response = client
-        .get(&url)
-        .send()
-        .await
-        .with_context(|| format!("failed to GET {url}"))?;
-    let status = response.status();
-    if !status.is_success() {
-        let body = response.text().await.unwrap_or_default();
-        return Err(anyhow!("list builds failed: status={status}, body={body}"));
-    }
-    let list: ListBuildsResponse = response
-        .json()
-        .await
-        .context("failed to parse list builds response")?;
+    let list: ListBuildsResponse = get_json(client, &url).await?;
     Ok(list.builds)
 }
 
@@ -123,33 +96,28 @@ async fn fetch_build_logs(
     build_id: &str,
     next_token: Option<&str>,
 ) -> Result<BuildLogsResponse> {
-    let base_url = format!(
+    let url = format!(
         "{}/v1/compute/builds/{}/logs",
-        config.base_path.trim_end_matches('/'),
+        api_url(config, ""),
         build_id
     );
-    let mut request = client.get(&base_url);
     if let Some(token) = next_token {
-        request = request.query(&[("next_token", token)]);
-    }
-    let response = request
-        .send()
+        crate::client::get_json_with_query(
+            client,
+            &url,
+            &[("next_token", token)],
+        )
         .await
-        .with_context(|| format!("failed to GET {base_url}"))?;
-    let status = response.status();
-    if !status.is_success() {
-        let body = response.text().await.unwrap_or_default();
-        return Err(anyhow!("fetch logs failed: status={status}, body={body}"));
+    } else {
+        get_json(client, &url).await
     }
-    response
-        .json()
-        .await
-        .context("failed to parse build logs response")
 }
 
 fn format_timestamp_ms(millis: i64) -> String {
     match Utc.timestamp_millis_opt(millis) {
-        chrono::LocalResult::Single(dt) => dt.format("%Y-%m-%d %H:%M:%S").to_string(),
+        chrono::LocalResult::Single(dt) => {
+            dt.format("%Y-%m-%d %H:%M:%S").to_string()
+        }
         _ => format!("{millis}"),
     }
 }
@@ -176,9 +144,12 @@ async fn run_status(
     limit: usize,
 ) -> Result<()> {
     let client = build_client(config, tenant_id)?;
-    let builds = fetch_builds(&client, config, app_id)
-        .await
-        .with_context(|| format!("failed to fetch builds for app {app_id}"))?;
+    let builds =
+        fetch_builds(&client, config, app_id)
+            .await
+            .with_context(|| {
+                format!("failed to fetch builds for app {app_id}")
+            })?;
 
     if builds.is_empty() {
         println!("No builds found for app {app_id}");
@@ -222,7 +193,11 @@ async fn run_status(
 
     for build in builds_to_show {
         let branch = if build.source_branch.chars().count() > branch_width {
-            let truncated: String = build.source_branch.chars().take(branch_width - 3).collect();
+            let truncated: String = build
+                .source_branch
+                .chars()
+                .take(branch_width - 3)
+                .collect();
             format!("{truncated}...")
         } else {
             build.source_branch.clone()
@@ -257,13 +232,13 @@ async fn run_logs(
     let resolved_build_id = match build_id {
         Some(id) => id.to_string(),
         None => {
-            let builds = fetch_builds(&client, config, app_id)
-                .await
-                .with_context(|| format!("failed to fetch builds for app {app_id}"))?;
-            let latest = builds
-                .into_iter()
-                .next()
-                .ok_or_else(|| anyhow!("no builds found for app {app_id}"))?;
+            let builds =
+                fetch_builds(&client, config, app_id).await.with_context(
+                    || format!("failed to fetch builds for app {app_id}"),
+                )?;
+            let latest = builds.into_iter().next().ok_or_else(|| {
+                anyhow!("no builds found for app {app_id}")
+            })?;
             latest.id
         }
     };
@@ -271,12 +246,23 @@ async fn run_logs(
     let mut next_token: Option<String> = None;
 
     loop {
-        let logs = fetch_build_logs(&client, config, &resolved_build_id, next_token.as_deref())
-            .await
-            .with_context(|| format!("failed to fetch logs for build {resolved_build_id}"))?;
+        let logs = fetch_build_logs(
+            &client,
+            config,
+            &resolved_build_id,
+            next_token.as_deref(),
+        )
+        .await
+        .with_context(|| {
+            format!("failed to fetch logs for build {resolved_build_id}")
+        })?;
 
         for line in &logs.lines {
-            println!("[{}] {}", format_timestamp_ms(line.timestamp), line.message);
+            println!(
+                "[{}] {}",
+                format_timestamp_ms(line.timestamp),
+                line.message
+            );
         }
 
         if logs.is_complete {
@@ -297,7 +283,11 @@ async fn run_logs(
     Ok(())
 }
 
-pub async fn run(args: &ComputeArgs, config: &Configuration, tenant_id: &str) -> Result<()> {
+pub async fn run(
+    args: &ComputeArgs,
+    config: &Configuration,
+    tenant_id: &str,
+) -> Result<()> {
     match &args.command {
         ComputeCommand::Status { app_id, limit } => {
             run_status(config, tenant_id, app_id, *limit).await
@@ -306,6 +296,15 @@ pub async fn run(args: &ComputeArgs, config: &Configuration, tenant_id: &str) ->
             app_id,
             build_id,
             follow,
-        } => run_logs(config, tenant_id, app_id, build_id.as_deref(), *follow).await,
+        } => {
+            run_logs(
+                config,
+                tenant_id,
+                app_id,
+                build_id.as_deref(),
+                *follow,
+            )
+            .await
+        }
     }
 }

@@ -1,4 +1,9 @@
+mod agent_cli;
+mod client;
 mod compute_cli;
+mod iac_cli;
+mod ops_cli;
+mod org_cli;
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
@@ -31,6 +36,14 @@ struct Cli {
 enum Commands {
     /// Manage compute apps and builds
     Compute(compute_cli::ComputeArgs),
+    /// Manage organization: users, operators, policies
+    Org(org_cli::OrgArgs),
+    /// Manage AI agent sessions and models
+    Agent(agent_cli::AgentArgs),
+    /// Manage IaC integrations
+    Iac(iac_cli::IacArgs),
+    /// Operations: deployments and tool jobs
+    Ops(ops_cli::OpsArgs),
 }
 
 #[tokio::main]
@@ -42,6 +55,20 @@ async fn main() -> Result<()> {
     config.bearer_access_token = cli.api_key;
 
     match cli.command {
-        Commands::Compute(args) => compute_cli::run(&args, &config, &cli.tenant_id).await,
+        Commands::Compute(args) => {
+            compute_cli::run(&args, &config, &cli.tenant_id).await
+        }
+        Commands::Org(args) => {
+            org_cli::run(&args, &config, &cli.tenant_id).await
+        }
+        Commands::Agent(args) => {
+            agent_cli::run(&args, &config, &cli.tenant_id).await
+        }
+        Commands::Iac(args) => {
+            iac_cli::run(&args, &config, &cli.tenant_id).await
+        }
+        Commands::Ops(args) => {
+            ops_cli::run(&args, &config, &cli.tenant_id).await
+        }
     }
 }
