@@ -94,12 +94,12 @@ async fn resolve_token(cli: &Cli) -> Option<String> {
                         eprintln!("Token refreshed successfully.");
                         return Some(new_creds.access_token);
                     }
-                    Err(_) => {
+                    Err(e) => {
                         eprintln!(
-                            "Warning: stored token has expired and refresh failed. \
+                            "Warning: token refresh failed: {e}. \
                              Run `tachyon login` to re-authenticate."
                         );
-                        return Some(creds.access_token);
+                        return None;
                     }
                 }
             }
