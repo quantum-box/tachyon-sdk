@@ -349,8 +349,7 @@ async fn run_users_invite(
         platform_id: platform_id.map(|s| s.to_string()),
         notify_user: if notify { Some(true) } else { None },
     };
-    let resp: serde_json::Value =
-        api.post("/v1/auth/users/invite", &req).await?;
+    let resp: serde_json::Value = api.post("/v1/auth/users/invite", &req).await?;
     if is_email {
         println!("Invitation sent to {identifier}.");
     } else {
@@ -511,14 +510,7 @@ pub async fn run(args: &OrgArgs, config: &Configuration, tenant_id: &str) -> Res
                 notify,
                 platform_id,
             } => {
-                run_users_invite(
-                    &api,
-                    tenant_id,
-                    identifier,
-                    *notify,
-                    platform_id.as_deref(),
-                )
-                .await
+                run_users_invite(&api, tenant_id, identifier, *notify, platform_id.as_deref()).await
             }
             UsersCommand::Policies { user_id, json } => {
                 run_users_policies(&api, user_id, *json).await
