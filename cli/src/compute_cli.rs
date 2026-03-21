@@ -1,10 +1,12 @@
 use anyhow::{anyhow, Context, Result};
 use chrono::{DateTime, TimeZone, Utc};
 use clap::{Args, Subcommand};
-use reqwest::{header, Client};
+use reqwest::Client;
 use serde::Deserialize;
 use tachyon_sdk::apis::configuration::Configuration;
 use tokio::time::{sleep, Duration};
+
+use crate::client::{api_url, build_client, get_json};
 
 #[derive(Debug, Clone, Args)]
 pub struct ComputeArgs {
@@ -74,46 +76,13 @@ struct BuildLogLineResponse {
     message: String,
 }
 
-/// Build a reqwest client with Tachyon auth headers.
-///
-/// Uses the SDK's [`Configuration`] for the base URL and bearer token, and
-/// `tenant_id` for the required `x-operator-id` header.
-fn build_client(config: &Configuration, tenant_id: &str) -> Result<Client> {
-    let mut headers = header::HeaderMap::new();
-    headers.insert("x-operator-id", header::HeaderValue::from_str(tenant_id)?);
-    if let Some(token) = &config.bearer_access_token {
-        headers.insert(
-            header::AUTHORIZATION,
-            header::HeaderValue::from_str(&format!("Bearer {token}"))?,
-        );
-    }
-    Ok(Client::builder().default_headers(headers).build()?)
-}
-
 async fn fetch_builds(
     client: &Client,
     config: &Configuration,
     app_id: &str,
 ) -> Result<Vec<BuildResponse>> {
-    let url = format!(
-        "{}/v1/compute/apps/{}/builds",
-        config.base_path.trim_end_matches('/'),
-        app_id
-    );
-    let response = client
-        .get(&url)
-        .send()
-        .await
-        .with_context(|| format!("failed to GET {url}"))?;
-    let status = response.status();
-    if !status.is_success() {
-        let body = response.text().await.unwrap_or_default();
-        return Err(anyhow!("list builds failed: status={status}, body={body}"));
-    }
-    let list: ListBuildsResponse = response
-        .json()
-        .await
-        .context("failed to parse list builds response")?;
+    let url = format!("{}/v1/compute/apps/{}/builds", api_url(config, ""), app_id);
+    let list: ListBuildsResponse = get_json(client, &url).await?;
     Ok(list.builds)
 }
 
@@ -123,28 +92,16 @@ async fn fetch_build_logs(
     build_id: &str,
     next_token: Option<&str>,
 ) -> Result<BuildLogsResponse> {
-    let base_url = format!(
+    let url = format!(
         "{}/v1/compute/builds/{}/logs",
-        config.base_path.trim_end_matches('/'),
+        api_url(config, ""),
         build_id
     );
-    let mut request = client.get(&base_url);
     if let Some(token) = next_token {
-        request = request.query(&[("next_token", token)]);
+        crate::client::get_json_with_query(client, &url, &[("next_token", token)]).await
+    } else {
+        get_json(client, &url).await
     }
-    let response = request
-        .send()
-        .await
-        .with_context(|| format!("failed to GET {base_url}"))?;
-    let status = response.status();
-    if !status.is_success() {
-        let body = response.text().await.unwrap_or_default();
-        return Err(anyhow!("fetch logs failed: status={status}, body={body}"));
-    }
-    response
-        .json()
-        .await
-        .context("failed to parse build logs response")
 }
 
 fn format_timestamp_ms(millis: i64) -> String {
