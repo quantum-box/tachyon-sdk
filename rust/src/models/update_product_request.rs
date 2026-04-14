@@ -38,6 +38,14 @@ pub struct UpdateProductRequest {
         skip_serializing_if = "Option::is_none"
     )]
     pub image_file_ids: Option<Option<Vec<String>>>,
+    /// Storage keys for product images
+    #[serde(
+        rename = "imageStorageKeys",
+        default,
+        with = "::serde_with::rust::double_option",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub image_storage_keys: Option<Option<Vec<String>>>,
     /// JAN code
     #[serde(
         rename = "janCode",
@@ -136,6 +144,7 @@ impl UpdateProductRequest {
             billing_cycle: None,
             description: None,
             image_file_ids: None,
+            image_storage_keys: None,
             jan_code: None,
             kind: None,
             list_price: None,
