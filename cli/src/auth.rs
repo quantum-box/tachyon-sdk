@@ -61,6 +61,9 @@ pub struct StoredCredentials {
     pub id_token: Option<String>,
     pub expires_at: Option<i64>,
     pub token_type: String,
+    /// Default operator (tenant) ID saved after login.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub operator_id: Option<String>,
 }
 
 /// Cognito token endpoint response.
@@ -248,6 +251,7 @@ pub async fn refresh_access_token(
         id_token: token_resp.id_token.or_else(|| creds.id_token.clone()),
         expires_at,
         token_type: token_resp.token_type,
+        operator_id: creds.operator_id.clone(),
     };
 
     save_credentials(&new_creds)?;
@@ -282,20 +286,78 @@ pub async fn login(oauth_config: &OAuthConfig, api_url: &str) -> Result<()> {
     let now = chrono::Utc::now().timestamp();
     let expires_at = token_resp.expires_in.map(|e| now + e);
 
-    let creds = StoredCredentials {
+    let mut creds = StoredCredentials {
         access_token: token_resp.access_token,
         refresh_token: token_resp.refresh_token,
         id_token: token_resp.id_token,
         expires_at,
         token_type: token_resp.token_type,
+        operator_id: None,
     };
+
+    // Fetch operators and save the default one.
+    creds.operator_id = fetch_default_operator(api_url, &creds.access_token).await.ok();
 
     save_credentials(&creds)?;
 
     let path = credentials_path()?;
     println!("Login successful! Credentials saved to {}", path.display());
+    if let Some(ref op_id) = creds.operator_id {
+        println!("Default tenant: {op_id}");
+    }
 
     Ok(())
+}
+
+/// Fetch the default operator ID for the logged-in user.
+/// Automatically selects if only one exists.
+async fn fetch_default_operator(api_url: &str, access_token: &str) -> Result<String> {
+    #[derive(Deserialize)]
+    struct OperatorEntry {
+        id: String,
+        #[serde(default)]
+        alias: Option<String>,
+    }
+
+    let client = Client::new();
+    let url = format!("{}/v1/auth/operators/by-user", api_url.trim_end_matches('/'));
+    let resp = client
+        .get(&url)
+        .bearer_auth(access_token)
+        .send()
+        .await
+        .context("failed to fetch operators")?;
+
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+        return Err(anyhow!("operators fetch failed: status={status}, body={body}"));
+    }
+
+    let operators: Vec<OperatorEntry> = resp.json().await.context("failed to parse operators")?;
+
+    match operators.len() {
+        0 => Err(anyhow!("no operators found for this user")),
+        1 => {
+            let op = &operators[0];
+            let label = op.alias.as_deref().unwrap_or(&op.id);
+            println!("Tenant: {label} ({})", op.id);
+            Ok(op.id.clone())
+        }
+        _ => {
+            // Multiple operators — pick the first and show a hint.
+            let op = &operators[0];
+            let label = op.alias.as_deref().unwrap_or(&op.id);
+            println!(
+                "Multiple tenants found. Using: {label} ({})",
+                op.id
+            );
+            println!(
+                "Use --tenant-id or TACHYON_TENANT_ID to override."
+            );
+            Ok(op.id.clone())
+        }
+    }
 }
 
 /// Remove stored credentials (logout).
