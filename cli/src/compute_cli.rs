@@ -124,7 +124,9 @@ impl PagesApp {
     /// Returns the pages build command and output directory.
     fn pages_build_info(&self) -> (&str, &str) {
         match self {
-            PagesApp::Cms => ("npx opennextjs-cloudflare build", ".open-next/assets"),
+            PagesApp::Cms => {
+                ("npx opennextjs-cloudflare build", ".open-next/assets")
+            }
             PagesApp::Tachyon | PagesApp::Docs => {
                 ("npx @cloudflare/next-on-pages", ".vercel/output/static")
             }
@@ -145,7 +147,11 @@ impl PagesApp {
 
 // --- Local build pipeline ---
 
-fn run_shell(description: &str, cmd: &str, cwd: &std::path::Path) -> Result<()> {
+fn run_shell(
+    description: &str,
+    cmd: &str,
+    cwd: &std::path::Path,
+) -> Result<()> {
     println!("  > {cmd}");
     let status = Command::new("sh")
         .arg("-c")
@@ -171,7 +177,11 @@ fn resolve_project_dir(project_dir: Option<&PathBuf>) -> Result<PathBuf> {
     }
 }
 
-fn run_local_build(app: &PagesApp, project_dir: Option<&PathBuf>, deploy: bool) -> Result<()> {
+fn run_local_build(
+    app: &PagesApp,
+    project_dir: Option<&PathBuf>,
+    deploy: bool,
+) -> Result<()> {
     let root = resolve_project_dir(project_dir)?;
     let app_dir = root.join("apps").join(app.name());
     if !app_dir.exists() {
@@ -237,7 +247,11 @@ fn run_local_build(app: &PagesApp, project_dir: Option<&PathBuf>, deploy: bool) 
     Ok(())
 }
 
-fn run_local_dev(app: &PagesApp, project_dir: Option<&PathBuf>, port: u16) -> Result<()> {
+fn run_local_dev(
+    app: &PagesApp,
+    project_dir: Option<&PathBuf>,
+    port: u16,
+) -> Result<()> {
     let root = resolve_project_dir(project_dir)?;
     let app_dir = root.join("apps").join(app.name());
     if !app_dir.exists() {
@@ -633,7 +647,9 @@ struct UpdateScalingRequest {
 
 fn format_timestamp_ms(millis: i64) -> String {
     match Utc.timestamp_millis_opt(millis) {
-        chrono::LocalResult::Single(dt) => dt.format("%Y-%m-%d %H:%M:%S").to_string(),
+        chrono::LocalResult::Single(dt) => {
+            dt.format("%Y-%m-%d %H:%M:%S").to_string()
+        }
         _ => format!("{millis}"),
     }
 }
@@ -688,8 +704,13 @@ async fn run_apps_list(api: &ApiClient, json: bool) -> Result<()> {
     Ok(())
 }
 
-async fn run_apps_get(api: &ApiClient, app_id: &str, json: bool) -> Result<()> {
-    let app: AppResponse = api.get(&format!("/v1/compute/apps/{app_id}")).await?;
+async fn run_apps_get(
+    api: &ApiClient,
+    app_id: &str,
+    json: bool,
+) -> Result<()> {
+    let app: AppResponse =
+        api.get(&format!("/v1/compute/apps/{app_id}")).await?;
     if json {
         return print_json(&app);
     }
@@ -724,7 +745,12 @@ async fn run_apps_delete(api: &ApiClient, app_id: &str) -> Result<()> {
     Ok(())
 }
 
-async fn run_builds_list(api: &ApiClient, app_id: &str, limit: usize, json: bool) -> Result<()> {
+async fn run_builds_list(
+    api: &ApiClient,
+    app_id: &str,
+    limit: usize,
+    json: bool,
+) -> Result<()> {
     let resp: ListBuildsResponse = api
         .get(&format!("/v1/compute/apps/{app_id}/builds"))
         .await?;
@@ -762,8 +788,13 @@ async fn run_builds_list(api: &ApiClient, app_id: &str, limit: usize, json: bool
     Ok(())
 }
 
-async fn run_builds_get(api: &ApiClient, build_id: &str, json: bool) -> Result<()> {
-    let build: BuildResponse = api.get(&format!("/v1/compute/builds/{build_id}")).await?;
+async fn run_builds_get(
+    api: &ApiClient,
+    build_id: &str,
+    json: bool,
+) -> Result<()> {
+    let build: BuildResponse =
+        api.get(&format!("/v1/compute/builds/{build_id}")).await?;
     if json {
         return print_json(&build);
     }
@@ -797,7 +828,11 @@ async fn run_builds_get(api: &ApiClient, build_id: &str, json: bool) -> Result<(
     Ok(())
 }
 
-async fn run_builds_trigger(api: &ApiClient, app_id: &str, branch: Option<&str>) -> Result<()> {
+async fn run_builds_trigger(
+    api: &ApiClient,
+    app_id: &str,
+    branch: Option<&str>,
+) -> Result<()> {
     let req = TriggerBuildRequest {
         branch: branch.map(String::from),
     };
@@ -884,7 +919,11 @@ async fn run_builds_logs(
     Ok(())
 }
 
-async fn run_deployments_list(api: &ApiClient, app_id: &str, json: bool) -> Result<()> {
+async fn run_deployments_list(
+    api: &ApiClient,
+    app_id: &str,
+    json: bool,
+) -> Result<()> {
     let resp: ListDeploymentsResponse = api
         .get(&format!("/v1/compute/apps/{app_id}/deployments"))
         .await?;
@@ -919,7 +958,11 @@ async fn run_deployments_list(api: &ApiClient, app_id: &str, json: bool) -> Resu
     Ok(())
 }
 
-async fn run_deployments_get(api: &ApiClient, deployment_id: &str, json: bool) -> Result<()> {
+async fn run_deployments_get(
+    api: &ApiClient,
+    deployment_id: &str,
+    json: bool,
+) -> Result<()> {
     let dep: DeploymentResponse = api
         .get(&format!("/v1/compute/deployments/{deployment_id}"))
         .await?;
@@ -957,8 +1000,13 @@ async fn run_deployments_rollback(
     Ok(())
 }
 
-async fn run_env_list(api: &ApiClient, app_id: &str, json: bool) -> Result<()> {
-    let resp: ListEnvVarsResponse = api.get(&format!("/v1/compute/apps/{app_id}/env")).await?;
+async fn run_env_list(
+    api: &ApiClient,
+    app_id: &str,
+    json: bool,
+) -> Result<()> {
+    let resp: ListEnvVarsResponse =
+        api.get(&format!("/v1/compute/apps/{app_id}/env")).await?;
     if json {
         return print_json(&resp.env_vars);
     }
@@ -986,13 +1034,19 @@ async fn run_env_list(api: &ApiClient, app_id: &str, json: bool) -> Result<()> {
     Ok(())
 }
 
-async fn run_env_set(api: &ApiClient, app_id: &str, vars: &[String]) -> Result<()> {
+async fn run_env_set(
+    api: &ApiClient,
+    app_id: &str,
+    vars: &[String],
+) -> Result<()> {
     let entries: Vec<SetEnvVarEntry> = vars
         .iter()
         .map(|v| {
-            let (key, value) = v
-                .split_once('=')
-                .ok_or_else(|| anyhow!("invalid env var format: '{v}' (expected KEY=VALUE)"))?;
+            let (key, value) = v.split_once('=').ok_or_else(|| {
+                anyhow!(
+                    "invalid env var format: '{v}' (expected KEY=VALUE)"
+                )
+            })?;
             Ok(SetEnvVarEntry {
                 key: key.to_string(),
                 value: value.to_string(),
@@ -1009,14 +1063,22 @@ async fn run_env_set(api: &ApiClient, app_id: &str, vars: &[String]) -> Result<(
     Ok(())
 }
 
-async fn run_env_delete(api: &ApiClient, app_id: &str, env_id: &str) -> Result<()> {
+async fn run_env_delete(
+    api: &ApiClient,
+    app_id: &str,
+    env_id: &str,
+) -> Result<()> {
     api.delete(&format!("/v1/compute/apps/{app_id}/env/{env_id}"))
         .await?;
     println!("Environment variable {env_id} deleted.");
     Ok(())
 }
 
-async fn run_domains_list(api: &ApiClient, app_id: &str, json: bool) -> Result<()> {
+async fn run_domains_list(
+    api: &ApiClient,
+    app_id: &str,
+    json: bool,
+) -> Result<()> {
     let resp: ListDomainsResponse = api
         .get(&format!("/v1/compute/apps/{app_id}/domains"))
         .await?;
@@ -1053,7 +1115,11 @@ async fn run_domains_list(api: &ApiClient, app_id: &str, json: bool) -> Result<(
     Ok(())
 }
 
-async fn run_domains_add(api: &ApiClient, app_id: &str, domain: &str) -> Result<()> {
+async fn run_domains_add(
+    api: &ApiClient,
+    app_id: &str,
+    domain: &str,
+) -> Result<()> {
     let req = AddDomainRequest {
         domain: domain.to_string(),
     };
@@ -1064,23 +1130,34 @@ async fn run_domains_add(api: &ApiClient, app_id: &str, domain: &str) -> Result<
     Ok(())
 }
 
-async fn run_domains_verify(api: &ApiClient, domain_id: &str) -> Result<()> {
+async fn run_domains_verify(
+    api: &ApiClient,
+    domain_id: &str,
+) -> Result<()> {
     api.post_no_body(&format!("/v1/compute/domains/{domain_id}/verify"))
         .await?;
     println!("Domain {domain_id} verification initiated.");
     Ok(())
 }
 
-async fn run_domains_remove(api: &ApiClient, domain_id: &str) -> Result<()> {
+async fn run_domains_remove(
+    api: &ApiClient,
+    domain_id: &str,
+) -> Result<()> {
     api.delete(&format!("/v1/compute/domains/{domain_id}"))
         .await?;
     println!("Domain {domain_id} removed.");
     Ok(())
 }
 
-async fn run_scaling_get(api: &ApiClient, app_id: &str, json: bool) -> Result<()> {
+async fn run_scaling_get(
+    api: &ApiClient,
+    app_id: &str,
+    json: bool,
+) -> Result<()> {
     // Scaling info is part of app details; fetch app and display scaling-relevant fields
-    let app: serde_json::Value = api.get(&format!("/v1/compute/apps/{app_id}")).await?;
+    let app: serde_json::Value =
+        api.get(&format!("/v1/compute/apps/{app_id}")).await?;
     if json {
         return print_json(&app);
     }
@@ -1138,7 +1215,11 @@ async fn run_scaling_update(
 
 // ---- Entry point ----
 
-pub async fn run(args: &ComputeArgs, config: &Configuration, tenant_id: &str) -> Result<()> {
+pub async fn run(
+    args: &ComputeArgs,
+    config: &Configuration,
+    tenant_id: &str,
+) -> Result<()> {
     // Local-only commands (no API call needed)
     match &args.command {
         ComputeCommand::Build {
@@ -1180,12 +1261,16 @@ pub async fn run(args: &ComputeArgs, config: &Configuration, tenant_id: &str) ->
                 let id = resolve::resolve_app_id(&api, app_id).await?;
                 run_builds_list(&api, &id, *limit, *json).await
             }
-            BuildsCommand::Get { build_id, json } => run_builds_get(&api, build_id, *json).await,
+            BuildsCommand::Get { build_id, json } => {
+                run_builds_get(&api, build_id, *json).await
+            }
             BuildsCommand::Trigger { app_id, branch } => {
                 let id = resolve::resolve_app_id(&api, app_id).await?;
                 run_builds_trigger(&api, &id, branch.as_deref()).await
             }
-            BuildsCommand::Cancel { build_id } => run_builds_cancel(&api, build_id).await,
+            BuildsCommand::Cancel { build_id } => {
+                run_builds_cancel(&api, build_id).await
+            }
             BuildsCommand::Logs {
                 app_id,
                 build_id,
@@ -1241,8 +1326,12 @@ pub async fn run(args: &ComputeArgs, config: &Configuration, tenant_id: &str) ->
                 let id = resolve::resolve_app_id(&api, app_id).await?;
                 run_domains_add(&api, &id, domain).await
             }
-            DomainsCommand::Verify { domain_id } => run_domains_verify(&api, domain_id).await,
-            DomainsCommand::Remove { domain_id } => run_domains_remove(&api, domain_id).await,
+            DomainsCommand::Verify { domain_id } => {
+                run_domains_verify(&api, domain_id).await
+            }
+            DomainsCommand::Remove { domain_id } => {
+                run_domains_remove(&api, domain_id).await
+            }
         },
         ComputeCommand::Scaling { command } => match command {
             ScalingCommand::Get { app_id, json } => {
@@ -1255,7 +1344,13 @@ pub async fn run(args: &ComputeArgs, config: &Configuration, tenant_id: &str) ->
                 max_instances,
             } => {
                 let id = resolve::resolve_app_id(&api, app_id).await?;
-                run_scaling_update(&api, &id, *min_instances, *max_instances).await
+                run_scaling_update(
+                    &api,
+                    &id,
+                    *min_instances,
+                    *max_instances,
+                )
+                .await
             }
         },
         // Legacy shortcuts
