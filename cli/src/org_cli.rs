@@ -235,7 +235,8 @@ struct ActionResponse {
 // ---- Handlers ----
 
 async fn run_operators_list(api: &ApiClient, json: bool) -> Result<()> {
-    let ops: Vec<OperatorResponse> = api.get("/v1/auth/operators/by-user").await?;
+    let ops: Vec<OperatorResponse> =
+        api.get("/v1/auth/operators/by-user").await?;
     if json {
         return print_json(&ops);
     }
@@ -257,8 +258,13 @@ async fn run_operators_list(api: &ApiClient, json: bool) -> Result<()> {
     Ok(())
 }
 
-async fn run_operators_get(api: &ApiClient, id: &str, json: bool) -> Result<()> {
-    let op: OperatorResponse = api.get(&format!("/v1/auth/operators/{id}")).await?;
+async fn run_operators_get(
+    api: &ApiClient,
+    id: &str,
+    json: bool,
+) -> Result<()> {
+    let op: OperatorResponse =
+        api.get(&format!("/v1/auth/operators/{id}")).await?;
     if json {
         return print_json(&op);
     }
@@ -269,7 +275,11 @@ async fn run_operators_get(api: &ApiClient, id: &str, json: bool) -> Result<()> 
     Ok(())
 }
 
-async fn run_operators_by_alias(api: &ApiClient, alias: &str, json: bool) -> Result<()> {
+async fn run_operators_by_alias(
+    api: &ApiClient,
+    alias: &str,
+    json: bool,
+) -> Result<()> {
     let op: OperatorResponse = api
         .get_query("/v1/auth/operators/by-alias", &[("alias", alias)])
         .await?;
@@ -313,8 +323,13 @@ async fn run_users_list(api: &ApiClient, json: bool) -> Result<()> {
     Ok(())
 }
 
-async fn run_users_get(api: &ApiClient, user_id: &str, json: bool) -> Result<()> {
-    let u: UserResponse = api.get(&format!("/v1/auth/users/{user_id}")).await?;
+async fn run_users_get(
+    api: &ApiClient,
+    user_id: &str,
+    json: bool,
+) -> Result<()> {
+    let u: UserResponse =
+        api.get(&format!("/v1/auth/users/{user_id}")).await?;
     if json {
         return print_json(&u);
     }
@@ -349,7 +364,8 @@ async fn run_users_invite(
         platform_id: platform_id.map(|s| s.to_string()),
         notify_user: if notify { Some(true) } else { None },
     };
-    let resp: serde_json::Value = api.post("/v1/auth/users/invite", &req).await?;
+    let resp: serde_json::Value =
+        api.post("/v1/auth/users/invite", &req).await?;
     if is_email {
         println!("Invitation sent to {identifier}.");
     } else {
@@ -361,7 +377,11 @@ async fn run_users_invite(
     Ok(())
 }
 
-async fn run_users_policies(api: &ApiClient, user_id: &str, json: bool) -> Result<()> {
+async fn run_users_policies(
+    api: &ApiClient,
+    user_id: &str,
+    json: bool,
+) -> Result<()> {
     let policies: Vec<UserPolicyResponse> = api
         .get(&format!("/v1/auth/users/{user_id}/policies"))
         .await?;
@@ -385,8 +405,12 @@ async fn run_users_policies(api: &ApiClient, user_id: &str, json: bool) -> Resul
     Ok(())
 }
 
-async fn run_service_accounts_list(api: &ApiClient, json: bool) -> Result<()> {
-    let accs: Vec<ServiceAccountResponse> = api.get("/v1/auth/service-accounts").await?;
+async fn run_service_accounts_list(
+    api: &ApiClient,
+    json: bool,
+) -> Result<()> {
+    let accs: Vec<ServiceAccountResponse> =
+        api.get("/v1/auth/service-accounts").await?;
     if json {
         return print_json(&accs);
     }
@@ -411,8 +435,13 @@ async fn run_service_accounts_list(api: &ApiClient, json: bool) -> Result<()> {
     Ok(())
 }
 
-async fn run_service_accounts_get(api: &ApiClient, id: &str, json: bool) -> Result<()> {
-    let sa: ServiceAccountResponse = api.get(&format!("/v1/auth/service-accounts/{id}")).await?;
+async fn run_service_accounts_get(
+    api: &ApiClient,
+    id: &str,
+    json: bool,
+) -> Result<()> {
+    let sa: ServiceAccountResponse =
+        api.get(&format!("/v1/auth/service-accounts/{id}")).await?;
     if json {
         return print_json(&sa);
     }
@@ -423,7 +452,11 @@ async fn run_service_accounts_get(api: &ApiClient, id: &str, json: bool) -> Resu
     Ok(())
 }
 
-async fn run_service_accounts_api_keys(api: &ApiClient, id: &str, json: bool) -> Result<()> {
+async fn run_service_accounts_api_keys(
+    api: &ApiClient,
+    id: &str,
+    json: bool,
+) -> Result<()> {
     let keys: Vec<ApiKeyResponse> = api
         .get(&format!("/v1/auth/service-accounts/{id}/api-keys"))
         .await?;
@@ -448,8 +481,13 @@ async fn run_service_accounts_api_keys(api: &ApiClient, id: &str, json: bool) ->
     Ok(())
 }
 
-async fn run_policies_get(api: &ApiClient, policy_id: &str, json: bool) -> Result<()> {
-    let p: PolicyResponse = api.get(&format!("/v1/auth/policies/{policy_id}")).await?;
+async fn run_policies_get(
+    api: &ApiClient,
+    policy_id: &str,
+    json: bool,
+) -> Result<()> {
+    let p: PolicyResponse =
+        api.get(&format!("/v1/auth/policies/{policy_id}")).await?;
     if json {
         return print_json(&p);
     }
@@ -489,12 +527,18 @@ async fn run_policies_actions(api: &ApiClient, json: bool) -> Result<()> {
 
 // ---- Entry point ----
 
-pub async fn run(args: &OrgArgs, config: &Configuration, tenant_id: &str) -> Result<()> {
+pub async fn run(
+    args: &OrgArgs,
+    config: &Configuration,
+    tenant_id: &str,
+) -> Result<()> {
     let api = ApiClient::new(config, tenant_id)?;
 
     match &args.command {
         OrgCommand::Operators { command } => match command {
-            OperatorsCommand::List { json } => run_operators_list(&api, *json).await,
+            OperatorsCommand::List { json } => {
+                run_operators_list(&api, *json).await
+            }
             OperatorsCommand::Get { operator_id, json } => {
                 run_operators_get(&api, operator_id, *json).await
             }
@@ -503,33 +547,54 @@ pub async fn run(args: &OrgArgs, config: &Configuration, tenant_id: &str) -> Res
             }
         },
         OrgCommand::Users { command } => match command {
-            UsersCommand::List { json } => run_users_list(&api, *json).await,
-            UsersCommand::Get { user_id, json } => run_users_get(&api, user_id, *json).await,
+            UsersCommand::List { json } => {
+                run_users_list(&api, *json).await
+            }
+            UsersCommand::Get { user_id, json } => {
+                run_users_get(&api, user_id, *json).await
+            }
             UsersCommand::Invite {
                 identifier,
                 notify,
                 platform_id,
             } => {
-                run_users_invite(&api, tenant_id, identifier, *notify, platform_id.as_deref()).await
+                run_users_invite(
+                    &api,
+                    tenant_id,
+                    identifier,
+                    *notify,
+                    platform_id.as_deref(),
+                )
+                .await
             }
             UsersCommand::Policies { user_id, json } => {
                 run_users_policies(&api, user_id, *json).await
             }
         },
         OrgCommand::ServiceAccounts { command } => match command {
-            ServiceAccountsCommand::List { json } => run_service_accounts_list(&api, *json).await,
+            ServiceAccountsCommand::List { json } => {
+                run_service_accounts_list(&api, *json).await
+            }
             ServiceAccountsCommand::Get {
                 service_account_id,
                 json,
             } => {
-                let id = resolve::resolve_service_account_id(&api, service_account_id).await?;
+                let id = resolve::resolve_service_account_id(
+                    &api,
+                    service_account_id,
+                )
+                .await?;
                 run_service_accounts_get(&api, &id, *json).await
             }
             ServiceAccountsCommand::ApiKeys {
                 service_account_id,
                 json,
             } => {
-                let id = resolve::resolve_service_account_id(&api, service_account_id).await?;
+                let id = resolve::resolve_service_account_id(
+                    &api,
+                    service_account_id,
+                )
+                .await?;
                 run_service_accounts_api_keys(&api, &id, *json).await
             }
         },
@@ -537,7 +602,9 @@ pub async fn run(args: &OrgArgs, config: &Configuration, tenant_id: &str) -> Res
             PoliciesCommand::Get { policy_id, json } => {
                 run_policies_get(&api, policy_id, *json).await
             }
-            PoliciesCommand::Actions { json } => run_policies_actions(&api, *json).await,
+            PoliciesCommand::Actions { json } => {
+                run_policies_actions(&api, *json).await
+            }
         },
     }
 }

@@ -13,7 +13,10 @@ impl ApiClient {
     /// Build from SDK configuration and tenant ID.
     pub fn new(config: &Configuration, tenant_id: &str) -> Result<Self> {
         let mut headers = header::HeaderMap::new();
-        headers.insert("x-operator-id", header::HeaderValue::from_str(tenant_id)?);
+        headers.insert(
+            "x-operator-id",
+            header::HeaderValue::from_str(tenant_id)?,
+        );
         if let Some(token) = &config.bearer_access_token {
             headers.insert(
                 header::AUTHORIZATION,
@@ -37,7 +40,9 @@ impl ApiClient {
         let status = resp.status();
         if !status.is_success() {
             let body = resp.text().await.unwrap_or_default();
-            return Err(anyhow!("GET {path} failed: status={status}, body={body}"));
+            return Err(anyhow!(
+                "GET {path} failed: status={status}, body={body}"
+            ));
         }
         resp.json()
             .await
@@ -61,7 +66,9 @@ impl ApiClient {
         let status = resp.status();
         if !status.is_success() {
             let body = resp.text().await.unwrap_or_default();
-            return Err(anyhow!("GET {path} failed: status={status}, body={body}"));
+            return Err(anyhow!(
+                "GET {path} failed: status={status}, body={body}"
+            ));
         }
         resp.json()
             .await
@@ -106,7 +113,9 @@ impl ApiClient {
         let status = resp.status();
         if !status.is_success() {
             let body = resp.text().await.unwrap_or_default();
-            return Err(anyhow!("POST {path} failed: status={status}, body={body}"));
+            return Err(anyhow!(
+                "POST {path} failed: status={status}, body={body}"
+            ));
         }
         Ok(status.to_string())
     }
@@ -186,7 +195,8 @@ impl ApiClient {
 /// Format helper: truncate a string with ellipsis if longer than max_len.
 pub fn truncate(s: &str, max_len: usize) -> String {
     if s.chars().count() > max_len {
-        let truncated: String = s.chars().take(max_len.saturating_sub(3)).collect();
+        let truncated: String =
+            s.chars().take(max_len.saturating_sub(3)).collect();
         format!("{truncated}...")
     } else {
         s.to_string()

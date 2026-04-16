@@ -23,7 +23,11 @@ pub struct OAuthConfig {
 }
 
 impl OAuthConfig {
-    pub fn authorize_url(&self, state: &str, code_challenge: &str) -> String {
+    pub fn authorize_url(
+        &self,
+        state: &str,
+        code_challenge: &str,
+    ) -> String {
         let scopes = self.scopes.join("+");
         format!(
             "{}/oauth2/authorize?response_type=code&client_id={}&redirect_uri={}&scope={}&state={}&code_challenge={}&code_challenge_method=S256",
@@ -61,6 +65,10 @@ pub struct StoredCredentials {
     pub id_token: Option<String>,
     pub expires_at: Option<i64>,
     pub token_type: String,
+    /// The operator (tenant) ID selected during login.
+    /// Automatically added as `x-operator-id` to all API requests.
+    #[serde(default)]
+    pub operator_id: Option<String>,
 }
 
 /// Cognito token endpoint response.
@@ -77,6 +85,20 @@ struct TokenResponse {
 #[derive(Debug, Deserialize)]
 struct PollResponse {
     code: String,
+}
+
+/// A single tenant entry from the bootstrap response.
+#[derive(Debug, Deserialize)]
+struct BootstrapTenant {
+    id: String,
+    name: String,
+}
+
+/// Response from `GET /v1/me`.
+#[derive(Debug, Deserialize)]
+struct BootstrapResponse {
+    tenants: Vec<BootstrapTenant>,
+    default_tenant_id: Option<String>,
 }
 
 /// Generate a random string for PKCE code_verifier and state.
@@ -110,8 +132,8 @@ pub fn load_credentials() -> Result<Option<StoredCredentials>> {
     }
     let data = std::fs::read_to_string(&path)
         .with_context(|| format!("failed to read {}", path.display()))?;
-    let creds: StoredCredentials =
-        serde_json::from_str(&data).context("failed to parse credentials file")?;
+    let creds: StoredCredentials = serde_json::from_str(&data)
+        .context("failed to parse credentials file")?;
     Ok(Some(creds))
 }
 
@@ -119,15 +141,20 @@ pub fn load_credentials() -> Result<Option<StoredCredentials>> {
 pub fn save_credentials(creds: &StoredCredentials) -> Result<()> {
     let path = credentials_path()?;
     if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)
-            .with_context(|| format!("failed to create {}", parent.display()))?;
+        std::fs::create_dir_all(parent).with_context(|| {
+            format!("failed to create {}", parent.display())
+        })?;
     }
     let data = serde_json::to_string_pretty(creds)?;
-    std::fs::write(&path, data).with_context(|| format!("failed to write {}", path.display()))?;
+    std::fs::write(&path, data)
+        .with_context(|| format!("failed to write {}", path.display()))?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))?;
+        std::fs::set_permissions(
+            &path,
+            std::fs::Permissions::from_mode(0o600),
+        )?;
     }
     Ok(())
 }
@@ -178,7 +205,9 @@ async fn poll_for_code(api_url: &str, state: &str) -> Result<String> {
 
     loop {
         if tokio::time::Instant::now() > deadline {
-            return Err(anyhow!("login timed out — no response within 5 minutes"));
+            return Err(anyhow!(
+                "login timed out — no response within 5 minutes"
+            ));
         }
 
         tokio::time::sleep(POLL_INTERVAL).await;
@@ -189,12 +218,73 @@ async fn poll_for_code(api_url: &str, state: &str) -> Result<String> {
         };
 
         if resp.status() == reqwest::StatusCode::OK {
-            let poll_resp: PollResponse =
-                resp.json().await.context("failed to parse poll response")?;
+            let poll_resp: PollResponse = resp
+                .json()
+                .await
+                .context("failed to parse poll response")?;
             return Ok(poll_resp.code);
         }
         // 204 No Content or other = not ready yet, keep polling
     }
+}
+
+/// Fetch the bootstrap response from `GET /v1/me` to discover available operators.
+async fn fetch_bootstrap(
+    api_url: &str,
+    access_token: &str,
+) -> Result<BootstrapResponse> {
+    let client = Client::new();
+    let url = format!("{}/v1/me", api_url.trim_end_matches('/'));
+    let resp = client
+        .get(&url)
+        .header("Authorization", format!("Bearer {access_token}"))
+        .send()
+        .await
+        .context("failed to call /v1/me")?;
+    let status = resp.status();
+    if !status.is_success() {
+        let body = resp.text().await.unwrap_or_default();
+        return Err(anyhow!("/v1/me failed: status={status}, body={body}"));
+    }
+    resp.json::<BootstrapResponse>()
+        .await
+        .context("failed to parse /v1/me response")
+}
+
+/// Prompt the user to select one operator from the list.
+fn select_operator_interactively(
+    tenants: &[BootstrapTenant],
+) -> Result<String> {
+    use std::io::{self, BufRead, Write};
+
+    println!();
+    println!("Multiple operators found. Select one:");
+    for (i, t) in tenants.iter().enumerate() {
+        println!("  [{}] {} ({})", i + 1, t.name, t.id);
+    }
+    print!("Enter number [1-{}]: ", tenants.len());
+    io::stdout().flush()?;
+
+    let stdin = io::stdin();
+    let line = stdin
+        .lock()
+        .lines()
+        .next()
+        .ok_or_else(|| anyhow!("no input provided"))??;
+    let n: usize = line
+        .trim()
+        .parse()
+        .map_err(|_| anyhow!("invalid selection: expected a number"))?;
+
+    if n < 1 || n > tenants.len() {
+        return Err(anyhow!(
+            "selection {} is out of range (1-{})",
+            n,
+            tenants.len()
+        ));
+    }
+
+    Ok(tenants[n - 1].id.clone())
 }
 
 /// Refresh the access token using a stored refresh token.
@@ -248,6 +338,7 @@ pub async fn refresh_access_token(
         id_token: token_resp.id_token.or_else(|| creds.id_token.clone()),
         expires_at,
         token_type: token_resp.token_type,
+        operator_id: creds.operator_id.clone(),
     };
 
     save_credentials(&new_creds)?;
@@ -260,7 +351,10 @@ pub async fn refresh_access_token(
 /// 2. Browser redirects to the API callback relay after login
 /// 3. CLI polls the relay endpoint to retrieve the authorization code
 /// 4. CLI exchanges the code for tokens and saves them
-pub async fn login(oauth_config: &OAuthConfig, api_url: &str) -> Result<()> {
+pub async fn login(
+    oauth_config: &OAuthConfig,
+    api_url: &str,
+) -> Result<()> {
     let state = random_string(16);
     let (code_verifier, code_challenge) = pkce_pair();
 
@@ -277,20 +371,78 @@ pub async fn login(oauth_config: &OAuthConfig, api_url: &str) -> Result<()> {
 
     println!("Exchanging authorization code for tokens...");
 
-    let token_resp = exchange_code(oauth_config, &code, &code_verifier).await?;
+    let token_resp =
+        exchange_code(oauth_config, &code, &code_verifier).await?;
 
     let now = chrono::Utc::now().timestamp();
     let expires_at = token_resp.expires_in.map(|e| now + e);
 
-    let creds = StoredCredentials {
+    let mut creds = StoredCredentials {
         access_token: token_resp.access_token,
         refresh_token: token_resp.refresh_token,
         id_token: token_resp.id_token,
         expires_at,
         token_type: token_resp.token_type,
+        operator_id: None,
     };
 
     save_credentials(&creds)?;
+
+    // Fetch available operators and let the user select one.
+    println!("Fetching operator list...");
+    match fetch_bootstrap(api_url, &creds.access_token).await {
+        Ok(bootstrap) => {
+            let operator_id = if bootstrap.tenants.is_empty() {
+                eprintln!("Warning: no operators found for this account.");
+                None
+            } else if bootstrap.tenants.len() == 1 {
+                let op = &bootstrap.tenants[0];
+                println!(
+                    "Operator automatically selected: {} ({})",
+                    op.name, op.id
+                );
+                Some(op.id.clone())
+            } else if let Some(default_id) = bootstrap.default_tenant_id {
+                // Server already picked a default; confirm with the user.
+                let default_name = bootstrap
+                    .tenants
+                    .iter()
+                    .find(|t| t.id == default_id)
+                    .map(|t| t.name.as_str())
+                    .unwrap_or("unknown");
+                println!(
+                    "Default operator selected: {} ({})",
+                    default_name, default_id
+                );
+                Some(default_id)
+            } else {
+                match select_operator_interactively(&bootstrap.tenants) {
+                    Ok(id) => {
+                        println!("Operator selected: {id}");
+                        Some(id)
+                    }
+                    Err(e) => {
+                        eprintln!(
+                            "Warning: operator selection failed: {e}. \
+                             Run `tachyon login` again or pass `--tenant-id`."
+                        );
+                        None
+                    }
+                }
+            };
+
+            if operator_id.is_some() {
+                creds.operator_id = operator_id;
+                save_credentials(&creds)?;
+            }
+        }
+        Err(e) => {
+            eprintln!(
+                "Warning: failed to fetch operator list: {e}. \
+                 Run `tachyon login` again or pass `--tenant-id`."
+            );
+        }
+    }
 
     let path = credentials_path()?;
     println!("Login successful! Credentials saved to {}", path.display());
@@ -302,8 +454,9 @@ pub async fn login(oauth_config: &OAuthConfig, api_url: &str) -> Result<()> {
 pub fn logout() -> Result<()> {
     let path = credentials_path()?;
     if path.exists() {
-        std::fs::remove_file(&path)
-            .with_context(|| format!("failed to remove {}", path.display()))?;
+        std::fs::remove_file(&path).with_context(|| {
+            format!("failed to remove {}", path.display())
+        })?;
         println!("Logged out. Credentials removed.");
     } else {
         println!("No stored credentials found.");
@@ -332,11 +485,14 @@ mod tests {
             cognito_domain: "https://auth.example.com".to_string(),
             client_id: "test-client".to_string(),
             client_secret: "test-secret".to_string(),
-            redirect_uri: "https://api.example.com/v1/auth/cli/callback".to_string(),
+            redirect_uri: "https://api.example.com/v1/auth/cli/callback"
+                .to_string(),
             scopes: vec!["openid".into(), "profile".into()],
         };
         let url = config.authorize_url("STATE", "CHALLENGE");
-        assert!(url.starts_with("https://auth.example.com/oauth2/authorize?"));
+        assert!(
+            url.starts_with("https://auth.example.com/oauth2/authorize?")
+        );
         assert!(url.contains("client_id=test-client"));
         assert!(url.contains("state=STATE"));
         assert!(url.contains("code_challenge=CHALLENGE"));

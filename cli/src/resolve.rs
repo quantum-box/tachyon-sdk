@@ -68,11 +68,31 @@ struct ServiceAccountEntry {
 // --- Tenant ID resolution ---
 
 /// Resolve a tenant identifier (ID, alias, or name) to the operator ID.
-/// If the value looks like an ID, it is returned as-is.
-/// Otherwise, tries by-alias lookup first, then falls back to listing operators and matching by name.
-pub async fn resolve_tenant_id(config: &Configuration, name_or_id: &str) -> Result<String> {
-    if name_or_id.is_empty() || looks_like_id(name_or_id) {
+///
+/// Resolution order:
+/// 1. If the value looks like an ID, return it as-is.
+/// 2. If the value is empty, load `operator_id` from stored credentials.
+/// 3. Otherwise resolve by alias or name via the API.
+pub async fn resolve_tenant_id(
+    config: &Configuration,
+    name_or_id: &str,
+) -> Result<String> {
+    if looks_like_id(name_or_id) {
         return Ok(name_or_id.to_string());
+    }
+
+    if name_or_id.is_empty() {
+        // Try the operator saved during `tachyon login`.
+        if let Ok(Some(creds)) = crate::auth::load_credentials() {
+            if let Some(op_id) = creds.operator_id {
+                return Ok(op_id);
+            }
+        }
+        return Err(anyhow::anyhow!(
+            "No operator selected. \
+             Run `tachyon login` to save an operator, \
+             or pass `--tenant-id <id>`."
+        ));
     }
 
     // Create a temporary client without tenant-id to resolve
@@ -80,7 +100,10 @@ pub async fn resolve_tenant_id(config: &Configuration, name_or_id: &str) -> Resu
 
     // Try by-alias first (exact match via API)
     if let Ok(op) = api
-        .get_query::<OperatorEntry>("/v1/auth/operators/by-alias", &[("alias", name_or_id)])
+        .get_query::<OperatorEntry>(
+            "/v1/auth/operators/by-alias",
+            &[("alias", name_or_id)],
+        )
         .await
     {
         eprintln!("Resolved tenant '{}' → {}", name_or_id, op.id);
@@ -88,10 +111,14 @@ pub async fn resolve_tenant_id(config: &Configuration, name_or_id: &str) -> Resu
     }
 
     // Fall back to listing operators and matching by name or alias
-    let ops: Vec<OperatorEntry> = api.get("/v1/auth/operators/by-user").await?;
+    let ops: Vec<OperatorEntry> =
+        api.get("/v1/auth/operators/by-user").await?;
     let matches: Vec<_> = ops
         .iter()
-        .filter(|o| o.alias.as_deref() == Some(name_or_id) || o.name.as_deref() == Some(name_or_id))
+        .filter(|o| {
+            o.alias.as_deref() == Some(name_or_id)
+                || o.name.as_deref() == Some(name_or_id)
+        })
         .collect();
 
     match matches.len() {
@@ -99,11 +126,15 @@ pub async fn resolve_tenant_id(config: &Configuration, name_or_id: &str) -> Resu
             "no operator found with name or alias '{name_or_id}'"
         )),
         1 => {
-            eprintln!("Resolved tenant '{}' → {}", name_or_id, matches[0].id);
+            eprintln!(
+                "Resolved tenant '{}' → {}",
+                name_or_id, matches[0].id
+            );
             Ok(matches[0].id.clone())
         }
         _ => {
-            let ids: Vec<_> = matches.iter().map(|o| o.id.as_str()).collect();
+            let ids: Vec<_> =
+                matches.iter().map(|o| o.id.as_str()).collect();
             Err(anyhow!(
                 "multiple operators match '{name_or_id}': {}",
                 ids.join(", ")
@@ -115,13 +146,17 @@ pub async fn resolve_tenant_id(config: &Configuration, name_or_id: &str) -> Resu
 // --- App ID resolution ---
 
 /// Resolve an app identifier (ID or name) to the app ID.
-pub async fn resolve_app_id(api: &ApiClient, name_or_id: &str) -> Result<String> {
+pub async fn resolve_app_id(
+    api: &ApiClient,
+    name_or_id: &str,
+) -> Result<String> {
     if looks_like_id(name_or_id) {
         return Ok(name_or_id.to_string());
     }
 
     let resp: ListAppsResponse = api.get("/v1/compute/apps").await?;
-    let matches: Vec<_> = resp.apps.iter().filter(|a| a.name == name_or_id).collect();
+    let matches: Vec<_> =
+        resp.apps.iter().filter(|a| a.name == name_or_id).collect();
 
     match matches.len() {
         0 => Err(anyhow!("no app found with name '{name_or_id}'")),
@@ -130,7 +165,8 @@ pub async fn resolve_app_id(api: &ApiClient, name_or_id: &str) -> Result<String>
             Ok(matches[0].id.clone())
         }
         _ => {
-            let ids: Vec<_> = matches.iter().map(|a| a.id.as_str()).collect();
+            let ids: Vec<_> =
+                matches.iter().map(|a| a.id.as_str()).collect();
             Err(anyhow!(
                 "multiple apps match name '{name_or_id}': {}",
                 ids.join(", ")
@@ -142,7 +178,10 @@ pub async fn resolve_app_id(api: &ApiClient, name_or_id: &str) -> Result<String>
 // --- Worker ID resolution ---
 
 /// Resolve a worker identifier (ID or name) to the worker ID.
-pub async fn resolve_worker_id(api: &ApiClient, name_or_id: &str) -> Result<String> {
+pub async fn resolve_worker_id(
+    api: &ApiClient,
+    name_or_id: &str,
+) -> Result<String> {
     if looks_like_id(name_or_id) {
         return Ok(name_or_id.to_string());
     }
@@ -156,11 +195,15 @@ pub async fn resolve_worker_id(api: &ApiClient, name_or_id: &str) -> Result<Stri
     match matches.len() {
         0 => Err(anyhow!("no worker found with name '{name_or_id}'")),
         1 => {
-            eprintln!("Resolved worker '{}' → {}", name_or_id, matches[0].id);
+            eprintln!(
+                "Resolved worker '{}' → {}",
+                name_or_id, matches[0].id
+            );
             Ok(matches[0].id.clone())
         }
         _ => {
-            let ids: Vec<_> = matches.iter().map(|w| w.id.as_str()).collect();
+            let ids: Vec<_> =
+                matches.iter().map(|w| w.id.as_str()).collect();
             Err(anyhow!(
                 "multiple workers match name '{name_or_id}': {}",
                 ids.join(", ")
@@ -172,12 +215,16 @@ pub async fn resolve_worker_id(api: &ApiClient, name_or_id: &str) -> Result<Stri
 // --- Protocol ID resolution ---
 
 /// Resolve a protocol identifier (ID or name) to the protocol ID.
-pub async fn resolve_protocol_id(api: &ApiClient, name_or_id: &str) -> Result<String> {
+pub async fn resolve_protocol_id(
+    api: &ApiClient,
+    name_or_id: &str,
+) -> Result<String> {
     if looks_like_id(name_or_id) {
         return Ok(name_or_id.to_string());
     }
 
-    let protocols: Vec<ProtocolEntry> = api.get("/v1/llms/agent-protocols").await?;
+    let protocols: Vec<ProtocolEntry> =
+        api.get("/v1/llms/agent-protocols").await?;
     let matches: Vec<_> = protocols
         .iter()
         .filter(|p| p.name.as_deref() == Some(name_or_id))
@@ -186,11 +233,15 @@ pub async fn resolve_protocol_id(api: &ApiClient, name_or_id: &str) -> Result<St
     match matches.len() {
         0 => Err(anyhow!("no protocol found with name '{name_or_id}'")),
         1 => {
-            eprintln!("Resolved protocol '{}' → {}", name_or_id, matches[0].id);
+            eprintln!(
+                "Resolved protocol '{}' → {}",
+                name_or_id, matches[0].id
+            );
             Ok(matches[0].id.clone())
         }
         _ => {
-            let ids: Vec<_> = matches.iter().map(|p| p.id.as_str()).collect();
+            let ids: Vec<_> =
+                matches.iter().map(|p| p.id.as_str()).collect();
             Err(anyhow!(
                 "multiple protocols match name '{name_or_id}': {}",
                 ids.join(", ")
@@ -202,12 +253,16 @@ pub async fn resolve_protocol_id(api: &ApiClient, name_or_id: &str) -> Result<St
 // --- Integration ID resolution ---
 
 /// Resolve an integration identifier (ID or name) to the integration ID.
-pub async fn resolve_integration_id(api: &ApiClient, name_or_id: &str) -> Result<String> {
+pub async fn resolve_integration_id(
+    api: &ApiClient,
+    name_or_id: &str,
+) -> Result<String> {
     if looks_like_id(name_or_id) {
         return Ok(name_or_id.to_string());
     }
 
-    let integrations: Vec<IntegrationEntry> = api.get("/v1/integrations").await?;
+    let integrations: Vec<IntegrationEntry> =
+        api.get("/v1/integrations").await?;
     let matches: Vec<_> = integrations
         .iter()
         .filter(|i| i.name.as_deref() == Some(name_or_id))
@@ -216,11 +271,15 @@ pub async fn resolve_integration_id(api: &ApiClient, name_or_id: &str) -> Result
     match matches.len() {
         0 => Err(anyhow!("no integration found with name '{name_or_id}'")),
         1 => {
-            eprintln!("Resolved integration '{}' → {}", name_or_id, matches[0].id);
+            eprintln!(
+                "Resolved integration '{}' → {}",
+                name_or_id, matches[0].id
+            );
             Ok(matches[0].id.clone())
         }
         _ => {
-            let ids: Vec<_> = matches.iter().map(|i| i.id.as_str()).collect();
+            let ids: Vec<_> =
+                matches.iter().map(|i| i.id.as_str()).collect();
             Err(anyhow!(
                 "multiple integrations match name '{name_or_id}': {}",
                 ids.join(", ")
@@ -232,19 +291,25 @@ pub async fn resolve_integration_id(api: &ApiClient, name_or_id: &str) -> Result
 // --- Service Account ID resolution ---
 
 /// Resolve a service account identifier (ID or name) to the service account ID.
-pub async fn resolve_service_account_id(api: &ApiClient, name_or_id: &str) -> Result<String> {
+pub async fn resolve_service_account_id(
+    api: &ApiClient,
+    name_or_id: &str,
+) -> Result<String> {
     if looks_like_id(name_or_id) {
         return Ok(name_or_id.to_string());
     }
 
-    let accounts: Vec<ServiceAccountEntry> = api.get("/v1/auth/service-accounts").await?;
+    let accounts: Vec<ServiceAccountEntry> =
+        api.get("/v1/auth/service-accounts").await?;
     let matches: Vec<_> = accounts
         .iter()
         .filter(|s| s.name.as_deref() == Some(name_or_id))
         .collect();
 
     match matches.len() {
-        0 => Err(anyhow!("no service account found with name '{name_or_id}'")),
+        0 => Err(anyhow!(
+            "no service account found with name '{name_or_id}'"
+        )),
         1 => {
             eprintln!(
                 "Resolved service account '{}' → {}",
@@ -253,7 +318,8 @@ pub async fn resolve_service_account_id(api: &ApiClient, name_or_id: &str) -> Re
             Ok(matches[0].id.clone())
         }
         _ => {
-            let ids: Vec<_> = matches.iter().map(|s| s.id.as_str()).collect();
+            let ids: Vec<_> =
+                matches.iter().map(|s| s.id.as_str()).collect();
             Err(anyhow!(
                 "multiple service accounts match name '{name_or_id}': {}",
                 ids.join(", ")
