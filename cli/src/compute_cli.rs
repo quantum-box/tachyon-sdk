@@ -860,8 +860,9 @@ async fn run_builds_logs(
     let resolved_build_id = match build_id {
         Some(id) => id.to_string(),
         None => {
-            let app_id = app_id
-                .ok_or_else(|| anyhow!("app_id required when --build-id is not specified"))?;
+            let app_id = app_id.ok_or_else(|| {
+                anyhow!("app_id required when --build-id is not specified")
+            })?;
             let resp: ListBuildsResponse = api
                 .get(&format!("/v1/compute/apps/{app_id}/builds"))
                 .await?;
@@ -885,7 +886,11 @@ async fn run_builds_logs(
         };
 
         for line in &logs.lines {
-            println!("[{}] {}", format_timestamp_ms(line.timestamp), line.message);
+            println!(
+                "[{}] {}",
+                format_timestamp_ms(line.timestamp),
+                line.message
+            );
         }
 
         if logs.is_complete {
@@ -1272,7 +1277,13 @@ pub async fn run(
                 follow,
             } => {
                 let id = resolve::resolve_app_id(&api, app_id).await?;
-                run_builds_logs(&api, Some(id.as_str()), build_id.as_deref(), *follow).await
+                run_builds_logs(
+                    &api,
+                    Some(id.as_str()),
+                    build_id.as_deref(),
+                    *follow,
+                )
+                .await
             }
         },
         ComputeCommand::Deployments { command } => match command {
@@ -1357,9 +1368,17 @@ pub async fn run(
                 None => None,
             };
             if resolved_app_id.is_none() && build_id.is_none() {
-                return Err(anyhow!("either app_id or --build-id must be provided"));
+                return Err(anyhow!(
+                    "either app_id or --build-id must be provided"
+                ));
             }
-            run_builds_logs(&api, resolved_app_id.as_deref(), build_id.as_deref(), *follow).await
+            run_builds_logs(
+                &api,
+                resolved_app_id.as_deref(),
+                build_id.as_deref(),
+                *follow,
+            )
+            .await
         }
     }
 }

@@ -227,7 +227,8 @@ struct ModelResponse {
 // ---- Handlers ----
 
 async fn run_sessions_list(api: &ApiClient, json: bool) -> Result<()> {
-    let sessions: Vec<SessionResponse> = api.get("/v1/llms/sessions").await?;
+    let sessions: Vec<SessionResponse> =
+        api.get("/v1/llms/sessions").await?;
     if json {
         return print_json(&sessions);
     }
@@ -253,7 +254,8 @@ async fn run_sessions_list(api: &ApiClient, json: bool) -> Result<()> {
 }
 
 async fn run_protocols_list(api: &ApiClient, json: bool) -> Result<()> {
-    let protocols: Vec<ProtocolResponse> = api.get("/v1/llms/agent-protocols").await?;
+    let protocols: Vec<ProtocolResponse> =
+        api.get("/v1/llms/agent-protocols").await?;
     if json {
         return print_json(&protocols);
     }
@@ -275,8 +277,13 @@ async fn run_protocols_list(api: &ApiClient, json: bool) -> Result<()> {
     Ok(())
 }
 
-async fn run_protocols_get(api: &ApiClient, id: &str, json: bool) -> Result<()> {
-    let p: ProtocolResponse = api.get(&format!("/v1/llms/agent-protocols/{id}")).await?;
+async fn run_protocols_get(
+    api: &ApiClient,
+    id: &str,
+    json: bool,
+) -> Result<()> {
+    let p: ProtocolResponse =
+        api.get(&format!("/v1/llms/agent-protocols/{id}")).await?;
     if json {
         return print_json(&p);
     }
@@ -322,8 +329,13 @@ async fn run_workers_list(api: &ApiClient, json: bool) -> Result<()> {
     Ok(())
 }
 
-async fn run_workers_get(api: &ApiClient, worker_id: &str, json: bool) -> Result<()> {
-    let w: WorkerResponse = api.get(&format!("/v1/agent/workers/{worker_id}")).await?;
+async fn run_workers_get(
+    api: &ApiClient,
+    worker_id: &str,
+    json: bool,
+) -> Result<()> {
+    let w: WorkerResponse =
+        api.get(&format!("/v1/agent/workers/{worker_id}")).await?;
     if json {
         return print_json(&w);
     }
@@ -338,7 +350,11 @@ async fn run_workers_get(api: &ApiClient, worker_id: &str, json: bool) -> Result
     Ok(())
 }
 
-async fn run_workers_metrics(api: &ApiClient, worker_id: &str, json: bool) -> Result<()> {
+async fn run_workers_metrics(
+    api: &ApiClient,
+    worker_id: &str,
+    json: bool,
+) -> Result<()> {
     let metrics: serde_json::Value = api
         .get(&format!("/v1/agent/workers/{worker_id}/metrics"))
         .await?;
@@ -350,7 +366,8 @@ async fn run_workers_metrics(api: &ApiClient, worker_id: &str, json: bool) -> Re
 }
 
 async fn run_worktrees_list(api: &ApiClient, json: bool) -> Result<()> {
-    let worktrees: Vec<WorktreeResponse> = api.get("/v1/agent/worktrees").await?;
+    let worktrees: Vec<WorktreeResponse> =
+        api.get("/v1/agent/worktrees").await?;
     if json {
         return print_json(&worktrees);
     }
@@ -375,8 +392,13 @@ async fn run_worktrees_list(api: &ApiClient, json: bool) -> Result<()> {
     Ok(())
 }
 
-async fn run_worktrees_get(api: &ApiClient, task_id: &str, json: bool) -> Result<()> {
-    let w: WorktreeResponse = api.get(&format!("/v1/agent/worktrees/{task_id}")).await?;
+async fn run_worktrees_get(
+    api: &ApiClient,
+    task_id: &str,
+    json: bool,
+) -> Result<()> {
+    let w: WorktreeResponse =
+        api.get(&format!("/v1/agent/worktrees/{task_id}")).await?;
     if json {
         return print_json(&w);
     }
@@ -421,7 +443,9 @@ async fn run_agent_status(
     json: bool,
 ) -> Result<()> {
     let path = match session_id {
-        Some(sid) => format!("/v1/llms/agents/{agent_id}/sessions/{sid}/status"),
+        Some(sid) => {
+            format!("/v1/llms/agents/{agent_id}/sessions/{sid}/status")
+        }
         None => format!("/v1/llms/agents/{agent_id}/status"),
     };
     let status: AgentStatusResponse = api.get(&path).await?;
@@ -443,7 +467,9 @@ async fn run_agent_messages(
     json: bool,
 ) -> Result<()> {
     let path = match session_id {
-        Some(sid) => format!("/v1/llms/agents/{agent_id}/sessions/{sid}/messages"),
+        Some(sid) => {
+            format!("/v1/llms/agents/{agent_id}/sessions/{sid}/messages")
+        }
         None => format!("/v1/llms/agents/{agent_id}/messages"),
     };
     let messages: Vec<serde_json::Value> = api.get(&path).await?;
@@ -452,7 +478,8 @@ async fn run_agent_messages(
     }
     for msg in &messages {
         let role = msg.get("role").and_then(|v| v.as_str()).unwrap_or("?");
-        let content = msg.get("content").and_then(|v| v.as_str()).unwrap_or("");
+        let content =
+            msg.get("content").and_then(|v| v.as_str()).unwrap_or("");
         println!("[{role}] {content}");
     }
     Ok(())
@@ -482,50 +509,73 @@ async fn run_models_list(api: &ApiClient, json: bool) -> Result<()> {
 
 // ---- Entry point ----
 
-pub async fn run(args: &AgentArgs, config: &Configuration, tenant_id: &str) -> Result<()> {
+pub async fn run(
+    args: &AgentArgs,
+    config: &Configuration,
+    tenant_id: &str,
+) -> Result<()> {
     let api = ApiClient::new(config, tenant_id)?;
 
     match &args.command {
         AgentCommand::Sessions { command } => match command {
-            SessionsCommand::List { json } => run_sessions_list(&api, *json).await,
+            SessionsCommand::List { json } => {
+                run_sessions_list(&api, *json).await
+            }
         },
         AgentCommand::Protocols { command } => match command {
-            ProtocolsCommand::List { json } => run_protocols_list(&api, *json).await,
+            ProtocolsCommand::List { json } => {
+                run_protocols_list(&api, *json).await
+            }
             ProtocolsCommand::Get { id, json } => {
-                let resolved = resolve::resolve_protocol_id(&api, id).await?;
+                let resolved =
+                    resolve::resolve_protocol_id(&api, id).await?;
                 run_protocols_get(&api, &resolved, *json).await
             }
         },
         AgentCommand::Workers { command } => match command {
-            WorkersCommand::List { json } => run_workers_list(&api, *json).await,
+            WorkersCommand::List { json } => {
+                run_workers_list(&api, *json).await
+            }
             WorkersCommand::Get { worker_id, json } => {
-                let id = resolve::resolve_worker_id(&api, worker_id).await?;
+                let id =
+                    resolve::resolve_worker_id(&api, worker_id).await?;
                 run_workers_get(&api, &id, *json).await
             }
             WorkersCommand::Metrics { worker_id, json } => {
-                let id = resolve::resolve_worker_id(&api, worker_id).await?;
+                let id =
+                    resolve::resolve_worker_id(&api, worker_id).await?;
                 run_workers_metrics(&api, &id, *json).await
             }
         },
         AgentCommand::Worktrees { command } => match command {
-            WorktreesCommand::List { json } => run_worktrees_list(&api, *json).await,
+            WorktreesCommand::List { json } => {
+                run_worktrees_list(&api, *json).await
+            }
             WorktreesCommand::Get { task_id, json } => {
                 run_worktrees_get(&api, task_id, *json).await
             }
         },
         AgentCommand::Memory { command } => match command {
-            MemoryCommand::List { json } => run_memory_list(&api, *json).await,
+            MemoryCommand::List { json } => {
+                run_memory_list(&api, *json).await
+            }
         },
         AgentCommand::Status {
             agent_id,
             session_id,
             json,
-        } => run_agent_status(&api, agent_id, session_id.as_deref(), *json).await,
+        } => {
+            run_agent_status(&api, agent_id, session_id.as_deref(), *json)
+                .await
+        }
         AgentCommand::Messages {
             agent_id,
             session_id,
             json,
-        } => run_agent_messages(&api, agent_id, session_id.as_deref(), *json).await,
+        } => {
+            run_agent_messages(&api, agent_id, session_id.as_deref(), *json)
+                .await
+        }
         AgentCommand::Models { json } => run_models_list(&api, *json).await,
     }
 }

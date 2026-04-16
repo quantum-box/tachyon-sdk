@@ -119,7 +119,10 @@ fn model_to_extension(model: &str) -> &'static str {
 }
 
 /// Fetch raw image bytes — either decode b64_json or download from URL.
-async fn fetch_image_bytes(client: &Client, img: &ImageData) -> Result<(Vec<u8>, &'static str)> {
+async fn fetch_image_bytes(
+    client: &Client,
+    img: &ImageData,
+) -> Result<(Vec<u8>, &'static str)> {
     if let Some(b64) = &img.b64_json {
         let bytes = base64::engine::general_purpose::STANDARD
             .decode(b64)
@@ -140,7 +143,9 @@ async fn fetch_image_bytes(client: &Client, img: &ImageData) -> Result<(Vec<u8>,
             .to_string();
         let ext = if content_type.contains("webp") {
             "webp"
-        } else if content_type.contains("jpeg") || content_type.contains("jpg") {
+        } else if content_type.contains("jpeg")
+            || content_type.contains("jpg")
+        {
             "jpg"
         } else {
             "png"
@@ -164,7 +169,11 @@ async fn save_to_file(path: &str, bytes: &[u8]) -> Result<()> {
 }
 
 /// Upload image bytes to Tachyon Storage via presigned URL.
-async fn upload_to_storage(api: &ApiClient, bytes: Vec<u8>, ext: &str) -> Result<()> {
+async fn upload_to_storage(
+    api: &ApiClient,
+    bytes: Vec<u8>,
+    ext: &str,
+) -> Result<()> {
     let content_type = match ext {
         "webp" => "image/webp",
         "jpg" | "jpeg" => "image/jpeg",
@@ -220,7 +229,11 @@ async fn upload_to_storage(api: &ApiClient, bytes: Vec<u8>, ext: &str) -> Result
     Ok(())
 }
 
-pub async fn run(args: &ImageArgs, config: &Configuration, tenant_id: &str) -> Result<()> {
+pub async fn run(
+    args: &ImageArgs,
+    config: &Configuration,
+    tenant_id: &str,
+) -> Result<()> {
     match &args.command {
         ImageCommand::Generate {
             prompt,
@@ -266,11 +279,12 @@ async fn generate(
 
     // When saving locally or to storage we need the raw bytes.
     // Prefer b64_json to avoid URL expiry issues.
-    let effective_format = if (output.is_some() || storage) && response_format == "url" {
-        "b64_json"
-    } else {
-        response_format
-    };
+    let effective_format =
+        if (output.is_some() || storage) && response_format == "url" {
+            "b64_json"
+        } else {
+            response_format
+        };
 
     println!("Generating image with model: {model}");
     println!("Prompt: {prompt}");
@@ -330,13 +344,15 @@ async fn generate(
             } else {
                 path.to_string()
             };
-            let (bytes, _detected_ext) = fetch_image_bytes(&dl_client, img).await?;
+            let (bytes, _detected_ext) =
+                fetch_image_bytes(&dl_client, img).await?;
             save_to_file(&save_path, &bytes).await?;
         }
 
         // Upload to Tachyon Storage
         if storage {
-            let (bytes, detected_ext) = fetch_image_bytes(&dl_client, img).await?;
+            let (bytes, detected_ext) =
+                fetch_image_bytes(&dl_client, img).await?;
             upload_to_storage(&api, bytes, detected_ext).await?;
         }
     }

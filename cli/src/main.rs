@@ -19,7 +19,8 @@ const DEFAULT_COGNITO_DOMAIN: &str = "https://auth-pool.n1.tachy.one";
 /// Default Cognito client ID (tachyon-app-client).
 const DEFAULT_COGNITO_CLIENT_ID: &str = "5002hok6cj8mjmt3gepdpdq98i";
 /// Default Cognito client secret (tachyon-app-client).
-const DEFAULT_COGNITO_CLIENT_SECRET: &str = "3epft46iie79jshd4gkpeuj62q1pcmthequ1skbbd9dj1rdojrf";
+const DEFAULT_COGNITO_CLIENT_SECRET: &str =
+    "3epft46iie79jshd4gkpeuj62q1pcmthequ1skbbd9dj1rdojrf";
 
 #[derive(Parser)]
 #[command(name = "tachyon", version, about = "Tachyon Platform CLI")]
@@ -95,7 +96,9 @@ async fn resolve_token(cli: &Cli) -> Option<String> {
 
             if expired {
                 let oauth_config = build_oauth_config(cli);
-                match auth::refresh_access_token(&oauth_config, &creds).await {
+                match auth::refresh_access_token(&oauth_config, &creds)
+                    .await
+                {
                     Ok(new_creds) => {
                         eprintln!("Token refreshed successfully.");
                         return Some(new_creds.access_token);
@@ -122,7 +125,10 @@ async fn resolve_token(cli: &Cli) -> Option<String> {
 
 /// Build an OAuthConfig from CLI args.
 fn build_oauth_config(cli: &Cli) -> auth::OAuthConfig {
-    let redirect_uri = format!("{}/v1/auth/cli/callback", cli.api_url.trim_end_matches('/'));
+    let redirect_uri = format!(
+        "{}/v1/auth/cli/callback",
+        cli.api_url.trim_end_matches('/')
+    );
     auth::OAuthConfig {
         cognito_domain: cli.cognito_domain.clone(),
         client_id: cli.cognito_client_id.clone(),
@@ -163,37 +169,44 @@ async fn run() -> Result<()> {
         Commands::Logout => auth::logout(),
         Commands::Compute(args) => {
             let config = build_config(&cli).await;
-            let tenant_id = resolve::resolve_tenant_id(&config, &cli.tenant_id).await?;
+            let tenant_id =
+                resolve::resolve_tenant_id(&config, &cli.tenant_id).await?;
             compute_cli::run(args, &config, &tenant_id).await
         }
         Commands::Org(args) => {
             let config = build_config(&cli).await;
-            let tenant_id = resolve::resolve_tenant_id(&config, &cli.tenant_id).await?;
+            let tenant_id =
+                resolve::resolve_tenant_id(&config, &cli.tenant_id).await?;
             org_cli::run(args, &config, &tenant_id).await
         }
         Commands::Agent(args) => {
             let config = build_config(&cli).await;
-            let tenant_id = resolve::resolve_tenant_id(&config, &cli.tenant_id).await?;
+            let tenant_id =
+                resolve::resolve_tenant_id(&config, &cli.tenant_id).await?;
             agent_cli::run(args, &config, &tenant_id).await
         }
         Commands::Iac(args) => {
             let config = build_config(&cli).await;
-            let tenant_id = resolve::resolve_tenant_id(&config, &cli.tenant_id).await?;
+            let tenant_id =
+                resolve::resolve_tenant_id(&config, &cli.tenant_id).await?;
             iac_cli::run(args, &config, &tenant_id).await
         }
         Commands::Ops(args) => {
             let config = build_config(&cli).await;
-            let tenant_id = resolve::resolve_tenant_id(&config, &cli.tenant_id).await?;
+            let tenant_id =
+                resolve::resolve_tenant_id(&config, &cli.tenant_id).await?;
             ops_cli::run(args, &config, &tenant_id).await
         }
         Commands::Image(args) => {
             let config = build_config(&cli).await;
-            let tenant_id = resolve::resolve_tenant_id(&config, &cli.tenant_id).await?;
+            let tenant_id =
+                resolve::resolve_tenant_id(&config, &cli.tenant_id).await?;
             image_cli::run(args, &config, &tenant_id).await
         }
         Commands::Tts(args) => {
             let config = build_config(&cli).await;
-            let tenant_id = resolve::resolve_tenant_id(&config, &cli.tenant_id).await?;
+            let tenant_id =
+                resolve::resolve_tenant_id(&config, &cli.tenant_id).await?;
             tts_cli::run(args, &config, &tenant_id).await
         }
         Commands::Install => install_cli::run().await,

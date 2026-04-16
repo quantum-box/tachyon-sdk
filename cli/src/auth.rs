@@ -23,7 +23,11 @@ pub struct OAuthConfig {
 }
 
 impl OAuthConfig {
-    pub fn authorize_url(&self, state: &str, code_challenge: &str) -> String {
+    pub fn authorize_url(
+        &self,
+        state: &str,
+        code_challenge: &str,
+    ) -> String {
         let scopes = self.scopes.join("+");
         format!(
             "{}/oauth2/authorize?response_type=code&client_id={}&redirect_uri={}&scope={}&state={}&code_challenge={}&code_challenge_method=S256",
@@ -113,8 +117,8 @@ pub fn load_credentials() -> Result<Option<StoredCredentials>> {
     }
     let data = std::fs::read_to_string(&path)
         .with_context(|| format!("failed to read {}", path.display()))?;
-    let creds: StoredCredentials =
-        serde_json::from_str(&data).context("failed to parse credentials file")?;
+    let creds: StoredCredentials = serde_json::from_str(&data)
+        .context("failed to parse credentials file")?;
     Ok(Some(creds))
 }
 
@@ -122,15 +126,20 @@ pub fn load_credentials() -> Result<Option<StoredCredentials>> {
 pub fn save_credentials(creds: &StoredCredentials) -> Result<()> {
     let path = credentials_path()?;
     if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)
-            .with_context(|| format!("failed to create {}", parent.display()))?;
+        std::fs::create_dir_all(parent).with_context(|| {
+            format!("failed to create {}", parent.display())
+        })?;
     }
     let data = serde_json::to_string_pretty(creds)?;
-    std::fs::write(&path, data).with_context(|| format!("failed to write {}", path.display()))?;
+    std::fs::write(&path, data)
+        .with_context(|| format!("failed to write {}", path.display()))?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))?;
+        std::fs::set_permissions(
+            &path,
+            std::fs::Permissions::from_mode(0o600),
+        )?;
     }
     Ok(())
 }
@@ -181,7 +190,9 @@ async fn poll_for_code(api_url: &str, state: &str) -> Result<String> {
 
     loop {
         if tokio::time::Instant::now() > deadline {
-            return Err(anyhow!("login timed out — no response within 5 minutes"));
+            return Err(anyhow!(
+                "login timed out — no response within 5 minutes"
+            ));
         }
 
         tokio::time::sleep(POLL_INTERVAL).await;
@@ -192,8 +203,10 @@ async fn poll_for_code(api_url: &str, state: &str) -> Result<String> {
         };
 
         if resp.status() == reqwest::StatusCode::OK {
-            let poll_resp: PollResponse =
-                resp.json().await.context("failed to parse poll response")?;
+            let poll_resp: PollResponse = resp
+                .json()
+                .await
+                .context("failed to parse poll response")?;
             return Ok(poll_resp.code);
         }
         // 204 No Content or other = not ready yet, keep polling
@@ -264,7 +277,10 @@ pub async fn refresh_access_token(
 /// 2. Browser redirects to the API callback relay after login
 /// 3. CLI polls the relay endpoint to retrieve the authorization code
 /// 4. CLI exchanges the code for tokens and saves them
-pub async fn login(oauth_config: &OAuthConfig, api_url: &str) -> Result<()> {
+pub async fn login(
+    oauth_config: &OAuthConfig,
+    api_url: &str,
+) -> Result<()> {
     let state = random_string(16);
     let (code_verifier, code_challenge) = pkce_pair();
 
@@ -281,7 +297,8 @@ pub async fn login(oauth_config: &OAuthConfig, api_url: &str) -> Result<()> {
 
     println!("Exchanging authorization code for tokens...");
 
-    let token_resp = exchange_code(oauth_config, &code, &code_verifier).await?;
+    let token_resp =
+        exchange_code(oauth_config, &code, &code_verifier).await?;
 
     let now = chrono::Utc::now().timestamp();
     let expires_at = token_resp.expires_in.map(|e| now + e);
@@ -296,7 +313,10 @@ pub async fn login(oauth_config: &OAuthConfig, api_url: &str) -> Result<()> {
     };
 
     // Fetch operators and save the default one.
-    creds.operator_id = fetch_default_operator(api_url, &creds.access_token).await.ok();
+    creds.operator_id =
+        fetch_default_operator(api_url, &creds.access_token)
+            .await
+            .ok();
 
     save_credentials(&creds)?;
 
@@ -311,7 +331,10 @@ pub async fn login(oauth_config: &OAuthConfig, api_url: &str) -> Result<()> {
 
 /// Fetch the default operator ID for the logged-in user.
 /// Automatically selects if only one exists.
-async fn fetch_default_operator(api_url: &str, access_token: &str) -> Result<String> {
+async fn fetch_default_operator(
+    api_url: &str,
+    access_token: &str,
+) -> Result<String> {
     #[derive(Deserialize)]
     struct OperatorEntry {
         id: String,
@@ -320,7 +343,10 @@ async fn fetch_default_operator(api_url: &str, access_token: &str) -> Result<Str
     }
 
     let client = Client::new();
-    let url = format!("{}/v1/auth/operators/by-user", api_url.trim_end_matches('/'));
+    let url = format!(
+        "{}/v1/auth/operators/by-user",
+        api_url.trim_end_matches('/')
+    );
     let resp = client
         .get(&url)
         .bearer_auth(access_token)
@@ -331,10 +357,13 @@ async fn fetch_default_operator(api_url: &str, access_token: &str) -> Result<Str
     if !resp.status().is_success() {
         let status = resp.status();
         let body = resp.text().await.unwrap_or_default();
-        return Err(anyhow!("operators fetch failed: status={status}, body={body}"));
+        return Err(anyhow!(
+            "operators fetch failed: status={status}, body={body}"
+        ));
     }
 
-    let operators: Vec<OperatorEntry> = resp.json().await.context("failed to parse operators")?;
+    let operators: Vec<OperatorEntry> =
+        resp.json().await.context("failed to parse operators")?;
 
     match operators.len() {
         0 => Err(anyhow!("no operators found for this user")),
@@ -348,13 +377,8 @@ async fn fetch_default_operator(api_url: &str, access_token: &str) -> Result<Str
             // Multiple operators — pick the first and show a hint.
             let op = &operators[0];
             let label = op.alias.as_deref().unwrap_or(&op.id);
-            println!(
-                "Multiple tenants found. Using: {label} ({})",
-                op.id
-            );
-            println!(
-                "Use --tenant-id or TACHYON_TENANT_ID to override."
-            );
+            println!("Multiple tenants found. Using: {label} ({})", op.id);
+            println!("Use --tenant-id or TACHYON_TENANT_ID to override.");
             Ok(op.id.clone())
         }
     }
@@ -364,8 +388,9 @@ async fn fetch_default_operator(api_url: &str, access_token: &str) -> Result<Str
 pub fn logout() -> Result<()> {
     let path = credentials_path()?;
     if path.exists() {
-        std::fs::remove_file(&path)
-            .with_context(|| format!("failed to remove {}", path.display()))?;
+        std::fs::remove_file(&path).with_context(|| {
+            format!("failed to remove {}", path.display())
+        })?;
         println!("Logged out. Credentials removed.");
     } else {
         println!("No stored credentials found.");
@@ -394,11 +419,14 @@ mod tests {
             cognito_domain: "https://auth.example.com".to_string(),
             client_id: "test-client".to_string(),
             client_secret: "test-secret".to_string(),
-            redirect_uri: "https://api.example.com/v1/auth/cli/callback".to_string(),
+            redirect_uri: "https://api.example.com/v1/auth/cli/callback"
+                .to_string(),
             scopes: vec!["openid".into(), "profile".into()],
         };
         let url = config.authorize_url("STATE", "CHALLENGE");
-        assert!(url.starts_with("https://auth.example.com/oauth2/authorize?"));
+        assert!(
+            url.starts_with("https://auth.example.com/oauth2/authorize?")
+        );
         assert!(url.contains("client_id=test-client"));
         assert!(url.contains("state=STATE"));
         assert!(url.contains("code_challenge=CHALLENGE"));
