@@ -421,7 +421,9 @@ async fn run_agent_status(
     json: bool,
 ) -> Result<()> {
     let path = match session_id {
-        Some(sid) => format!("/v1/llms/agents/{agent_id}/sessions/{sid}/status"),
+        Some(sid) => {
+            format!("/v1/llms/agents/{agent_id}/sessions/{sid}/status")
+        }
         None => format!("/v1/llms/agents/{agent_id}/status"),
     };
     let status: AgentStatusResponse = api.get(&path).await?;
@@ -443,7 +445,9 @@ async fn run_agent_messages(
     json: bool,
 ) -> Result<()> {
     let path = match session_id {
-        Some(sid) => format!("/v1/llms/agents/{agent_id}/sessions/{sid}/messages"),
+        Some(sid) => {
+            format!("/v1/llms/agents/{agent_id}/sessions/{sid}/messages")
+        }
         None => format!("/v1/llms/agents/{agent_id}/messages"),
     };
     let messages: Vec<serde_json::Value> = api.get(&path).await?;

@@ -80,12 +80,13 @@ pub enum ComputeCommand {
     },
     /// Stream or fetch build logs (shortcut for builds logs)
     Logs {
-        /// App ID or name
-        app_id: String,
-        /// Build ID (defaults to the latest build)
+        /// App ID or name (optional when --build-id is specified)
+        app_id: Option<String>,
+        /// Build ID (defaults to the latest build for the given app)
         #[arg(long)]
         build_id: Option<String>,
-        /// Keep polling until the build is complete
+        /// Keep polling until the build is complete;
+        /// exits with code 1 if the build fails
         #[arg(long)]
         follow: bool,
     },
@@ -817,13 +818,15 @@ async fn run_builds_cancel(api: &ApiClient, build_id: &str) -> Result<()> {
 
 async fn run_builds_logs(
     api: &ApiClient,
-    app_id: &str,
+    app_id: Option<&str>,
     build_id: Option<&str>,
     follow: bool,
 ) -> Result<()> {
     let resolved_build_id = match build_id {
         Some(id) => id.to_string(),
         None => {
+            let app_id = app_id
+                .ok_or_else(|| anyhow!("app_id required when --build-id is not specified"))?;
             let resp: ListBuildsResponse = api
                 .get(&format!("/v1/compute/apps/{app_id}/builds"))
                 .await?;
@@ -836,6 +839,7 @@ async fn run_builds_logs(
     };
 
     let mut next_token: Option<String> = None;
+    let mut is_complete = false;
     loop {
         let path = format!("/v1/compute/builds/{resolved_build_id}/logs");
         let logs: BuildLogsResponse = if let Some(token) = &next_token {
@@ -850,6 +854,7 @@ async fn run_builds_logs(
         }
 
         if logs.is_complete {
+            is_complete = true;
             break;
         }
         if logs.next_token.is_some() {
@@ -861,6 +866,16 @@ async fn run_builds_logs(
             break;
         }
     }
+
+    if follow && is_complete {
+        let build: BuildResponse = api
+            .get(&format!("/v1/compute/builds/{resolved_build_id}"))
+            .await?;
+        if build.status == "failed" {
+            return Err(anyhow!("build {} failed", resolved_build_id));
+        }
+    }
+
     Ok(())
 }
 
@@ -1172,7 +1187,7 @@ pub async fn run(args: &ComputeArgs, config: &Configuration, tenant_id: &str) ->
                 follow,
             } => {
                 let id = resolve::resolve_app_id(&api, app_id).await?;
-                run_builds_logs(&api, &id, build_id.as_deref(), *follow).await
+                run_builds_logs(&api, Some(id.as_str()), build_id.as_deref(), *follow).await
             }
         },
         ComputeCommand::Deployments { command } => match command {
@@ -1242,8 +1257,20 @@ pub async fn run(args: &ComputeArgs, config: &Configuration, tenant_id: &str) ->
             build_id,
             follow,
         } => {
-            let id = resolve::resolve_app_id(&api, app_id).await?;
-            run_builds_logs(&api, &id, build_id.as_deref(), *follow).await
+            let resolved_app_id = match app_id {
+                Some(id) => Some(resolve::resolve_app_id(&api, id).await?),
+                None => None,
+            };
+            if resolved_app_id.is_none() && build_id.is_none() {
+                return Err(anyhow!("either app_id or --build-id must be provided"));
+            }
+            run_builds_logs(
+                &api,
+                resolved_app_id.as_deref(),
+                build_id.as_deref(),
+                *follow,
+            )
+            .await
         }
     }
 }

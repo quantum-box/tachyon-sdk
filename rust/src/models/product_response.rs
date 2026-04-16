@@ -34,6 +34,9 @@ pub struct ProductResponse {
     /// Image file IDs
     #[serde(rename = "imageFileIds")]
     pub image_file_ids: Vec<String>,
+    /// Storage keys for product images
+    #[serde(rename = "imageStorageKeys", default)]
+    pub image_storage_keys: Vec<String>,
     /// JAN code
     #[serde(
         rename = "janCode",
@@ -118,6 +121,7 @@ impl ProductResponse {
             description: None,
             id,
             image_file_ids,
+            image_storage_keys: vec![],
             jan_code: None,
             kind,
             list_price,

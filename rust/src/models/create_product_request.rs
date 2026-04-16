@@ -42,6 +42,12 @@ pub struct CreateProductRequest {
         skip_serializing_if = "Option::is_none"
     )]
     pub image_file_ids: Option<Vec<String>>,
+    /// Storage keys for product images
+    #[serde(
+        rename = "imageStorageKeys",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub image_storage_keys: Option<Vec<String>>,
     /// JAN code
     #[serde(
         rename = "janCode",
@@ -127,6 +133,7 @@ impl CreateProductRequest {
             description: None,
             id: None,
             image_file_ids: None,
+            image_storage_keys: None,
             jan_code: None,
             kind,
             list_price,

@@ -296,7 +296,9 @@ pub async fn login(oauth_config: &OAuthConfig, api_url: &str) -> Result<()> {
     };
 
     // Fetch operators and save the default one.
-    creds.operator_id = fetch_default_operator(api_url, &creds.access_token).await.ok();
+    creds.operator_id = fetch_default_operator(api_url, &creds.access_token)
+        .await
+        .ok();
 
     save_credentials(&creds)?;
 
@@ -320,7 +322,10 @@ async fn fetch_default_operator(api_url: &str, access_token: &str) -> Result<Str
     }
 
     let client = Client::new();
-    let url = format!("{}/v1/auth/operators/by-user", api_url.trim_end_matches('/'));
+    let url = format!(
+        "{}/v1/auth/operators/by-user",
+        api_url.trim_end_matches('/')
+    );
     let resp = client
         .get(&url)
         .bearer_auth(access_token)
@@ -331,7 +336,9 @@ async fn fetch_default_operator(api_url: &str, access_token: &str) -> Result<Str
     if !resp.status().is_success() {
         let status = resp.status();
         let body = resp.text().await.unwrap_or_default();
-        return Err(anyhow!("operators fetch failed: status={status}, body={body}"));
+        return Err(anyhow!(
+            "operators fetch failed: status={status}, body={body}"
+        ));
     }
 
     let operators: Vec<OperatorEntry> = resp.json().await.context("failed to parse operators")?;
@@ -348,13 +355,8 @@ async fn fetch_default_operator(api_url: &str, access_token: &str) -> Result<Str
             // Multiple operators — pick the first and show a hint.
             let op = &operators[0];
             let label = op.alias.as_deref().unwrap_or(&op.id);
-            println!(
-                "Multiple tenants found. Using: {label} ({})",
-                op.id
-            );
-            println!(
-                "Use --tenant-id or TACHYON_TENANT_ID to override."
-            );
+            println!("Multiple tenants found. Using: {label} ({})", op.id);
+            println!("Use --tenant-id or TACHYON_TENANT_ID to override.");
             Ok(op.id.clone())
         }
     }
