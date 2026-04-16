@@ -27,11 +27,7 @@ pub enum TtsCommand {
 
         /// Model to use for synthesis
         /// (e.g., gemini-2.5-flash-preview-tts, gemini-3.1-flash-tts)
-        #[arg(
-            long,
-            short = 'm',
-            default_value = "gemini-2.5-flash-preview-tts"
-        )]
+        #[arg(long, short = 'm', default_value = "gemini-2.5-flash-preview-tts")]
         model: String,
 
         /// Voice name (e.g., Aoede, Charon, Fenrir, Kore, Puck, Orbit,
@@ -70,11 +66,7 @@ struct SynthesizeSpeechResponse {
     cost_nanodollars: i64,
 }
 
-pub async fn run(
-    args: &TtsArgs,
-    config: &Configuration,
-    tenant_id: &str,
-) -> Result<()> {
+pub async fn run(args: &TtsArgs, config: &Configuration, tenant_id: &str) -> Result<()> {
     match &args.command {
         TtsCommand::Synthesize {
             text,
@@ -155,10 +147,7 @@ async fn synthesize(
     Ok(())
 }
 
-async fn list_models(
-    _config: &Configuration,
-    _tenant_id: &str,
-) -> Result<()> {
+async fn list_models(_config: &Configuration, _tenant_id: &str) -> Result<()> {
     println!("Available TTS models:");
     println!();
     println!(

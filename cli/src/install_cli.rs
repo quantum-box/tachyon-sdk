@@ -109,10 +109,8 @@ pub async fn run() -> Result<()> {
         .context("Failed to read download body")?;
 
     // Extract to temp directory
-    let tmp_dir = env::temp_dir()
-        .join(format!("tachyon-install-{}", std::process::id()));
-    fs::create_dir_all(&tmp_dir)
-        .context("Failed to create temp directory")?;
+    let tmp_dir = env::temp_dir().join(format!("tachyon-install-{}", std::process::id()));
+    fs::create_dir_all(&tmp_dir).context("Failed to create temp directory")?;
 
     let tarball_path = tmp_dir.join(format!("{artifact}.tar.gz"));
     fs::write(&tarball_path, &bytes).context("Failed to write tarball")?;
@@ -139,15 +137,13 @@ pub async fn run() -> Result<()> {
     }
 
     // Determine install location
-    let install_path = current_binary_path()
-        .unwrap_or_else(|_| install_dir().join(BIN_NAME));
+    let install_path = current_binary_path().unwrap_or_else(|_| install_dir().join(BIN_NAME));
     let install_directory = install_path
         .parent()
         .map(PathBuf::from)
         .unwrap_or_else(install_dir);
 
-    fs::create_dir_all(&install_directory)
-        .context("Failed to create install directory")?;
+    fs::create_dir_all(&install_directory).context("Failed to create install directory")?;
 
     let target = install_directory.join(BIN_NAME);
 

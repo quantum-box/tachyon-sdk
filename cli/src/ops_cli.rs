@@ -144,8 +144,7 @@ struct ToolJobProviderResponse {
 // ---- Handlers ----
 
 async fn run_deployments_list(api: &ApiClient, json: bool) -> Result<()> {
-    let deps: Vec<OpsDeploymentResponse> =
-        api.get("/v1/ops/deployments").await?;
+    let deps: Vec<OpsDeploymentResponse> = api.get("/v1/ops/deployments").await?;
     if json {
         return print_json(&deps);
     }
@@ -175,13 +174,8 @@ async fn run_deployments_list(api: &ApiClient, json: bool) -> Result<()> {
     Ok(())
 }
 
-async fn run_deployments_get(
-    api: &ApiClient,
-    id: &str,
-    json: bool,
-) -> Result<()> {
-    let d: OpsDeploymentResponse =
-        api.get(&format!("/v1/ops/deployments/{id}")).await?;
+async fn run_deployments_get(api: &ApiClient, id: &str, json: bool) -> Result<()> {
+    let d: OpsDeploymentResponse = api.get(&format!("/v1/ops/deployments/{id}")).await?;
     if json {
         return print_json(&d);
     }
@@ -195,8 +189,7 @@ async fn run_deployments_get(
 }
 
 async fn run_reports_list(api: &ApiClient, json: bool) -> Result<()> {
-    let reports: Vec<ScenarioReportResponse> =
-        api.get("/v1/ops/scenario-reports").await?;
+    let reports: Vec<ScenarioReportResponse> = api.get("/v1/ops/scenario-reports").await?;
     if json {
         return print_json(&reports);
     }
@@ -232,11 +225,7 @@ async fn run_reports_list(api: &ApiClient, json: bool) -> Result<()> {
     Ok(())
 }
 
-async fn run_reports_get(
-    api: &ApiClient,
-    run_id: &str,
-    json: bool,
-) -> Result<()> {
+async fn run_reports_get(api: &ApiClient, run_id: &str, json: bool) -> Result<()> {
     let r: serde_json::Value = api
         .get(&format!("/v1/ops/scenario-reports/{run_id}"))
         .await?;
@@ -278,13 +267,8 @@ async fn run_tool_jobs_list(api: &ApiClient, json: bool) -> Result<()> {
     Ok(())
 }
 
-async fn run_tool_jobs_get(
-    api: &ApiClient,
-    job_id: &str,
-    json: bool,
-) -> Result<()> {
-    let j: serde_json::Value =
-        api.get(&format!("/v1/agent/tool-jobs/{job_id}")).await?;
+async fn run_tool_jobs_get(api: &ApiClient, job_id: &str, json: bool) -> Result<()> {
+    let j: serde_json::Value = api.get(&format!("/v1/agent/tool-jobs/{job_id}")).await?;
     if json {
         return print_json(&j);
     }
@@ -299,12 +283,8 @@ async fn run_tool_jobs_cancel(api: &ApiClient, job_id: &str) -> Result<()> {
     Ok(())
 }
 
-async fn run_tool_jobs_providers(
-    api: &ApiClient,
-    json: bool,
-) -> Result<()> {
-    let providers: Vec<ToolJobProviderResponse> =
-        api.get("/v1/agent/tool-jobs/providers").await?;
+async fn run_tool_jobs_providers(api: &ApiClient, json: bool) -> Result<()> {
+    let providers: Vec<ToolJobProviderResponse> = api.get("/v1/agent/tool-jobs/providers").await?;
     if json {
         return print_json(&providers);
     }
@@ -314,10 +294,7 @@ async fn run_tool_jobs_providers(
     }
     for p in &providers {
         println!("Provider: {}", p.name.as_deref().unwrap_or("-"));
-        println!(
-            "  Description: {}",
-            p.description.as_deref().unwrap_or("-")
-        );
+        println!("  Description: {}", p.description.as_deref().unwrap_or("-"));
         if let Some(tools) = &p.tools {
             println!("  Tools: {}", tools.join(", "));
         }
@@ -328,43 +305,23 @@ async fn run_tool_jobs_providers(
 
 // ---- Entry point ----
 
-pub async fn run(
-    args: &OpsArgs,
-    config: &Configuration,
-    tenant_id: &str,
-) -> Result<()> {
+pub async fn run(args: &OpsArgs, config: &Configuration, tenant_id: &str) -> Result<()> {
     let api = ApiClient::new(config, tenant_id)?;
 
     match &args.command {
         OpsCommand::Deployments { command } => match command {
-            OpsDeploymentsCommand::List { json } => {
-                run_deployments_list(&api, *json).await
-            }
-            OpsDeploymentsCommand::Get { id, json } => {
-                run_deployments_get(&api, id, *json).await
-            }
+            OpsDeploymentsCommand::List { json } => run_deployments_list(&api, *json).await,
+            OpsDeploymentsCommand::Get { id, json } => run_deployments_get(&api, id, *json).await,
         },
         OpsCommand::Reports { command } => match command {
-            ReportsCommand::List { json } => {
-                run_reports_list(&api, *json).await
-            }
-            ReportsCommand::Get { run_id, json } => {
-                run_reports_get(&api, run_id, *json).await
-            }
+            ReportsCommand::List { json } => run_reports_list(&api, *json).await,
+            ReportsCommand::Get { run_id, json } => run_reports_get(&api, run_id, *json).await,
         },
         OpsCommand::ToolJobs { command } => match command {
-            ToolJobsCommand::List { json } => {
-                run_tool_jobs_list(&api, *json).await
-            }
-            ToolJobsCommand::Get { job_id, json } => {
-                run_tool_jobs_get(&api, job_id, *json).await
-            }
-            ToolJobsCommand::Cancel { job_id } => {
-                run_tool_jobs_cancel(&api, job_id).await
-            }
-            ToolJobsCommand::Providers { json } => {
-                run_tool_jobs_providers(&api, *json).await
-            }
+            ToolJobsCommand::List { json } => run_tool_jobs_list(&api, *json).await,
+            ToolJobsCommand::Get { job_id, json } => run_tool_jobs_get(&api, job_id, *json).await,
+            ToolJobsCommand::Cancel { job_id } => run_tool_jobs_cancel(&api, job_id).await,
+            ToolJobsCommand::Providers { json } => run_tool_jobs_providers(&api, *json).await,
         },
     }
 }

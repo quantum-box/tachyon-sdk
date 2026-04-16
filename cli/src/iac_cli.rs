@@ -140,10 +140,7 @@ async fn run_oauth_providers(
                 .map(|v| if v { "yes" } else { "no" })
                 .unwrap_or("-")
         );
-        println!(
-            "    Client ID: {}",
-            gh.client_id.as_deref().unwrap_or("-")
-        );
+        println!("    Client ID: {}", gh.client_id.as_deref().unwrap_or("-"));
         if let Some(scopes) = &gh.scopes {
             println!("    Scopes:    {}", scopes.join(", "));
         }
@@ -159,10 +156,7 @@ async fn run_oauth_providers(
                 .map(|v| if v { "yes" } else { "no" })
                 .unwrap_or("-")
         );
-        println!(
-            "    Client ID: {}",
-            lr.client_id.as_deref().unwrap_or("-")
-        );
+        println!("    Client ID: {}", lr.client_id.as_deref().unwrap_or("-"));
         if let Some(scopes) = &lr.scopes {
             println!("    Scopes:    {}", scopes.join(", "));
         }
@@ -173,8 +167,7 @@ async fn run_oauth_providers(
 }
 
 async fn run_integrations_list(api: &ApiClient, json: bool) -> Result<()> {
-    let integrations: Vec<IntegrationResponse> =
-        api.get("/v1/integrations").await?;
+    let integrations: Vec<IntegrationResponse> = api.get("/v1/integrations").await?;
     if json {
         return print_json(&integrations);
     }
@@ -203,13 +196,8 @@ async fn run_integrations_list(api: &ApiClient, json: bool) -> Result<()> {
     Ok(())
 }
 
-async fn run_integrations_get(
-    api: &ApiClient,
-    id: &str,
-    json: bool,
-) -> Result<()> {
-    let i: IntegrationResponse =
-        api.get(&format!("/v1/integrations/{id}")).await?;
+async fn run_integrations_get(api: &ApiClient, id: &str, json: bool) -> Result<()> {
+    let i: IntegrationResponse = api.get(&format!("/v1/integrations/{id}")).await?;
     if json {
         return print_json(&i);
     }
@@ -222,8 +210,7 @@ async fn run_integrations_get(
 }
 
 async fn run_connections_list(api: &ApiClient, json: bool) -> Result<()> {
-    let conns: Vec<ConnectionResponse> =
-        api.get("/v1/integrations/connections").await?;
+    let conns: Vec<ConnectionResponse> = api.get("/v1/integrations/connections").await?;
     if json {
         return print_json(&conns);
     }
@@ -252,11 +239,7 @@ async fn run_connections_list(api: &ApiClient, json: bool) -> Result<()> {
     Ok(())
 }
 
-async fn run_connections_get(
-    api: &ApiClient,
-    id: &str,
-    json: bool,
-) -> Result<()> {
+async fn run_connections_get(api: &ApiClient, id: &str, json: bool) -> Result<()> {
     let c: ConnectionResponse = api
         .get(&format!("/v1/integrations/connections/{id}"))
         .await?;
@@ -271,10 +254,7 @@ async fn run_connections_get(
     Ok(())
 }
 
-async fn run_connections_disconnect(
-    api: &ApiClient,
-    id: &str,
-) -> Result<()> {
+async fn run_connections_disconnect(api: &ApiClient, id: &str) -> Result<()> {
     api.delete(&format!("/v1/integrations/connections/{id}"))
         .await?;
     println!("Connection {id} disconnected.");
@@ -283,41 +263,25 @@ async fn run_connections_disconnect(
 
 // ---- Entry point ----
 
-pub async fn run(
-    args: &IacArgs,
-    config: &Configuration,
-    tenant_id: &str,
-) -> Result<()> {
+pub async fn run(args: &IacArgs, config: &Configuration, tenant_id: &str) -> Result<()> {
     let api = ApiClient::new(config, tenant_id)?;
 
     match &args.command {
         IacCommand::OauthProviders {
             tenant_id: tid,
             json,
-        } => {
-            run_oauth_providers(&api, tid.as_deref(), tenant_id, *json)
-                .await
-        }
+        } => run_oauth_providers(&api, tid.as_deref(), tenant_id, *json).await,
         IacCommand::Integrations { command } => match command {
-            IntegrationsCommand::List { json } => {
-                run_integrations_list(&api, *json).await
-            }
+            IntegrationsCommand::List { json } => run_integrations_list(&api, *json).await,
             IntegrationsCommand::Get { id, json } => {
-                let resolved =
-                    resolve::resolve_integration_id(&api, id).await?;
+                let resolved = resolve::resolve_integration_id(&api, id).await?;
                 run_integrations_get(&api, &resolved, *json).await
             }
         },
         IacCommand::Connections { command } => match command {
-            ConnectionsCommand::List { json } => {
-                run_connections_list(&api, *json).await
-            }
-            ConnectionsCommand::Get { id, json } => {
-                run_connections_get(&api, id, *json).await
-            }
-            ConnectionsCommand::Disconnect { id } => {
-                run_connections_disconnect(&api, id).await
-            }
+            ConnectionsCommand::List { json } => run_connections_list(&api, *json).await,
+            ConnectionsCommand::Get { id, json } => run_connections_get(&api, id, *json).await,
+            ConnectionsCommand::Disconnect { id } => run_connections_disconnect(&api, id).await,
         },
     }
 }
