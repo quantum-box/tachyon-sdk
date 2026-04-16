@@ -1,6 +1,6 @@
 [package]
 name = "tachyon"
-version = "0.1.4"
+version = "0.2.0"
 edition = "2021"
 description = "CLI for the Tachyon Platform"
 license = "MIT"
@@ -23,3 +23,5 @@ sha2 = "0.10"
 tachyon-sdk = { path = "../rust", default-features = false, features = ["rustls"] }
 tokio = { version = "1", features = ["full"] }
 urlencoding = "2"
+
+[workspace]

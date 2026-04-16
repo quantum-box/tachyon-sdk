@@ -3,10 +3,12 @@ mod auth;
 mod client;
 mod compute_cli;
 mod iac_cli;
+mod image_cli;
 mod install_cli;
 mod ops_cli;
 mod org_cli;
 mod resolve;
+mod tts_cli;
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
@@ -70,6 +72,10 @@ enum Commands {
     Iac(iac_cli::IacArgs),
     /// Operations: deployment events, scenario reports, and tool jobs
     Ops(ops_cli::OpsArgs),
+    /// Generate AI images from text prompts
+    Image(image_cli::ImageArgs),
+    /// Convert text to speech using AI TTS models
+    Tts(tts_cli::TtsArgs),
     /// Update the Tachyon CLI to the latest version
     Install,
 }
@@ -179,6 +185,16 @@ async fn run() -> Result<()> {
             let config = build_config(&cli).await;
             let tenant_id = resolve::resolve_tenant_id(&config, &cli.tenant_id).await?;
             ops_cli::run(args, &config, &tenant_id).await
+        }
+        Commands::Image(args) => {
+            let config = build_config(&cli).await;
+            let tenant_id = resolve::resolve_tenant_id(&config, &cli.tenant_id).await?;
+            image_cli::run(args, &config, &tenant_id).await
+        }
+        Commands::Tts(args) => {
+            let config = build_config(&cli).await;
+            let tenant_id = resolve::resolve_tenant_id(&config, &cli.tenant_id).await?;
+            tts_cli::run(args, &config, &tenant_id).await
         }
         Commands::Install => install_cli::run().await,
     }
