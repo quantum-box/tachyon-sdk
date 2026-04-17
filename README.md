@@ -63,6 +63,56 @@ npm install @tachyon/sdk
 pip install tachyon-sdk
 ```
 
+## Agent Skills
+
+Pre-built skill definitions for AI agents are in the `skills/` directory.
+
+| Skill | File | Description |
+|-------|------|-------------|
+| image-gen | [`skills/image-gen.json`](skills/image-gen.json) | Generate AI images via `tachyon image generate` |
+
+### Using image-gen with Claude Code
+
+The skill is also available as a Claude Code skill at `.claude/skills/image-gen/`. Install by copying to your `~/.claude/skills/` directory or cloning this repo.
+
+```bash
+# Generate an image and save locally
+tachyon image generate \
+  --prompt "hero banner for a cloud developer platform, dark theme" \
+  --model gpt-image-1.5 \
+  --quality high \
+  --output hero.png
+
+# Generate and upload to Tachyon Storage
+tachyon image generate \
+  --prompt "minimalist product logo, blue gradient" \
+  --model gpt-image-1.5 \
+  --size 1024x1024 \
+  --storage
+
+# Multiple images
+tachyon image generate \
+  --prompt "mobile app mockup screenshots" \
+  --n 4 \
+  --output mockup.png
+# → mockup_1.png, mockup_2.png, mockup_3.png, mockup_4.png
+```
+
+### Using image-gen as an API tool (Claude API)
+
+```typescript
+import { Anthropic } from "@anthropic-ai/sdk";
+import imageGenSkill from "@anthropic-ja/agent-chat/skills/image-gen.json";
+
+const client = new Anthropic();
+const response = await client.messages.create({
+  model: "claude-opus-4-7",
+  max_tokens: 1024,
+  tools: [imageGenSkill],
+  messages: [{ role: "user", content: "Create a hero image for our SaaS product" }],
+});
+```
+
 ## Regenerating SDKs
 
 When the OpenAPI spec (`openapi.json`) is updated:
