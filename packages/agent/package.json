@@ -1,5 +1,5 @@
 {
-	"name": "@quantumbox/agent",
+	"name": "@quantumbox/tachyon-agent",
 	"version": "0.1.0",
 	"description": "Tachyon Agent SDK — TypeScript client for the Tachyon Agent API",
 	"author": "Quantum Box <hello@quantum-box.com>",
