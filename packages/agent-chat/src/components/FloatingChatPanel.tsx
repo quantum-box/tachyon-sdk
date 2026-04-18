@@ -3,22 +3,55 @@ import { createPortal } from 'react-dom'
 import { PERSISTENCE_KEYS, usePersisted } from '../hooks/useChatPersistence'
 import { ChatPanel } from './ChatPanel'
 
-type FloatingChatPanelProps = {
+export type AgentChatTheme = {
+	primary?: string
+	primaryHover?: string
+	background?: string
+	headerBackground?: string
+	border?: string
+}
+
+export type FloatingChatPanelPosition =
+	| 'bottom-right'
+	| 'bottom-left'
+	| 'top-right'
+	| 'top-left'
+
+export type FloatingChatPanelProps = {
 	className?: string
+	style?: React.CSSProperties
 	panelWidth?: number
 	panelHeight?: number
 	buttonLabel?: string
+	zIndex?: number
+	position?: FloatingChatPanelPosition
+	theme?: AgentChatTheme
+}
+
+const POSITION_MAP: Record<
+	FloatingChatPanelPosition,
+	{ button: string; panel: string }
+> = {
+	'bottom-right': { button: 'bottom-4 right-4', panel: 'bottom-20 right-4' },
+	'bottom-left': { button: 'bottom-4 left-4', panel: 'bottom-20 left-4' },
+	'top-right': { button: 'top-4 right-4', panel: 'top-20 right-4' },
+	'top-left': { button: 'top-4 left-4', panel: 'top-20 left-4' },
 }
 
 export function FloatingChatPanel({
 	className,
+	style,
 	panelWidth = 400,
 	panelHeight = 600,
 	buttonLabel,
+	zIndex = 50,
+	position = 'bottom-right',
+	theme,
 }: FloatingChatPanelProps) {
 	const [isOpen, setIsOpen] = usePersisted(PERSISTENCE_KEYS.panelOpen, false)
 	const [sessionId, setSessionId] = useState<string | null>(null)
 	const [mounted, setMounted] = useState(false)
+	const [isButtonHovered, setIsButtonHovered] = useState(false)
 
 	useEffect(() => {
 		setMounted(true)
@@ -35,22 +68,46 @@ export function FloatingChatPanel({
 		return () => window.removeEventListener('keydown', handler)
 	}, [setIsOpen])
 
-	// Portal to document.body so that `position: fixed` is
-	// always relative to the viewport, regardless of any
-	// ancestor with `position: relative` / `transform` / etc.
+	const pos = POSITION_MAP[position]
+
+	const cssVars = {
+		...(theme?.primary != null && { '--agentchat-primary': theme.primary }),
+		...(theme?.primaryHover != null && {
+			'--agentchat-primary-hover': theme.primaryHover,
+		}),
+		...(theme?.background != null && { '--agentchat-bg': theme.background }),
+		...(theme?.headerBackground != null && {
+			'--agentchat-header-bg': theme.headerBackground,
+		}),
+		...(theme?.border != null && { '--agentchat-border': theme.border }),
+	} as React.CSSProperties
+
 	const content = (
-		<>
+		<div className={className} style={{ ...cssVars, ...style }}>
 			{isOpen && (
 				<div
-					className='fixed bottom-20 right-4 z-50 rounded-2xl shadow-2xl border border-gray-200 dark:border-gray-700 overflow-hidden'
-					style={{ width: panelWidth, height: panelHeight }}
+					className={`fixed ${pos.panel} rounded-2xl shadow-2xl overflow-hidden`}
+					style={{
+						width: panelWidth,
+						height: panelHeight,
+						zIndex,
+						borderWidth: 1,
+						borderStyle: 'solid',
+						borderColor: 'var(--agentchat-border, rgb(229 231 235))',
+					}}
 				>
-					<div className='flex items-center justify-between px-4 py-2 bg-gray-50 dark:bg-gray-800 border-b'>
+					<div
+						className='flex items-center justify-between px-4 py-2 border-b'
+						style={{
+							backgroundColor: 'var(--agentchat-header-bg, rgb(249 250 251))',
+							borderColor: 'var(--agentchat-border, rgb(229 231 235))',
+						}}
+					>
 						<span className='text-sm font-medium'>Agent Chat</span>
 						<button
 							type='button'
 							onClick={() => setIsOpen(false)}
-							className='text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 text-lg leading-none'
+							className='text-gray-400 hover:text-gray-600 text-lg leading-none'
 							aria-label='Close chat'
 						>
 							×
@@ -67,7 +124,15 @@ export function FloatingChatPanel({
 			<button
 				type='button'
 				onClick={() => setIsOpen((prev: boolean) => !prev)}
-				className='fixed bottom-4 right-4 z-50 flex items-center justify-center w-14 h-14 rounded-full bg-blue-600 text-white shadow-lg hover:bg-blue-700 hover:shadow-xl transition-all'
+				className={`fixed ${pos.button} flex items-center justify-center w-14 h-14 rounded-full text-white shadow-lg hover:shadow-xl transition-all`}
+				style={{
+					zIndex,
+					backgroundColor: isButtonHovered
+						? 'var(--agentchat-primary-hover, #1d4ed8)'
+						: 'var(--agentchat-primary, #2563eb)',
+				}}
+				onMouseEnter={() => setIsButtonHovered(true)}
+				onMouseLeave={() => setIsButtonHovered(false)}
 				aria-label={buttonLabel ?? 'Open agent chat'}
 			>
 				{isOpen ? (
@@ -102,7 +167,7 @@ export function FloatingChatPanel({
 					</svg>
 				)}
 			</button>
-		</>
+		</div>
 	)
 
 	if (!mounted) {
