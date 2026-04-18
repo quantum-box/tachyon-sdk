@@ -8,6 +8,7 @@ mod install_cli;
 mod ops_cli;
 mod org_cli;
 mod resolve;
+mod switch_cli;
 mod tts_cli;
 
 use anyhow::Result;
@@ -33,7 +34,12 @@ struct Cli {
     api_url: String,
 
     /// Tenant ID or name/alias (x-operator-id header)
-    #[arg(long, env = "TACHYON_TENANT_ID", default_value = "")]
+    #[arg(
+        long,
+        visible_alias = "operator",
+        env = "TACHYON_TENANT_ID",
+        default_value = ""
+    )]
     tenant_id: String,
 
     /// API key for authentication (overrides stored OAuth token)
@@ -78,6 +84,8 @@ enum Commands {
     Tts(tts_cli::TtsArgs),
     /// Update the Tachyon CLI to the latest version
     Install,
+    /// Switch the active tenant (updates saved credentials)
+    Switch(switch_cli::SwitchArgs),
 }
 
 /// Resolve the bearer token from CLI args or stored credentials.
@@ -197,5 +205,9 @@ async fn run() -> Result<()> {
             tts_cli::run(args, &config, &tenant_id).await
         }
         Commands::Install => install_cli::run().await,
+        Commands::Switch(args) => {
+            let config = build_config(&cli).await;
+            switch_cli::run(args, &config).await
+        }
     }
 }
