@@ -84,7 +84,13 @@ export {
 
 // --- Components ---
 export { AgentChat } from './components/AgentChat'
+export type { AgentChatProps } from './components/AgentChat'
 export { FloatingChatPanel } from './components/FloatingChatPanel'
+export type {
+	FloatingChatPanelProps,
+	FloatingChatPanelPosition,
+	AgentChatTheme,
+} from './components/FloatingChatPanel'
 export { ChatPanel } from './components/ChatPanel'
 export { MessageList } from './components/MessageList'
 export { MessageBubble } from './components/MessageBubble'
