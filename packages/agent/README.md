@@ -1,11 +1,11 @@
-# @tachyon/agent
+# @quantumbox/tachyon-agent
 
 TypeScript client SDK for the Tachyon Agent API.
 
 ## Installation
 
 ```bash
-npm install @tachyon/agent
+npm install @quantumbox/tachyon-agent
 ```
 
 ## Usage
@@ -13,7 +13,7 @@ npm install @tachyon/agent
 ### TachyonAgentClient
 
 ```typescript
-import { TachyonAgentClient } from '@tachyon/agent'
+import { TachyonAgentClient } from '@quantumbox/tachyon-agent'
 
 const client = new TachyonAgentClient({
   apiKey: 'your-api-key',
@@ -34,7 +34,7 @@ for await (const event of client.streamAgent('Hello, agent!')) {
 ### streamAgent (functional API)
 
 ```typescript
-import { streamAgent } from '@tachyon/agent'
+import { streamAgent } from '@quantumbox/tachyon-agent'
 
 for await (const event of streamAgent('Hello!', { apiKey: '...', baseUrl: '...' })) {
   console.log(event)
