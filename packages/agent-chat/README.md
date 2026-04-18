@@ -196,6 +196,143 @@ export function MyChatUI() {
 
 ---
 
+## Authentication
+
+`AgentChatProvider` requires an `accessToken` and `tenantId`. The following patterns cover the most common authentication setups.
+
+### Pattern 1 — Tachyon OAuth (`tachyon login`)
+
+Use the token issued by `tachyon login`. In a Next.js app the token is typically stored server-side and injected at request time (see Pattern 3).
+
+```tsx
+// app/layout.tsx
+import { AgentChatProvider } from '@anthropic-ja/agent-chat'
+
+export default function RootLayout({ children }: { children: React.ReactNode }) {
+  return (
+    <html lang="en">
+      <body>
+        <AgentChatProvider
+          apiBaseUrl={process.env.NEXT_PUBLIC_TACHYON_API_URL!}
+          accessToken={process.env.NEXT_PUBLIC_TACHYON_ACCESS_TOKEN!} // OAuth token
+          tenantId={process.env.NEXT_PUBLIC_TACHYON_TENANT_ID!}
+        >
+          {children}
+        </AgentChatProvider>
+      </body>
+    </html>
+  )
+}
+```
+
+`NEXT_PUBLIC_TACHYON_ACCESS_TOKEN` should be set to the token obtained via `tachyon login` (stored in `~/.tachyon/credentials` or equivalent).
+
+### Pattern 2 — API Key authentication (`TACHYON_API_KEY`)
+
+Use a long-lived API key issued from the Tachyon operator console. Pass it directly as `accessToken`.
+
+```tsx
+// app/layout.tsx
+import { AgentChatProvider } from '@anthropic-ja/agent-chat'
+
+export default function RootLayout({ children }: { children: React.ReactNode }) {
+  return (
+    <html lang="en">
+      <body>
+        <AgentChatProvider
+          apiBaseUrl={process.env.NEXT_PUBLIC_TACHYON_API_URL!}
+          accessToken={process.env.NEXT_PUBLIC_TACHYON_API_KEY!} // API key as bearer token
+          tenantId={process.env.NEXT_PUBLIC_TACHYON_TENANT_ID!}
+        >
+          {children}
+        </AgentChatProvider>
+      </body>
+    </html>
+  )
+}
+```
+
+> **Security note:** `NEXT_PUBLIC_*` variables are embedded in the client bundle. For production use, prefer Pattern 3 below to keep secrets server-side.
+
+### Pattern 3 — Next.js Server Component → Client Component (recommended)
+
+Fetch the token on the server (where secrets stay private) and pass it as a prop to a Client Component wrapper.
+
+```tsx
+// app/providers.tsx  — Client Component wrapper
+'use client'
+
+import { AgentChatProvider } from '@anthropic-ja/agent-chat'
+
+type Props = {
+  accessToken: string
+  tenantId: string
+  children: React.ReactNode
+}
+
+export function Providers({ accessToken, tenantId, children }: Props) {
+  return (
+    <AgentChatProvider
+      apiBaseUrl={process.env.NEXT_PUBLIC_TACHYON_API_URL!}
+      accessToken={accessToken}
+      tenantId={tenantId}
+    >
+      {children}
+    </AgentChatProvider>
+  )
+}
+```
+
+```tsx
+// app/layout.tsx  — Server Component
+import { Providers } from './providers'
+
+async function getAccessToken(): Promise<string> {
+  // e.g. read from a session cookie, KV store, or call your auth endpoint
+  const res = await fetch('https://your-auth-endpoint/token', {
+    headers: { Cookie: /* forward request cookies */ '' },
+    cache: 'no-store',
+  })
+  const data = await res.json()
+  return data.access_token
+}
+
+export default async function RootLayout({ children }: { children: React.ReactNode }) {
+  const accessToken = await getAccessToken()
+
+  return (
+    <html lang="en">
+      <body>
+        <Providers
+          accessToken={accessToken}
+          tenantId={process.env.TACHYON_TENANT_ID!} // server-side env, not NEXT_PUBLIC_
+        >
+          {children}
+        </Providers>
+      </body>
+    </html>
+  )
+}
+```
+
+### Accessing config in child components
+
+Use `useAgentChatContext` to read the current client configuration from any component inside `AgentChatProvider`:
+
+```tsx
+'use client'
+
+import { useAgentChatContext } from '@anthropic-ja/agent-chat'
+
+export function DebugPanel() {
+  const { client, config } = useAgentChatContext()
+
+  return <p>Connected to {config.apiBaseUrl} as tenant {config.tenantId}</p>
+}
+```
+
+---
+
 ## `AgentChatClient` — direct API access
 
 Use `AgentChatClient` outside of React, in server actions, or when you need low-level control.
