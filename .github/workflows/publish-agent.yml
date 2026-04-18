@@ -10,7 +10,7 @@ on:
 
 jobs:
   publish:
-    name: Build & Publish
+    name: Publish
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -29,9 +29,6 @@ jobs:
 
       - name: Type check
         run: npx tsc --noEmit
-
-      - name: Build
-        run: npx vite build
 
       - name: Publish
         run: npm publish --access public
