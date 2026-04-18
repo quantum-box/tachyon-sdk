@@ -142,4 +142,4 @@ The OpenAPI spec is the single source of truth. SDKs are auto-generated from it.
 
 ## License
 
-MIT
+MIT © 2026 Quantum Box株式会社
