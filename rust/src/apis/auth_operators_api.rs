@@ -94,11 +94,11 @@ pub async fn create_operator(
 
 pub async fn find_operators_by_user(
     configuration: &configuration::Configuration,
-    platform_id: &str,
+    platform_id: Option<&str>,
     user_id: &str,
-) -> Result<models::OperatorListResponse, Error<FindOperatorsByUserError>> {
+) -> Result<Vec<models::OperatorResponse>, Error<FindOperatorsByUserError>>
+{
     // add a prefix to parameters to efficiently prevent name collisions
-    let p_query_platform_id = platform_id;
     let p_query_user_id = user_id;
 
     let uri_str =
@@ -106,8 +106,9 @@ pub async fn find_operators_by_user(
     let mut req_builder =
         configuration.client.request(reqwest::Method::GET, &uri_str);
 
-    req_builder = req_builder
-        .query(&[("platform_id", &p_query_platform_id.to_string())]);
+    if let Some(pid) = platform_id {
+        req_builder = req_builder.query(&[("platform_id", pid)]);
+    }
     req_builder =
         req_builder.query(&[("user_id", &p_query_user_id.to_string())]);
     if let Some(ref user_agent) = configuration.user_agent {
@@ -130,8 +131,8 @@ pub async fn find_operators_by_user(
         let content = resp.text().await?;
         match content_type {
             ContentType::Json => serde_json::from_str(&content).map_err(Error::from),
-            ContentType::Text => return Err(Error::from(serde_json::Error::custom("Received `text/plain` content type response that cannot be converted to `models::OperatorListResponse`"))),
-            ContentType::Unsupported(unknown_type) => return Err(Error::from(serde_json::Error::custom(format!("Received `{unknown_type}` content type response that cannot be converted to `models::OperatorListResponse`")))),
+            ContentType::Text => return Err(Error::from(serde_json::Error::custom("Received `text/plain` content type response that cannot be converted to `Vec<models::OperatorResponse>`"))),
+            ContentType::Unsupported(unknown_type) => return Err(Error::from(serde_json::Error::custom(format!("Received `{unknown_type}` content type response that cannot be converted to `Vec<models::OperatorResponse>`")))),
         }
     } else {
         let content = resp.text().await?;
