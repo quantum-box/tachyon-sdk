@@ -1,6 +1,7 @@
 {
   "private": true,
   "name": "@anthropic-ja/tachyon-sdk",
+  "license": "MIT",
   "workspaces": [
     "packages/*"
   ]
