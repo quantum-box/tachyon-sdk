@@ -1,0 +1,13 @@
+{
+  "name": "@quantumbox/tachyon-agent-example-node-cli",
+  "version": "0.0.1",
+  "description": "Node.js CLI example for @quantumbox/tachyon-agent",
+  "type": "module",
+  "scripts": {
+    "start": "node --input-type=module < index.js",
+    "dev": "node index.js"
+  },
+  "dependencies": {
+    "@quantumbox/tachyon-agent": "^0.1.0"
+  }
+}
