@@ -1,0 +1,57 @@
+{
+  "name": "@quantumbox/tachyon-storage",
+  "version": "0.1.0",
+  "description": "Tachyon Storage SDK — TypeScript client for the Tachyon Storage API",
+  "author": "Quantum Box <hello@quantum-box.com>",
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  },
+  "type": "module",
+  "main": "./src/index.ts",
+  "module": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": {
+      "import": "./src/index.ts",
+      "types": "./src/index.ts"
+    },
+    "./react": {
+      "import": "./src/react/index.ts",
+      "types": "./src/react/index.ts"
+    },
+    "./image-loader": {
+      "import": "./src/image-loader.ts",
+      "types": "./src/image-loader.ts"
+    }
+  },
+  "files": ["src"],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/quantum-box/tachyon-sdk.git",
+    "directory": "packages/storage"
+  },
+  "license": "MIT",
+  "scripts": {
+    "lint": "biome lint ./src",
+    "format": "biome format ./src",
+    "format:write": "biome format --write ./src",
+    "ts": "tsc --noEmit --incremental",
+    "ts:watch": "tsc --noEmit --incremental --watch"
+  },
+  "peerDependencies": {
+    "next": ">=14",
+    "react": "18 - 19"
+  },
+  "peerDependenciesMeta": {
+    "next": { "optional": true },
+    "react": { "optional": true }
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^1.9",
+    "@types/react": "^18.3.11",
+    "next": "^14.2.7",
+    "react": "^18.3.1",
+    "typescript": "~5.6.2"
+  }
+}
