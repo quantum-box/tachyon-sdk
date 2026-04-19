@@ -506,6 +506,8 @@ struct BuildResponse {
     commit_sha: Option<String>,
     #[serde(default)]
     commit_message: Option<String>,
+    #[serde(default)]
+    pr_number: Option<i32>,
     status: String,
     #[serde(default)]
     duration_secs: Option<i32>,
@@ -543,6 +545,8 @@ struct DeploymentResponse {
     #[serde(default)]
     build_id: Option<String>,
     status: String,
+    #[serde(default)]
+    source_branch: Option<String>,
     #[serde(default)]
     url: Option<String>,
     #[serde(default)]
@@ -758,6 +762,26 @@ async fn run_builds_list(api: &ApiClient, app_id: &str, limit: usize, json: bool
                 .unwrap_or_else(|| "-".to_string()),
         );
     }
+
+    // Show active preview URLs below the build list.
+    let preview_url =
+        format!("/v1/compute/apps/{app_id}/deployments?environment=preview");
+    if let Ok(dep_resp) = api.get::<ListDeploymentsResponse>(&preview_url).await {
+        let active: Vec<_> = dep_resp
+            .deployments
+            .iter()
+            .filter(|d| d.status == "active" || d.status == "deploying")
+            .collect();
+        if !active.is_empty() {
+            println!();
+            println!("Preview URLs:");
+            for dep in &active {
+                let branch = dep.source_branch.as_deref().unwrap_or("-");
+                let url = dep.url.as_deref().unwrap_or("-");
+                println!("  [{branch}] {url}");
+            }
+        }
+    }
     Ok(())
 }
 
@@ -793,6 +817,23 @@ async fn run_builds_get(api: &ApiClient, build_id: &str, json: bool) -> Result<(
             .map(format_created_at)
             .unwrap_or_else(|| "-".to_string())
     );
+
+    // Fetch the associated deployment to show the preview URL.
+    if build.status == "succeeded" {
+        let url: String =
+            format!("/v1/compute/apps/{}/deployments", build.app_id);
+        if let Ok(resp) = api.get::<ListDeploymentsResponse>(&url).await {
+            if let Some(dep) = resp
+                .deployments
+                .iter()
+                .find(|d| d.build_id.as_deref() == Some(&build.id))
+            {
+                if let Some(preview_url) = &dep.url {
+                    println!("Preview:  {preview_url}");
+                }
+            }
+        }
+    }
     Ok(())
 }
 
