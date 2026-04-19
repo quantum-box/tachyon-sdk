@@ -1,6 +1,6 @@
 # @quantumbox/tachyon-agent
 
-TypeScript client SDK for the Tachyon Agent API.
+TypeScript client SDK for the [Tachyon Agent API](https://api.n1.tachy.one).
 
 ## Installation
 
@@ -8,38 +8,74 @@ TypeScript client SDK for the Tachyon Agent API.
 npm install @quantumbox/tachyon-agent
 ```
 
-## Usage
-
-### TachyonAgentClient
+## Quickstart
 
 ```typescript
 import { TachyonAgentClient } from '@quantumbox/tachyon-agent'
 
 const client = new TachyonAgentClient({
-  apiKey: 'your-api-key',
-  baseUrl: 'https://api.tachyon.ai',
+  apiKey: process.env.TACHYON_API_KEY!,
+  baseUrl: 'https://api.n1.tachy.one',
 })
 
-for await (const event of client.streamAgent('Hello, agent!')) {
+for await (const event of client.streamAgent('Slackに本番デプロイ完了を通知して')) {
   if (event.type === 'text') {
     process.stdout.write(event.content)
   } else if (event.type === 'tool_call') {
-    console.log('Tool call:', event.content)
+    console.log('[tool]', event.content)
   } else if (event.type === 'done') {
     break
   }
 }
 ```
 
-### streamAgent (functional API)
+## Functional API
 
 ```typescript
 import { streamAgent } from '@quantumbox/tachyon-agent'
 
-for await (const event of streamAgent('Hello!', { apiKey: '...', baseUrl: '...' })) {
-  console.log(event)
+for await (const event of streamAgent('Hello!', {
+  apiKey: process.env.TACHYON_API_KEY!,
+  baseUrl: 'https://api.n1.tachy.one',
+})) {
+  if (event.type === 'text') process.stdout.write(event.content)
 }
 ```
+
+## React (SSE streaming)
+
+```tsx
+import { useState } from 'react'
+import { streamAgent } from '@quantumbox/tachyon-agent'
+
+export function AgentChat() {
+  const [output, setOutput] = useState('')
+
+  const run = async () => {
+    setOutput('')
+    for await (const event of streamAgent('こんにちは', {
+      apiKey: import.meta.env.VITE_TACHYON_API_KEY,
+      baseUrl: 'https://api.n1.tachy.one',
+    })) {
+      if (event.type === 'text') setOutput((s) => s + event.content)
+    }
+  }
+
+  return (
+    <div>
+      <button onClick={run}>Run Agent</button>
+      <pre>{output}</pre>
+    </div>
+  )
+}
+```
+
+## Environment Variables
+
+| Variable | Description |
+|----------|-------------|
+| `TACHYON_API_KEY` | API key issued from the Tachyon dashboard |
+| `TACHYON_API_URL` | Base URL (default: `https://api.n1.tachy.one`) |
 
 ## Types
 
@@ -48,9 +84,14 @@ type AgentEvent = {
   type: 'text' | 'tool_call' | 'done'
   content: string
 }
+
+type TachyonAgentClientConfig = {
+  apiKey: string   // Bearer token
+  baseUrl: string  // e.g. https://api.n1.tachy.one
+}
 ```
 
-## Notes
+## Examples
 
-> **v0.1 skeleton**: API endpoint paths (e.g. `/v1/agent/execute`) are illustrative.
-> Exact endpoints will be finalized once the Tachyon Agent API spec is published.
+- [`examples/node-cli`](../../examples/node-cli) — Node.js streaming CLI
+- [`examples/react-agent-chat`](../../examples/react-agent-chat) — React chat UI with SSE streaming
