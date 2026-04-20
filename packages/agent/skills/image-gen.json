@@ -1,0 +1,71 @@
+{
+  "name": "tachyon_image_generate",
+  "description": "Generate AI images using the Tachyon Platform image generation API via the `tachyon image generate` CLI command. Supports multiple models (gpt-image-1.5, grok-2-image, gemini-2.0-flash-exp-image-generation), sizes, and output destinations (local file or Tachyon Storage).",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "prompt": {
+        "type": "string",
+        "description": "Text prompt describing the image to generate"
+      },
+      "model": {
+        "type": "string",
+        "description": "Model to use for generation",
+        "enum": [
+          "gpt-image-1.5",
+          "gpt-image-1",
+          "gpt-image-1-mini",
+          "grok-2-image",
+          "gemini-2.0-flash-exp-image-generation"
+        ],
+        "default": "gpt-image-1.5"
+      },
+      "size": {
+        "type": "string",
+        "description": "Image size",
+        "enum": ["1024x1024", "1024x1536", "1536x1024", "auto"]
+      },
+      "quality": {
+        "type": "string",
+        "description": "Image quality",
+        "enum": ["low", "medium", "high"]
+      },
+      "n": {
+        "type": "integer",
+        "description": "Number of images to generate (1–10)",
+        "minimum": 1,
+        "maximum": 10,
+        "default": 1
+      },
+      "output": {
+        "type": "string",
+        "description": "Local file path to save the generated image. For multiple images, a numeric suffix is appended (e.g. output_1.png, output_2.png)."
+      },
+      "storage": {
+        "type": "boolean",
+        "description": "Upload the generated image to Tachyon Storage and return a storage key and public URL",
+        "default": false
+      }
+    },
+    "required": ["prompt"]
+  },
+  "cli_command": {
+    "binary": "tachyon",
+    "subcommand": ["image", "generate"],
+    "flag_mapping": {
+      "prompt": "--prompt",
+      "model": "--model",
+      "size": "--size",
+      "quality": "--quality",
+      "n": "--n",
+      "output": "--output",
+      "storage": "--storage"
+    },
+    "example": "tachyon image generate --prompt \"hero image for SaaS product\" --model gpt-image-1.5 --quality high --output hero.png"
+  },
+  "environment": {
+    "required": ["TACHYON_TENANT_ID"],
+    "optional": ["TACHYON_API_URL", "TACHYON_API_KEY"],
+    "auth": "tachyon login (OAuth) or TACHYON_API_KEY"
+  }
+}
