@@ -1,12 +1,5 @@
-import { TachyonAgentClient } from './TachyonAgentClient'
-import type { AgentEvent, TachyonAgentClientConfig } from './types'
-
-export { TachyonAgentClient }
-export type { AgentEvent, AgentEventType, TachyonAgentClientConfig } from './types'
-
-export function streamAgent(
-	prompt: string,
-	config: TachyonAgentClientConfig,
-): AsyncIterable<AgentEvent> {
-	return new TachyonAgentClient(config).streamAgent(prompt)
-}
+export { TachyonAgentClient, TachyonAgentError } from './client'
+export type { TachyonAgentClientConfig } from './client'
+export { streamAgent } from './stream'
+export type { StreamAgentOptions, StreamEvent } from './stream'
+export type { AgentChunk, AgentExecuteRequest, ChatRoom } from './types'
