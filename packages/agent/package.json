@@ -1,7 +1,7 @@
 {
   "name": "@quantumbox/tachyon-agent",
-  "version": "0.1.0",
-  "description": "Lightweight TypeScript SDK for Tachyon Agent API",
+  "version": "0.2.0",
+  "description": "Lightweight TypeScript SDK for Tachyon Agent API, plus agent skill definitions",
   "type": "module",
   "main": "./dist/index.cjs",
   "module": "./dist/index.js",
@@ -16,9 +16,10 @@
         "types": "./dist/index.d.cts",
         "default": "./dist/index.cjs"
       }
-    }
+    },
+    "./skills/image-gen.json": "./skills/image-gen.json"
   },
-  "files": ["dist", "LICENSE"],
+  "files": ["dist", "skills", "LICENSE"],
   "scripts": {
     "build": "tsup",
     "prepublishOnly": "npm run build",
