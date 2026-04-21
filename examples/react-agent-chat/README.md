@@ -1,6 +1,6 @@
 # react-agent-chat example
 
-React + Vite example for `@quantumbox/tachyon-agent` with SSE streaming.
+React + Vite example for `@tachyon-sdk/agent` with SSE streaming.
 
 ## Setup
 

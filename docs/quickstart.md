@@ -3,7 +3,7 @@
 ## Installation
 
 ```bash
-npm install @quantumbox/tachyon-agent
+npm install @tachyon-sdk/agent
 ```
 
 ## Requirements
@@ -19,7 +19,7 @@ npm install @quantumbox/tachyon-agent
 The quickest way to stream agent responses. Creates a chat room internally and streams events.
 
 ```js
-import { streamAgent } from '@quantumbox/tachyon-agent'
+import { streamAgent } from '@tachyon-sdk/agent'
 
 const apiKey = process.env.TACHYON_API_KEY
 const baseUrl = process.env.TACHYON_API_URL ?? 'https://api.n1.tachy.one'
@@ -65,7 +65,7 @@ for await (const event of streamAgent('Slackに通知して', { apiKey, baseUrl 
 For full control, use the client class directly.
 
 ```typescript
-import { TachyonAgentClient } from '@quantumbox/tachyon-agent'
+import { TachyonAgentClient } from '@tachyon-sdk/agent'
 
 const client = new TachyonAgentClient({
   apiBaseUrl: 'https://api.n1.tachy.one',
@@ -121,7 +121,7 @@ import type {
   StreamEvent,
   StreamAgentOptions,
   TachyonAgentClientConfig,
-} from '@quantumbox/tachyon-agent'
+} from '@tachyon-sdk/agent'
 ```
 
 ### `AgentExecuteRequest`
@@ -139,7 +139,7 @@ import type {
 ### Error Handling
 
 ```typescript
-import { TachyonAgentError } from '@quantumbox/tachyon-agent'
+import { TachyonAgentError } from '@tachyon-sdk/agent'
 
 try {
   const chatroom = await client.createChatRoom()

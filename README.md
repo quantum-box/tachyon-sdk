@@ -102,7 +102,7 @@ tachyon image generate \
 
 ```typescript
 import { Anthropic } from "@anthropic-ai/sdk";
-import imageGenSkill from "@anthropic-ja/agent-chat/skills/image-gen.json";
+import imageGenSkill from "@tachyon-sdk/agent-chat/skills/image-gen.json";
 
 const client = new Anthropic();
 const response = await client.messages.create({

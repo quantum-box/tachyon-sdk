@@ -1,11 +1,11 @@
-# @anthropic-ja/agent-chat
+# @tachyon-sdk/agent-chat
 
 React component library and API client for Tachyon agent chat.
 
 ## Installation
 
 ```bash
-npm install @anthropic-ja/agent-chat
+npm install @tachyon-sdk/agent-chat
 ```
 
 ## Quick Start — Next.js App Router
@@ -14,7 +14,7 @@ npm install @anthropic-ja/agent-chat
 
 ```tsx
 // app/layout.tsx
-import { AgentChatProvider } from '@anthropic-ja/agent-chat'
+import { AgentChatProvider } from '@tachyon-sdk/agent-chat'
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
@@ -40,7 +40,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
 // app/page.tsx
 'use client'
 
-import { AgentChat } from '@anthropic-ja/agent-chat'
+import { AgentChat } from '@tachyon-sdk/agent-chat'
 
 export default function Page() {
   // Floating chat button (default)
@@ -99,7 +99,7 @@ Build a fully custom UI with the `useAgentChat` hook. Must be used inside `Agent
 ```tsx
 'use client'
 
-import { useAgentChat } from '@anthropic-ja/agent-chat'
+import { useAgentChat } from '@tachyon-sdk/agent-chat'
 
 export function MyChatUI() {
   const {
@@ -206,7 +206,7 @@ Use the token issued by `tachyon login`. In a Next.js app the token is typically
 
 ```tsx
 // app/layout.tsx
-import { AgentChatProvider } from '@anthropic-ja/agent-chat'
+import { AgentChatProvider } from '@tachyon-sdk/agent-chat'
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
@@ -233,7 +233,7 @@ Use a long-lived API key issued from the Tachyon operator console. Pass it direc
 
 ```tsx
 // app/layout.tsx
-import { AgentChatProvider } from '@anthropic-ja/agent-chat'
+import { AgentChatProvider } from '@tachyon-sdk/agent-chat'
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
@@ -262,7 +262,7 @@ Fetch the token on the server (where secrets stay private) and pass it as a prop
 // app/providers.tsx  — Client Component wrapper
 'use client'
 
-import { AgentChatProvider } from '@anthropic-ja/agent-chat'
+import { AgentChatProvider } from '@tachyon-sdk/agent-chat'
 
 type Props = {
   accessToken: string
@@ -322,7 +322,7 @@ Use `useAgentChatContext` to read the current client configuration from any comp
 ```tsx
 'use client'
 
-import { useAgentChatContext } from '@anthropic-ja/agent-chat'
+import { useAgentChatContext } from '@tachyon-sdk/agent-chat'
 
 export function DebugPanel() {
   const { client, config } = useAgentChatContext()
@@ -338,7 +338,7 @@ export function DebugPanel() {
 Use `AgentChatClient` outside of React, in server actions, or when you need low-level control.
 
 ```ts
-import { AgentChatClient } from '@anthropic-ja/agent-chat'
+import { AgentChatClient } from '@tachyon-sdk/agent-chat'
 
 const client = new AgentChatClient({
   apiBaseUrl: 'https://api.example.com',

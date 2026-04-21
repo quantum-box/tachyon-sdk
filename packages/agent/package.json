@@ -1,6 +1,6 @@
 {
-  "name": "@quantumbox/tachyon-agent",
-  "version": "0.2.0",
+  "name": "@tachyon-sdk/agent",
+  "version": "0.3.0",
   "description": "Lightweight TypeScript SDK for Tachyon Agent API, plus agent skill definitions",
   "type": "module",
   "main": "./dist/index.cjs",

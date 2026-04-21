@@ -1,6 +1,6 @@
 {
-	"name": "@anthropic-ja/agent-chat",
-	"version": "0.2.2",
+	"name": "@tachyon-sdk/agent-chat",
+	"version": "0.2.3",
 	"description": "React component library for Tachyon agent chat, plus agent skill definitions",
 	"type": "module",
 	"main": "./src/index.ts",
@@ -19,7 +19,7 @@
 	],
 	"repository": {
 		"type": "git",
-		"url": "https://github.com/anthropic-ja/tachyon-sdk.git",
+		"url": "https://github.com/quantum-box/tachyon-sdk.git",
 		"directory": "packages/agent-chat"
 	},
 	"license": "MIT",

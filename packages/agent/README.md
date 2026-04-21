@@ -1,17 +1,17 @@
-# @quantumbox/tachyon-agent
+# @tachyon-sdk/agent
 
 TypeScript client SDK for the [Tachyon Agent API](https://api.n1.tachy.one).
 
 ## Installation
 
 ```bash
-npm install @quantumbox/tachyon-agent
+npm install @tachyon-sdk/agent
 ```
 
 ## Quickstart
 
 ```typescript
-import { TachyonAgentClient } from '@quantumbox/tachyon-agent'
+import { TachyonAgentClient } from '@tachyon-sdk/agent'
 
 const client = new TachyonAgentClient({
   apiKey: process.env.TACHYON_API_KEY!,
@@ -32,7 +32,7 @@ for await (const event of client.streamAgent('Slackに本番デプロイ完了�
 ## Functional API
 
 ```typescript
-import { streamAgent } from '@quantumbox/tachyon-agent'
+import { streamAgent } from '@tachyon-sdk/agent'
 
 for await (const event of streamAgent('Hello!', {
   apiKey: process.env.TACHYON_API_KEY!,
@@ -46,7 +46,7 @@ for await (const event of streamAgent('Hello!', {
 
 ```tsx
 import { useState } from 'react'
-import { streamAgent } from '@quantumbox/tachyon-agent'
+import { streamAgent } from '@tachyon-sdk/agent'
 
 export function AgentChat() {
   const [output, setOutput] = useState('')
