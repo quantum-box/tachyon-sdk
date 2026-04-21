@@ -1,5 +1,5 @@
 {
-  "name": "@quantumbox/tachyon-storage",
+  "name": "@tachyon-sdk/storage",
   "version": "0.1.0",
   "description": "Tachyon Storage SDK — TypeScript client for the Tachyon Storage API",
   "author": "Quantum Box <hello@quantum-box.com>",

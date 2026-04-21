@@ -1,5 +1,5 @@
 import { useState, useRef } from 'react'
-import { streamAgent } from '@quantumbox/tachyon-agent'
+import { streamAgent } from '@tachyon-sdk/agent'
 
 const API_KEY = import.meta.env.VITE_TACHYON_API_KEY as string
 const BASE_URL = (import.meta.env.VITE_TACHYON_API_URL as string) ?? 'https://api.n1.tachy.one'

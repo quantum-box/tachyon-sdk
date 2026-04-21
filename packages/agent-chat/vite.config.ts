@@ -9,7 +9,7 @@ export default defineConfig({
 		outDir: 'dist',
 		lib: {
 			entry: 'src/index.ts',
-			name: '@anthropic-ja/agent-chat',
+			name: '@tachyon-sdk/agent-chat',
 			fileName: 'index',
 			formats: ['es', 'umd'],
 		},

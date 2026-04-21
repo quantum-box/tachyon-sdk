@@ -1,20 +1,20 @@
-name: Publish agent-chat
+name: Publish storage
 
 on:
   push:
     branches:
       - main
     paths:
-      - "packages/agent-chat/**"
+      - "packages/storage/**"
   workflow_dispatch:
 
 jobs:
   publish:
-    name: Build & Publish
+    name: Publish
     runs-on: ubuntu-latest
     defaults:
       run:
-        working-directory: packages/agent-chat
+        working-directory: packages/storage
 
     steps:
       - uses: actions/checkout@v4
@@ -26,12 +26,6 @@ jobs:
 
       - name: Install dependencies
         run: npm ci
-
-      - name: Type check
-        run: npx tsc --noEmit
-
-      - name: Build
-        run: npx vite build
 
       - name: Check if already published
         id: check

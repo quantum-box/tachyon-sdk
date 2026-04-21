@@ -1,6 +1,6 @@
 {
   "private": true,
-  "name": "@anthropic-ja/tachyon-sdk",
+  "name": "@tachyon-sdk/monorepo",
   "license": "MIT",
   "workspaces": [
     "packages/*"

@@ -1,6 +1,6 @@
 # node-cli example
 
-Node.js streaming CLI for `@quantumbox/tachyon-agent`.
+Node.js streaming CLI for `@tachyon-sdk/agent`.
 
 ## Setup
 

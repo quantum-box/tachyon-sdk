@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * @quantumbox/tachyon-agent — Node.js CLI example
+ * @tachyon-sdk/agent — Node.js CLI example
  *
  * Usage:
  *   export TACHYON_API_KEY=your-api-key
@@ -9,7 +9,7 @@
  * Or pipe:
  *   echo "最新のデプロイ状況を教えて" | node index.js
  */
-import { streamAgent } from '@quantumbox/tachyon-agent'
+import { streamAgent } from '@tachyon-sdk/agent'
 
 const apiKey = process.env.TACHYON_API_KEY
 const baseUrl = process.env.TACHYON_API_URL ?? 'https://api.n1.tachy.one'
