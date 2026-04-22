@@ -31,13 +31,28 @@ esac
 
 ARTIFACT="${BIN_NAME}-${OS}-${ARCH}"
 
-# Fetch latest release tag from GitHub API
-LATEST_TAG="$(curl -fsSL "https://api.github.com/repos/${REPO}/releases/latest" \
+# Fetch latest release tag from GitHub API.
+# Some environments (corporate proxies, strict egress, rate-limited IPs) 403
+# the API when the request lacks a User-Agent / Accept header, so we set both.
+# If GITHUB_TOKEN is provided, use it to lift the anonymous rate limit.
+API_URL="https://api.github.com/repos/${REPO}/releases/latest"
+AUTH_HEADER=""
+if [ -n "${GITHUB_TOKEN:-}" ]; then
+  AUTH_HEADER="Authorization: Bearer ${GITHUB_TOKEN}"
+fi
+
+LATEST_TAG="$(curl -fsSL \
+  -H "User-Agent: tachyon-sdk-installer/1.0" \
+  -H "Accept: application/vnd.github.v3+json" \
+  ${AUTH_HEADER:+-H "$AUTH_HEADER"} \
+  "$API_URL" \
   | grep '"tag_name"' \
   | sed 's/.*"tag_name": *"\([^"]*\)".*/\1/')"
 
 if [ -z "$LATEST_TAG" ]; then
-  echo "Failed to fetch latest release tag." >&2
+  echo "Failed to fetch latest release tag from ${API_URL}." >&2
+  echo "If you are hitting a GitHub API rate limit or 403, retry with:" >&2
+  echo "  curl -fsSL https://raw.githubusercontent.com/${REPO}/main/scripts/install.sh | GITHUB_TOKEN=<token> sh" >&2
   exit 1
 fi
 

@@ -4,6 +4,8 @@ Auto-generated multi-language API clients for the [Tachyon Platform](https://git
 
 ## CLI
 
+Latest release: **v0.2.1**
+
 ### Install
 
 ```sh
@@ -11,6 +13,23 @@ curl -fsSL https://raw.githubusercontent.com/quantum-box/tachyon-sdk/main/script
 ```
 
 Installs `tachyon` to `/usr/local/bin` (or `~/.local/bin` if you lack write permission).
+
+Supported platforms:
+
+| OS | Architecture | Artifact |
+|----|--------------|----------|
+| Linux | x86_64 | `tachyon-linux-x86_64.tar.gz` |
+| Linux | arm64 | `tachyon-linux-arm64.tar.gz` |
+| macOS | arm64 (Apple Silicon) | `tachyon-darwin-arm64.tar.gz` |
+| macOS | x86_64 (Intel) | `tachyon-darwin-x86_64.tar.gz` |
+
+If you see `Failed to fetch latest release tag` (GitHub API 403 / rate limit), pass a token:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/quantum-box/tachyon-sdk/main/scripts/install.sh | GITHUB_TOKEN=<your-token> sh
+```
+
+A classic PAT with `public_repo` scope (or any valid GitHub token) is sufficient.
 
 ### Usage
 
@@ -61,6 +80,21 @@ npm install @tachyon/sdk
 
 ```bash
 pip install tachyon-sdk
+```
+
+## npm Packages
+
+Additional domain-specific TypeScript SDKs published under the `@tachyon-sdk/*` scope:
+
+| Package | Version | Description |
+|---------|---------|-------------|
+| [`@tachyon-sdk/storekit`](packages/storekit) | `0.3.0` | Commerce SDK: auth, order management (updateStatus/cancel/refund), inventory operations |
+| [`@tachyon-sdk/agent`](packages/agent) | — | Agent runtime SDK |
+| [`@tachyon-sdk/agent-chat`](packages/agent-chat) | — | Agent chat utilities + bundled skills |
+| [`@tachyon-sdk/storage`](packages/storage) | — | Storage SDK |
+
+```bash
+npm install @tachyon-sdk/storekit
 ```
 
 ## Agent Skills
