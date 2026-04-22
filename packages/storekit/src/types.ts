@@ -181,6 +181,55 @@ export interface CheckoutInput {
 }
 
 // ============================================================================
+// Auth Types
+// ============================================================================
+
+export enum UserRole {
+  OWNER = "OWNER",
+  MANAGER = "MANAGER",
+  GENERAL = "GENERAL",
+  STORE = "STORE",
+}
+
+export interface UserProfile {
+  id: string;
+  email: string | null;
+  name: string | null;
+  username: string | null;
+  emailVerified: string | null;
+  image: string | null;
+  role: UserRole;
+  tenantIdList: string[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface AuthResult {
+  user: UserProfile;
+}
+
+export interface SignInWithPlatformInput {
+  platformId: string;
+  accessToken: string;
+  allowSignUp?: boolean;
+}
+
+export interface CreateUserInput {
+  operatorId: string;
+  username: string;
+  email: string;
+  image?: string;
+  role?: string;
+  password?: string;
+}
+
+export interface UpdateProfileInput {
+  id: string;
+  email?: string;
+  name?: string;
+}
+
+// ============================================================================
 // GraphQL Types
 // ============================================================================
 
