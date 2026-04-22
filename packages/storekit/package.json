@@ -1,6 +1,6 @@
 {
   "name": "@tachyon-sdk/storekit",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Type-safe TypeScript SDK for bakuure commerce API",
   "author": "Quantum Box <hello@quantum-box.com>",
   "license": "MIT",
