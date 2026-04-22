@@ -37,6 +37,13 @@ export type {
   // Checkout types
   CheckoutInput,
 
+  // Auth types
+  UserProfile,
+  AuthResult,
+  SignInWithPlatformInput,
+  CreateUserInput,
+  UpdateProfileInput,
+
   // GraphQL types
   GraphQLError,
   GraphQLResponse,
@@ -47,4 +54,7 @@ export type {
 } from "./types.js";
 
 // Enums
-export { ProductStatus, ProductVariantStatus, ConsumerOrderStatus } from "./types.js";
+export { ProductStatus, ProductVariantStatus, ConsumerOrderStatus, UserRole } from "./types.js";
+
+// Operations
+export { AuthOperations } from "./operations/auth.js";
