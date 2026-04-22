@@ -166,6 +166,16 @@ export interface ConsumerOrdersInput {
   offset?: number;
 }
 
+export type OrderStatus = ConsumerOrderStatus;
+
+// Scaffold type — shape subject to change pending PLT-723 approval
+export interface RefundResult {
+  orderId: string;
+  refundedAmount: number;
+  currency: string;
+  status: string;
+}
+
 // ============================================================================
 // Checkout Types
 // ============================================================================

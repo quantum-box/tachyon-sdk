@@ -33,6 +33,8 @@ export type {
   ConsumerOrderItem,
   ConsumerOrderList,
   ConsumerOrdersInput,
+  OrderStatus,
+  RefundResult,
 
   // Checkout types
   CheckoutInput,
