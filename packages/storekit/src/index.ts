@@ -46,6 +46,10 @@ export type {
   CreateUserInput,
   UpdateProfileInput,
 
+  // Inventory types
+  StockInfo,
+  ProductStock,
+
   // GraphQL types
   GraphQLError,
   GraphQLResponse,
@@ -60,3 +64,4 @@ export { ProductStatus, ProductVariantStatus, ConsumerOrderStatus, UserRole } fr
 
 // Operations
 export { AuthOperations } from "./operations/auth.js";
+export { InventoryOperations } from "./operations/inventory.js";

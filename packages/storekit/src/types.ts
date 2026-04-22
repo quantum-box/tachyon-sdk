@@ -240,6 +240,24 @@ export interface UpdateProfileInput {
 }
 
 // ============================================================================
+// Inventory Types
+// ============================================================================
+
+export interface StockInfo {
+  id: string;
+  productId: string;
+  quantityOnHand: number;
+  quantityReserved: number;
+  quantityAvailable: number;
+  lowStockThreshold: number;
+  trackInventory: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ProductStock extends StockInfo {}
+
+// ============================================================================
 // GraphQL Types
 // ============================================================================
 
