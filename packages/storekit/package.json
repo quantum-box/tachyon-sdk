@@ -1,0 +1,48 @@
+{
+  "name": "@tachyon-sdk/storekit",
+  "version": "0.1.0",
+  "description": "Type-safe TypeScript SDK for bakuure commerce API",
+  "author": "Quantum Box <hello@quantum-box.com>",
+  "license": "MIT",
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  },
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/quantum-box/tachyon-sdk.git",
+    "directory": "packages/storekit"
+  },
+  "keywords": [
+    "storekit",
+    "ecommerce",
+    "bakuure",
+    "graphql",
+    "sdk",
+    "typescript"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "prepublishOnly": "npm run build && npm test"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "typescript": "^5.3.3",
+    "vitest": "^1.2.0"
+  }
+}
