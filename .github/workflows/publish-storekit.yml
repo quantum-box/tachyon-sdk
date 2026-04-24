@@ -44,9 +44,9 @@ jobs:
         if: steps.check.outputs.already_published == 'false'
         run: npm run build
 
-      - name: Test
+      - name: Test (with coverage)
         if: steps.check.outputs.already_published == 'false'
-        run: npm test
+        run: npm run test:coverage
 
       - name: Publish
         if: steps.check.outputs.already_published == 'false'
