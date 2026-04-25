@@ -1,5 +1,6 @@
 mod agent_cli;
 mod auth;
+mod build_reproduce;
 mod client;
 mod compute_cli;
 mod iac_cli;

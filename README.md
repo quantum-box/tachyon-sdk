@@ -51,7 +51,17 @@ tachyon compute logs <app-id> --build-id <build-id>
 
 # Stream logs until the build completes
 tachyon compute logs <app-id> --follow
+
+# Reproduce a cloud build locally in Docker (Phase 1: mock fixture)
+# See cli/tests/fixtures/mock-build-config.yaml for the expected shape.
+tachyon compute builds reproduce <build-id> --mock <path/to/build-config.yaml> --dry-run
+tachyon compute builds reproduce <build-id> --mock <path> --source-dir .
 ```
+
+> `compute builds reproduce` (PLT-914) fetches the buildspec + environment for
+> a cloud build and replays it locally in a CodeBuild-compatible Docker
+> container. Phase 1 requires `--mock <path>`; the live build-config endpoint
+> (PLT-913) lands in Phase 2.
 
 ## Languages
 
