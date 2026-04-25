@@ -6,6 +6,8 @@ mod compute_cli;
 mod iac_cli;
 mod image_cli;
 mod install_cli;
+mod mcp;
+mod mcp_cli;
 mod ops_cli;
 mod org_cli;
 mod resolve;
@@ -83,6 +85,8 @@ enum Commands {
     Image(image_cli::ImageArgs),
     /// Convert text to speech using AI TTS models
     Tts(tts_cli::TtsArgs),
+    /// Run as an MCP (Model Context Protocol) server (stdio or HTTP)
+    Mcp(mcp_cli::McpArgs),
     /// Update the Tachyon CLI to the latest version
     Install,
     /// Switch the active tenant (updates saved credentials)
@@ -205,6 +209,7 @@ async fn run() -> Result<()> {
             let tenant_id = resolve::resolve_tenant_id(&config, &cli.tenant_id).await?;
             tts_cli::run(args, &config, &tenant_id).await
         }
+        Commands::Mcp(args) => mcp_cli::run(args).await,
         Commands::Install => install_cli::run().await,
         Commands::Switch(args) => {
             let config = build_config(&cli).await;
