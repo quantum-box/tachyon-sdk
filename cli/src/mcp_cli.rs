@@ -88,19 +88,22 @@ fn init_tracing(stdio: bool) {
 }
 
 fn build_server() -> TachyonMcpServer {
-    let openai = OpenAiClient::from_env();
-    if openai.is_none() {
+    TachyonMcpServer::new(OpenAiClient::from_env())
+}
+
+fn warn_if_openai_missing() {
+    if OpenAiClient::from_env().is_none() {
         eprintln!(
             "[tachyon mcp] OPENAI_API_KEY not set — \
              skipping `generate_image` tool registration"
         );
     }
-    TachyonMcpServer::new(openai)
 }
 
 async fn serve_stdio() -> Result<()> {
     init_tracing(true);
     eprintln!("[tachyon mcp] starting stdio transport");
+    warn_if_openai_missing();
     let server = build_server();
     let service = server
         .serve(stdio())
@@ -117,6 +120,7 @@ async fn serve_http(
     custom_query_auth: bool,
 ) -> Result<()> {
     init_tracing(false);
+    warn_if_openai_missing();
 
     let auth_cfg = Arc::new(AuthConfig {
         tokens,
