@@ -35,15 +35,18 @@ Pages local-build helper for hardcoded apps (tachyon/cms/docs). New work lives u
 build_id. Phase 1 mock works for either; must be confirmed with PLT-913 endpoint shape before Phase 2.
 Surfacing in 着手宣言.
 
-## Phase 1 (mock, this PR)
+## Phase 1 (mock, this PR) — DONE, PR #49 merged 2026-04-25
 
-- [ ] (a) Add `BuildsCommand::Reproduce` to `compute_cli.rs` with clap derive
-- [ ] (b) `serde_yaml` dependency + buildspec parser
-- [ ] (c) Docker wrapper using `std::process::Command` (or `--dry-run` for tests)
-- [ ] (d) `tests/fixtures/mock-buildspec.yml` fixture + parser unit test
-- [ ] (e) `--dry-run` E2E test that asserts the docker invocation without running docker
-- [ ] (f) README update — document subcommand + Phase 2 future-work note
-- [ ] (g) PR draft → CI green → admin merge
+- [x] (a) Add `BuildsCommand::Reproduce` to `compute_cli.rs` with clap derive
+- [x] (b) `serde_yaml` dependency + buildspec parser
+- [x] (c) Docker wrapper using `std::process::Command` (or `--dry-run` for tests)
+- [x] (d) `tests/fixtures/mock-build-config.yaml` fixture + parser unit test
+- [x] (e) `--dry-run` E2E test that asserts the docker invocation without running docker
+- [x] (f) README update — document subcommand + Phase 2 future-work note
+- [x] (g) PR draft → CI green → admin merge
+
+Followup landed in same PR: mirror `$CODEBUILD_SRC_DIR` env var (advisor-flagged
+foot-gun — buildspecs frequently `cd $CODEBUILD_SRC_DIR/sub`).
 
 ## Phase 2 (real endpoint, separate PR after PLT-913)
 
