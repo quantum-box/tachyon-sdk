@@ -5,17 +5,15 @@
 
 use anyhow::Result;
 use base64::Engine as _;
+use reqwest::Client;
 use rmcp::{
-    ErrorData as McpError, ServerHandler,
     handler::server::{router::tool::ToolRouter, wrapper::Parameters},
     model::{CallToolResult, Content, ServerCapabilities, ServerInfo},
-    schemars,
-    tool, tool_handler, tool_router,
+    schemars, tool, tool_handler, tool_router, ErrorData as McpError, ServerHandler,
 };
-use reqwest::Client;
 use serde::Deserialize;
 
-use super::openai::{DEFAULT_MODEL, GenerateRequest, OpenAiClient};
+use super::openai::{GenerateRequest, OpenAiClient, DEFAULT_MODEL};
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct GenerateImageParams {

@@ -3,19 +3,19 @@
 use anyhow::{Context, Result};
 use clap::{Args, Subcommand, ValueEnum};
 use rmcp::{
-    ServiceExt,
     transport::{
         stdio,
         streamable_http_server::{
-            StreamableHttpServerConfig, StreamableHttpService, session::local::LocalSessionManager,
+            session::local::LocalSessionManager, StreamableHttpServerConfig, StreamableHttpService,
         },
     },
+    ServiceExt,
 };
 use std::sync::Arc;
-use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
+use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
 use crate::mcp::{
-    auth::{AuthConfig, auth_layer},
+    auth::{auth_layer, AuthConfig},
     openai::OpenAiClient,
     server::TachyonMcpServer,
 };
@@ -73,9 +73,7 @@ pub async fn run(args: &McpArgs) -> Result<()> {
             custom_query_auth,
         } => match transport {
             Transport::Stdio => serve_stdio().await,
-            Transport::Http => {
-                serve_http(bind, path, tokens.clone(), *custom_query_auth).await
-            }
+            Transport::Http => serve_http(bind, path, tokens.clone(), *custom_query_auth).await,
         },
     }
 }
@@ -149,10 +147,7 @@ async fn serve_http(
     let auth_state = auth_cfg.clone();
     let app = axum::Router::new()
         .nest_service(path, mcp_service)
-        .layer(axum::middleware::from_fn_with_state(
-            auth_state,
-            auth_layer,
-        ));
+        .layer(axum::middleware::from_fn_with_state(auth_state, auth_layer));
 
     let listener = tokio::net::TcpListener::bind(bind)
         .await

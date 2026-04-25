@@ -209,7 +209,60 @@ http://host:7337/sse?apikey=<issued-token>
 - [x] taskdoc 初回 commit (CEO 追加指示反映版)
 - [x] OpenAI docs で最新 GPT Image model 確定 → `gpt-image-2`
 - [x] MCP spec で URL query 認証の標準性を primary-source 確認 → **spec で MUST NOT 禁止**
-- [ ] custom query-auth extension の opt-in flag 設計 (default off)
+- [x] custom query-auth extension の opt-in flag (`--custom-query-auth`, default off)
+- [x] `rmcp` 1.5 + 依存追加
+- [x] `mcp/{server,openai,auth}.rs` + `mcp_cli.rs` 実装 (stdio + Streamable HTTP)
+- [x] OPENAI_API_KEY 欠落時の tool registration skip + warn
+- [x] Bearer auth + log masking + Referrer-Policy + WWW-Authenticate
+- [x] `cargo build` green
+- [x] stdio handshake / `tools/list` smoke test (with & without OPENAI key)
+- [x] HTTP transport 401/200 smoke test (Bearer + custom query auth)
+- [x] Claude Code 登録 + `tools/list` で `generate_image` 表示確認
+- [ ] **要 real OPENAI key**: end-to-end image generation (本 task の PoC 完了条件)
+- [ ] Cursor PoC (config sample 提供済 / 実機検証は別環境)
+- [ ] PR open & CI green
+
+## 実装サマリ
+
+| ファイル | 役割 |
+|---|---|
+| `cli/src/mcp_cli.rs` | clap subcommand, transport dispatch, tracing init |
+| `cli/src/mcp/server.rs` | `TachyonMcpServer` + `#[tool]` `generate_image` |
+| `cli/src/mcp/openai.rs` | OpenAI `/v1/images/generations` クライアント (default `gpt-image-2`) |
+| `cli/src/mcp/auth.rs` | Bearer + opt-in query auth + masking + Referrer-Policy |
+| `examples/mcp/{README,claude-code,cursor}.{md,json}` | sample configs |
+
+## 検証ログ抜粋
+
+stdio without OPENAI_API_KEY → `tools/list` empty + stderr warn:
+
+```
+[tachyon mcp] OPENAI_API_KEY not set — skipping `generate_image` tool registration
+{"jsonrpc":"2.0","id":2,"result":{"tools":[]}}
+```
+
+HTTP transport with `--tokens` (no `--custom-query-auth`):
+
+```
+no auth          → 401
+Bearer t1        → 200
+?apikey=t1       → 401  (spec compliant)
+Response headers → Referrer-Policy: no-referrer, X-Content-Type-Options: nosniff
+```
+
+HTTP transport with `--custom-query-auth`:
+
+```
+?apikey=t1       → 200  (opt-in extension)
+?apikey=bad      → 401  (token=*** masked in log)
+```
+
+Claude Code (haiku) sub-process visibility check:
+
+```
+$ claude -p --model haiku "List … tachyon-plt835 server."
+1. generate_image — Generate an image from a text prompt using OpenAI's GPT Image model
+```
 - [ ] `rmcp` + 依存追加
 - [ ] `mcp_cli.rs` / `mcp/` mod 実装 (stdio)
 - [ ] HTTP+SSE transport 実装

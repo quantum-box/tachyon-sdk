@@ -33,11 +33,7 @@ impl AuthConfig {
     }
 }
 
-pub async fn auth_layer(
-    State(cfg): State<Arc<AuthConfig>>,
-    req: Request,
-    next: Next,
-) -> Response {
+pub async fn auth_layer(State(cfg): State<Arc<AuthConfig>>, req: Request, next: Next) -> Response {
     if !cfg.is_enforced() {
         return apply_security_headers(next.run(req).await);
     }
@@ -96,7 +92,10 @@ fn apply_security_headers(mut resp: Response) -> Response {
         axum::http::header::REFERRER_POLICY,
         HeaderValue::from_static("no-referrer"),
     );
-    h.insert("X-Content-Type-Options", HeaderValue::from_static("nosniff"));
+    h.insert(
+        "X-Content-Type-Options",
+        HeaderValue::from_static("nosniff"),
+    );
     resp
 }
 
@@ -107,7 +106,14 @@ pub fn mask_token(token: &str) -> String {
         return "*".repeat(n);
     }
     let head: String = token.chars().take(4).collect();
-    let tail: String = token.chars().rev().take(2).collect::<String>().chars().rev().collect();
+    let tail: String = token
+        .chars()
+        .rev()
+        .take(2)
+        .collect::<String>()
+        .chars()
+        .rev()
+        .collect();
     format!("{head}***{tail}")
 }
 
@@ -120,4 +126,37 @@ fn constant_time_eq(a: &str, b: &str) -> bool {
         diff |= x ^ y;
     }
     diff == 0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn mask_short_token_is_fully_starred() {
+        assert_eq!(mask_token("abc"), "***");
+        assert_eq!(mask_token("12345678"), "********");
+    }
+
+    #[test]
+    fn mask_long_token_keeps_head_and_tail() {
+        assert_eq!(mask_token("sk-test123456789"), "sk-t***89");
+    }
+
+    #[test]
+    fn constant_time_eq_basic() {
+        assert!(constant_time_eq("abc", "abc"));
+        assert!(!constant_time_eq("abc", "abd"));
+        assert!(!constant_time_eq("abc", "abcd"));
+    }
+
+    #[test]
+    fn auth_config_enforced_only_with_tokens() {
+        assert!(!AuthConfig::default().is_enforced());
+        let cfg = AuthConfig {
+            tokens: vec!["t".into()],
+            allow_query_auth: false,
+        };
+        assert!(cfg.is_enforced());
+    }
 }

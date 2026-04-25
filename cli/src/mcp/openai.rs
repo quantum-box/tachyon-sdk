@@ -3,7 +3,7 @@
 //! Calls `POST /v1/images/generations` directly with the configured API key.
 //! Default model is `gpt-image-2` per OpenAI docs (2026-04-21 snapshot).
 
-use anyhow::{Context, Result, bail};
+use anyhow::{bail, Context, Result};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 
@@ -48,16 +48,21 @@ impl OpenAiClient {
         if api_key.trim().is_empty() {
             return None;
         }
-        let base_url = std::env::var("OPENAI_API_BASE")
-            .unwrap_or_else(|_| OPENAI_API_BASE.to_string());
-        let http = Client::builder()
-            .build()
-            .ok()?;
-        Some(Self { http, api_key, base_url })
+        let base_url =
+            std::env::var("OPENAI_API_BASE").unwrap_or_else(|_| OPENAI_API_BASE.to_string());
+        let http = Client::builder().build().ok()?;
+        Some(Self {
+            http,
+            api_key,
+            base_url,
+        })
     }
 
     pub async fn generate(&self, req: &GenerateRequest) -> Result<GenerateResponse> {
-        let url = format!("{}/v1/images/generations", self.base_url.trim_end_matches('/'));
+        let url = format!(
+            "{}/v1/images/generations",
+            self.base_url.trim_end_matches('/')
+        );
         let resp = self
             .http
             .post(&url)
