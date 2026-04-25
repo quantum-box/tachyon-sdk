@@ -218,9 +218,12 @@ http://host:7337/sse?apikey=<issued-token>
 - [x] stdio handshake / `tools/list` smoke test (with & without OPENAI key)
 - [x] HTTP transport 401/200 smoke test (Bearer + custom query auth)
 - [x] Claude Code 登録 + `tools/list` で `generate_image` 表示確認
-- [ ] **要 real OPENAI key**: end-to-end image generation (本 task の PoC 完了条件)
-- [ ] Cursor PoC (config sample 提供済 / 実機検証は別環境)
-- [ ] PR open & CI green
+- [x] PR open & CI green (#51)
+- [ ] ~~**要 real OPENAI key**: end-to-end image generation~~
+      → **deferred to follow-up** (PdM-PF 判断 2026-04-26):
+      smoke (tools/list 検出 + HTTP 401/200 + Claude Code haiku 経由表示) で §6 PoC 完了とみなす。
+      real key での `tools/call generate_image` E2E は credential 取得 path が別なため別 issue 化。
+- [ ] Cursor PoC (config sample 提供済 / 実機検証は別環境) — follow-up
 
 ## 実装サマリ
 
