@@ -1,6 +1,16 @@
 # @tachyon-sdk/storekit
 
-Type-safe TypeScript SDK for bakuure commerce API.
+Type-safe TypeScript SDK for [bakuure](https://bakuure.app) commerce API.
+
+Build storefronts on top of the bakuure multi-tenant commerce backend with a typed, ergonomic client.
+
+## Features
+
+- **Type-safe** — full TypeScript types for every request / response, generated against the live bakuure GraphQL schema
+- **Namespaced API** — grouped entry points (`client.products`, `client.cart`, `client.orders`) keep call sites readable
+- **Guest-friendly** — cart + checkout + order lookup work without user accounts; `sessionId` is enough
+- **Structured errors** — `GraphQLClientError` exposes the GraphQL `errors[]` array for programmatic handling
+- **Zero runtime dependencies** — the client is plain `fetch`, safe to use in Node.js, Cloudflare Workers, Deno, and browsers
 
 ## Installation
 
@@ -236,6 +246,42 @@ import type {
 } from "@tachyon-sdk/storekit";
 ```
 
+## Development
+
+```bash
+# From the tachyon-sdk monorepo root
+npm install
+
+cd packages/storekit
+
+npm run build         # tsc → dist/
+npm test              # vitest run
+npm run test:watch    # vitest (watch mode)
+```
+
+`prepublishOnly` runs `build` + `test`, so `npm publish` cannot ship without a green test suite and a fresh `dist/`.
+
+## Contributing
+
+Issues and pull requests are welcome. Before opening a PR:
+
+1. Add or update tests (`vitest`) covering the change
+2. Run `npm run build && npm test` locally
+3. For non-trivial changes (new public methods, breaking changes), open a design issue first so API direction can be discussed
+
+## Roadmap
+
+Planned additions driven by production usage:
+
+- **Guest-friendly order lookup** — fetch a guest order by phone number + last 4 digits of the order ID (no account required)
+- **Cart reservation with TTL** — time-boxed stock hold on `cart.addItem` / `cart.updateItem` to prevent oversell
+- **Out-of-stock availability states** — `availability: "in_stock" | "low_stock" | "out_of_stock"` on `Product`
+- **Order notifications** — optional email receipt + printable receipt (HTML / PDF) for in-store pickup with QR-linked order lookup
+
 ## License
 
-MIT
+MIT — see [`LICENSE`](../../LICENSE) at the repository root.
+
+---
+
+Copyright © Quantum Box株式会社
