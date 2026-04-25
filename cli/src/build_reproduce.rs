@@ -211,6 +211,10 @@ pub fn build_invocation(
             env.entry(k.clone()).or_insert_with(|| v.clone());
         }
     }
+    // CodeBuild itself sets $CODEBUILD_SRC_DIR inside the container; buildspecs
+    // routinely reference it (e.g. `cd $CODEBUILD_SRC_DIR/subpath`). Mirror it.
+    env.entry("CODEBUILD_SRC_DIR".into())
+        .or_insert_with(|| CONTAINER_SOURCE_DIR.into());
 
     DockerInvocation {
         image,
