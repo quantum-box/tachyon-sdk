@@ -1,0 +1,40 @@
+# Mock build-config fixture for `tachyon compute builds reproduce`.
+#
+# Phase 1 (PLT-914): the build-config endpoint (PLT-913) returning this shape
+# is not yet implemented. Pass this file via `--mock` to exercise the local
+# Docker pipeline end-to-end.
+#
+# Phase 2: replaced with `ApiClient::get(/v1/compute/builds/{id}/build-config)`.
+
+build_id: bld-mock-0001
+buildspec: |
+  version: 0.2
+  env:
+    variables:
+      NODE_ENV: production
+  phases:
+    install:
+      commands:
+        - echo "installing deps"
+        - node --version
+    pre_build:
+      commands:
+        - echo "pre_build"
+    build:
+      commands:
+        - echo "building app"
+        - ls -la
+    post_build:
+      commands:
+        - echo "build complete"
+environment:
+  image: public.ecr.aws/codebuild/amazonlinux-x86_64-standard:5.0
+  variables:
+    TACHYON_APP_ID: app-mock-0001
+    TACHYON_TENANT_ID: tnt-mock
+  secret_names:
+    - GITHUB_TOKEN
+source:
+  repository: https://github.com/example/example
+  branch: main
+  commit: deadbeef

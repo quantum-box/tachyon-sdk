@@ -7,6 +7,7 @@ use std::process::Command;
 use tachyon_sdk::apis::configuration::Configuration;
 use tokio::time::{sleep, Duration};
 
+use crate::build_reproduce;
 use crate::client::{print_json, truncate, ApiClient};
 use crate::resolve;
 
@@ -349,6 +350,29 @@ pub enum BuildsCommand {
         /// Keep polling until the build is complete
         #[arg(long)]
         follow: bool,
+    },
+    /// Reproduce a cloud build locally in Docker.
+    ///
+    /// Phase 1: requires `--mock <path>` pointing at a local build-config
+    /// fixture (PLT-914). Phase 2 (PLT-913) will fetch the buildspec and
+    /// environment from tachyon-api given the build id.
+    Reproduce {
+        /// Build ID to reproduce (informational in --mock mode).
+        build_id: String,
+        /// Path to a local mock build-config (json or yaml). Required until
+        /// PLT-913 endpoint is available.
+        #[arg(long)]
+        mock: Option<PathBuf>,
+        /// Source tree to mount into the container (defaults to cwd).
+        #[arg(long)]
+        source_dir: Option<PathBuf>,
+        /// Override the CodeBuild image (e.g.
+        /// public.ecr.aws/codebuild/amazonlinux-x86_64-standard:5.0).
+        #[arg(long)]
+        image: Option<String>,
+        /// Print the docker invocation instead of running it.
+        #[arg(long)]
+        dry_run: bool,
     },
 }
 
@@ -879,6 +903,62 @@ async fn run_builds_logs(
     Ok(())
 }
 
+/// Reproduce a Cloud Apps build locally in Docker. See `build_reproduce` for
+/// the parsing/invocation logic; this function wires CLI args and exit codes.
+fn run_builds_reproduce(
+    build_id: &str,
+    mock_path: Option<&std::path::Path>,
+    source_dir: Option<&std::path::Path>,
+    image_override: Option<&str>,
+    dry_run: bool,
+) -> Result<()> {
+    let mock_path = mock_path.ok_or_else(|| {
+        anyhow!(
+            "Phase 1: --mock <path> is required. \
+             The build-config endpoint (PLT-913) is not yet available; \
+             pass a local YAML/JSON fixture matching BuildConfig."
+        )
+    })?;
+
+    let config = build_reproduce::load_mock_config(mock_path)?;
+    let spec = build_reproduce::BuildSpec::parse(&config.buildspec)?;
+
+    let owned_cwd;
+    let source_dir: &std::path::Path = match source_dir {
+        Some(p) => p,
+        None => {
+            owned_cwd = std::env::current_dir()?;
+            owned_cwd.as_path()
+        }
+    };
+
+    let invocation = build_reproduce::build_invocation(&config, &spec, source_dir, image_override);
+
+    eprintln!("=== reproduce build {} ===", build_id);
+    eprintln!("  config build_id: {}", config.build_id);
+    eprintln!("  image:           {}", invocation.image);
+    eprintln!("  source:          {}", invocation.source_dir.display());
+    if !config.environment.secret_names.is_empty() {
+        eprintln!(
+            "  secrets (names): {}",
+            config.environment.secret_names.join(", ")
+        );
+        eprintln!("  (secret values are not provided in mock mode)");
+    }
+    eprintln!();
+
+    if dry_run {
+        println!("{}", invocation.to_display_string());
+        return Ok(());
+    }
+
+    let exit_code = invocation.execute()?;
+    if exit_code != 0 {
+        return Err(anyhow!("reproduce build exited with code {exit_code}"));
+    }
+    Ok(())
+}
+
 async fn run_deployments_list(api: &ApiClient, app_id: &str, json: bool) -> Result<()> {
     let resp: ListDeploymentsResponse = api
         .get(&format!("/v1/compute/apps/{app_id}/deployments"))
@@ -1189,6 +1269,19 @@ pub async fn run(args: &ComputeArgs, config: &Configuration, tenant_id: &str) ->
                 let id = resolve::resolve_app_id(&api, app_id).await?;
                 run_builds_logs(&api, Some(id.as_str()), build_id.as_deref(), *follow).await
             }
+            BuildsCommand::Reproduce {
+                build_id,
+                mock,
+                source_dir,
+                image,
+                dry_run,
+            } => run_builds_reproduce(
+                build_id,
+                mock.as_deref(),
+                source_dir.as_deref(),
+                image.as_deref(),
+                *dry_run,
+            ),
         },
         ComputeCommand::Deployments { command } => match command {
             DeploymentsCommand::List { app_id, json } => {
