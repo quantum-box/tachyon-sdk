@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "tachyon": {
+      "command": "/usr/local/bin/tachyon",
+      "args": ["mcp", "serve"],
+      "env": {
+        "OPENAI_API_KEY": "sk-replace-me"
+      }
+    }
+  }
+}
