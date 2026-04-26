@@ -56,9 +56,8 @@ jobs:
           - os: ubuntu-24.04-arm
             target: aarch64-unknown-linux-gnu
             artifact: tachyon-linux-arm64
-          - os: macos-13
-            target: x86_64-apple-darwin
-            artifact: tachyon-darwin-x86_64
+          # darwin-x86_64 (macos-13) is currently unavailable on hosted runners
+          # (queues forever) — deferred and tracked in PLT-841.
           - os: macos-latest
             target: aarch64-apple-darwin
             artifact: tachyon-darwin-arm64
