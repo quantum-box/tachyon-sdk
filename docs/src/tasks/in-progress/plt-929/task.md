@@ -80,18 +80,86 @@ redirect は安定。
 
 - [x] Root cause primary-source 特定
 - [x] taskdoc 初稿 commit (このファイル)
-- [ ] install.sh patch
-- [ ] linux-x86_64 実 install verify (`tachyon --version`)
-- [ ] linux-arm64 / darwin-arm64 download + extract + sha256 verify
+- [x] install.sh patch (本 commit)
+- [x] linux-x86_64 実 install verify (`tachyon 0.5.1`)
+- [x] linux-arm64 / darwin-arm64 download + extract + sha256 verify
       (host = linux-x86_64 のため arch 違いの execute は不可、
       download/extract/file-type 確認のみ)
-- [ ] 60 連続 install 実機 verify (403 count = 0)
+- [x] 60 連続 install 実機 verify (403 count = 0)
 - [ ] PR open + CI green + admin merge
 - [ ] Linear PLT-929 Done flip + self-kill
 
-## 実機 verify ログ
+## 実機 verify ログ (2026-04-26 JST、host: linux x86_64 Sakura VPS)
 
-(patch 後追記)
+### Done(1) install.sh 内 api.github.com 削除
+
+```
+$ grep -cE 'api\.github\.com' scripts/install.sh
+0
+$ sh -n scripts/install.sh && echo OK
+OK
+```
+
+### Done(2) platform 別 binary download 実機 verify
+
+CDN 着地 (release-assets.githubusercontent.com S3 署名 URL) 経由で 200 OK / sha256
+一致を 3 platform で確認。host arch の都合で execute verify は linux-x86_64 のみ
+(他 2 arch は download + tar -xzf + `file(1)` で binary type 確認 + chmod 755)。
+
+#### linux-x86_64 (full install)
+
+```
+$ bash scripts/install.sh
+Downloading tachyon (linux/x86_64) from latest release...
+Installed tachyon to /home/ubuntu/.local/bin/tachyon
+$ ls -la ~/.local/bin/tachyon
+-rwxr-xr-x 1 ubuntu ubuntu 18173288 Apr 26 18:54 /home/ubuntu/.local/bin/tachyon
+$ tachyon --version
+tachyon 0.5.1
+```
+
+URL: https://github.com/quantum-box/tachyon-sdk/releases/latest/download/tachyon-linux-x86_64.tar.gz
+- tarball size: 6,521,020 bytes
+- tarball sha256: `01f3094fafda3ca4956578daccbb5f5a16c921cf1e251188f69de7fccaafd7cc`
+- binary sha256: `82ff24847c1b3585280f886ba752ba8543bc8cfc610d77680c2420f091100c66`
+
+#### linux-arm64 (download + extract verify)
+
+URL: https://github.com/quantum-box/tachyon-sdk/releases/latest/download/tachyon-linux-arm64.tar.gz
+- HTTP: 200, tarball size: 6,266,017 bytes
+- tarball sha256: `aecdecdf981521f65e4751f1319b5b8fd1ffdcdc0bc699894e41770a3c1ceea3`
+- binary sha256: `bf562c20f6255fe306120acc4bdd76578bb13d7ab37b65d4c83cecc02a2ff27c`
+- `file(1)`: `ELF 64-bit LSB pie executable, ARM aarch64, version 1 (SYSV), dynamically linked, ...`
+- chmod 755 OK
+
+#### darwin-arm64 (download + extract verify)
+
+URL: https://github.com/quantum-box/tachyon-sdk/releases/latest/download/tachyon-darwin-arm64.tar.gz
+- HTTP: 200, tarball size: 5,943,111 bytes
+- tarball sha256: `0b947b3e92bc2d869c10df123eb88e1e3af7b6fceeb4228f3cd8e2accda6fa12`
+- binary sha256: `a97072cd2ea8e640e32b63b1b11943c745ffece7216c369a7d27a96ed5ddf1a7`
+- `file(1)`: `Mach-O 64-bit arm64 executable, flags:<NOUNDEFS|DYLDLINK|TWOLEVEL|PIE|HAS_TLV_DESCRIPTORS>`
+- chmod 755 OK
+
+### Done(3) 60 連続 install 実機 verify (rate-limit 突破確認)
+
+```
+$ for i in $(seq 1 60); do echo "=== run $i ==="; bash scripts/install.sh; done > loop60.log 2>&1
+elapsed=57s
+$ grep -c '^Installed tachyon to' loop60.log
+60
+$ grep -c '403' loop60.log
+0
+$ grep -ciE 'rate.?limit|403' loop60.log
+0
+$ grep -c '^\[run .* FAILED' loop60.log
+0
+```
+
+success rate = 60/60 (100%) / 403 count = 0 / rate-limit hits = 0。
+平均 install 時間 ≒ 57s / 60 ≒ 0.95s/run。
+GitHub anonymous の `api.github.com` 60 req/hr/IP は呼ばないため、
+60 回連続でも一切 throttle されないことを実機 verify 済。
 
 ## PR / commit / Done flip
 
