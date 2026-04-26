@@ -88,7 +88,8 @@ enum Commands {
     /// Run as an MCP (Model Context Protocol) server (stdio or HTTP)
     Mcp(mcp_cli::McpArgs),
     /// Update the Tachyon CLI to the latest version
-    Install,
+    #[command(name = "self-update", visible_alias = "install")]
+    SelfUpdate,
     /// Switch the active tenant (updates saved credentials)
     Switch(switch_cli::SwitchArgs),
 }
@@ -210,7 +211,7 @@ async fn run() -> Result<()> {
             tts_cli::run(args, &config, &tenant_id).await
         }
         Commands::Mcp(args) => mcp_cli::run(args).await,
-        Commands::Install => install_cli::run().await,
+        Commands::SelfUpdate => install_cli::run().await,
         Commands::Switch(args) => {
             let config = build_config(&cli).await;
             switch_cli::run(args, &config).await

@@ -8,6 +8,7 @@ use std::process::Command;
 
 const REPO: &str = "quantum-box/tachyon-sdk";
 const BIN_NAME: &str = "tachyon";
+const TAG_PREFIX: &str = "tachyon-cli-v";
 
 #[derive(Deserialize)]
 struct GitHubRelease {
@@ -79,14 +80,19 @@ pub async fn run() -> Result<()> {
         .context("Failed to parse release response")?;
 
     let tag = &release.tag_name;
-    let latest_version = tag.strip_prefix('v').unwrap_or(tag);
+    // Tag prefix changed from `v$VERSION` to `tachyon-cli-v$VERSION` after PLT-923
+    // when the CLI moved to its own release lane. Strip either prefix.
+    let latest_version = tag
+        .strip_prefix(TAG_PREFIX)
+        .or_else(|| tag.strip_prefix('v'))
+        .unwrap_or(tag);
 
     if latest_version == current_version {
         eprintln!("Already up to date (v{current_version}).");
         return Ok(());
     }
 
-    eprintln!("Updating from v{current_version} to {tag}...");
+    eprintln!("Updating from v{current_version} to v{latest_version}...");
 
     let artifact = format!("{BIN_NAME}-{os}-{arch}");
     let download_url =
@@ -165,7 +171,7 @@ pub async fn run() -> Result<()> {
         bail!("Failed to install binary to {}", target.display());
     }
 
-    eprintln!("Successfully updated to {tag}.");
+    eprintln!("Successfully updated to v{latest_version} (release tag: {tag}).");
     eprintln!("Installed to: {}", target.display());
 
     // Verify by running the new binary
