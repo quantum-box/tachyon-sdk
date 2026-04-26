@@ -86,8 +86,8 @@ redirect は安定。
       (host = linux-x86_64 のため arch 違いの execute は不可、
       download/extract/file-type 確認のみ)
 - [x] 60 連続 install 実機 verify (403 count = 0)
-- [ ] PR open + CI green + admin merge
-- [ ] Linear PLT-929 Done flip + self-kill
+- [x] PR open + CI green + admin merge (PR #56, squash 9c780fb @ 2026-04-26 09:59:32 UTC)
+- [x] Linear PLT-929 Done flip + self-kill
 
 ## 実機 verify ログ (2026-04-26 JST、host: linux x86_64 Sakura VPS)
 
@@ -163,4 +163,10 @@ GitHub anonymous の `api.github.com` 60 req/hr/IP は呼ばないため、
 
 ## PR / commit / Done flip
 
-(後追記)
+- PR: https://github.com/quantum-box/tachyon-sdk/pull/56
+- merge commit (squash on main): `9c780fbe37db8b0c322096f510051358112f8d30`
+- mergedAt: `2026-04-26T09:59:32Z` (UTC) / `2026-04-26 18:59:32 JST`
+- CI: `Check CLI` SUCCESS (1m08s, run 24953860546)
+- merge mode: `gh pr merge 56 --squash --admin --delete-branch`
+- Linear PLT-929 status: Done (this commit)
+- self-kill target: `tmux kill-window -t work:8`
