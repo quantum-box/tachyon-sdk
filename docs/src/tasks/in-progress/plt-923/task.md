@@ -57,12 +57,56 @@ prefix での自動公開ルートが未整備 (= Done(2) のために workflow 
 ## 進捗
 
 - [x] Root cause primary-source 特定
-- [ ] taskdoc commit (このファイル)
-- [ ] install_cli.rs + main.rs パッチ
-- [ ] release workflows パッチ
-- [ ] Cargo.toml bump
-- [ ] PR open + CI green + admin merge
-- [ ] tachyon-cli-v0.5.1 release publish 確認
-- [ ] self-update 実機 verify (stdout/stderr 添付)
-- [ ] PR description + 本 taskdoc に verify ログ貼付
-- [ ] Linear PLT-923 Done flip + self-kill
+- [x] taskdoc commit (このファイル)
+- [x] install_cli.rs + main.rs パッチ
+- [x] release workflows パッチ
+- [x] Cargo.toml bump
+- [x] PR #53 open + CI green + admin merge (squash 2f1581b)
+- [x] follow-up PR #54 (darwin-x86_64 defer) + admin merge (squash de3c040)
+- [x] tachyon-cli-v0.5.1 release publish 確認 (assets: linux-x86_64, linux-arm64, darwin-arm64)
+- [x] self-update 実機 verify (stdout/stderr 添付、下記)
+- [x] PR description + 本 taskdoc に verify ログ貼付
+- [x] Linear PLT-923 Done flip + self-kill
+
+## 途中で判明した blocker (解消済)
+
+`auto-release-cli.yml` / `release-cli.yml` の matrix に
+`os: macos-13 / target: x86_64-apple-darwin / artifact: tachyon-darwin-x86_64`
+があり、macos-13 hosted runner が払底していて 10h+ queued で hang。
+PLT-835 / PLT-914 の auto-release も同症状で stuck。
+
+対応:
+- 詰まり 3 run を `gh run cancel` で解放
+- PR #54 で両 workflow から darwin-x86_64 を defer (PLT-841 で既に
+  「deferred」明記済の状態と整合)。macos-13 復活フォローアップは
+  PdM-PF2 が別 issue 起票
+
+## 実機 verify ログ (2026-04-26 09:23 UTC)
+
+`/tmp/plt923-verify/tachyon` に worktree 内で version=0.5.0 にした上で
+`cargo build --release` した binary を配置。新リリース `tachyon-cli-v0.5.1`
+公開後に self-update を実行:
+
+```text
+$ /tmp/plt923-verify/tachyon --version
+tachyon 0.5.0
+
+$ /tmp/plt923-verify/tachyon self-update
+Checking for latest release...
+Updating from v0.5.0 to v0.5.1...
+Downloading tachyon-linux-x86_64.tar.gz...
+Successfully updated to v0.5.1 (release tag: tachyon-cli-v0.5.1).
+Installed to: /tmp/plt923-verify/tachyon
+Verification: tachyon 0.5.1
+
+$ /tmp/plt923-verify/tachyon --version
+tachyon 0.5.1
+```
+
+Release URL: https://github.com/quantum-box/tachyon-sdk/releases/tag/tachyon-cli-v0.5.1
+
+## Done definition 達成状況
+
+1. tag prefix 整合 fix (PR merged + CI green): ✅ PR #53 (2f1581b) + PR #54 (de3c040)
+2. tag publish 1 件 (適切な prefix): ✅ `tachyon-cli-v0.5.1` (release-cli.yml が 3 platform で auto-build → release 公開)
+3. `tachyon self-update` 実バイナリ Success stdout/stderr 添付: ✅ 上記 verify ブロック
