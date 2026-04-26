@@ -31,38 +31,20 @@ esac
 
 ARTIFACT="${BIN_NAME}-${OS}-${ARCH}"
 
-# Fetch latest release tag from GitHub API.
-# Some environments (corporate proxies, strict egress, rate-limited IPs) 403
-# the API when the request lacks a User-Agent / Accept header, so we set both.
-# If GITHUB_TOKEN is provided, use it to lift the anonymous rate limit.
-API_URL="https://api.github.com/repos/${REPO}/releases/latest"
-AUTH_HEADER=""
-if [ -n "${GITHUB_TOKEN:-}" ]; then
-  AUTH_HEADER="Authorization: Bearer ${GITHUB_TOKEN}"
-fi
+# Resolve the latest release asset via GitHub's /releases/latest/download/<asset>
+# redirect. This avoids the GitHub REST API anonymous 60 req/hr/IP rate limit:
+# the URL 302s to releases/download/<tag>/<asset>, no REST call required.
+DOWNLOAD_URL="https://github.com/${REPO}/releases/latest/download/${ARTIFACT}.tar.gz"
 
-LATEST_TAG="$(curl -fsSL \
-  -H "User-Agent: tachyon-sdk-installer/1.0" \
-  -H "Accept: application/vnd.github.v3+json" \
-  ${AUTH_HEADER:+-H "$AUTH_HEADER"} \
-  "$API_URL" \
-  | grep '"tag_name"' \
-  | sed 's/.*"tag_name": *"\([^"]*\)".*/\1/')"
-
-if [ -z "$LATEST_TAG" ]; then
-  echo "Failed to fetch latest release tag from ${API_URL}." >&2
-  echo "If you are hitting a GitHub API rate limit or 403, retry with:" >&2
-  echo "  curl -fsSL https://raw.githubusercontent.com/${REPO}/main/scripts/install.sh | GITHUB_TOKEN=<token> sh" >&2
-  exit 1
-fi
-
-DOWNLOAD_URL="https://github.com/${REPO}/releases/download/${LATEST_TAG}/${ARTIFACT}.tar.gz"
-
-echo "Downloading ${BIN_NAME} ${LATEST_TAG} (${OS}/${ARCH})..."
+echo "Downloading ${BIN_NAME} (${OS}/${ARCH}) from latest release..."
 TMP_DIR="$(mktemp -d)"
 trap 'rm -rf "$TMP_DIR"' EXIT
 
-curl -fsSL "$DOWNLOAD_URL" -o "${TMP_DIR}/${ARTIFACT}.tar.gz"
+curl -fsSL \
+  -H "User-Agent: tachyon-sdk-installer/1.0" \
+  "$DOWNLOAD_URL" \
+  -o "${TMP_DIR}/${ARTIFACT}.tar.gz"
+
 tar -xzf "${TMP_DIR}/${ARTIFACT}.tar.gz" -C "$TMP_DIR"
 
 # Determine install location
