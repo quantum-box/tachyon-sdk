@@ -27,18 +27,18 @@ jobs:
         run: |
           VERSION=$(grep -m1 '^version' cli/Cargo.toml | sed 's/.*"\(.*\)"/\1/')
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-          echo "tag=v$VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag=tachyon-cli-v$VERSION" >> "$GITHUB_OUTPUT"
           echo "Detected version: $VERSION"
 
       - name: Check if tag already exists
         id: check_tag
         run: |
-          if git rev-parse "v${{ steps.version.outputs.version }}" >/dev/null 2>&1; then
+          if git rev-parse "tachyon-cli-v${{ steps.version.outputs.version }}" >/dev/null 2>&1; then
             echo "needed=false" >> "$GITHUB_OUTPUT"
-            echo "Tag v${{ steps.version.outputs.version }} already exists, skipping release"
+            echo "Tag tachyon-cli-v${{ steps.version.outputs.version }} already exists, skipping release"
           else
             echo "needed=true" >> "$GITHUB_OUTPUT"
-            echo "Tag v${{ steps.version.outputs.version }} does not exist, will create release"
+            echo "Tag tachyon-cli-v${{ steps.version.outputs.version }} does not exist, will create release"
           fi
 
   build:

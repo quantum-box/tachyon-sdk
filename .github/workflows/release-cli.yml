@@ -3,7 +3,7 @@ name: Release CLI
 on:
   push:
     tags:
-      - 'v*'
+      - 'tachyon-cli-v*'
 
 permissions:
   contents: write
