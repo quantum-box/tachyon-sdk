@@ -31,6 +31,46 @@ curl -fsSL https://raw.githubusercontent.com/quantum-box/tachyon-sdk/main/script
 
 A classic PAT with `public_repo` scope (or any valid GitHub token) is sufficient.
 
+### Authentication profiles (multi-account)
+
+The CLI supports multiple named auth profiles (similar to `aws --profile` /
+`gcloud config configurations`). Each profile stores its own access token,
+refresh token, and default tenant in `~/.config/tachyon/profiles/<name>.json`.
+The active profile is recorded in `~/.config/tachyon/active_profile`.
+
+```sh
+# Log in to two separate accounts
+tachyon auth login --profile work
+tachyon auth login --profile personal
+
+# Inspect registered profiles (active marked with *)
+tachyon auth list
+
+# Switch the active profile persistently
+tachyon auth use personal
+
+# Override the active profile for one command
+tachyon --profile work compute apps list
+TACHYON_PROFILE=work tachyon compute apps list
+
+# Log out of a single profile
+tachyon auth logout --profile personal
+```
+
+Resolution order when picking a profile for a command:
+
+1. `--profile <name>` global flag
+2. `TACHYON_PROFILE` env var
+3. `~/.config/tachyon/active_profile` file (set by `auth login` / `auth use`)
+4. `default`
+
+Existing single-account installs are auto-migrated: an older
+`~/.config/tachyon/credentials.json` is copied to `profiles/default.json`
+on first use, with the legacy file kept for downgrade safety.
+
+> Phase 2 (macOS Keychain / Linux secret-service / encryption-at-rest) is
+> tracked separately. Profiles are currently plaintext JSON with `0o600` perms.
+
 ### Usage
 
 ```sh

@@ -2178,6 +2178,7 @@ dependencies = [
  "serde_yaml",
  "sha2",
  "tachyon-sdk",
+ "tempfile",
  "tokio",
  "tokio-util",
  "tower",

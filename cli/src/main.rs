@@ -15,7 +15,7 @@ mod switch_cli;
 mod tts_cli;
 
 use anyhow::Result;
-use clap::{Parser, Subcommand};
+use clap::{Args, Parser, Subcommand};
 use tachyon_sdk::apis::configuration::Configuration;
 
 /// Default Cognito domain for the Tachyon production environment.
@@ -49,6 +49,10 @@ struct Cli {
     #[arg(long, env = "TACHYON_API_KEY")]
     api_key: Option<String>,
 
+    /// Auth profile to use for this command (overrides the active profile).
+    #[arg(long, global = true, env = "TACHYON_PROFILE")]
+    profile: Option<String>,
+
     /// Cognito domain URL (e.g. https://your-domain.auth.ap-northeast-1.amazoncognito.com)
     #[arg(long, env = "TACHYON_COGNITO_DOMAIN", default_value = DEFAULT_COGNITO_DOMAIN)]
     cognito_domain: String,
@@ -67,10 +71,12 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Log in via browser-based OAuth (Cognito Hosted UI)
-    Login,
-    /// Remove stored credentials
-    Logout,
+    /// Manage authentication profiles (login / logout / list / use)
+    Auth(AuthArgs),
+    /// Log in via browser-based OAuth (alias for `auth login`)
+    Login(LoginArgs),
+    /// Remove stored credentials (alias for `auth logout`)
+    Logout(LogoutArgs),
     /// Manage compute apps, builds, deployments, and configuration
     Compute(compute_cli::ComputeArgs),
     /// Manage organizations, users, service accounts, and policies
@@ -94,13 +100,54 @@ enum Commands {
     Switch(switch_cli::SwitchArgs),
 }
 
-/// Resolve the bearer token from CLI args or stored credentials.
-/// If the stored token is expired, attempt to refresh it automatically.
-async fn resolve_token(cli: &Cli) -> Option<String> {
+#[derive(Args)]
+struct AuthArgs {
+    #[command(subcommand)]
+    command: AuthCommand,
+}
+
+#[derive(Subcommand)]
+enum AuthCommand {
+    /// Log in via browser-based OAuth and save tokens to a profile
+    Login(LoginArgs),
+    /// Remove a profile's stored credentials
+    Logout(LogoutArgs),
+    /// List registered profiles (active marked with *)
+    List,
+    /// Switch the active profile (must already be logged in)
+    Use(UseArgs),
+}
+
+#[derive(Args)]
+struct LoginArgs {
+    /// Profile name to save tokens under (default: the active profile or "default").
+    /// On `auth login`, this overrides the global `--profile`.
+    #[arg(long)]
+    profile: Option<String>,
+}
+
+#[derive(Args)]
+struct LogoutArgs {
+    /// Profile name to log out of (default: the active profile).
+    /// On `auth logout`, this overrides the global `--profile`.
+    #[arg(long)]
+    profile: Option<String>,
+}
+
+#[derive(Args)]
+struct UseArgs {
+    /// Profile name to make active.
+    profile: String,
+}
+
+/// Resolve the bearer token from CLI args or stored credentials for the given
+/// profile. If the stored token is expired, attempt to refresh it automatically
+/// (writing back to the same profile).
+async fn resolve_token(cli: &Cli, profile: &str) -> Option<String> {
     if cli.api_key.is_some() {
         return cli.api_key.clone();
     }
-    match auth::load_credentials() {
+    match auth::load_profile(profile) {
         Ok(Some(creds)) => {
             let expired = creds
                 .expires_at
@@ -109,15 +156,15 @@ async fn resolve_token(cli: &Cli) -> Option<String> {
 
             if expired {
                 let oauth_config = build_oauth_config(cli);
-                match auth::refresh_access_token(&oauth_config, &creds).await {
+                match auth::refresh_access_token(&oauth_config, profile, &creds).await {
                     Ok(new_creds) => {
-                        eprintln!("Token refreshed successfully.");
+                        eprintln!("Token refreshed successfully (profile: {profile}).");
                         return Some(new_creds.access_token);
                     }
                     Err(e) => {
                         eprintln!(
-                            "Warning: token refresh failed: {e}. \
-                             Run `tachyon login` to re-authenticate."
+                            "Warning: token refresh failed for profile '{profile}': {e}. \
+                             Run `tachyon auth login --profile {profile}` to re-authenticate."
                         );
                         return None;
                     }
@@ -128,7 +175,7 @@ async fn resolve_token(cli: &Cli) -> Option<String> {
         }
         Ok(None) => None,
         Err(e) => {
-            eprintln!("Warning: failed to load stored credentials: {e}");
+            eprintln!("Warning: failed to load profile '{profile}': {e}");
             None
         }
     }
@@ -146,11 +193,11 @@ fn build_oauth_config(cli: &Cli) -> auth::OAuthConfig {
     }
 }
 
-/// Build SDK configuration with the resolved token.
-async fn build_config(cli: &Cli) -> Configuration {
+/// Build SDK configuration with the resolved token for the given profile.
+async fn build_config(cli: &Cli, profile: &str) -> Configuration {
     let mut config = Configuration::new();
     config.base_path = cli.api_url.clone();
-    config.bearer_access_token = resolve_token(cli).await;
+    config.bearer_access_token = resolve_token(cli, profile).await;
     config
 }
 
@@ -169,52 +216,91 @@ async fn main() {
 async fn run() -> Result<()> {
     let cli = Cli::parse();
 
+    // Resolve the profile to use for this invocation. For most commands this
+    // is the active profile (or the value of --profile / TACHYON_PROFILE for a
+    // one-shot override). `auth login` / `auth use` choose their own target
+    // profile, so they ignore `active`.
+    let active = auth::resolve_active_profile(cli.profile.as_deref())?;
+
     match &cli.command {
-        Commands::Login => {
+        Commands::Auth(args) => match &args.command {
+            AuthCommand::Login(login_args) => {
+                let oauth_config = build_oauth_config(&cli);
+                let target = login_args
+                    .profile
+                    .clone()
+                    .or_else(|| cli.profile.clone())
+                    .unwrap_or_else(|| auth::DEFAULT_PROFILE.to_string());
+                auth::login(&oauth_config, &cli.api_url, &target).await
+            }
+            AuthCommand::Logout(logout_args) => {
+                let target = logout_args
+                    .profile
+                    .clone()
+                    .or_else(|| cli.profile.clone())
+                    .unwrap_or(active.clone());
+                auth::logout(&target)
+            }
+            AuthCommand::List => auth::list_profiles_command(),
+            AuthCommand::Use(use_args) => auth::use_profile(&use_args.profile),
+        },
+        Commands::Login(login_args) => {
             let oauth_config = build_oauth_config(&cli);
-            auth::login(&oauth_config, &cli.api_url).await
+            let target = login_args
+                .profile
+                .clone()
+                .or_else(|| cli.profile.clone())
+                .unwrap_or_else(|| auth::DEFAULT_PROFILE.to_string());
+            auth::login(&oauth_config, &cli.api_url, &target).await
         }
-        Commands::Logout => auth::logout(),
+        Commands::Logout(logout_args) => {
+            let target = logout_args
+                .profile
+                .clone()
+                .or_else(|| cli.profile.clone())
+                .unwrap_or(active.clone());
+            auth::logout(&target)
+        }
         Commands::Compute(args) => {
-            let config = build_config(&cli).await;
-            let tenant_id = resolve::resolve_tenant_id(&config, &cli.tenant_id).await?;
+            let config = build_config(&cli, &active).await;
+            let tenant_id = resolve::resolve_tenant_id(&config, &cli.tenant_id, &active).await?;
             compute_cli::run(args, &config, &tenant_id).await
         }
         Commands::Org(args) => {
-            let config = build_config(&cli).await;
-            let tenant_id = resolve::resolve_tenant_id(&config, &cli.tenant_id).await?;
+            let config = build_config(&cli, &active).await;
+            let tenant_id = resolve::resolve_tenant_id(&config, &cli.tenant_id, &active).await?;
             org_cli::run(args, &config, &tenant_id).await
         }
         Commands::Agent(args) => {
-            let config = build_config(&cli).await;
-            let tenant_id = resolve::resolve_tenant_id(&config, &cli.tenant_id).await?;
+            let config = build_config(&cli, &active).await;
+            let tenant_id = resolve::resolve_tenant_id(&config, &cli.tenant_id, &active).await?;
             agent_cli::run(args, &config, &tenant_id).await
         }
         Commands::Iac(args) => {
-            let config = build_config(&cli).await;
-            let tenant_id = resolve::resolve_tenant_id(&config, &cli.tenant_id).await?;
+            let config = build_config(&cli, &active).await;
+            let tenant_id = resolve::resolve_tenant_id(&config, &cli.tenant_id, &active).await?;
             iac_cli::run(args, &config, &tenant_id).await
         }
         Commands::Ops(args) => {
-            let config = build_config(&cli).await;
-            let tenant_id = resolve::resolve_tenant_id(&config, &cli.tenant_id).await?;
+            let config = build_config(&cli, &active).await;
+            let tenant_id = resolve::resolve_tenant_id(&config, &cli.tenant_id, &active).await?;
             ops_cli::run(args, &config, &tenant_id).await
         }
         Commands::Image(args) => {
-            let config = build_config(&cli).await;
-            let tenant_id = resolve::resolve_tenant_id(&config, &cli.tenant_id).await?;
+            let config = build_config(&cli, &active).await;
+            let tenant_id = resolve::resolve_tenant_id(&config, &cli.tenant_id, &active).await?;
             image_cli::run(args, &config, &tenant_id).await
         }
         Commands::Tts(args) => {
-            let config = build_config(&cli).await;
-            let tenant_id = resolve::resolve_tenant_id(&config, &cli.tenant_id).await?;
+            let config = build_config(&cli, &active).await;
+            let tenant_id = resolve::resolve_tenant_id(&config, &cli.tenant_id, &active).await?;
             tts_cli::run(args, &config, &tenant_id).await
         }
         Commands::Mcp(args) => mcp_cli::run(args).await,
         Commands::SelfUpdate => install_cli::run().await,
         Commands::Switch(args) => {
-            let config = build_config(&cli).await;
-            switch_cli::run(args, &config).await
+            let config = build_config(&cli, &active).await;
+            switch_cli::run(args, &config, &active).await
         }
     }
 }

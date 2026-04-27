@@ -7,6 +7,8 @@
 use std::path::PathBuf;
 use std::process::Command;
 
+use tempfile::TempDir;
+
 fn fixture_path(name: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("tests")
@@ -14,12 +16,24 @@ fn fixture_path(name: &str) -> PathBuf {
         .join(name)
 }
 
+/// Build a fresh-config-home env so each test is hermetic and doesn't pick up
+/// a developer's real `~/.config/tachyon/credentials.json` (PLT-724 made the
+/// CLI auto-migrate that file, which previously caused these tests to fail
+/// when the local file was malformed).
+fn isolated_home() -> TempDir {
+    TempDir::new().expect("create tempdir")
+}
+
 #[test]
 fn reproduce_dry_run_emits_docker_invocation() {
     let bin = env!("CARGO_BIN_EXE_tachyon");
     let fixture = fixture_path("mock-build-config.yaml");
+    let home = isolated_home();
 
     let output = Command::new(bin)
+        .env("HOME", home.path())
+        .env("XDG_CONFIG_HOME", home.path().join(".config"))
+        .env_remove("TACHYON_PROFILE")
         .args(["compute", "builds", "reproduce", "bld-mock-0001", "--mock"])
         .arg(&fixture)
         .args(["--source-dir", "/tmp", "--dry-run"])
@@ -64,7 +78,11 @@ fn reproduce_dry_run_emits_docker_invocation() {
 #[test]
 fn reproduce_requires_mock_in_phase1() {
     let bin = env!("CARGO_BIN_EXE_tachyon");
+    let home = isolated_home();
     let output = Command::new(bin)
+        .env("HOME", home.path())
+        .env("XDG_CONFIG_HOME", home.path().join(".config"))
+        .env_remove("TACHYON_PROFILE")
         .args(["compute", "builds", "reproduce", "bld-x"])
         .output()
         .expect("run tachyon binary");
