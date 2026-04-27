@@ -1,5 +1,7 @@
 use anyhow::{bail, Context, Result};
-use serde::Deserialize;
+use reqwest::header::LOCATION;
+use reqwest::redirect::Policy;
+use reqwest::Url;
 use std::env;
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
@@ -9,11 +11,6 @@ use std::process::Command;
 const REPO: &str = "quantum-box/tachyon-sdk";
 const BIN_NAME: &str = "tachyon";
 const TAG_PREFIX: &str = "tachyon-cli-v";
-
-#[derive(Deserialize)]
-struct GitHubRelease {
-    tag_name: String,
-}
 
 /// Detect the OS string used in release artifact names.
 fn detect_os() -> Result<&'static str> {
@@ -57,35 +54,78 @@ fn current_binary_path() -> Result<PathBuf> {
     env::current_exe().context("Failed to determine current binary path")
 }
 
+fn extract_release_tag(download_url: &str) -> Result<String> {
+    let parsed = Url::parse(download_url)
+        .or_else(|_| Url::parse(&format!("https://github.com{download_url}")))
+        .with_context(|| format!("Failed to parse GitHub redirect URL: {download_url}"))?;
+    let segments = parsed
+        .path_segments()
+        .context("Failed to parse GitHub redirect path")?
+        .collect::<Vec<_>>();
+
+    for window in segments.windows(2) {
+        if window[0] == "download" || window[0] == "tag" {
+            return Ok(window[1].to_string());
+        }
+    }
+
+    bail!("Could not parse release tag from redirect URL: {download_url}");
+}
+
+async fn resolve_latest_tag(resolver: &reqwest::Client, url: &str) -> Result<String> {
+    let response = resolver
+        .get(url)
+        .send()
+        .await
+        .with_context(|| format!("Failed to resolve latest release from {url}"))?
+        .error_for_status()
+        .with_context(|| format!("GitHub release resolution returned an error: {url}"))?;
+
+    let location = response
+        .headers()
+        .get(LOCATION)
+        .context("GitHub did not return redirect location for latest release")?
+        .to_str()
+        .context("Invalid redirect location value from GitHub")?;
+
+    extract_release_tag(location)
+}
+
 pub async fn run() -> Result<()> {
     let current_version = env!("CARGO_PKG_VERSION");
     let os = detect_os()?;
     let arch = detect_arch()?;
 
-    // Fetch latest release from GitHub API
+    // Resolve latest release from GitHub without hitting GitHub API.
     eprintln!("Checking for latest release...");
-    let client = reqwest::Client::new();
-    let release: GitHubRelease = client
-        .get(format!(
-            "https://api.github.com/repos/{REPO}/releases/latest"
-        ))
-        .header("User-Agent", format!("tachyon-cli/{current_version}"))
-        .send()
-        .await
-        .context("Failed to fetch latest release")?
-        .error_for_status()
-        .context("GitHub API returned an error")?
-        .json()
-        .await
-        .context("Failed to parse release response")?;
+    let user_agent = format!("tachyon-cli/{current_version}");
+    let client = reqwest::Client::builder()
+        .user_agent(&user_agent)
+        .build()
+        .context("Failed to build GitHub client")?;
+    let resolver = reqwest::Client::builder()
+        .user_agent(&user_agent)
+        .redirect(Policy::none())
+        .build()
+        .context("Failed to build GitHub redirect resolver")?;
 
-    let tag = &release.tag_name;
+    let artifact = format!("{BIN_NAME}-{os}-{arch}");
+    let latest_url =
+        format!("https://github.com/{REPO}/releases/latest/download/{artifact}.tar.gz");
+    let fallback_url = format!("https://github.com/{REPO}/releases/latest");
+
+    let tag = match resolve_latest_tag(&resolver, &latest_url).await {
+        Ok(tag) => tag,
+        Err(_) => resolve_latest_tag(&resolver, &fallback_url)
+            .await
+            .context("Failed to resolve latest release from GitHub")?,
+    };
     // Tag prefix changed from `v$VERSION` to `tachyon-cli-v$VERSION` after PLT-923
     // when the CLI moved to its own release lane. Strip either prefix.
     let latest_version = tag
         .strip_prefix(TAG_PREFIX)
         .or_else(|| tag.strip_prefix('v'))
-        .unwrap_or(tag);
+        .unwrap_or(&tag);
 
     if latest_version == current_version {
         eprintln!("Already up to date (v{current_version}).");
@@ -94,7 +134,6 @@ pub async fn run() -> Result<()> {
 
     eprintln!("Updating from v{current_version} to v{latest_version}...");
 
-    let artifact = format!("{BIN_NAME}-{os}-{arch}");
     let download_url =
         format!("https://github.com/{REPO}/releases/download/{tag}/{artifact}.tar.gz");
 
