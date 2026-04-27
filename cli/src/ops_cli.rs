@@ -28,6 +28,12 @@ pub enum OpsCommand {
         #[command(subcommand)]
         command: ToolJobsCommand,
     },
+    /// Send chat notifications to configured Slack/Discord destinations
+    #[command(visible_alias = "slack")]
+    Notify {
+        #[command(subcommand)]
+        command: NotifyCommand,
+    },
 }
 
 #[derive(Debug, Clone, Subcommand)]
@@ -77,6 +83,19 @@ pub enum ToolJobsCommand {
     Cancel { job_id: String },
     /// List available tool job providers
     Providers {
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+#[derive(Debug, Clone, Subcommand)]
+pub enum NotifyCommand {
+    /// Send a plain-text notification
+    Send {
+        /// Notification text to send
+        #[arg(long)]
+        text: String,
+        /// Print the API response as JSON
         #[arg(long)]
         json: bool,
     },
@@ -139,6 +158,16 @@ struct ToolJobProviderResponse {
     description: Option<String>,
     #[serde(default)]
     tools: Option<Vec<String>>,
+}
+
+#[derive(Debug, Serialize)]
+struct SendNotificationRequest {
+    text: String,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct SendNotificationResponse {
+    accepted: bool,
 }
 
 // ---- Handlers ----
@@ -303,6 +332,26 @@ async fn run_tool_jobs_providers(api: &ApiClient, json: bool) -> Result<()> {
     Ok(())
 }
 
+async fn run_notify_send(api: &ApiClient, text: &str, json: bool) -> Result<()> {
+    let response: SendNotificationResponse = api
+        .post(
+            "/v1/chat/send",
+            &SendNotificationRequest {
+                text: text.to_string(),
+            },
+        )
+        .await?;
+    if json {
+        return print_json(&response);
+    }
+    if response.accepted {
+        println!("Notification accepted.");
+    } else {
+        println!("Notification was not accepted.");
+    }
+    Ok(())
+}
+
 // ---- Entry point ----
 
 pub async fn run(args: &OpsArgs, config: &Configuration, tenant_id: &str) -> Result<()> {
@@ -322,6 +371,9 @@ pub async fn run(args: &OpsArgs, config: &Configuration, tenant_id: &str) -> Res
             ToolJobsCommand::Get { job_id, json } => run_tool_jobs_get(&api, job_id, *json).await,
             ToolJobsCommand::Cancel { job_id } => run_tool_jobs_cancel(&api, job_id).await,
             ToolJobsCommand::Providers { json } => run_tool_jobs_providers(&api, *json).await,
+        },
+        OpsCommand::Notify { command } => match command {
+            NotifyCommand::Send { text, json } => run_notify_send(&api, text, *json).await,
         },
     }
 }
