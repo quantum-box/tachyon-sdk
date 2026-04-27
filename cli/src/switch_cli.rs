@@ -22,7 +22,7 @@ struct OperatorEntry {
     alias: Option<String>,
 }
 
-pub async fn run(args: &SwitchArgs, config: &Configuration) -> Result<()> {
+pub async fn run(args: &SwitchArgs, config: &Configuration, profile: &str) -> Result<()> {
     // Build client without operator context — list endpoint doesn't need it
     let api = ApiClient::new(config, "")?;
 
@@ -30,7 +30,7 @@ pub async fn run(args: &SwitchArgs, config: &Configuration) -> Result<()> {
         Some(name_or_id) => {
             // Direct switch: resolve then update
             let operator_id = resolve_operator_id(&api, name_or_id).await?;
-            update_credentials(&operator_id)?;
+            update_credentials(profile, &operator_id)?;
             println!("Switched to tenant: {operator_id}");
         }
         None => {
@@ -38,7 +38,7 @@ pub async fn run(args: &SwitchArgs, config: &Configuration) -> Result<()> {
             let ops: Vec<OperatorEntry> = api.get("/v1/auth/operators/by-user").await?;
             if ops.is_empty() {
                 return Err(anyhow!(
-                    "No tenants found. Run `tachyon login` to authenticate."
+                    "No tenants found. Run `tachyon auth login` to authenticate."
                 ));
             }
             let labels: Vec<String> = ops
@@ -54,18 +54,19 @@ pub async fn run(args: &SwitchArgs, config: &Configuration) -> Result<()> {
                 .default(0)
                 .interact()?;
             let operator_id = ops[selection].id.clone();
-            update_credentials(&operator_id)?;
+            update_credentials(profile, &operator_id)?;
             println!("Switched to tenant: {operator_id}");
         }
     }
     Ok(())
 }
 
-fn update_credentials(operator_id: &str) -> Result<()> {
-    let mut creds = auth::load_credentials()?
-        .ok_or_else(|| anyhow!("Not logged in. Run `tachyon login` first."))?;
+fn update_credentials(profile: &str, operator_id: &str) -> Result<()> {
+    let mut creds = auth::load_profile(profile)?.ok_or_else(|| {
+        anyhow!("Not logged in (profile '{profile}'). Run `tachyon auth login --profile {profile}` first.")
+    })?;
     creds.operator_id = Some(operator_id.to_string());
-    auth::save_credentials(&creds)?;
+    auth::save_profile(profile, &creds)?;
     Ok(())
 }
 

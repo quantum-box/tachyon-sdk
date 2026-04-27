@@ -68,13 +68,17 @@ struct ServiceAccountEntry {
 // --- Tenant ID resolution ---
 
 /// Resolve a tenant identifier (ID, alias, or name) to the operator ID.
-/// If empty, falls back to the saved operator_id in credentials.
+/// If empty, falls back to the saved operator_id in the active profile's credentials.
 /// If the value looks like an ID, it is returned as-is.
 /// Otherwise, tries by-alias lookup first, then falls back to listing operators and matching by name.
-pub async fn resolve_tenant_id(config: &Configuration, name_or_id: &str) -> Result<String> {
+pub async fn resolve_tenant_id(
+    config: &Configuration,
+    name_or_id: &str,
+    profile: &str,
+) -> Result<String> {
     if name_or_id.is_empty() {
-        // Fall back to saved operator_id from credentials
-        if let Ok(Some(creds)) = crate::auth::load_credentials() {
+        // Fall back to saved operator_id from the active profile's credentials.
+        if let Ok(Some(creds)) = crate::auth::load_profile(profile) {
             if let Some(op_id) = creds.operator_id {
                 return Ok(op_id);
             }
