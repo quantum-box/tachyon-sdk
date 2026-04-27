@@ -789,8 +789,7 @@ async fn run_builds_list(api: &ApiClient, app_id: &str, limit: usize, json: bool
     }
 
     // Show active preview URLs below the build list.
-    let preview_url =
-        format!("/v1/compute/apps/{app_id}/deployments?environment=preview");
+    let preview_url = format!("/v1/compute/apps/{app_id}/deployments?environment=preview");
     if let Ok(dep_resp) = api.get::<ListDeploymentsResponse>(&preview_url).await {
         let active: Vec<_> = dep_resp
             .deployments
@@ -845,8 +844,7 @@ async fn run_builds_get(api: &ApiClient, build_id: &str, json: bool) -> Result<(
 
     // Fetch the associated deployment to show the preview URL.
     if build.status == "succeeded" {
-        let url: String =
-            format!("/v1/compute/apps/{}/deployments", build.app_id);
+        let url: String = format!("/v1/compute/apps/{}/deployments", build.app_id);
         if let Ok(resp) = api.get::<ListDeploymentsResponse>(&url).await {
             if let Some(dep) = resp
                 .deployments
