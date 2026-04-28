@@ -455,6 +455,11 @@ mod tests {
         assert!(!is_supported_reference_image(b"GIF89a\0\0\0\0\0\0"));
     }
 
+    #[test]
+    fn maps_gpt_image_2_to_png_extension() {
+        assert_eq!(model_to_extension("gpt-image-2"), "png");
+    }
+
     #[tokio::test]
     async fn load_reference_images_round_trip_png() {
         let dir = tempfile::tempdir().unwrap();
