@@ -27,9 +27,10 @@ pub enum ImageCommand {
         prompt: String,
 
         /// Model to use for generation
-        /// (e.g., gpt-image-1.5, gpt-image-1, gpt-image-1-mini,
-        ///  grok-2-image, gemini-2.0-flash-exp-image-generation)
-        #[arg(long, short = 'm', default_value = "gpt-image-1.5")]
+        /// (e.g., gpt-image-2, gpt-image-1.5, gpt-image-1,
+        ///  gpt-image-1-mini, grok-2-image,
+        ///  gemini-2.0-flash-exp-image-generation)
+        #[arg(long, short = 'm', default_value = "gpt-image-2")]
         model: String,
 
         /// Image size: 1024x1024, 1024x1536, 1536x1024, or auto
@@ -55,6 +56,13 @@ pub enum ImageCommand {
         /// Upload generated image to Tachyon Storage
         #[arg(long)]
         storage: bool,
+
+        /// Reference image file paths for image-to-image generation.
+        /// Repeat for multiple images (max 16). Each file must be
+        /// PNG, JPEG, or WebP and < 25 MB. Only supported with
+        /// model=gpt-image-2.
+        #[arg(long = "reference-image", value_name = "PATH")]
+        reference_images: Vec<String>,
     },
 }
 
@@ -68,6 +76,8 @@ struct GenerateImageRequest {
     quality: Option<String>,
     n: u8,
     response_format: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reference_images: Option<Vec<String>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -107,6 +117,55 @@ struct ConfirmResponse {
     storage_key: String,
     url: String,
     content_length: u64,
+}
+
+/// Maximum decoded size per reference image (25 MB).
+const MAX_REFERENCE_IMAGE_BYTES: u64 = 25 * 1024 * 1024;
+
+/// Reads each reference image path, validates magic bytes and size,
+/// and returns a list of base64-encoded payloads.
+async fn load_reference_images(paths: &[String]) -> Result<Vec<String>> {
+    let mut out = Vec::with_capacity(paths.len());
+    for path in paths {
+        let metadata = tokio::fs::metadata(path)
+            .await
+            .with_context(|| format!("Reference image not found: {path}"))?;
+        if metadata.len() > MAX_REFERENCE_IMAGE_BYTES {
+            anyhow::bail!(
+                "Reference image {path} is {} bytes; max is {} bytes (25 MB)",
+                metadata.len(),
+                MAX_REFERENCE_IMAGE_BYTES
+            );
+        }
+        let bytes = tokio::fs::read(path)
+            .await
+            .with_context(|| format!("Failed to read reference image: {path}"))?;
+        if !is_supported_reference_image(&bytes) {
+            anyhow::bail!(
+                "Reference image {path} is not a supported format \
+                 (PNG, JPEG, or WebP required)"
+            );
+        }
+        out.push(base64::engine::general_purpose::STANDARD.encode(&bytes));
+    }
+    Ok(out)
+}
+
+/// Detects PNG, JPEG, or WebP from magic bytes.
+fn is_supported_reference_image(bytes: &[u8]) -> bool {
+    if bytes.len() < 12 {
+        return false;
+    }
+    if bytes.starts_with(&[0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]) {
+        return true;
+    }
+    if bytes.starts_with(&[0xFF, 0xD8, 0xFF]) {
+        return true;
+    }
+    if bytes.starts_with(b"RIFF") && &bytes[8..12] == b"WEBP" {
+        return true;
+    }
+    false
 }
 
 /// Determine the default image file extension from a model name.
@@ -231,6 +290,7 @@ pub async fn run(args: &ImageArgs, config: &Configuration, tenant_id: &str) -> R
             response_format,
             output,
             storage,
+            reference_images,
         } => {
             generate(
                 config,
@@ -243,6 +303,7 @@ pub async fn run(args: &ImageArgs, config: &Configuration, tenant_id: &str) -> R
                 response_format,
                 output.as_deref(),
                 *storage,
+                reference_images,
             )
             .await
         }
@@ -261,8 +322,30 @@ async fn generate(
     response_format: &str,
     output: Option<&str>,
     storage: bool,
+    reference_image_paths: &[String],
 ) -> Result<()> {
     let api = ApiClient::new(config, tenant_id)?;
+
+    // Pre-flight: reject reference images on unsupported models
+    // before reading any files. The API enforces this server-side
+    // too, but failing early avoids reading large files needlessly.
+    let reference_images = if reference_image_paths.is_empty() {
+        None
+    } else {
+        if model != "gpt-image-2" {
+            anyhow::bail!(
+                "--reference-image is only supported with --model gpt-image-2 \
+                 (got: {model}). Pass `-m gpt-image-2` explicitly."
+            );
+        }
+        if reference_image_paths.len() > 16 {
+            anyhow::bail!(
+                "Too many reference images: {} (max 16)",
+                reference_image_paths.len()
+            );
+        }
+        Some(load_reference_images(reference_image_paths).await?)
+    };
 
     // When saving locally or to storage we need the raw bytes.
     // Prefer b64_json to avoid URL expiry issues.
@@ -274,6 +357,9 @@ async fn generate(
 
     println!("Generating image with model: {model}");
     println!("Prompt: {prompt}");
+    if let Some(refs) = &reference_images {
+        println!("Reference images: {} attached", refs.len());
+    }
 
     let result: GenerateImageResponse = api
         .post(
@@ -285,6 +371,7 @@ async fn generate(
                 quality: quality.map(String::from),
                 n,
                 response_format: effective_format.to_string(),
+                reference_images,
             },
         )
         .await?;
@@ -342,4 +429,64 @@ async fn generate(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn detects_supported_image_formats() {
+        let png = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0, 0, 0, 0];
+        assert!(is_supported_reference_image(&png));
+
+        let jpeg = [0xFF, 0xD8, 0xFF, 0xE0, 0, 0, 0, 0, 0, 0, 0, 0];
+        assert!(is_supported_reference_image(&jpeg));
+
+        let mut webp = vec![0u8; 12];
+        webp[..4].copy_from_slice(b"RIFF");
+        webp[8..12].copy_from_slice(b"WEBP");
+        assert!(is_supported_reference_image(&webp));
+    }
+
+    #[test]
+    fn rejects_unsupported_formats_and_too_short_buffers() {
+        assert!(!is_supported_reference_image(&[0u8; 4]));
+        assert!(!is_supported_reference_image(b"GIF89a\0\0\0\0\0\0"));
+    }
+
+    #[tokio::test]
+    async fn load_reference_images_round_trip_png() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ref.png");
+        let png_bytes = [
+            0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0xDE, 0xAD, 0xBE, 0xEF,
+        ];
+        tokio::fs::write(&path, &png_bytes).await.unwrap();
+        let result = load_reference_images(&[path.to_string_lossy().into_owned()])
+            .await
+            .unwrap();
+        assert_eq!(result.len(), 1);
+        // Round-trip the base64 to verify content.
+        let decoded = base64::engine::general_purpose::STANDARD
+            .decode(&result[0])
+            .unwrap();
+        assert_eq!(decoded, png_bytes);
+    }
+
+    #[tokio::test]
+    async fn load_reference_images_rejects_unknown_format() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ref.bin");
+        tokio::fs::write(&path, b"GIF89a-not-supported")
+            .await
+            .unwrap();
+        let err = load_reference_images(&[path.to_string_lossy().into_owned()])
+            .await
+            .unwrap_err();
+        assert!(
+            format!("{err}").contains("not a supported format"),
+            "unexpected error: {err}"
+        );
+    }
 }
