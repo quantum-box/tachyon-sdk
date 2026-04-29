@@ -158,6 +158,23 @@ export interface ConsumerOrderList {
   offset: number;
 }
 
+export interface OrderLookupInput {
+  phone: string;
+  lastDigits: string;
+}
+
+export interface OrderListInput {
+  limit?: number;
+  cursor?: string;
+}
+
+export interface OrderList {
+  items: ConsumerOrder[];
+  limit: number;
+  cursor: string | null;
+  hasNextPage: boolean;
+}
+
 export interface ConsumerOrdersInput {
   userId?: string;
   sessionId?: string;
