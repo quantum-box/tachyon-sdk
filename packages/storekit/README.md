@@ -203,6 +203,40 @@ Get a single order by ID.
 
 **Returns:** `ConsumerOrder`
 
+#### `client.orders.getByLookup(input: OrderLookupInput)`
+
+Look up a guest order by phone number and the last 4 order ID digits.
+
+**Input:**
+```typescript
+interface OrderLookupInput {
+  phone: string;
+  lastDigits: string;
+}
+```
+
+**Returns:** `ConsumerOrder | null`
+
+#### `client.orders.listByUser(userId: string, input?: OrderListInput)`
+
+Get orders for an authenticated user.
+
+**Input:**
+```typescript
+interface OrderListInput {
+  limit?: number;   // default: 20
+  cursor?: string;  // offset cursor
+}
+```
+
+**Returns:** `OrderList`
+
+#### `client.orders.getById(orderId: string)`
+
+Get a single order by ID.
+
+**Returns:** `ConsumerOrder`
+
 ## Error Handling
 
 The SDK throws errors for failed requests:

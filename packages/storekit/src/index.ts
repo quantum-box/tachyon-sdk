@@ -33,6 +33,9 @@ export type {
   ConsumerOrderItem,
   ConsumerOrderList,
   ConsumerOrdersInput,
+  OrderList,
+  OrderListInput,
+  OrderLookupInput,
   OrderStatus,
   RefundResult,
 

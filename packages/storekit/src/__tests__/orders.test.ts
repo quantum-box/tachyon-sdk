@@ -71,6 +71,101 @@ describe("OrdersOperations", () => {
     });
   });
 
+  describe("getByLookup", () => {
+    it("should return an order matched by phone and last digits", async () => {
+      const mockOrder = makeOrder({ shippingPhone: "+1-555-1234" });
+      mockClient.query.mockResolvedValueOnce({ consumerOrderByLookup: mockOrder });
+
+      const result = await orders.getByLookup({
+        phone: "+1-555-1234",
+        lastDigits: "0001",
+      });
+
+      expect(result).toEqual(mockOrder);
+      expect(mockClient.query).toHaveBeenCalledWith(
+        expect.stringContaining("ConsumerOrderByLookup"),
+        { phone: "+1-555-1234", lastDigits: "0001" },
+      );
+    });
+
+    it("should return null when lookup does not match an order", async () => {
+      mockClient.query.mockResolvedValueOnce({ consumerOrderByLookup: null });
+
+      await expect(
+        orders.getByLookup({ phone: "+1-555-9999", lastDigits: "9999" }),
+      ).resolves.toBeNull();
+    });
+  });
+
+  describe("listByUser", () => {
+    it("should return a cursor based order list for a user", async () => {
+      const mockList = { items: [makeOrder()], limit: 20, offset: 0 };
+      mockClient.query.mockResolvedValueOnce({ consumerOrders: mockList });
+
+      const result = await orders.listByUser("user-1", { limit: 20 });
+
+      expect(result).toEqual({
+        items: mockList.items,
+        limit: 20,
+        cursor: null,
+        hasNextPage: false,
+      });
+      expect(mockClient.query).toHaveBeenCalledWith(
+        expect.stringContaining("ConsumerOrders"),
+        {
+          userId: "user-1",
+          sessionId: null,
+          status: null,
+          limit: 20,
+          offset: 0,
+        },
+      );
+    });
+
+    it("should map cursor to offset and return next cursor when page is full", async () => {
+      const mockList = {
+        items: [makeOrder({ id: "order-21" }), makeOrder({ id: "order-22" })],
+        limit: 2,
+        offset: 20,
+      };
+      mockClient.query.mockResolvedValueOnce({ consumerOrders: mockList });
+
+      const result = await orders.listByUser("user-1", {
+        limit: 2,
+        cursor: "20",
+      });
+
+      expect(result.cursor).toBe("22");
+      expect(result.hasNextPage).toBe(true);
+      expect(mockClient.query).toHaveBeenCalledWith(
+        expect.stringContaining("ConsumerOrders"),
+        expect.objectContaining({ userId: "user-1", limit: 2, offset: 20 }),
+      );
+    });
+
+    it("should reject non-numeric cursors", async () => {
+      await expect(
+        orders.listByUser("user-1", { cursor: "bad-cursor" }),
+      ).rejects.toThrow("cursor must be a non-negative offset string");
+      expect(mockClient.query).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("getById", () => {
+    it("should return a single order by ID", async () => {
+      const mockOrder = makeOrder();
+      mockClient.query.mockResolvedValueOnce({ consumerOrder: mockOrder });
+
+      const result = await orders.getById("order-1");
+
+      expect(result).toEqual(mockOrder);
+      expect(mockClient.query).toHaveBeenCalledWith(
+        expect.stringContaining("ConsumerOrder"),
+        { orderId: "order-1" },
+      );
+    });
+  });
+
   describe("updateStatus", () => {
     it("should call confirmOrder mutation for CONFIRMED status", async () => {
       const confirmed = makeOrder({ status: ConsumerOrderStatus.CONFIRMED });

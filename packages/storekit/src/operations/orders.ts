@@ -6,6 +6,9 @@ import type {
   ConsumerOrder,
   ConsumerOrderList,
   ConsumerOrdersInput,
+  OrderList,
+  OrderListInput,
+  OrderLookupInput,
   OrderStatus,
   RefundResult,
 } from "../types.js";
@@ -103,6 +106,41 @@ const GET_CONSUMER_ORDER = `
   }
 `;
 
+const GET_CONSUMER_ORDER_BY_LOOKUP = `
+  query ConsumerOrderByLookup($phone: String!, $lastDigits: String!) {
+    consumerOrderByLookup(phone: $phone, lastDigits: $lastDigits) {
+      id
+      tenantId
+      cartId
+      userId
+      sessionId
+      status
+      fulfillmentMethod
+      paymentMethod
+      shippingName
+      shippingAddress
+      shippingPhone
+      subtotalNanodollar
+      discountNanodollar
+      shippingFeeNanodollar
+      totalNanodollar
+      items {
+        id
+        productId
+        productName
+        quantity
+        unitPriceNanodollar
+        subtotalNanodollar
+      }
+      confirmedAt
+      shippedAt
+      deliveredAt
+      createdAt
+      updatedAt
+    }
+  }
+`;
+
 const ORDER_FIELDS = `
   id tenantId cartId userId sessionId status fulfillmentMethod paymentMethod
   shippingName shippingAddress shippingPhone subtotalNanodollar discountNanodollar
@@ -149,6 +187,66 @@ export class OrdersOperations {
       consumerOrder: ConsumerOrder;
     }>(GET_CONSUMER_ORDER, { orderId });
     return response.consumerOrder;
+  }
+
+  /**
+   * Look up a guest order by phone number and the last 4 order ID digits.
+   * Tenant scoping is handled by the shared GraphQL client headers.
+   */
+  async getByLookup(input: OrderLookupInput): Promise<ConsumerOrder | null> {
+    const response = await this.client.query<{
+      consumerOrderByLookup: ConsumerOrder | null;
+    }>(GET_CONSUMER_ORDER_BY_LOOKUP, {
+      phone: input.phone,
+      lastDigits: input.lastDigits,
+    });
+    return response.consumerOrderByLookup;
+  }
+
+  /**
+   * Get orders for an authenticated user.
+   *
+   * The current bakuure API exposes offset pagination for consumerOrders.
+   * This method accepts a string cursor to keep the SDK contract stable while
+   * preserving compatibility with the existing endpoint.
+   */
+  async listByUser(
+    userId: string,
+    input: OrderListInput = {},
+  ): Promise<OrderList> {
+    const limit = input.limit ?? 20;
+    const offset = input.cursor === undefined ? 0 : Number(input.cursor);
+
+    if (!Number.isInteger(offset) || offset < 0) {
+      throw new Error("listByUser: cursor must be a non-negative offset string");
+    }
+
+    const response = await this.client.query<{
+      consumerOrders: ConsumerOrderList;
+    }>(GET_CONSUMER_ORDERS, {
+      userId,
+      sessionId: null,
+      status: null,
+      limit,
+      offset,
+    });
+
+    const nextOffset = response.consumerOrders.offset + response.consumerOrders.items.length;
+    const hasNextPage = response.consumerOrders.items.length === response.consumerOrders.limit;
+
+    return {
+      items: response.consumerOrders.items,
+      limit: response.consumerOrders.limit,
+      cursor: hasNextPage ? String(nextOffset) : null,
+      hasNextPage,
+    };
+  }
+
+  /**
+   * Get a single order by ID.
+   */
+  async getById(orderId: string): Promise<ConsumerOrder> {
+    return this.get(orderId);
   }
 
   /**
