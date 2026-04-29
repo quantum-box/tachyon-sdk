@@ -61,7 +61,14 @@ pub enum ImageCommand {
         /// Repeat for multiple images (max 16). Each file must be
         /// PNG, JPEG, or WebP and < 25 MB. Only supported with
         /// model=gpt-image-2.
-        #[arg(long = "reference-image", value_name = "PATH")]
+        ///
+        /// Accepts `--reference-image`, `--reference`, or `-r`.
+        #[arg(
+            long = "reference-image",
+            short = 'r',
+            alias = "reference",
+            value_name = "PATH"
+        )]
         reference_images: Vec<String>,
     },
 }
@@ -434,6 +441,39 @@ async fn generate(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use clap::Parser;
+
+    #[derive(Parser, Debug)]
+    struct TestCli {
+        #[command(subcommand)]
+        cmd: ImageCommand,
+    }
+
+    fn parse_reference_images(args: &[&str]) -> Vec<String> {
+        let cli = TestCli::try_parse_from(args).expect("parse should succeed");
+        let ImageCommand::Generate {
+            reference_images, ..
+        } = cli.cmd;
+        reference_images
+    }
+
+    #[test]
+    fn reference_image_accepts_short_and_alias_forms() {
+        // -r short, --reference alias, --reference-image canonical all populate the same Vec.
+        let refs = parse_reference_images(&[
+            "test",
+            "generate",
+            "--prompt",
+            "hi",
+            "-r",
+            "a.png",
+            "--reference",
+            "b.png",
+            "--reference-image",
+            "c.png",
+        ]);
+        assert_eq!(refs, vec!["a.png", "b.png", "c.png"]);
+    }
 
     #[test]
     fn detects_supported_image_formats() {
