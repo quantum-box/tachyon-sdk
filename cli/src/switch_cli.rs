@@ -7,13 +7,17 @@ use tachyon_sdk::apis::configuration::Configuration;
 use crate::auth;
 use crate::client::ApiClient;
 
+const DEFAULT_TACHYON_TENANT_ID: &str = "tn_01hjryxysgey07h5jz5wagqj0m";
+const DEFAULT_TACHYON_TENANT_ALIAS: &str = "tachyon";
+const DEFAULT_TACHYON_TENANT_NAME: &str = "Tachyon";
+
 #[derive(Debug, Args)]
 pub struct SwitchArgs {
     /// Tenant ID, alias, or name to switch to (omit for interactive)
     pub tenant: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 struct OperatorEntry {
     id: String,
     #[serde(default)]
@@ -36,6 +40,7 @@ pub async fn run(args: &SwitchArgs, config: &Configuration, profile: &str) -> Re
         None => {
             // Interactive switch
             let ops: Vec<OperatorEntry> = api.get("/v1/auth/operators/by-user").await?;
+            let ops = with_default_tachyon_tenant(ops);
             if ops.is_empty() {
                 return Err(anyhow!(
                     "No tenants found. Run `tachyon auth login` to authenticate."
@@ -75,6 +80,9 @@ async fn resolve_operator_id(api: &ApiClient, name_or_id: &str) -> Result<String
     if looks_like_id(name_or_id) {
         return Ok(name_or_id.to_string());
     }
+    if is_default_tachyon_tenant_name(name_or_id) {
+        return Ok(DEFAULT_TACHYON_TENANT_ID.to_string());
+    }
     // Try by-alias exact match
     #[derive(Deserialize)]
     struct ByAliasResult {
@@ -88,6 +96,7 @@ async fn resolve_operator_id(api: &ApiClient, name_or_id: &str) -> Result<String
     }
     // Fall back to listing and matching by name or alias
     let ops: Vec<OperatorEntry> = api.get("/v1/auth/operators/by-user").await?;
+    let ops = with_default_tachyon_tenant(ops);
     let matches: Vec<_> = ops
         .iter()
         .filter(|o| o.alias.as_deref() == Some(name_or_id) || o.name.as_deref() == Some(name_or_id))
@@ -106,11 +115,68 @@ async fn resolve_operator_id(api: &ApiClient, name_or_id: &str) -> Result<String
     }
 }
 
+fn with_default_tachyon_tenant(mut ops: Vec<OperatorEntry>) -> Vec<OperatorEntry> {
+    if ops.iter().any(|op| op.id == DEFAULT_TACHYON_TENANT_ID) {
+        return ops;
+    }
+    ops.push(OperatorEntry {
+        id: DEFAULT_TACHYON_TENANT_ID.to_string(),
+        name: Some(DEFAULT_TACHYON_TENANT_NAME.to_string()),
+        alias: Some(DEFAULT_TACHYON_TENANT_ALIAS.to_string()),
+    });
+    ops
+}
+
+fn is_default_tachyon_tenant_name(value: &str) -> bool {
+    value.eq_ignore_ascii_case(DEFAULT_TACHYON_TENANT_ALIAS)
+        || value.eq_ignore_ascii_case(DEFAULT_TACHYON_TENANT_NAME)
+}
+
 fn looks_like_id(value: &str) -> bool {
     if let Some(pos) = value.find('_') {
         let after = &value[pos + 1..];
         after.len() > 10 && after.chars().all(|c| c.is_ascii_alphanumeric())
     } else {
         false
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn adds_default_tachyon_tenant_to_switch_candidates() {
+        let ops = with_default_tachyon_tenant(vec![OperatorEntry {
+            id: "tn_customer".to_string(),
+            name: Some("Customer".to_string()),
+            alias: None,
+        }]);
+
+        assert!(ops.iter().any(|op| op.id == DEFAULT_TACHYON_TENANT_ID));
+    }
+
+    #[test]
+    fn does_not_duplicate_default_tachyon_tenant() {
+        let ops = with_default_tachyon_tenant(vec![OperatorEntry {
+            id: DEFAULT_TACHYON_TENANT_ID.to_string(),
+            name: Some("Existing Tachyon".to_string()),
+            alias: None,
+        }]);
+
+        assert_eq!(
+            ops.iter()
+                .filter(|op| op.id == DEFAULT_TACHYON_TENANT_ID)
+                .count(),
+            1
+        );
+        assert_eq!(ops[0].name.as_deref(), Some("Existing Tachyon"));
+    }
+
+    #[test]
+    fn recognizes_default_tachyon_tenant_name() {
+        assert!(is_default_tachyon_tenant_name("tachyon"));
+        assert!(is_default_tachyon_tenant_name("Tachyon"));
+        assert!(!is_default_tachyon_tenant_name("MOVERENT"));
     }
 }

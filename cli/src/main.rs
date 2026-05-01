@@ -41,7 +41,8 @@ struct Cli {
         long,
         visible_alias = "operator",
         env = "TACHYON_TENANT_ID",
-        default_value = ""
+        default_value = "",
+        global = true
     )]
     tenant_id: String,
 
@@ -67,6 +68,40 @@ struct Cli {
 
     #[command(subcommand)]
     command: Commands,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_tenant_id_after_nested_ops_command() {
+        let cli = Cli::try_parse_from([
+            "tachyon",
+            "ops",
+            "slack",
+            "send",
+            "--tenant-id",
+            "tn_test",
+            "--text",
+            "hello",
+        ])
+        .unwrap();
+
+        assert_eq!(cli.tenant_id, "tn_test");
+        match cli.command {
+            Commands::Ops(ops_cli::OpsArgs {
+                command:
+                    ops_cli::OpsCommand::Notify {
+                        command: ops_cli::NotifyCommand::Send { text, json },
+                    },
+            }) => {
+                assert_eq!(text, "hello");
+                assert!(!json);
+            }
+            _ => panic!("expected ops slack send command"),
+        }
+    }
 }
 
 #[derive(Subcommand)]
