@@ -222,3 +222,36 @@ pub async fn run() -> Result<()> {
 
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn extracts_release_tag_from_asset_redirect_url() {
+        let tag = extract_release_tag(
+            "https://github.com/quantum-box/tachyon-sdk/releases/download/tachyon-cli-v0.5.3/tachyon-darwin-arm64.tar.gz",
+        )
+        .expect("tag should be parsed from release asset redirect");
+
+        assert_eq!(tag, "tachyon-cli-v0.5.3");
+    }
+
+    #[test]
+    fn extracts_release_tag_from_latest_page_redirect_path() {
+        let tag = extract_release_tag("/quantum-box/tachyon-sdk/releases/tag/tachyon-cli-v0.5.3")
+            .expect("tag should be parsed from relative latest-page redirect");
+
+        assert_eq!(tag, "tachyon-cli-v0.5.3");
+    }
+
+    #[test]
+    fn rejects_redirect_urls_without_release_tag() {
+        let error = extract_release_tag("https://github.com/quantum-box/tachyon-sdk")
+            .expect_err("missing release tag should be rejected");
+
+        assert!(error
+            .to_string()
+            .contains("Could not parse release tag from redirect URL"));
+    }
+}
