@@ -74,7 +74,16 @@ describe("OrdersOperations", () => {
   describe("getByLookup", () => {
     it("should return an order matched by phone and last digits", async () => {
       const mockOrder = makeOrder({ shippingPhone: "+1-555-1234" });
-      mockClient.query.mockResolvedValueOnce({ consumerOrderByLookup: mockOrder });
+      mockClient.mutate.mockResolvedValueOnce({
+        consumerOrderByLookup: {
+          lookupToken: "lookup-token",
+          expiresAt: "2026-05-02T00:30:00Z",
+          order: mockOrder,
+        },
+      });
+      mockClient.query.mockResolvedValueOnce({
+        consumerOrderByLookupToken: mockOrder,
+      });
 
       const result = await orders.getByLookup({
         phone: "+1-555-1234",
@@ -82,14 +91,25 @@ describe("OrdersOperations", () => {
       });
 
       expect(result).toEqual(mockOrder);
-      expect(mockClient.query).toHaveBeenCalledWith(
+      expect(mockClient.mutate).toHaveBeenCalledWith(
         expect.stringContaining("ConsumerOrderByLookup"),
-        { phone: "+1-555-1234", lastDigits: "0001" },
+        {
+          input: {
+            phone: "+1-555-1234",
+            lastDigits: "0001",
+          },
+        },
+      );
+      expect(mockClient.query).toHaveBeenCalledWith(
+        expect.stringContaining("ConsumerOrderByLookupToken"),
+        { lookupToken: "lookup-token" },
       );
     });
 
     it("should return null when lookup does not match an order", async () => {
-      mockClient.query.mockResolvedValueOnce({ consumerOrderByLookup: null });
+      mockClient.mutate.mockRejectedValueOnce(
+        new Error("NotFoundError: Order not found"),
+      );
 
       await expect(
         orders.getByLookup({ phone: "+1-555-9999", lastDigits: "9999" }),

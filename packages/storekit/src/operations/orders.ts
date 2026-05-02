@@ -106,9 +106,48 @@ const GET_CONSUMER_ORDER = `
   }
 `;
 
-const GET_CONSUMER_ORDER_BY_LOOKUP = `
-  query ConsumerOrderByLookup($phone: String!, $lastDigits: String!) {
-    consumerOrderByLookup(phone: $phone, lastDigits: $lastDigits) {
+const CONSUMER_ORDER_BY_LOOKUP = `
+  mutation ConsumerOrderByLookup($input: ConsumerOrderLookupInput!) {
+    consumerOrderByLookup(input: $input) {
+      lookupToken
+      expiresAt
+      order {
+        id
+        tenantId
+        cartId
+        userId
+        sessionId
+        status
+        fulfillmentMethod
+        paymentMethod
+        shippingName
+        shippingAddress
+        shippingPhone
+        subtotalNanodollar
+        discountNanodollar
+        shippingFeeNanodollar
+        totalNanodollar
+        items {
+          id
+          productId
+          productName
+          quantity
+          unitPriceNanodollar
+          subtotalNanodollar
+        }
+        confirmedAt
+        shippedAt
+        deliveredAt
+        createdAt
+        updatedAt
+      }
+    }
+  }
+`;
+
+const GET_CONSUMER_ORDER_BY_LOOKUP_TOKEN = `
+  query ConsumerOrderByLookupToken($lookupToken: String!) {
+    consumerOrderByLookupToken(lookupToken: $lookupToken) {
       id
       tenantId
       cartId
@@ -194,13 +233,32 @@ export class OrdersOperations {
    * Tenant scoping is handled by the shared GraphQL client headers.
    */
   async getByLookup(input: OrderLookupInput): Promise<ConsumerOrder | null> {
-    const response = await this.client.query<{
-      consumerOrderByLookup: ConsumerOrder | null;
-    }>(GET_CONSUMER_ORDER_BY_LOOKUP, {
-      phone: input.phone,
-      lastDigits: input.lastDigits,
-    });
-    return response.consumerOrderByLookup;
+    try {
+      const lookup = await this.client.mutate<{
+        consumerOrderByLookup: {
+          lookupToken: string;
+          expiresAt: string;
+          order: ConsumerOrder;
+        };
+      }>(CONSUMER_ORDER_BY_LOOKUP, {
+        input: {
+          phone: input.phone,
+          lastDigits: input.lastDigits,
+        },
+      });
+
+      const response = await this.client.query<{
+        consumerOrderByLookupToken: ConsumerOrder | null;
+      }>(GET_CONSUMER_ORDER_BY_LOOKUP_TOKEN, {
+        lookupToken: lookup.consumerOrderByLookup.lookupToken,
+      });
+      return response.consumerOrderByLookupToken;
+    } catch (error) {
+      if (isLookupNotFound(error)) {
+        return null;
+      }
+      throw error;
+    }
   }
 
   /**
@@ -309,4 +367,15 @@ export class OrdersOperations {
   async refund(_orderId: string, _amount?: number): Promise<RefundResult> {
     throw new Error("Not implemented: requires PLT-723 approval");
   }
+}
+
+function isLookupNotFound(error: unknown): boolean {
+  const message =
+    error instanceof Error ? error.message : String(error ?? "");
+  return (
+    message.includes("NOT_FOUND") ||
+    message.includes("NotFound") ||
+    message.includes("not found") ||
+    message.includes("404")
+  );
 }
