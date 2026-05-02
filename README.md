@@ -224,6 +224,23 @@ tachyon-apps (private monorepo)
 
 The OpenAPI spec is the single source of truth. SDKs are auto-generated from it.
 
+## StoreKit SDK
+
+StoreKit uses `apps/bakuure-api/bakuure.openapi.yaml` as its OpenAPI source.
+Generate a TypeScript StoreKit client with:
+
+```bash
+./scripts/generate-storekit.sh
+```
+
+By default this writes to `typescript-storekit/`. Override the spec or output path with:
+
+```bash
+STOREKIT_OPENAPI_SPEC=/path/to/bakuure.openapi.yaml \
+STOREKIT_TYPESCRIPT_OUT=typescript-storekit \
+./scripts/generate-storekit.sh
+```
+
 ## License
 
 MIT © 2026 Quantum Box株式会社
