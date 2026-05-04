@@ -1,9 +1,10 @@
 # PLT-1099 Phase 1 Task
 
-Status: in-progress
+Status: phase1-completed
 Owner: leader-plt1099-adr-codex
 Branch: feature/plt-1099-auth-adr
 Scope: ADR draft only; no implementation and no admin merge until CEO confirmation.
+Completed: 2026-05-04
 
 ## Objective
 
@@ -19,6 +20,9 @@ Draft an ADR for adding top-level `auth:` provider definitions to `tachyon.yml` 
 - [x] Open PR targeting `main`: https://github.com/quantum-box/tachyon-sdk/pull/73
 - [x] Send PR URL and Linear sub-issue request draft to PdM-PF work:17.
 - [x] Hold for COO/CEO ADR confirmation.
+- [x] Received COO ack that Linear ops are complete: PLT-1100 sub-issue, PLT-1101 CEO judgment escalation, and Slack notify.
+- [x] Confirmed PR #73 CI is green and merge remains HOLD pending CEO ADR FIX.
+- [x] Prepared leader self-kill handoff.
 
 ## Guardrails
 
