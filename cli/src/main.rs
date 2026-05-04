@@ -154,6 +154,10 @@ struct AuthArgs {
 enum AuthCommand {
     /// Log in via browser-based OAuth and save tokens to a profile
     Login(LoginArgs),
+    /// Register an auth provider in tachyon.yml
+    Init(commands::auth::init::InitAuthArgs),
+    /// Issue credentials for a registered auth provider
+    Issue(commands::auth::issue::IssueAuthArgs),
     /// Remove a profile's stored credentials
     Logout(LogoutArgs),
     /// List registered profiles (active marked with *)
@@ -276,6 +280,22 @@ async fn run() -> Result<()> {
                     .or_else(|| cli.profile.clone())
                     .unwrap_or_else(|| auth::DEFAULT_PROFILE.to_string());
                 auth::login(&oauth_config, &cli.api_url, &target).await
+            }
+            AuthCommand::Init(init_args) => {
+                commands::auth::init::run(init_args, cli.config.as_deref())
+            }
+            AuthCommand::Issue(issue_args) => {
+                let project_config = config::loader::load(cli.config.as_deref())?;
+                let tenant_arg = tenant_arg(&cli, project_config.as_ref()).to_string();
+                let token = resolve_token(&cli, &active).await;
+                commands::auth::issue::run(
+                    issue_args,
+                    cli.config.as_deref(),
+                    &cli.api_url,
+                    token,
+                    &tenant_arg,
+                )
+                .await
             }
             AuthCommand::Logout(logout_args) => {
                 let target = logout_args
