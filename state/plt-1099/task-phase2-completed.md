@@ -1,6 +1,6 @@
 # PLT-1099 Phase 2 CLI Implementation
 
-Status: in-progress
+Status: completed
 
 Scope:
 - Extend `tachyon.yml` with an `auth.providers[]` schema.
