@@ -10,6 +10,8 @@ const CONFIG_ENV: &str = "TACHYON_CONFIG";
 pub struct ProjectConfig {
     #[serde(default)]
     pub metadata: ProjectMetadata,
+    #[serde(default)]
+    pub auth: Option<crate::config::auth::AuthConfig>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize, PartialEq, Eq)]
@@ -25,17 +27,37 @@ pub fn load(config_flag: Option<&Path>) -> Result<Option<ProjectConfig>> {
     load_from(&cwd, config_flag)
 }
 
+pub fn load_with_path(config_flag: Option<&Path>) -> Result<Option<LoadedProjectConfig>> {
+    let cwd = env::current_dir()?;
+    load_with_path_from(&cwd, config_flag)
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LoadedProjectConfig {
+    pub path: PathBuf,
+    pub config: ProjectConfig,
+}
+
 fn load_from(cwd: &Path, config_flag: Option<&Path>) -> Result<Option<ProjectConfig>> {
+    Ok(load_with_path_from(cwd, config_flag)?.map(|loaded| loaded.config))
+}
+
+fn load_with_path_from(
+    cwd: &Path,
+    config_flag: Option<&Path>,
+) -> Result<Option<LoadedProjectConfig>> {
     if let Some(path) = env::var_os(CONFIG_ENV) {
-        return load_path(&resolve_path(cwd, Path::new(&path))).map(Some);
+        let path = resolve_path(cwd, Path::new(&path));
+        return load_path(&path).map(|config| Some(LoadedProjectConfig { path, config }));
     }
 
     if let Some(path) = config_flag {
-        return load_path(&resolve_path(cwd, path)).map(Some);
+        let path = resolve_path(cwd, path);
+        return load_path(&path).map(|config| Some(LoadedProjectConfig { path, config }));
     }
 
     match discover(cwd) {
-        Some(path) => load_path(&path).map(Some),
+        Some(path) => load_path(&path).map(|config| Some(LoadedProjectConfig { path, config })),
         None => Ok(None),
     }
 }
