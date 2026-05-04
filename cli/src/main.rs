@@ -2,7 +2,9 @@ mod agent_cli;
 mod auth;
 mod build_reproduce;
 mod client;
+mod commands;
 mod compute_cli;
+mod config;
 mod iac_cli;
 mod image_cli;
 mod install_cli;
@@ -16,6 +18,7 @@ mod tts_cli;
 
 use anyhow::Result;
 use clap::{Args, Parser, Subcommand};
+use std::path::PathBuf;
 use tachyon_sdk::apis::configuration::Configuration;
 
 /// Default Cognito domain for the Tachyon production environment.
@@ -53,6 +56,10 @@ struct Cli {
     /// Auth profile to use for this command (overrides the active profile).
     #[arg(long, global = true, env = "TACHYON_PROFILE")]
     profile: Option<String>,
+
+    /// Project config file (overridden by TACHYON_CONFIG when set)
+    #[arg(long, global = true)]
+    config: Option<PathBuf>,
 
     /// Cognito domain URL (e.g. https://your-domain.auth.ap-northeast-1.amazoncognito.com)
     #[arg(long, env = "TACHYON_COGNITO_DOMAIN", default_value = DEFAULT_COGNITO_DOMAIN)]
@@ -114,6 +121,8 @@ enum Commands {
     Logout(LogoutArgs),
     /// Manage compute apps, builds, deployments, and configuration
     Compute(compute_cli::ComputeArgs),
+    /// Generate a tachyon.yml project config
+    Init(commands::init::InitArgs),
     /// Manage organizations, users, service accounts, and policies
     Org(org_cli::OrgArgs),
     /// Manage agent sessions, protocols, workers, and memory
@@ -297,45 +306,73 @@ async fn run() -> Result<()> {
             auth::logout(&target)
         }
         Commands::Compute(args) => {
+            let project_config = config::loader::load(cli.config.as_deref())?;
+            let tenant_arg = tenant_arg(&cli, project_config.as_ref());
             let config = build_config(&cli, &active).await;
-            let tenant_id = resolve::resolve_tenant_id(&config, &cli.tenant_id, &active).await?;
-            compute_cli::run(args, &config, &tenant_id).await
+            let tenant_id = resolve::resolve_tenant_id(&config, tenant_arg, &active).await?;
+            compute_cli::run(args, &config, &tenant_id, project_config.as_ref()).await
         }
         Commands::Org(args) => {
+            let project_config = config::loader::load(cli.config.as_deref())?;
+            let tenant_arg = tenant_arg(&cli, project_config.as_ref());
             let config = build_config(&cli, &active).await;
-            let tenant_id = resolve::resolve_tenant_id(&config, &cli.tenant_id, &active).await?;
+            let tenant_id = resolve::resolve_tenant_id(&config, tenant_arg, &active).await?;
             org_cli::run(args, &config, &tenant_id).await
         }
         Commands::Agent(args) => {
+            let project_config = config::loader::load(cli.config.as_deref())?;
+            let tenant_arg = tenant_arg(&cli, project_config.as_ref());
             let config = build_config(&cli, &active).await;
-            let tenant_id = resolve::resolve_tenant_id(&config, &cli.tenant_id, &active).await?;
+            let tenant_id = resolve::resolve_tenant_id(&config, tenant_arg, &active).await?;
             agent_cli::run(args, &config, &tenant_id).await
         }
         Commands::Iac(args) => {
+            let project_config = config::loader::load(cli.config.as_deref())?;
+            let tenant_arg = tenant_arg(&cli, project_config.as_ref());
             let config = build_config(&cli, &active).await;
-            let tenant_id = resolve::resolve_tenant_id(&config, &cli.tenant_id, &active).await?;
+            let tenant_id = resolve::resolve_tenant_id(&config, tenant_arg, &active).await?;
             iac_cli::run(args, &config, &tenant_id).await
         }
         Commands::Ops(args) => {
+            let project_config = config::loader::load(cli.config.as_deref())?;
+            let tenant_arg = tenant_arg(&cli, project_config.as_ref());
             let config = build_config(&cli, &active).await;
-            let tenant_id = resolve::resolve_tenant_id(&config, &cli.tenant_id, &active).await?;
+            let tenant_id = resolve::resolve_tenant_id(&config, tenant_arg, &active).await?;
             ops_cli::run(args, &config, &tenant_id).await
         }
         Commands::Image(args) => {
+            let project_config = config::loader::load(cli.config.as_deref())?;
+            let tenant_arg = tenant_arg(&cli, project_config.as_ref());
             let config = build_config(&cli, &active).await;
-            let tenant_id = resolve::resolve_tenant_id(&config, &cli.tenant_id, &active).await?;
+            let tenant_id = resolve::resolve_tenant_id(&config, tenant_arg, &active).await?;
             image_cli::run(args, &config, &tenant_id).await
         }
         Commands::Tts(args) => {
+            let project_config = config::loader::load(cli.config.as_deref())?;
+            let tenant_arg = tenant_arg(&cli, project_config.as_ref());
             let config = build_config(&cli, &active).await;
-            let tenant_id = resolve::resolve_tenant_id(&config, &cli.tenant_id, &active).await?;
+            let tenant_id = resolve::resolve_tenant_id(&config, tenant_arg, &active).await?;
             tts_cli::run(args, &config, &tenant_id).await
         }
         Commands::Mcp(args) => mcp_cli::run(args).await,
         Commands::SelfUpdate => install_cli::run().await,
+        Commands::Init(args) => commands::init::run(args),
         Commands::Switch(args) => {
             let config = build_config(&cli, &active).await;
             switch_cli::run(args, &config, &active).await
         }
     }
+}
+
+fn tenant_arg<'a>(
+    cli: &'a Cli,
+    project_config: Option<&'a config::loader::ProjectConfig>,
+) -> &'a str {
+    if !cli.tenant_id.is_empty() {
+        return cli.tenant_id.as_str();
+    }
+
+    project_config
+        .and_then(|config| config.metadata.tenant_id.as_deref())
+        .unwrap_or("")
 }

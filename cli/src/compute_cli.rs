@@ -9,6 +9,7 @@ use tokio::time::{sleep, Duration};
 
 use crate::build_reproduce;
 use crate::client::{print_json, truncate, ApiClient};
+use crate::config::loader::ProjectConfig;
 use crate::resolve;
 
 #[derive(Debug, Clone, Args)]
@@ -74,7 +75,7 @@ pub enum ComputeCommand {
     /// Show build status for a compute app (shortcut for builds list)
     Status {
         /// App ID or name
-        app_id: String,
+        app_id: Option<String>,
         /// Maximum number of builds to display
         #[arg(long, default_value_t = 10)]
         limit: usize,
@@ -292,7 +293,7 @@ pub enum AppsCommand {
     /// Get details of a compute app
     Get {
         /// App ID or name
-        app_id: String,
+        app_id: Option<String>,
         /// Output as JSON
         #[arg(long)]
         json: bool,
@@ -300,7 +301,7 @@ pub enum AppsCommand {
     /// Delete a compute app
     Delete {
         /// App ID or name
-        app_id: String,
+        app_id: Option<String>,
     },
 }
 
@@ -311,7 +312,7 @@ pub enum BuildsCommand {
     /// List builds for an app
     List {
         /// App ID or name
-        app_id: String,
+        app_id: Option<String>,
         /// Maximum number of builds to display
         #[arg(long, default_value_t = 10)]
         limit: usize,
@@ -330,7 +331,7 @@ pub enum BuildsCommand {
     /// Trigger a new build
     Trigger {
         /// App ID or name
-        app_id: String,
+        app_id: Option<String>,
         /// Branch to build (optional)
         #[arg(long)]
         branch: Option<String>,
@@ -343,7 +344,7 @@ pub enum BuildsCommand {
     /// Fetch build logs
     Logs {
         /// App ID (used to resolve latest build if --build-id is not given)
-        app_id: String,
+        app_id: Option<String>,
         /// Build ID (defaults to the latest build)
         #[arg(long)]
         build_id: Option<String>,
@@ -383,7 +384,7 @@ pub enum DeploymentsCommand {
     /// List deployments for an app
     List {
         /// App ID or name
-        app_id: String,
+        app_id: Option<String>,
         /// Output as JSON
         #[arg(long)]
         json: bool,
@@ -399,7 +400,7 @@ pub enum DeploymentsCommand {
     /// Rollback an app to a previous deployment
     Rollback {
         /// App ID or name
-        app_id: String,
+        app_id: Option<String>,
         /// Deployment ID to roll back to
         #[arg(long)]
         deployment_id: String,
@@ -413,7 +414,7 @@ pub enum EnvCommand {
     /// List environment variables for an app
     List {
         /// App ID or name
-        app_id: String,
+        app_id: Option<String>,
         /// Output as JSON
         #[arg(long)]
         json: bool,
@@ -442,7 +443,7 @@ pub enum DomainsCommand {
     /// List custom domains for an app
     List {
         /// App ID or name
-        app_id: String,
+        app_id: Option<String>,
         /// Output as JSON
         #[arg(long)]
         json: bool,
@@ -450,7 +451,7 @@ pub enum DomainsCommand {
     /// Add a custom domain
     Add {
         /// App ID or name
-        app_id: String,
+        app_id: Option<String>,
         /// Domain name
         domain: String,
     },
@@ -473,7 +474,7 @@ pub enum ScalingCommand {
     /// Show current scaling configuration
     Get {
         /// App ID or name
-        app_id: String,
+        app_id: Option<String>,
         /// Output as JSON
         #[arg(long)]
         json: bool,
@@ -481,7 +482,7 @@ pub enum ScalingCommand {
     /// Update scaling configuration
     Update {
         /// App ID or name
-        app_id: String,
+        app_id: Option<String>,
         /// Minimum number of instances
         #[arg(long)]
         min_instances: Option<i32>,
@@ -1252,7 +1253,26 @@ async fn run_scaling_update(
 
 // ---- Entry point ----
 
-pub async fn run(args: &ComputeArgs, config: &Configuration, tenant_id: &str) -> Result<()> {
+fn app_id_or_default<'a>(
+    app_id: &'a Option<String>,
+    project_config: Option<&'a ProjectConfig>,
+) -> Result<&'a str> {
+    app_id
+        .as_deref()
+        .or_else(|| {
+            project_config
+                .and_then(|config| config.metadata.name.as_deref())
+                .filter(|name| !name.is_empty())
+        })
+        .ok_or_else(|| anyhow!("app_id is required (or set metadata.name in tachyon.yml)"))
+}
+
+pub async fn run(
+    args: &ComputeArgs,
+    config: &Configuration,
+    tenant_id: &str,
+    project_config: Option<&ProjectConfig>,
+) -> Result<()> {
     // Local-only commands (no API call needed)
     match &args.command {
         ComputeCommand::Build {
@@ -1277,10 +1297,12 @@ pub async fn run(args: &ComputeArgs, config: &Configuration, tenant_id: &str) ->
         ComputeCommand::Apps { command } => match command {
             AppsCommand::List { json } => run_apps_list(&api, *json).await,
             AppsCommand::Get { app_id, json } => {
+                let app_id = app_id_or_default(app_id, project_config)?;
                 let id = resolve::resolve_app_id(&api, app_id).await?;
                 run_apps_get(&api, &id, *json).await
             }
             AppsCommand::Delete { app_id } => {
+                let app_id = app_id_or_default(app_id, project_config)?;
                 let id = resolve::resolve_app_id(&api, app_id).await?;
                 run_apps_delete(&api, &id).await
             }
@@ -1291,11 +1313,13 @@ pub async fn run(args: &ComputeArgs, config: &Configuration, tenant_id: &str) ->
                 limit,
                 json,
             } => {
+                let app_id = app_id_or_default(app_id, project_config)?;
                 let id = resolve::resolve_app_id(&api, app_id).await?;
                 run_builds_list(&api, &id, *limit, *json).await
             }
             BuildsCommand::Get { build_id, json } => run_builds_get(&api, build_id, *json).await,
             BuildsCommand::Trigger { app_id, branch } => {
+                let app_id = app_id_or_default(app_id, project_config)?;
                 let id = resolve::resolve_app_id(&api, app_id).await?;
                 run_builds_trigger(&api, &id, branch.as_deref()).await
             }
@@ -1305,6 +1329,7 @@ pub async fn run(args: &ComputeArgs, config: &Configuration, tenant_id: &str) ->
                 build_id,
                 follow,
             } => {
+                let app_id = app_id_or_default(app_id, project_config)?;
                 let id = resolve::resolve_app_id(&api, app_id).await?;
                 run_builds_logs(&api, Some(id.as_str()), build_id.as_deref(), *follow).await
             }
@@ -1324,6 +1349,7 @@ pub async fn run(args: &ComputeArgs, config: &Configuration, tenant_id: &str) ->
         },
         ComputeCommand::Deployments { command } => match command {
             DeploymentsCommand::List { app_id, json } => {
+                let app_id = app_id_or_default(app_id, project_config)?;
                 let id = resolve::resolve_app_id(&api, app_id).await?;
                 run_deployments_list(&api, &id, *json).await
             }
@@ -1335,12 +1361,14 @@ pub async fn run(args: &ComputeArgs, config: &Configuration, tenant_id: &str) ->
                 app_id,
                 deployment_id,
             } => {
+                let app_id = app_id_or_default(app_id, project_config)?;
                 let id = resolve::resolve_app_id(&api, app_id).await?;
                 run_deployments_rollback(&api, &id, deployment_id).await
             }
         },
         ComputeCommand::Env { command } => match command {
             EnvCommand::List { app_id, json } => {
+                let app_id = app_id_or_default(app_id, project_config)?;
                 let id = resolve::resolve_app_id(&api, app_id).await?;
                 run_env_list(&api, &id, *json).await
             }
@@ -1355,10 +1383,12 @@ pub async fn run(args: &ComputeArgs, config: &Configuration, tenant_id: &str) ->
         },
         ComputeCommand::Domains { command } => match command {
             DomainsCommand::List { app_id, json } => {
+                let app_id = app_id_or_default(app_id, project_config)?;
                 let id = resolve::resolve_app_id(&api, app_id).await?;
                 run_domains_list(&api, &id, *json).await
             }
             DomainsCommand::Add { app_id, domain } => {
+                let app_id = app_id_or_default(app_id, project_config)?;
                 let id = resolve::resolve_app_id(&api, app_id).await?;
                 run_domains_add(&api, &id, domain).await
             }
@@ -1367,6 +1397,7 @@ pub async fn run(args: &ComputeArgs, config: &Configuration, tenant_id: &str) ->
         },
         ComputeCommand::Scaling { command } => match command {
             ScalingCommand::Get { app_id, json } => {
+                let app_id = app_id_or_default(app_id, project_config)?;
                 let id = resolve::resolve_app_id(&api, app_id).await?;
                 run_scaling_get(&api, &id, *json).await
             }
@@ -1375,12 +1406,14 @@ pub async fn run(args: &ComputeArgs, config: &Configuration, tenant_id: &str) ->
                 min_instances,
                 max_instances,
             } => {
+                let app_id = app_id_or_default(app_id, project_config)?;
                 let id = resolve::resolve_app_id(&api, app_id).await?;
                 run_scaling_update(&api, &id, *min_instances, *max_instances).await
             }
         },
         // Legacy shortcuts
         ComputeCommand::Status { app_id, limit } => {
+            let app_id = app_id_or_default(app_id, project_config)?;
             let id = resolve::resolve_app_id(&api, app_id).await?;
             run_builds_list(&api, &id, *limit, false).await
         }
