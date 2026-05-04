@@ -16,9 +16,9 @@ Draft an ADR for adding top-level `auth:` provider definitions to `tachyon.yml` 
 - [x] Inspect existing CLI auth and config loader patterns.
 - [x] Inspect existing secret-management patterns from infrastructure references.
 - [x] Draft `state/plt-1099/adr-tachyon-yml-auth.md` with the required five chapters.
-- [ ] Open PR targeting `main`.
-- [ ] Send PR URL and Linear sub-issue request draft to PdM-PF work:17.
-- [ ] Hold for COO/CEO ADR confirmation.
+- [x] Open PR targeting `main`: https://github.com/quantum-box/tachyon-sdk/pull/73
+- [x] Send PR URL and Linear sub-issue request draft to PdM-PF work:17.
+- [x] Hold for COO/CEO ADR confirmation.
 
 ## Guardrails
 
