@@ -13,9 +13,9 @@ Draft an ADR for adding top-level `auth:` provider definitions to `tachyon.yml` 
 
 - [x] Read PLT-1099 directive and confirm Phase 1 scope.
 - [x] Send startup ack to PdM-PF work:17.
-- [ ] Inspect existing CLI auth and config loader patterns.
-- [ ] Inspect existing secret-management patterns from infrastructure references.
-- [ ] Draft `state/plt-1099/adr-tachyon-yml-auth.md` with the required five chapters.
+- [x] Inspect existing CLI auth and config loader patterns.
+- [x] Inspect existing secret-management patterns from infrastructure references.
+- [x] Draft `state/plt-1099/adr-tachyon-yml-auth.md` with the required five chapters.
 - [ ] Open PR targeting `main`.
 - [ ] Send PR URL and Linear sub-issue request draft to PdM-PF work:17.
 - [ ] Hold for COO/CEO ADR confirmation.
