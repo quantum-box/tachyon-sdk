@@ -1,9 +1,17 @@
-use anyhow::Result;
+use std::{
+    collections::HashMap,
+    io::{self, Read},
+    time::{Duration, Instant},
+};
+
+use anyhow::{anyhow, Context, Result};
 use clap::{Args, Subcommand};
 use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
 use tachyon_sdk::apis::configuration::Configuration;
 
 use crate::client::{print_json, truncate, ApiClient};
+use crate::resolve;
 
 #[derive(Debug, Clone, Args)]
 pub struct OpsArgs {
@@ -12,6 +20,7 @@ pub struct OpsArgs {
 }
 
 #[derive(Debug, Clone, Subcommand)]
+#[allow(clippy::large_enum_variant)]
 pub enum OpsCommand {
     /// Manage deployment events
     Deployments {
@@ -67,7 +76,56 @@ pub enum ReportsCommand {
 }
 
 #[derive(Debug, Clone, Subcommand)]
+#[allow(clippy::large_enum_variant)]
 pub enum ToolJobsCommand {
+    /// Create a tool job
+    Create {
+        /// Tool job provider (codex, claude_code, cursor_agent, opencode)
+        #[arg(long)]
+        provider: String,
+        /// Prompt to send. If omitted, stdin is read.
+        #[arg(long)]
+        prompt: Option<String>,
+        /// Context path to send. Can be specified multiple times.
+        #[arg(long = "context-path")]
+        context_paths: Vec<String>,
+        /// Working directory recorded in metadata.cwd
+        #[arg(long)]
+        cwd: Option<String>,
+        /// Environment variable to pass, formatted as KEY=VALUE.
+        #[arg(long = "env")]
+        environment: Vec<String>,
+        /// Output profile name
+        #[arg(long)]
+        output_profile: Option<String>,
+        /// Existing session ID to resume or group with this job.
+        #[arg(long, visible_alias = "session-id")]
+        resume_session_id: Option<String>,
+        /// Target worker ID or name.
+        #[arg(long)]
+        worker_id: Option<String>,
+        /// Use a git worktree for isolated editing.
+        #[arg(long)]
+        use_worktree: bool,
+        /// Auto-merge the worktree branch on success.
+        #[arg(long)]
+        auto_merge: bool,
+        /// Codex execution mode stored in metadata.codex_mode.
+        #[arg(long)]
+        codex_mode: Option<String>,
+        /// Wait until the job reaches a terminal status.
+        #[arg(long)]
+        wait: bool,
+        /// Maximum wait time in seconds.
+        #[arg(long, default_value_t = 300)]
+        wait_timeout_seconds: u64,
+        /// Poll interval in seconds while waiting.
+        #[arg(long, default_value_t = 2)]
+        wait_interval_seconds: u64,
+        /// Print the API response as JSON.
+        #[arg(long)]
+        json: bool,
+    },
     /// List tool jobs
     List {
         #[arg(long)]
@@ -136,14 +194,25 @@ struct ScenarioReportResponse {
 
 #[derive(Debug, Deserialize, Serialize)]
 struct ToolJobResponse {
-    #[serde(default)]
-    id: Option<String>,
-    #[serde(default)]
-    job_id: Option<String>,
+    id: String,
     #[serde(default)]
     provider: Option<String>,
     #[serde(default)]
     status: Option<String>,
+    #[serde(default)]
+    prompt: Option<String>,
+    #[serde(default)]
+    context_paths: Vec<String>,
+    #[serde(default)]
+    normalized_output: Option<Value>,
+    #[serde(default)]
+    error_message: Option<String>,
+    #[serde(default)]
+    session_id: Option<String>,
+    #[serde(default)]
+    resume_session_id: Option<String>,
+    #[serde(default)]
+    assigned_worker_id: Option<String>,
     #[serde(default)]
     tool_name: Option<String>,
     #[serde(default)]
@@ -151,13 +220,36 @@ struct ToolJobResponse {
 }
 
 #[derive(Debug, Deserialize, Serialize)]
-struct ToolJobProviderResponse {
-    #[serde(default)]
-    name: Option<String>,
-    #[serde(default)]
-    description: Option<String>,
-    #[serde(default)]
-    tools: Option<Vec<String>>,
+struct ToolJobListResponse {
+    jobs: Vec<ToolJobResponse>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct ToolJobCreatedResponse {
+    job: ToolJobResponse,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct ToolJobProvidersResponse {
+    providers: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct ToolJobCreateRequest {
+    provider: String,
+    prompt: String,
+    context_paths: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    output_profile: Option<String>,
+    #[serde(skip_serializing_if = "HashMap::is_empty")]
+    environment: HashMap<String, String>,
+    metadata: Value,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    resume_session_id: Option<String>,
+    use_worktree: bool,
+    auto_merge: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    worker_id: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -265,11 +357,198 @@ async fn run_reports_get(api: &ApiClient, run_id: &str, json: bool) -> Result<()
     Ok(())
 }
 
-async fn run_tool_jobs_list(api: &ApiClient, json: bool) -> Result<()> {
-    let jobs: Vec<ToolJobResponse> = api.get("/v1/agent/tool-jobs").await?;
-    if json {
-        return print_json(&jobs);
+fn read_prompt(prompt: &Option<String>) -> Result<String> {
+    if let Some(prompt) = prompt {
+        if prompt.trim().is_empty() {
+            return Err(anyhow!("--prompt must not be empty"));
+        }
+        return Ok(prompt.clone());
     }
+
+    let mut buf = String::new();
+    io::stdin()
+        .read_to_string(&mut buf)
+        .context("read prompt from stdin")?;
+    if buf.trim().is_empty() {
+        return Err(anyhow!(
+            "prompt is required. Pass --prompt or pipe prompt text to stdin"
+        ));
+    }
+    Ok(buf)
+}
+
+fn parse_environment(values: &[String]) -> Result<HashMap<String, String>> {
+    let mut environment = HashMap::new();
+    for value in values {
+        let Some((key, val)) = value.split_once('=') else {
+            return Err(anyhow!(
+                "--env must be formatted as KEY=VALUE, got '{value}'"
+            ));
+        };
+        if key.is_empty() {
+            return Err(anyhow!("--env key must not be empty"));
+        }
+        environment.insert(key.to_string(), val.to_string());
+    }
+    Ok(environment)
+}
+
+fn build_tool_job_metadata(
+    provider: &str,
+    cwd: Option<&str>,
+    codex_mode: Option<&str>,
+) -> Result<Value> {
+    let cwd = match cwd {
+        Some(cwd) => cwd.to_string(),
+        None => std::env::current_dir()
+            .context("resolve current directory")?
+            .display()
+            .to_string(),
+    };
+    let mut metadata = json!({
+        "cwd": cwd,
+        "source": "tachyon-cli",
+    });
+
+    if provider == "codex" || codex_mode.is_some() {
+        metadata["codex_mode"] = json!(codex_mode.unwrap_or("app_server_ws"));
+    }
+
+    Ok(metadata)
+}
+
+fn is_terminal_tool_job_status(status: Option<&str>) -> bool {
+    matches!(status, Some("succeeded" | "failed" | "cancelled"))
+}
+
+fn print_tool_job_created(job: &ToolJobResponse) {
+    println!("Tool job created.");
+    println!("Job ID:   {}", job.id);
+    println!("Provider: {}", job.provider.as_deref().unwrap_or("-"));
+    println!("Status:   {}", job.status.as_deref().unwrap_or("-"));
+    if let Some(worker_id) = &job.assigned_worker_id {
+        println!("Worker:   {worker_id}");
+    }
+    if let Some(session_id) = &job.session_id {
+        println!("Session:  {session_id}");
+    } else if let Some(session_id) = &job.resume_session_id {
+        println!("Session:  {session_id}");
+    }
+}
+
+fn print_tool_job_final(job: &ToolJobResponse) -> Result<()> {
+    println!("Final status: {}", job.status.as_deref().unwrap_or("-"));
+    if let Some(output) = &job.normalized_output {
+        if let Some(text) = output.pointer("/body/text").and_then(Value::as_str) {
+            println!("{text}");
+        } else {
+            println!("{}", serde_json::to_string_pretty(output)?);
+        }
+    }
+    if let Some(error) = &job.error_message {
+        println!("Error: {error}");
+    }
+    Ok(())
+}
+
+async fn wait_tool_job(
+    api: &ApiClient,
+    job_id: &str,
+    timeout_seconds: u64,
+    interval_seconds: u64,
+) -> Result<ToolJobResponse> {
+    let started_at = Instant::now();
+    let timeout = Duration::from_secs(timeout_seconds);
+    let interval = Duration::from_secs(interval_seconds.max(1));
+
+    loop {
+        let response: ToolJobCreatedResponse =
+            api.get(&format!("/v1/agent/tool-jobs/{job_id}")).await?;
+        let job = response.job;
+        if is_terminal_tool_job_status(job.status.as_deref()) {
+            return Ok(job);
+        }
+        if started_at.elapsed() >= timeout {
+            return Err(anyhow!(
+                "timed out waiting for tool job {job_id} after {timeout_seconds}s"
+            ));
+        }
+        tokio::time::sleep(interval).await;
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn run_tool_jobs_create(
+    api: &ApiClient,
+    provider: &str,
+    prompt: &Option<String>,
+    context_paths: &[String],
+    cwd: Option<&str>,
+    environment: &[String],
+    output_profile: Option<&str>,
+    resume_session_id: Option<&str>,
+    worker_id: Option<&str>,
+    use_worktree: bool,
+    auto_merge: bool,
+    codex_mode: Option<&str>,
+    wait: bool,
+    wait_timeout_seconds: u64,
+    wait_interval_seconds: u64,
+    json: bool,
+) -> Result<()> {
+    let prompt = read_prompt(prompt)?;
+    let context_paths = if context_paths.is_empty() {
+        vec![".".to_string()]
+    } else {
+        context_paths.to_vec()
+    };
+    let worker_id = match worker_id {
+        Some(worker_id) => Some(resolve::resolve_worker_id(api, worker_id).await?),
+        None => None,
+    };
+    let request = ToolJobCreateRequest {
+        provider: provider.to_string(),
+        prompt,
+        context_paths,
+        output_profile: output_profile.map(ToString::to_string),
+        environment: parse_environment(environment)?,
+        metadata: build_tool_job_metadata(provider, cwd, codex_mode)?,
+        resume_session_id: resume_session_id.map(ToString::to_string),
+        use_worktree,
+        auto_merge,
+        worker_id,
+    };
+
+    let created: ToolJobCreatedResponse = api.post("/v1/agent/tool-jobs", &request).await?;
+    if !wait {
+        if json {
+            return print_json(&created);
+        }
+        print_tool_job_created(&created.job);
+        return Ok(());
+    }
+
+    let final_job = wait_tool_job(
+        api,
+        &created.job.id,
+        wait_timeout_seconds,
+        wait_interval_seconds,
+    )
+    .await?;
+    let response = ToolJobCreatedResponse { job: final_job };
+    if json {
+        return print_json(&response);
+    }
+    print_tool_job_created(&created.job);
+    print_tool_job_final(&response.job)
+}
+
+async fn run_tool_jobs_list(api: &ApiClient, json: bool) -> Result<()> {
+    let response: ToolJobListResponse = api.get("/v1/agent/tool-jobs").await?;
+    if json {
+        return print_json(&response);
+    }
+    let jobs = response.jobs;
     if jobs.is_empty() {
         println!("No tool jobs found.");
         return Ok(());
@@ -283,10 +562,9 @@ async fn run_tool_jobs_list(api: &ApiClient, json: bool) -> Result<()> {
         "", "", "", "", ""
     );
     for j in &jobs {
-        let id = j.job_id.as_deref().or(j.id.as_deref()).unwrap_or("-");
         println!(
             "{:<28}  {:<16}  {:<12}  {:<20}  {}",
-            id,
+            j.id,
             j.provider.as_deref().unwrap_or("-"),
             j.status.as_deref().unwrap_or("-"),
             truncate(j.tool_name.as_deref().unwrap_or("-"), 20),
@@ -297,7 +575,7 @@ async fn run_tool_jobs_list(api: &ApiClient, json: bool) -> Result<()> {
 }
 
 async fn run_tool_jobs_get(api: &ApiClient, job_id: &str, json: bool) -> Result<()> {
-    let j: serde_json::Value = api.get(&format!("/v1/agent/tool-jobs/{job_id}")).await?;
+    let j: ToolJobCreatedResponse = api.get(&format!("/v1/agent/tool-jobs/{job_id}")).await?;
     if json {
         return print_json(&j);
     }
@@ -313,21 +591,17 @@ async fn run_tool_jobs_cancel(api: &ApiClient, job_id: &str) -> Result<()> {
 }
 
 async fn run_tool_jobs_providers(api: &ApiClient, json: bool) -> Result<()> {
-    let providers: Vec<ToolJobProviderResponse> = api.get("/v1/agent/tool-jobs/providers").await?;
+    let response: ToolJobProvidersResponse = api.get("/v1/agent/tool-jobs/providers").await?;
     if json {
-        return print_json(&providers);
+        return print_json(&response);
     }
+    let providers = response.providers;
     if providers.is_empty() {
         println!("No providers found.");
         return Ok(());
     }
-    for p in &providers {
-        println!("Provider: {}", p.name.as_deref().unwrap_or("-"));
-        println!("  Description: {}", p.description.as_deref().unwrap_or("-"));
-        if let Some(tools) = &p.tools {
-            println!("  Tools: {}", tools.join(", "));
-        }
-        println!();
+    for provider in &providers {
+        println!("{provider}");
     }
     Ok(())
 }
@@ -367,6 +641,43 @@ pub async fn run(args: &OpsArgs, config: &Configuration, tenant_id: &str) -> Res
             ReportsCommand::Get { run_id, json } => run_reports_get(&api, run_id, *json).await,
         },
         OpsCommand::ToolJobs { command } => match command {
+            ToolJobsCommand::Create {
+                provider,
+                prompt,
+                context_paths,
+                cwd,
+                environment,
+                output_profile,
+                resume_session_id,
+                worker_id,
+                use_worktree,
+                auto_merge,
+                codex_mode,
+                wait,
+                wait_timeout_seconds,
+                wait_interval_seconds,
+                json,
+            } => {
+                run_tool_jobs_create(
+                    &api,
+                    provider,
+                    prompt,
+                    context_paths,
+                    cwd.as_deref(),
+                    environment,
+                    output_profile.as_deref(),
+                    resume_session_id.as_deref(),
+                    worker_id.as_deref(),
+                    *use_worktree,
+                    *auto_merge,
+                    codex_mode.as_deref(),
+                    *wait,
+                    *wait_timeout_seconds,
+                    *wait_interval_seconds,
+                    *json,
+                )
+                .await
+            }
             ToolJobsCommand::List { json } => run_tool_jobs_list(&api, *json).await,
             ToolJobsCommand::Get { job_id, json } => run_tool_jobs_get(&api, job_id, *json).await,
             ToolJobsCommand::Cancel { job_id } => run_tool_jobs_cancel(&api, job_id).await,
