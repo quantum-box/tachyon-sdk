@@ -4,6 +4,7 @@ use clap::{Args, Subcommand, ValueEnum};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::process::Command;
+use std::time::Instant;
 use tachyon_sdk::apis::configuration::Configuration;
 use tokio::time::{sleep, Duration};
 
@@ -91,6 +92,9 @@ pub enum ComputeCommand {
         /// exits with code 1 if the build fails
         #[arg(long)]
         follow: bool,
+        /// Emit compact JSON Lines for coding agents
+        #[arg(long)]
+        agent: bool,
     },
 }
 
@@ -351,6 +355,29 @@ pub enum BuildsCommand {
         /// Keep polling until the build is complete
         #[arg(long)]
         follow: bool,
+        /// Emit compact JSON Lines for coding agents
+        #[arg(long)]
+        agent: bool,
+    },
+    /// Watch build logs and final status until completion
+    Watch {
+        /// App ID or name (optional when --build-id is specified)
+        app_id: Option<String>,
+        /// Build ID (defaults to the latest build for the given app)
+        #[arg(long)]
+        build_id: Option<String>,
+        /// Poll interval in seconds
+        #[arg(long, default_value_t = 5)]
+        interval_secs: u64,
+        /// Maximum wait time in seconds
+        #[arg(long)]
+        timeout_secs: Option<u64>,
+        /// Do not print build logs, only status/result
+        #[arg(long)]
+        no_logs: bool,
+        /// Emit compact JSON Lines for coding agents
+        #[arg(long)]
+        agent: bool,
     },
     /// Reproduce a cloud build locally in Docker.
     ///
@@ -558,6 +585,27 @@ struct BuildLogLineResponse {
     message: String,
 }
 
+#[derive(Debug, Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum AgentBuildEvent<'a> {
+    Build {
+        build_id: &'a str,
+        status: &'a str,
+    },
+    Log {
+        build_id: &'a str,
+        timestamp: i64,
+        message: String,
+    },
+    Result {
+        build_id: &'a str,
+        status: &'a str,
+        exit_code: i32,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        error_message: Option<&'a str>,
+    },
+}
+
 #[derive(Debug, Deserialize, Serialize)]
 struct ListDeploymentsResponse {
     deployments: Vec<DeploymentResponse>,
@@ -680,6 +728,32 @@ fn truncate_sha(sha: &str) -> &str {
     } else {
         sha
     }
+}
+
+fn is_terminal_build_status(status: &str) -> bool {
+    matches!(
+        status.to_ascii_lowercase().as_str(),
+        "succeeded" | "failed" | "cancelled" | "canceled" | "timed_out" | "timeout"
+    )
+}
+
+fn is_success_build_status(status: &str) -> bool {
+    matches!(status.to_ascii_lowercase().as_str(), "succeeded")
+}
+
+fn print_agent_event(event: &AgentBuildEvent<'_>) -> Result<()> {
+    println!("{}", serde_json::to_string(event)?);
+    Ok(())
+}
+
+fn compact_agent_message(message: &str) -> String {
+    const MAX_LEN: usize = 500;
+    if message.chars().count() <= MAX_LEN {
+        return message.to_string();
+    }
+    let mut compacted: String = message.chars().take(MAX_LEN - 3).collect();
+    compacted.push_str("...");
+    compacted
 }
 
 // ---- Command handlers ----
@@ -885,6 +959,7 @@ async fn run_builds_logs(
     app_id: Option<&str>,
     build_id: Option<&str>,
     follow: bool,
+    agent: bool,
 ) -> Result<()> {
     let resolved_build_id = match build_id {
         Some(id) => id.to_string(),
@@ -914,16 +989,22 @@ async fn run_builds_logs(
         };
 
         for line in &logs.lines {
-            println!("[{}] {}", format_timestamp_ms(line.timestamp), line.message);
+            if agent {
+                print_agent_event(&AgentBuildEvent::Log {
+                    build_id: &resolved_build_id,
+                    timestamp: line.timestamp,
+                    message: compact_agent_message(&line.message),
+                })?;
+            } else {
+                println!("[{}] {}", format_timestamp_ms(line.timestamp), line.message);
+            }
         }
 
         if logs.is_complete {
             is_complete = true;
             break;
         }
-        if logs.next_token.is_some() {
-            next_token = logs.next_token;
-        }
+        next_token = logs.next_token;
         if follow {
             sleep(Duration::from_secs(2)).await;
         } else {
@@ -935,12 +1016,138 @@ async fn run_builds_logs(
         let build: BuildResponse = api
             .get(&format!("/v1/compute/builds/{resolved_build_id}"))
             .await?;
-        if build.status == "failed" {
+        if agent {
+            let exit_code = if is_success_build_status(&build.status) {
+                0
+            } else {
+                1
+            };
+            print_agent_event(&AgentBuildEvent::Result {
+                build_id: &resolved_build_id,
+                status: &build.status,
+                exit_code,
+                error_message: build.error_message.as_deref(),
+            })?;
+        }
+        if !is_success_build_status(&build.status) {
             return Err(anyhow!("build {} failed", resolved_build_id));
         }
     }
 
     Ok(())
+}
+
+async fn run_builds_watch(
+    api: &ApiClient,
+    app_id: Option<&str>,
+    build_id: Option<&str>,
+    interval_secs: u64,
+    timeout_secs: Option<u64>,
+    no_logs: bool,
+    agent: bool,
+) -> Result<()> {
+    let resolved_build_id = match build_id {
+        Some(id) => id.to_string(),
+        None => {
+            let app_id = app_id
+                .ok_or_else(|| anyhow!("app_id required when --build-id is not specified"))?;
+            let resp: ListBuildsResponse = api
+                .get(&format!("/v1/compute/apps/{app_id}/builds"))
+                .await?;
+            resp.builds
+                .into_iter()
+                .next()
+                .ok_or_else(|| anyhow!("no builds found for app {app_id}"))?
+                .id
+        }
+    };
+
+    let interval = Duration::from_secs(interval_secs.max(1));
+    let started = Instant::now();
+    let timeout = timeout_secs.map(Duration::from_secs);
+    let mut next_token: Option<String> = None;
+    let mut last_status: Option<String> = None;
+
+    loop {
+        if let Some(timeout) = timeout {
+            if started.elapsed() >= timeout {
+                if agent {
+                    print_agent_event(&AgentBuildEvent::Result {
+                        build_id: &resolved_build_id,
+                        status: "timeout",
+                        exit_code: 124,
+                        error_message: Some("watch timed out"),
+                    })?;
+                }
+                return Err(anyhow!("build {} watch timed out", resolved_build_id));
+            }
+        }
+
+        let build: BuildResponse = api
+            .get(&format!("/v1/compute/builds/{resolved_build_id}"))
+            .await?;
+        if last_status.as_deref() != Some(build.status.as_str()) {
+            if agent {
+                print_agent_event(&AgentBuildEvent::Build {
+                    build_id: &resolved_build_id,
+                    status: &build.status,
+                })?;
+            } else {
+                println!("Build {}: {}", resolved_build_id, build.status);
+            }
+            last_status = Some(build.status.clone());
+        }
+
+        if !no_logs {
+            let path = format!("/v1/compute/builds/{resolved_build_id}/logs");
+            let logs: BuildLogsResponse = if let Some(token) = &next_token {
+                api.get_query(&path, &[("next_token", token.as_str())])
+                    .await?
+            } else {
+                api.get(&path).await?
+            };
+            for line in &logs.lines {
+                if agent {
+                    print_agent_event(&AgentBuildEvent::Log {
+                        build_id: &resolved_build_id,
+                        timestamp: line.timestamp,
+                        message: compact_agent_message(&line.message),
+                    })?;
+                } else {
+                    println!("[{}] {}", format_timestamp_ms(line.timestamp), line.message);
+                }
+            }
+            next_token = logs.next_token;
+        }
+
+        if is_terminal_build_status(&build.status) {
+            let exit_code = if is_success_build_status(&build.status) {
+                0
+            } else {
+                1
+            };
+            if agent {
+                print_agent_event(&AgentBuildEvent::Result {
+                    build_id: &resolved_build_id,
+                    status: &build.status,
+                    exit_code,
+                    error_message: build.error_message.as_deref(),
+                })?;
+            } else if exit_code == 0 {
+                println!("Build {} completed successfully.", resolved_build_id);
+            }
+            if exit_code != 0 {
+                return Err(anyhow!(
+                    "build {} finished with status {}",
+                    resolved_build_id,
+                    build.status
+                ));
+            }
+            return Ok(());
+        }
+
+        sleep(interval).await;
+    }
 }
 
 /// Reproduce a Cloud Apps build locally in Docker. See `build_reproduce` for
@@ -1328,10 +1535,51 @@ pub async fn run(
                 app_id,
                 build_id,
                 follow,
+                agent,
             } => {
-                let app_id = app_id_or_default(app_id, project_config)?;
-                let id = resolve::resolve_app_id(&api, app_id).await?;
-                run_builds_logs(&api, Some(id.as_str()), build_id.as_deref(), *follow).await
+                let resolved_app_id = match app_id {
+                    Some(id) => Some(resolve::resolve_app_id(&api, id).await?),
+                    None if build_id.is_none() => {
+                        let app_id = app_id_or_default(app_id, project_config)?;
+                        Some(resolve::resolve_app_id(&api, app_id).await?)
+                    }
+                    None => None,
+                };
+                run_builds_logs(
+                    &api,
+                    resolved_app_id.as_deref(),
+                    build_id.as_deref(),
+                    *follow,
+                    *agent,
+                )
+                .await
+            }
+            BuildsCommand::Watch {
+                app_id,
+                build_id,
+                interval_secs,
+                timeout_secs,
+                no_logs,
+                agent,
+            } => {
+                let resolved_app_id = match app_id {
+                    Some(id) => Some(resolve::resolve_app_id(&api, id).await?),
+                    None if build_id.is_none() => {
+                        let app_id = app_id_or_default(app_id, project_config)?;
+                        Some(resolve::resolve_app_id(&api, app_id).await?)
+                    }
+                    None => None,
+                };
+                run_builds_watch(
+                    &api,
+                    resolved_app_id.as_deref(),
+                    build_id.as_deref(),
+                    *interval_secs,
+                    *timeout_secs,
+                    *no_logs,
+                    *agent,
+                )
+                .await
             }
             BuildsCommand::Reproduce {
                 build_id,
@@ -1421,6 +1669,7 @@ pub async fn run(
             app_id,
             build_id,
             follow,
+            agent,
         } => {
             let resolved_app_id = match app_id {
                 Some(id) => Some(resolve::resolve_app_id(&api, id).await?),
@@ -1434,6 +1683,7 @@ pub async fn run(
                 resolved_app_id.as_deref(),
                 build_id.as_deref(),
                 *follow,
+                *agent,
             )
             .await
         }

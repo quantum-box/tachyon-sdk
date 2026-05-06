@@ -92,11 +92,23 @@ tachyon compute logs <app-id> --build-id <build-id>
 # Stream logs until the build completes
 tachyon compute logs <app-id> --follow
 
+# Watch logs and final status until completion
+tachyon compute builds watch <app-id>
+tachyon compute builds watch --build-id <build-id>
+
+# Compact JSON Lines for coding agents
+tachyon compute builds watch --build-id <build-id> --agent
+tachyon compute logs --build-id <build-id> --follow --agent
+
 # Reproduce a cloud build locally in Docker (Phase 1: mock fixture)
 # See cli/tests/fixtures/mock-build-config.yaml for the expected shape.
 tachyon compute builds reproduce <build-id> --mock <path/to/build-config.yaml> --dry-run
 tachyon compute builds reproduce <build-id> --mock <path> --source-dir .
 ```
+
+`compute builds watch` exits with code 0 only when the build succeeds. Failed,
+cancelled, and timed-out builds return non-zero so automation can stop early.
+`--agent` emits compact JSON Lines and only repeats status when it changes.
 
 > `compute builds reproduce` (PLT-914) fetches the buildspec + environment for
 > a cloud build and replays it locally in a CodeBuild-compatible Docker
