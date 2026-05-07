@@ -102,6 +102,73 @@ mod tests {
             _ => panic!("expected ops slack send command"),
         }
     }
+
+    #[test]
+    fn parses_agent_session_diagnostics_command() {
+        let cli = Cli::try_parse_from([
+            "tachyon",
+            "agent",
+            "session",
+            "diagnose",
+            "as_01hjryxysgey07h5jz5wagqj0m",
+            "--json",
+            "--fail-on",
+            "anomaly",
+        ])
+        .unwrap();
+
+        match cli.command {
+            Commands::Agent(agent_cli::AgentArgs {
+                command:
+                    agent_cli::AgentCommand::Sessions {
+                        command:
+                            agent_cli::SessionsCommand::Diagnose {
+                                session_id,
+                                json,
+                                fail_on,
+                            },
+                    },
+            }) => {
+                assert_eq!(session_id, "as_01hjryxysgey07h5jz5wagqj0m");
+                assert!(json);
+                assert_eq!(fail_on, Some(agent_cli::FailOn::Anomaly));
+            }
+            _ => panic!("expected agent session diagnose command"),
+        }
+    }
+
+    #[test]
+    fn parses_agent_session_events_command() {
+        let cli = Cli::try_parse_from([
+            "tachyon",
+            "agent",
+            "sessions",
+            "events",
+            "ch_01hjryxysgey07h5jz5wagqj0m",
+            "--limit",
+            "200",
+        ])
+        .unwrap();
+
+        match cli.command {
+            Commands::Agent(agent_cli::AgentArgs {
+                command:
+                    agent_cli::AgentCommand::Sessions {
+                        command:
+                            agent_cli::SessionsCommand::Events {
+                                session_id,
+                                limit,
+                                json,
+                            },
+                    },
+            }) => {
+                assert_eq!(session_id, "ch_01hjryxysgey07h5jz5wagqj0m");
+                assert_eq!(limit, Some(200));
+                assert!(!json);
+            }
+            _ => panic!("expected agent session events command"),
+        }
+    }
 }
 
 #[derive(Subcommand)]
