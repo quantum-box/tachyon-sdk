@@ -3,10 +3,14 @@ use chrono::{DateTime, Utc};
 use clap::{Args, Subcommand};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
+use std::process::{Command, Stdio};
 use tachyon_sdk::apis::configuration::Configuration;
 
 use crate::client::{print_json, truncate, ApiClient};
 use crate::resolve;
+
+const DEFAULT_TACHYOND_IMAGE: &str = "ghcr.io/quantum-box/tachyond:latest";
+const DEFAULT_QUIC_GATEWAY_URL: &str = "quic.n1.tachy.one:4433";
 
 #[derive(Debug, Clone, Args)]
 pub struct AgentArgs {
@@ -66,6 +70,12 @@ pub enum AgentCommand {
     Models {
         #[arg(long)]
         json: bool,
+    },
+    /// Run local tachyond worker for tool jobs
+    #[command(name = "tool-job", alias = "tool-jobs")]
+    ToolJob {
+        #[command(subcommand)]
+        command: ToolJobCommand,
     },
 }
 
@@ -170,6 +180,119 @@ pub enum MemoryCommand {
         #[arg(long)]
         json: bool,
     },
+}
+
+#[derive(Debug, Clone, Subcommand)]
+pub enum ToolJobCommand {
+    /// Run tachyond locally via Docker and process tool jobs
+    Run(ToolJobRunArgs),
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct ToolJobRunArgs {
+    /// Tachyond container image to run
+    #[arg(long, env = "TACHYON_TACHYOND_IMAGE", default_value = DEFAULT_TACHYOND_IMAGE)]
+    pub image: String,
+
+    /// QUIC gateway endpoint for tachyond
+    #[arg(
+        long,
+        env = "TACHYON_QUIC_GATEWAY_URL",
+        default_value = DEFAULT_QUIC_GATEWAY_URL
+    )]
+    pub quic_gateway_url: String,
+
+    /// Docker binary to execute
+    #[arg(
+        long,
+        env = "TACHYON_DOCKER_BIN",
+        default_value = "docker",
+        hide = true
+    )]
+    pub docker_bin: String,
+
+    /// Optional Docker container name
+    #[arg(long)]
+    pub name: Option<String>,
+
+    /// Keep the container after it exits
+    #[arg(long)]
+    pub no_rm: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ToolJobDockerConfig {
+    image: String,
+    api_url: String,
+    api_key: String,
+    operator_id: String,
+    quic_gateway_url: String,
+    name: Option<String>,
+    rm: bool,
+}
+
+impl ToolJobDockerConfig {
+    fn from_runtime(
+        args: &ToolJobRunArgs,
+        config: &Configuration,
+        tenant_id: &str,
+    ) -> Result<Self> {
+        let api_key = config
+            .bearer_access_token
+            .clone()
+            .filter(|token| !token.trim().is_empty())
+            .ok_or_else(|| {
+                anyhow!(
+                    "no Tachyon API key is available. Run `tachyon login` or set TACHYON_API_KEY."
+                )
+            })?;
+        if tenant_id.trim().is_empty() {
+            return Err(anyhow!(
+                "no Tachyon operator id is available. Run `tachyon login`, pass --tenant-id, or set TACHYON_TENANT_ID."
+            ));
+        }
+
+        Ok(Self {
+            image: args.image.clone(),
+            api_url: config.base_path.trim_end_matches('/').to_string(),
+            api_key,
+            operator_id: tenant_id.to_string(),
+            quic_gateway_url: args.quic_gateway_url.clone(),
+            name: args.name.clone(),
+            rm: !args.no_rm,
+        })
+    }
+
+    fn env_pairs(&self) -> Vec<(&'static str, String)> {
+        vec![
+            ("TACHYON_API_URL", self.api_url.clone()),
+            ("TACHYON_API_KEY", self.api_key.clone()),
+            ("TACHYON_OPERATOR_ID", self.operator_id.clone()),
+            ("TACHYON_QUIC_GATEWAY_URL", self.quic_gateway_url.clone()),
+            // tachyond currently reads these names. Keep them until tachyond
+            // accepts the Tachyon-prefixed aliases directly.
+            ("TACHYON_AUTH_TOKEN", self.api_key.clone()),
+            ("TOOL_JOB_OPERATOR_ID", self.operator_id.clone()),
+            ("QUIC_GATEWAY_ADDR", self.quic_gateway_url.clone()),
+        ]
+    }
+
+    fn docker_args(&self) -> Vec<String> {
+        let mut args = vec!["run".to_string()];
+        if self.rm {
+            args.push("--rm".to_string());
+        }
+        if let Some(name) = &self.name {
+            args.push("--name".to_string());
+            args.push(name.clone());
+        }
+        for (key, value) in self.env_pairs() {
+            args.push("-e".to_string());
+            args.push(format!("{key}={value}"));
+        }
+        args.push(self.image.clone());
+        args
+    }
 }
 
 // ---- Response types ----
@@ -886,6 +1009,41 @@ async fn run_models_list(api: &ApiClient, json: bool) -> Result<()> {
     Ok(())
 }
 
+fn run_tool_job_container(
+    args: &ToolJobRunArgs,
+    config: &Configuration,
+    tenant_id: &str,
+) -> Result<()> {
+    let docker_config = ToolJobDockerConfig::from_runtime(args, config, tenant_id)?;
+    run_tool_job_container_with_docker(&args.docker_bin, &docker_config)
+}
+
+fn run_tool_job_container_with_docker(
+    docker_bin: &str,
+    config: &ToolJobDockerConfig,
+) -> Result<()> {
+    let status = Command::new(docker_bin)
+        .args(config.docker_args())
+        .stdin(Stdio::inherit())
+        .stdout(Stdio::inherit())
+        .stderr(Stdio::inherit())
+        .status()
+        .map_err(|err| {
+            if err.kind() == std::io::ErrorKind::NotFound {
+                anyhow!(
+                    "Docker is not installed or `{docker_bin}` is not on PATH. Install Docker and retry `tachyon agent tool-job run`."
+                )
+            } else {
+                anyhow!(err).context(format!("failed to start Docker via `{docker_bin}`"))
+            }
+        })?;
+
+    if !status.success() {
+        return Err(anyhow!("tachyond container exited with status {status}"));
+    }
+    Ok(())
+}
+
 // ---- Entry point ----
 
 pub async fn run(args: &AgentArgs, config: &Configuration, tenant_id: &str) -> Result<()> {
@@ -948,5 +1106,85 @@ pub async fn run(args: &AgentArgs, config: &Configuration, tenant_id: &str) -> R
             json,
         } => run_agent_messages(&api, agent_id, session_id.as_deref(), *json).await,
         AgentCommand::Models { json } => run_models_list(&api, *json).await,
+        AgentCommand::ToolJob { command } => match command {
+            ToolJobCommand::Run(run_args) => run_tool_job_container(run_args, config, tenant_id),
+        },
+    }
+}
+
+#[cfg(test)]
+mod tool_job_tests {
+    use super::*;
+
+    fn test_config() -> Configuration {
+        let mut config = Configuration::new();
+        config.base_path = "https://api.example.test/".to_string();
+        config.bearer_access_token = Some("test-token".to_string());
+        config
+    }
+
+    fn run_args() -> ToolJobRunArgs {
+        ToolJobRunArgs {
+            image: "ghcr.io/quantum-box/tachyond:latest".to_string(),
+            quic_gateway_url: "quic.n1.tachy.one:4433".to_string(),
+            docker_bin: "docker".to_string(),
+            name: Some("tachyond-test".to_string()),
+            no_rm: false,
+        }
+    }
+
+    #[test]
+    fn docker_command_builder_injects_required_env() {
+        let config =
+            ToolJobDockerConfig::from_runtime(&run_args(), &test_config(), "op_test").unwrap();
+
+        assert_eq!(config.image, DEFAULT_TACHYOND_IMAGE);
+        let args = config.docker_args();
+        assert_eq!(args.first().map(String::as_str), Some("run"));
+        assert!(args.contains(&"--rm".to_string()));
+        assert!(args.contains(&"--name".to_string()));
+        assert!(args.contains(&"tachyond-test".to_string()));
+        assert!(args.contains(&"TACHYON_API_URL=https://api.example.test".to_string()));
+        assert!(args.contains(&"TACHYON_API_KEY=test-token".to_string()));
+        assert!(args.contains(&"TACHYON_OPERATOR_ID=op_test".to_string()));
+        assert!(args.contains(&"TACHYON_QUIC_GATEWAY_URL=quic.n1.tachy.one:4433".to_string()));
+        assert!(args.contains(&"TACHYON_AUTH_TOKEN=test-token".to_string()));
+        assert!(args.contains(&"TOOL_JOB_OPERATOR_ID=op_test".to_string()));
+        assert!(args.contains(&"QUIC_GATEWAY_ADDR=quic.n1.tachy.one:4433".to_string()));
+        assert_eq!(
+            args.last().map(String::as_str),
+            Some(DEFAULT_TACHYOND_IMAGE)
+        );
+    }
+
+    #[test]
+    fn config_resolution_requires_api_key() {
+        let mut config = test_config();
+        config.bearer_access_token = None;
+        let err = ToolJobDockerConfig::from_runtime(&run_args(), &config, "op_test")
+            .expect_err("missing token should fail");
+        assert!(err.to_string().contains("no Tachyon API key"));
+    }
+
+    #[test]
+    fn config_resolution_requires_operator_id() {
+        let err = ToolJobDockerConfig::from_runtime(&run_args(), &test_config(), "")
+            .expect_err("missing operator should fail");
+        assert!(err.to_string().contains("no Tachyon operator id"));
+    }
+
+    #[test]
+    fn missing_docker_error_is_clear() {
+        let docker_config =
+            ToolJobDockerConfig::from_runtime(&run_args(), &test_config(), "op_test").unwrap();
+        let err = run_tool_job_container_with_docker(
+            "definitely-missing-docker-for-plt-1163",
+            &docker_config,
+        )
+        .expect_err("missing docker binary should fail");
+        assert!(
+            err.to_string().contains("Docker is not installed"),
+            "unexpected error: {err:#}"
+        );
     }
 }
