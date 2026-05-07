@@ -80,8 +80,8 @@ pub enum SessionsCommand {
     Inspect {
         /// Session ID (`as_...`) or legacy chatroom ID (`ch_...`)
         session_id: String,
-        /// Fail with a non-zero exit when anomalies are present
-        #[arg(long, value_parser = ["anomaly"])]
+        /// Fail with a non-zero exit when the selected condition is present
+        #[arg(long, value_parser = ["anomaly", "error", "incomplete"])]
         fail_on: Option<String>,
     },
     /// Print raw session event timeline
@@ -98,13 +98,13 @@ pub enum SessionsCommand {
     Diagnose {
         /// Session ID (`as_...`) or legacy chatroom ID (`ch_...`)
         session_id: String,
-        /// Maximum number of raw events to include
+        /// Deprecated; use `events --limit` to retrieve the raw timeline
         #[arg(long)]
         limit: Option<usize>,
         #[arg(long)]
         json: bool,
-        /// Fail with a non-zero exit when anomalies are present
-        #[arg(long, value_parser = ["anomaly"])]
+        /// Fail with a non-zero exit when the selected condition is present
+        #[arg(long, value_parser = ["anomaly", "error", "incomplete"])]
         fail_on: Option<String>,
     },
 }
@@ -191,12 +191,25 @@ struct SessionsListResponse {
 }
 
 #[derive(Debug, Deserialize, Serialize)]
+struct AgentDiagnosticsSessionSummary {
+    id: String,
+    requested_id: String,
+    #[serde(default)]
+    legacy_chatroom_id: Option<String>,
+    tenant_id: String,
+    owner_id: String,
+    #[serde(default)]
+    name: Option<String>,
+    created_at: DateTime<Utc>,
+    updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
 struct AgentDiagnosticsEvent {
     id: String,
     event_type: String,
     payload_json: serde_json::Value,
     created_at: DateTime<Utc>,
-    malformed: bool,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -204,9 +217,13 @@ struct AgentDiagnosticsExecutionState {
     id: String,
     execution_id: String,
     status: String,
+    #[serde(default)]
     pending_tool_job_id: Option<String>,
+    #[serde(default)]
+    pending_sub_agent_execution_id: Option<String>,
+    #[serde(default)]
     last_error: Option<String>,
-    model: Option<String>,
+    retry_count: u32,
     updated_at: DateTime<Utc>,
 }
 
@@ -215,26 +232,86 @@ struct AgentDiagnosticsToolJob {
     id: String,
     provider: String,
     status: String,
-    prompt: String,
-    error_message: Option<String>,
-    session_id: Option<String>,
+    created_at: DateTime<Utc>,
+    updated_at: DateTime<Utc>,
+    #[serde(default)]
     resume_session_id: Option<String>,
+    #[serde(default)]
+    result_session_id: Option<String>,
     has_normalized_output: bool,
     raw_event_count: usize,
-    updated_at: DateTime<Utc>,
+    artifact_count: usize,
+    #[serde(default)]
+    exit_code: Option<i32>,
+    #[serde(default)]
+    error_message: Option<String>,
+    #[serde(default)]
+    estimated_nanodollar: Option<i64>,
+    #[serde(default)]
+    observed_nanodollar: Option<i64>,
+}
+
+#[derive(Debug, Deserialize, Serialize, Default)]
+struct AgentDiagnosticsFlags {
+    #[serde(default)]
+    has_user: bool,
+    #[serde(default)]
+    has_assistant: bool,
+    #[serde(default)]
+    has_thinking: bool,
+    #[serde(default)]
+    has_tool_call: bool,
+    #[serde(default)]
+    has_tool_result: bool,
+    #[serde(default)]
+    has_tool_job_started: bool,
+    #[serde(default)]
+    has_attempt_completion: bool,
+    #[serde(default)]
+    has_usage: bool,
+    #[serde(default)]
+    has_done: bool,
+    #[serde(default)]
+    has_error: bool,
+    #[serde(default)]
+    streaming_completed: bool,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct AgentDiagnosticsTerminalState {
+    status: String,
+    #[serde(default)]
+    latest_terminal_event: Option<String>,
+    #[serde(default)]
+    latest_event_type: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct AgentDiagnosticsAnomaly {
+    code: String,
+    message: String,
+    #[serde(default)]
+    event_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
 struct AgentDiagnosticsResponse {
-    session_id: String,
+    session: AgentDiagnosticsSessionSummary,
     event_count: usize,
     event_type_breakdown: BTreeMap<String, usize>,
     first_event_at: Option<DateTime<Utc>>,
     last_event_at: Option<DateTime<Utc>>,
-    completion_state: String,
-    anomalies: Vec<String>,
-    latest_execution_state: Option<AgentDiagnosticsExecutionState>,
+    terminal_state: AgentDiagnosticsTerminalState,
+    #[serde(default)]
+    flags: AgentDiagnosticsFlags,
+    anomalies: Vec<AgentDiagnosticsAnomaly>,
     related_tool_jobs: Vec<AgentDiagnosticsToolJob>,
+    execution_states: Vec<AgentDiagnosticsExecutionState>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct AgentEventsResponse {
+    session: AgentDiagnosticsSessionSummary,
     events: Vec<AgentDiagnosticsEvent>,
 }
 
@@ -343,28 +420,80 @@ async fn run_sessions_list(api: &ApiClient, json: bool) -> Result<()> {
 async fn fetch_session_diagnostics(
     api: &ApiClient,
     session_id: &str,
-    limit: Option<usize>,
 ) -> Result<AgentDiagnosticsResponse> {
+    let path = format!("/v1/llms/sessions/{session_id}/agent/diagnostics");
+    api.get(&path).await
+}
+
+async fn fetch_session_events(
+    api: &ApiClient,
+    session_id: &str,
+    limit: Option<usize>,
+) -> Result<AgentEventsResponse> {
     let path = match limit {
-        Some(limit) => {
-            format!("/v1/llms/sessions/{session_id}/agent/diagnostics?event_limit={limit}")
-        }
-        None => format!("/v1/llms/sessions/{session_id}/agent/diagnostics"),
+        Some(limit) => format!("/v1/llms/sessions/{session_id}/agent/events?limit={limit}"),
+        None => format!("/v1/llms/sessions/{session_id}/agent/events"),
     };
     api.get(&path).await
 }
 
-fn check_fail_on_anomaly(
-    diagnostics: &AgentDiagnosticsResponse,
-    fail_on: Option<&str>,
-) -> Result<()> {
-    if fail_on == Some("anomaly") && !diagnostics.anomalies.is_empty() {
-        return Err(anyhow!(
+fn check_fail_on(diagnostics: &AgentDiagnosticsResponse, fail_on: Option<&str>) -> Result<()> {
+    match fail_on {
+        Some("anomaly") if !diagnostics.anomalies.is_empty() => Err(anyhow!(
             "session diagnostics reported {} anomalies",
             diagnostics.anomalies.len()
-        ));
+        )),
+        Some("error")
+            if diagnostics.terminal_state.status == "error" || diagnostics.flags.has_error =>
+        {
+            Err(anyhow!(
+                "session diagnostics reported an error terminal state"
+            ))
+        }
+        Some("incomplete") if diagnostics.terminal_state.status != "completed" => Err(anyhow!(
+            "session diagnostics status is {}",
+            diagnostics.terminal_state.status
+        )),
+        _ => Ok(()),
     }
-    Ok(())
+}
+
+fn enabled_flags(flags: &AgentDiagnosticsFlags) -> Vec<&'static str> {
+    let mut values = Vec::new();
+    if flags.has_user {
+        values.push("user");
+    }
+    if flags.has_assistant {
+        values.push("assistant");
+    }
+    if flags.has_thinking {
+        values.push("thinking");
+    }
+    if flags.has_tool_call {
+        values.push("tool_call");
+    }
+    if flags.has_tool_result {
+        values.push("tool_result");
+    }
+    if flags.has_tool_job_started {
+        values.push("tool_job_started");
+    }
+    if flags.has_attempt_completion {
+        values.push("attempt_completion");
+    }
+    if flags.has_usage {
+        values.push("usage");
+    }
+    if flags.has_done {
+        values.push("done");
+    }
+    if flags.has_error {
+        values.push("error");
+    }
+    if flags.streaming_completed {
+        values.push("streaming_completed");
+    }
+    values
 }
 
 async fn run_session_inspect(
@@ -372,9 +501,18 @@ async fn run_session_inspect(
     session_id: &str,
     fail_on: Option<&str>,
 ) -> Result<()> {
-    let diagnostics = fetch_session_diagnostics(api, session_id, None).await?;
-    println!("Session:          {}", diagnostics.session_id);
-    println!("Completion state: {}", diagnostics.completion_state);
+    let diagnostics = fetch_session_diagnostics(api, session_id).await?;
+    println!("Session:          {}", diagnostics.session.id);
+    if diagnostics.session.requested_id != diagnostics.session.id {
+        println!("Requested ID:     {}", diagnostics.session.requested_id);
+    }
+    if let Some(chatroom_id) = &diagnostics.session.legacy_chatroom_id {
+        println!("Chatroom ID:      {chatroom_id}");
+    }
+    println!("Terminal state:   {}", diagnostics.terminal_state.status);
+    if let Some(event_type) = &diagnostics.terminal_state.latest_event_type {
+        println!("Latest event:     {event_type}");
+    }
     println!("Events:           {}", diagnostics.event_count);
     println!(
         "First event:      {}",
@@ -391,15 +529,29 @@ async fn run_session_inspect(
             .unwrap_or_else(|| "-".to_string())
     );
 
-    if let Some(state) = &diagnostics.latest_execution_state {
+    let flags = enabled_flags(&diagnostics.flags);
+    if !flags.is_empty() {
         println!();
-        println!("Execution state:  {}", state.status);
-        println!("Execution ID:     {}", state.execution_id);
-        if let Some(job_id) = &state.pending_tool_job_id {
-            println!("Pending job:      {job_id}");
-        }
-        if let Some(error) = &state.last_error {
-            println!("Last error:       {error}");
+        println!("Flags:            {}", flags.join(", "));
+    }
+
+    if !diagnostics.execution_states.is_empty() {
+        println!();
+        println!("Execution States:");
+        for state in &diagnostics.execution_states {
+            println!(
+                "  {}  {:<12} retries={}",
+                state.execution_id, state.status, state.retry_count
+            );
+            if let Some(job_id) = &state.pending_tool_job_id {
+                println!("    pending job: {job_id}");
+            }
+            if let Some(execution_id) = &state.pending_sub_agent_execution_id {
+                println!("    pending sub-agent execution: {execution_id}");
+            }
+            if let Some(error) = &state.last_error {
+                println!("    error: {error}");
+            }
         }
     }
 
@@ -414,12 +566,18 @@ async fn run_session_inspect(
         println!("Related Tool Jobs:");
         for job in &diagnostics.related_tool_jobs {
             println!(
-                "  {}  {:<12} {:<12} {}",
-                job.id,
-                job.provider,
-                job.status,
-                truncate(&job.prompt, 60)
+                "  {}  {:<12} {:<12} raw_events={} artifacts={}",
+                job.id, job.provider, job.status, job.raw_event_count, job.artifact_count
             );
+            if let Some(session_id) = &job.result_session_id {
+                println!("    result session: {session_id}");
+            }
+            if let Some(session_id) = &job.resume_session_id {
+                println!("    resume session: {session_id}");
+            }
+            if let Some(exit_code) = job.exit_code {
+                println!("    exit code: {exit_code}");
+            }
             if let Some(error) = &job.error_message {
                 println!("    error: {error}");
             }
@@ -430,11 +588,16 @@ async fn run_session_inspect(
         println!();
         println!("Anomalies:");
         for anomaly in &diagnostics.anomalies {
-            println!("  - {anomaly}");
+            match &anomaly.event_id {
+                Some(event_id) => {
+                    println!("  - [{}] {} ({event_id})", anomaly.code, anomaly.message)
+                }
+                None => println!("  - [{}] {}", anomaly.code, anomaly.message),
+            }
         }
     }
 
-    check_fail_on_anomaly(&diagnostics, fail_on)
+    check_fail_on(&diagnostics, fail_on)
 }
 
 async fn run_session_events(
@@ -443,24 +606,24 @@ async fn run_session_events(
     limit: Option<usize>,
     json: bool,
 ) -> Result<()> {
-    let diagnostics = fetch_session_diagnostics(api, session_id, limit).await?;
+    let response = fetch_session_events(api, session_id, limit).await?;
     if json {
-        return print_json(&diagnostics.events);
+        return print_json(&response);
     }
-    if diagnostics.events.is_empty() {
+    if response.events.is_empty() {
         println!("No events found.");
         return Ok(());
     }
+    println!("Session: {}", response.session.id);
+    println!();
     println!("{:<28}  {:<22}  TYPE", "CREATED AT", "EVENT ID");
     println!("{:-<28}  {:-<22}  {:-<24}", "", "", "");
-    for event in &diagnostics.events {
-        let marker = if event.malformed { " malformed" } else { "" };
+    for event in &response.events {
         println!(
-            "{:<28}  {:<22}  {}{}",
+            "{:<28}  {:<22}  {}",
             event.created_at.to_rfc3339(),
             event.id,
-            event.event_type,
-            marker
+            event.event_type
         );
     }
     Ok(())
@@ -473,19 +636,22 @@ async fn run_session_diagnose(
     json: bool,
     fail_on: Option<&str>,
 ) -> Result<()> {
-    let diagnostics = fetch_session_diagnostics(api, session_id, limit).await?;
+    let diagnostics = fetch_session_diagnostics(api, session_id).await?;
+    if limit.is_some() && !json {
+        eprintln!("warning: --limit is ignored for diagnose; use `events --limit` for raw events");
+    }
     if json {
         print_json(&diagnostics)?;
     } else {
         println!(
             "{}: {} ({} events, {} anomalies)",
-            diagnostics.session_id,
-            diagnostics.completion_state,
+            diagnostics.session.id,
+            diagnostics.terminal_state.status,
             diagnostics.event_count,
             diagnostics.anomalies.len()
         );
     }
-    check_fail_on_anomaly(&diagnostics, fail_on)
+    check_fail_on(&diagnostics, fail_on)
 }
 
 async fn run_protocols_list(api: &ApiClient, json: bool) -> Result<()> {
