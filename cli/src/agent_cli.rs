@@ -1,6 +1,8 @@
-use anyhow::Result;
+use anyhow::{anyhow, Result};
+use chrono::{DateTime, Utc};
 use clap::{Args, Subcommand};
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use tachyon_sdk::apis::configuration::Configuration;
 
 use crate::client::{print_json, truncate, ApiClient};
@@ -15,6 +17,7 @@ pub struct AgentArgs {
 #[derive(Debug, Clone, Subcommand)]
 pub enum AgentCommand {
     /// Manage agent sessions
+    #[command(alias = "session")]
     Sessions {
         #[command(subcommand)]
         command: SessionsCommand,
@@ -72,6 +75,37 @@ pub enum SessionsCommand {
     List {
         #[arg(long)]
         json: bool,
+    },
+    /// Show a human-readable session diagnostic summary
+    Inspect {
+        /// Session ID (`as_...`) or legacy chatroom ID (`ch_...`)
+        session_id: String,
+        /// Fail with a non-zero exit when anomalies are present
+        #[arg(long, value_parser = ["anomaly"])]
+        fail_on: Option<String>,
+    },
+    /// Print raw session event timeline
+    Events {
+        /// Session ID (`as_...`) or legacy chatroom ID (`ch_...`)
+        session_id: String,
+        /// Maximum number of events to print
+        #[arg(long)]
+        limit: Option<usize>,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Print machine-readable diagnostics
+    Diagnose {
+        /// Session ID (`as_...`) or legacy chatroom ID (`ch_...`)
+        session_id: String,
+        /// Maximum number of raw events to include
+        #[arg(long)]
+        limit: Option<usize>,
+        #[arg(long)]
+        json: bool,
+        /// Fail with a non-zero exit when anomalies are present
+        #[arg(long, value_parser = ["anomaly"])]
+        fail_on: Option<String>,
     },
 }
 
@@ -152,6 +186,59 @@ struct SessionResponse {
 }
 
 #[derive(Debug, Deserialize, Serialize)]
+struct SessionsListResponse {
+    sessions: Vec<SessionResponse>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct AgentDiagnosticsEvent {
+    id: String,
+    event_type: String,
+    payload_json: serde_json::Value,
+    created_at: DateTime<Utc>,
+    malformed: bool,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct AgentDiagnosticsExecutionState {
+    id: String,
+    execution_id: String,
+    status: String,
+    pending_tool_job_id: Option<String>,
+    last_error: Option<String>,
+    model: Option<String>,
+    updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct AgentDiagnosticsToolJob {
+    id: String,
+    provider: String,
+    status: String,
+    prompt: String,
+    error_message: Option<String>,
+    session_id: Option<String>,
+    resume_session_id: Option<String>,
+    has_normalized_output: bool,
+    raw_event_count: usize,
+    updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct AgentDiagnosticsResponse {
+    session_id: String,
+    event_count: usize,
+    event_type_breakdown: BTreeMap<String, usize>,
+    first_event_at: Option<DateTime<Utc>>,
+    last_event_at: Option<DateTime<Utc>>,
+    completion_state: String,
+    anomalies: Vec<String>,
+    latest_execution_state: Option<AgentDiagnosticsExecutionState>,
+    related_tool_jobs: Vec<AgentDiagnosticsToolJob>,
+    events: Vec<AgentDiagnosticsEvent>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
 struct ProtocolResponse {
     id: String,
     #[serde(default)]
@@ -227,7 +314,8 @@ struct ModelResponse {
 // ---- Handlers ----
 
 async fn run_sessions_list(api: &ApiClient, json: bool) -> Result<()> {
-    let sessions: Vec<SessionResponse> = api.get("/v1/llms/sessions").await?;
+    let response: SessionsListResponse = api.get("/v1/llms/sessions").await?;
+    let sessions = response.sessions;
     if json {
         return print_json(&sessions);
     }
@@ -250,6 +338,154 @@ async fn run_sessions_list(api: &ApiClient, json: bool) -> Result<()> {
         );
     }
     Ok(())
+}
+
+async fn fetch_session_diagnostics(
+    api: &ApiClient,
+    session_id: &str,
+    limit: Option<usize>,
+) -> Result<AgentDiagnosticsResponse> {
+    let path = match limit {
+        Some(limit) => {
+            format!("/v1/llms/sessions/{session_id}/agent/diagnostics?event_limit={limit}")
+        }
+        None => format!("/v1/llms/sessions/{session_id}/agent/diagnostics"),
+    };
+    api.get(&path).await
+}
+
+fn check_fail_on_anomaly(
+    diagnostics: &AgentDiagnosticsResponse,
+    fail_on: Option<&str>,
+) -> Result<()> {
+    if fail_on == Some("anomaly") && !diagnostics.anomalies.is_empty() {
+        return Err(anyhow!(
+            "session diagnostics reported {} anomalies",
+            diagnostics.anomalies.len()
+        ));
+    }
+    Ok(())
+}
+
+async fn run_session_inspect(
+    api: &ApiClient,
+    session_id: &str,
+    fail_on: Option<&str>,
+) -> Result<()> {
+    let diagnostics = fetch_session_diagnostics(api, session_id, None).await?;
+    println!("Session:          {}", diagnostics.session_id);
+    println!("Completion state: {}", diagnostics.completion_state);
+    println!("Events:           {}", diagnostics.event_count);
+    println!(
+        "First event:      {}",
+        diagnostics
+            .first_event_at
+            .map(|value| value.to_rfc3339())
+            .unwrap_or_else(|| "-".to_string())
+    );
+    println!(
+        "Last event:       {}",
+        diagnostics
+            .last_event_at
+            .map(|value| value.to_rfc3339())
+            .unwrap_or_else(|| "-".to_string())
+    );
+
+    if let Some(state) = &diagnostics.latest_execution_state {
+        println!();
+        println!("Execution state:  {}", state.status);
+        println!("Execution ID:     {}", state.execution_id);
+        if let Some(job_id) = &state.pending_tool_job_id {
+            println!("Pending job:      {job_id}");
+        }
+        if let Some(error) = &state.last_error {
+            println!("Last error:       {error}");
+        }
+    }
+
+    println!();
+    println!("Event breakdown:");
+    for (event_type, count) in &diagnostics.event_type_breakdown {
+        println!("  {event_type:<24} {count}");
+    }
+
+    if !diagnostics.related_tool_jobs.is_empty() {
+        println!();
+        println!("Related Tool Jobs:");
+        for job in &diagnostics.related_tool_jobs {
+            println!(
+                "  {}  {:<12} {:<12} {}",
+                job.id,
+                job.provider,
+                job.status,
+                truncate(&job.prompt, 60)
+            );
+            if let Some(error) = &job.error_message {
+                println!("    error: {error}");
+            }
+        }
+    }
+
+    if !diagnostics.anomalies.is_empty() {
+        println!();
+        println!("Anomalies:");
+        for anomaly in &diagnostics.anomalies {
+            println!("  - {anomaly}");
+        }
+    }
+
+    check_fail_on_anomaly(&diagnostics, fail_on)
+}
+
+async fn run_session_events(
+    api: &ApiClient,
+    session_id: &str,
+    limit: Option<usize>,
+    json: bool,
+) -> Result<()> {
+    let diagnostics = fetch_session_diagnostics(api, session_id, limit).await?;
+    if json {
+        return print_json(&diagnostics.events);
+    }
+    if diagnostics.events.is_empty() {
+        println!("No events found.");
+        return Ok(());
+    }
+    println!("{:<28}  {:<22}  TYPE", "CREATED AT", "EVENT ID");
+    println!("{:-<28}  {:-<22}  {:-<24}", "", "", "");
+    for event in &diagnostics.events {
+        let marker = if event.malformed { " malformed" } else { "" };
+        println!(
+            "{:<28}  {:<22}  {}{}",
+            event.created_at.to_rfc3339(),
+            event.id,
+            event.event_type,
+            marker
+        );
+    }
+    Ok(())
+}
+
+async fn run_session_diagnose(
+    api: &ApiClient,
+    session_id: &str,
+    limit: Option<usize>,
+    json: bool,
+    fail_on: Option<&str>,
+) -> Result<()> {
+    let diagnostics = fetch_session_diagnostics(api, session_id, limit).await?;
+    if json {
+        print_json(&diagnostics)?;
+    } else {
+        println!(
+            "{}: {} ({} events, {} anomalies)",
+            diagnostics.session_id,
+            diagnostics.completion_state,
+            diagnostics.event_count,
+            diagnostics.anomalies.len()
+        );
+    }
+    check_fail_on_anomaly(&diagnostics, fail_on)
 }
 
 async fn run_protocols_list(api: &ApiClient, json: bool) -> Result<()> {
@@ -492,6 +728,21 @@ pub async fn run(args: &AgentArgs, config: &Configuration, tenant_id: &str) -> R
     match &args.command {
         AgentCommand::Sessions { command } => match command {
             SessionsCommand::List { json } => run_sessions_list(&api, *json).await,
+            SessionsCommand::Inspect {
+                session_id,
+                fail_on,
+            } => run_session_inspect(&api, session_id, fail_on.as_deref()).await,
+            SessionsCommand::Events {
+                session_id,
+                limit,
+                json,
+            } => run_session_events(&api, session_id, *limit, *json).await,
+            SessionsCommand::Diagnose {
+                session_id,
+                limit,
+                json,
+                fail_on,
+            } => run_session_diagnose(&api, session_id, *limit, *json, fail_on.as_deref()).await,
         },
         AgentCommand::Protocols { command } => match command {
             ProtocolsCommand::List { json } => run_protocols_list(&api, *json).await,
