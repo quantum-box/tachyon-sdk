@@ -511,6 +511,12 @@ struct ModelResponse {
     provider: Option<String>,
 }
 
+#[derive(Debug, Deserialize, Serialize)]
+struct ModelsListResponse {
+    #[serde(default)]
+    models: Vec<ModelResponse>,
+}
+
 // ---- Handlers ----
 
 async fn run_sessions_list(api: &ApiClient, json: bool) -> Result<()> {
@@ -988,7 +994,8 @@ async fn run_agent_messages(
 }
 
 async fn run_models_list(api: &ApiClient, json: bool) -> Result<()> {
-    let models: Vec<ModelResponse> = api.get("/v1/llms/models").await?;
+    let response: ModelsListResponse = api.get("/v1/llms/models").await?;
+    let models = response.models;
     if json {
         return print_json(&models);
     }
