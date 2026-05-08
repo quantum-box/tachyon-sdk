@@ -4,6 +4,7 @@
 #![allow(clippy::into_iter_on_ref)]
 #![allow(clippy::needless_return)]
 #![allow(clippy::too_many_arguments)]
+#![allow(clippy::uninlined_format_args)]
 
 pub extern crate reqwest;
 extern crate serde;
