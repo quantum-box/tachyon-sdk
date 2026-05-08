@@ -1,4 +1,8 @@
 #![allow(unused_imports)]
+#![allow(clippy::derivable_impls)]
+#![allow(clippy::empty_docs)]
+#![allow(clippy::into_iter_on_ref)]
+#![allow(clippy::needless_return)]
 #![allow(clippy::too_many_arguments)]
 
 pub extern crate reqwest;
