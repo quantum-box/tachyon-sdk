@@ -136,6 +136,9 @@ const CHECKOUT = `
       discountNanodollar
       shippingFeeNanodollar
       totalNanodollar
+      checkoutUrl
+      pickupRequestedAt
+      pickupDeadline
       items {
         id
         productId
@@ -147,6 +150,7 @@ const CHECKOUT = `
       confirmedAt
       shippedAt
       deliveredAt
+      cancelledAt
       createdAt
       updatedAt
     }

@@ -51,6 +51,9 @@ const GET_CONSUMER_ORDERS = `
         discountNanodollar
         shippingFeeNanodollar
         totalNanodollar
+        checkoutUrl
+        pickupRequestedAt
+        pickupDeadline
         items {
           id
           productId
@@ -62,6 +65,7 @@ const GET_CONSUMER_ORDERS = `
         confirmedAt
         shippedAt
         deliveredAt
+        cancelledAt
         createdAt
         updatedAt
       }
@@ -89,6 +93,9 @@ const GET_CONSUMER_ORDER = `
       discountNanodollar
       shippingFeeNanodollar
       totalNanodollar
+      checkoutUrl
+      pickupRequestedAt
+      pickupDeadline
       items {
         id
         productId
@@ -100,6 +107,7 @@ const GET_CONSUMER_ORDER = `
       confirmedAt
       shippedAt
       deliveredAt
+      cancelledAt
       createdAt
       updatedAt
     }
@@ -127,6 +135,9 @@ const CONSUMER_ORDER_BY_LOOKUP = `
         discountNanodollar
         shippingFeeNanodollar
         totalNanodollar
+        checkoutUrl
+        pickupRequestedAt
+        pickupDeadline
         items {
           id
           productId
@@ -138,6 +149,7 @@ const CONSUMER_ORDER_BY_LOOKUP = `
         confirmedAt
         shippedAt
         deliveredAt
+        cancelledAt
         createdAt
         updatedAt
       }
@@ -163,6 +175,9 @@ const GET_CONSUMER_ORDER_BY_LOOKUP_TOKEN = `
       discountNanodollar
       shippingFeeNanodollar
       totalNanodollar
+      checkoutUrl
+      pickupRequestedAt
+      pickupDeadline
       items {
         id
         productId
@@ -174,6 +189,7 @@ const GET_CONSUMER_ORDER_BY_LOOKUP_TOKEN = `
       confirmedAt
       shippedAt
       deliveredAt
+      cancelledAt
       createdAt
       updatedAt
     }
@@ -183,9 +199,9 @@ const GET_CONSUMER_ORDER_BY_LOOKUP_TOKEN = `
 const ORDER_FIELDS = `
   id tenantId cartId userId sessionId status fulfillmentMethod paymentMethod
   shippingName shippingAddress shippingPhone subtotalNanodollar discountNanodollar
-  shippingFeeNanodollar totalNanodollar
+  shippingFeeNanodollar totalNanodollar checkoutUrl pickupRequestedAt pickupDeadline
   items { id productId productName quantity unitPriceNanodollar subtotalNanodollar }
-  confirmedAt shippedAt deliveredAt createdAt updatedAt
+  confirmedAt shippedAt deliveredAt cancelledAt createdAt updatedAt
 `;
 
 const CONFIRM_ORDER = `mutation ConfirmOrder($orderId: ID!) { confirmOrder(orderId: $orderId) { ${ORDER_FIELDS} } }`;
@@ -366,6 +382,14 @@ export class OrdersOperations {
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   async refund(_orderId: string, _amount?: number): Promise<RefundResult> {
     throw new Error("Not implemented: requires PLT-723 approval");
+  }
+
+  /**
+   * Build the receipt endpoint path for a given order.
+   * Combine with the API base URL to get the full receipt URL.
+   */
+  static receiptPath(orderId: string, format: "html" | "pdf" = "html"): string {
+    return `/v1/storekit/consumer-orders/${encodeURIComponent(orderId)}/receipt?format=${format}`;
   }
 }
 
