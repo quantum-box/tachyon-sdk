@@ -21,6 +21,13 @@ export type {
   ProductConnection,
   ProductsInput,
 
+  // Storefront types
+  StorefrontProduct,
+  StorefrontCategory,
+  StorefrontProductsInput,
+  StorefrontProductConnection,
+  CouponValidation,
+
   // Cart types
   Cart,
   CartItem,
@@ -63,8 +70,16 @@ export type {
 } from "./types.js";
 
 // Enums
-export { ProductStatus, ProductVariantStatus, ConsumerOrderStatus, UserRole } from "./types.js";
+export {
+  ProductStatus,
+  ProductVariantStatus,
+  ConsumerOrderStatus,
+  StorefrontProductSortOrder,
+  UserRole,
+} from "./types.js";
 
 // Operations
 export { AuthOperations } from "./operations/auth.js";
 export { InventoryOperations } from "./operations/inventory.js";
+export { OrdersOperations } from "./operations/orders.js";
+export { StorefrontOperations } from "./operations/storefront.js";

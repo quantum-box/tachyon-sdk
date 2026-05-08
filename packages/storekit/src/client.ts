@@ -9,6 +9,7 @@ import { OrdersOperations } from "./operations/orders.js";
 import { CartOperations } from "./operations/cart.js";
 import { AuthOperations } from "./operations/auth.js";
 import { InventoryOperations } from "./operations/inventory.js";
+import { StorefrontOperations } from "./operations/storefront.js";
 import type { StorekitClientConfig } from "./types.js";
 
 export class StorekitClient {
@@ -17,6 +18,7 @@ export class StorekitClient {
   public readonly cart: CartOperations;
   public readonly auth: AuthOperations;
   public readonly inventory: InventoryOperations;
+  public readonly storefront: StorefrontOperations;
 
   private readonly graphqlClient: GraphQLClient;
 
@@ -32,5 +34,6 @@ export class StorekitClient {
     this.cart = new CartOperations(this.graphqlClient);
     this.auth = new AuthOperations(this.graphqlClient);
     this.inventory = new InventoryOperations(this.graphqlClient);
+    this.storefront = new StorefrontOperations(this.graphqlClient);
   }
 }

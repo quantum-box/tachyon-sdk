@@ -71,6 +71,53 @@ export interface ProductsInput {
 }
 
 // ============================================================================
+// Storefront Types
+// ============================================================================
+
+export interface StorefrontProduct {
+  id: string;
+  name: string;
+  description: string | null;
+  kind: string;
+  listPrice: number;
+  billingCycle: string;
+  publicationName: string | null;
+  publicationDescription: string | null;
+  imageIds: string[];
+  categoryId: string | null;
+  weightGrams: number | null;
+}
+
+export interface StorefrontCategory {
+  id: string;
+  name: string;
+  slug: string;
+}
+
+export enum StorefrontProductSortOrder {
+  PRICE_ASC = "PRICE_ASC",
+  PRICE_DESC = "PRICE_DESC",
+  NAME_ASC = "NAME_ASC",
+}
+
+export interface StorefrontProductsInput {
+  categoryId?: string;
+  search?: string;
+  priceMin?: number;
+  priceMax?: number;
+  sort?: StorefrontProductSortOrder;
+  inStock?: boolean;
+  limit?: number;
+  offset?: number;
+}
+
+export interface StorefrontProductConnection {
+  items: StorefrontProduct[];
+  limit: number;
+  offset: number;
+}
+
+// ============================================================================
 // Cart Types
 // ============================================================================
 
@@ -128,9 +175,13 @@ export interface ConsumerOrder {
   shippingFeeNanodollar: string;
   totalNanodollar: string;
   items: ConsumerOrderItem[];
+  checkoutUrl: string | null;
+  pickupRequestedAt: string | null;
+  pickupDeadline: string | null;
   confirmedAt: string | null;
   shippedAt: string | null;
   deliveredAt: string | null;
+  cancelledAt: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -205,6 +256,20 @@ export interface CheckoutInput {
   fulfillmentMethod?: "pickup" | "delivery";
   paymentMethod?: "in_store" | "online";
   couponCode?: string;
+  customerEmail?: string;
+  pickupRequestedAt?: string;
+  successUrl?: string;
+  cancelUrl?: string;
+}
+
+export interface CouponValidation {
+  id: string;
+  code: string;
+  discountType: string;
+  discountValue: number;
+  currency: string;
+  isActive: boolean;
+  discountAmount: number | null;
 }
 
 // ============================================================================
