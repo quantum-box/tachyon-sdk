@@ -30,6 +30,7 @@ const GET_CART = `
         productId
         quantity
         unitPriceNanodollar
+        reservedUntil
       }
       expiresAt
       createdAt
@@ -52,6 +53,7 @@ const CREATE_CART = `
         productId
         quantity
         unitPriceNanodollar
+        reservedUntil
       }
       expiresAt
       createdAt
@@ -73,6 +75,7 @@ const ADD_CART_ITEM = `
         productId
         quantity
         unitPriceNanodollar
+        reservedUntil
       }
       expiresAt
       createdAt
@@ -98,6 +101,7 @@ const UPDATE_CART_ITEM = `
         productId
         quantity
         unitPriceNanodollar
+        reservedUntil
       }
       expiresAt
       createdAt

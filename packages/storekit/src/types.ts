@@ -138,6 +138,7 @@ export interface CartItem {
   productId: string;
   quantity: number;
   unitPriceNanodollar: string;
+  reservedUntil: string | null;
 }
 
 export interface CreateCartInput {

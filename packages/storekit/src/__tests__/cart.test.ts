@@ -92,6 +92,7 @@ describe("CartOperations", () => {
             productId: "prod-1",
             quantity: 2,
             unitPriceNanodollar: "5000000000",
+            reservedUntil: null,
           },
         ],
       });
@@ -133,6 +134,7 @@ describe("CartOperations", () => {
             productId: "prod-1",
             quantity: 5,
             unitPriceNanodollar: "5000000000",
+            reservedUntil: null,
           },
         ],
       });
