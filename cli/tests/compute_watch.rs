@@ -134,3 +134,87 @@ fn compute_builds_watch_latest_build_uses_app_builds_endpoint() {
     assert!(stdout.contains(r#""type":"result""#), "stdout:\n{stdout}");
     assert!(!stdout.contains(r#""type":"log""#), "stdout:\n{stdout}");
 }
+
+#[test]
+fn compute_builds_list_prefers_public_preview_url() {
+    let tmp = TempDir::new().unwrap();
+    let app_id = "app_01kp4vm07tr3d4375597d15gkp";
+    let (api_url, rx, handle) = start_server(vec![
+        r#"{"builds":[{"id":"bld_01kp4vm07tr3d4375597d15gka","app_id":"app_01kp4vm07tr3d4375597d15gkp","status":"succeeded","source_branch":"feature/fix-mcp-write-tool-jsonrpc","commit_sha":"abcdef123456","created_at":"2026-05-07T00:00:00Z"}]}"#,
+        r#"{"deployments":[{"id":"dep_01kp4vm07tr3d4375597d15gkb","app_id":"app_01kp4vm07tr3d4375597d15gkp","build_id":"bld_01kp4vm07tr3d4375597d15gka","status":"active","source_branch":"feature/fix-mcp-write-tool-jsonrpc","url":"https://8383df2f.moverent.pages.dev","public_url":"https://pr158--moverent.txcloud.app","created_at":"2026-05-07T00:00:00Z"}]}"#,
+    ]);
+
+    let output = isolated_command(tmp.path())
+        .env("TACHYON_API_URL", api_url)
+        .args(["compute", "builds", "list", app_id])
+        .output()
+        .expect("run tachyon compute builds list");
+
+    assert!(
+        output.status.success(),
+        "builds list failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+
+    let first_req = rx.recv().unwrap();
+    let second_req = rx.recv().unwrap();
+    handle.join().unwrap();
+    assert!(first_req.starts_with(&format!("GET /v1/compute/apps/{app_id}/builds ")));
+    assert!(second_req.starts_with(&format!(
+        "GET /v1/compute/apps/{app_id}/deployments?environment=preview "
+    )));
+
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("Preview URLs:"), "stdout:\n{stdout}");
+    assert!(
+        stdout.contains("https://pr158--moverent.txcloud.app"),
+        "stdout:\n{stdout}"
+    );
+    assert!(
+        !stdout.contains("https://8383df2f.moverent.pages.dev"),
+        "stdout:\n{stdout}"
+    );
+}
+
+#[test]
+fn compute_builds_list_converts_pages_dev_preview_url_using_build_pr_number() {
+    let tmp = TempDir::new().unwrap();
+    let app_id = "app_01kp4vm07tr3d4375597d15gkp";
+    let (api_url, rx, handle) = start_server(vec![
+        r#"{"builds":[{"id":"bld_01kp4vm07tr3d4375597d15gka","app_id":"app_01kp4vm07tr3d4375597d15gkp","status":"succeeded","source_branch":"feature/fix-mcp-write-tool-jsonrpc","commit_sha":"abcdef123456","pr_number":158,"created_at":"2026-05-07T00:00:00Z"}]}"#,
+        r#"{"deployments":[{"id":"dep_01kp4vm07tr3d4375597d15gkb","app_id":"app_01kp4vm07tr3d4375597d15gkp","build_id":"bld_01kp4vm07tr3d4375597d15gka","status":"active","source_branch":"feature/fix-mcp-write-tool-jsonrpc","url":"https://8383df2f.moverent.pages.dev","created_at":"2026-05-07T00:00:00Z"}]}"#,
+    ]);
+
+    let output = isolated_command(tmp.path())
+        .env("TACHYON_API_URL", api_url)
+        .args(["compute", "builds", "list", app_id])
+        .output()
+        .expect("run tachyon compute builds list");
+
+    assert!(
+        output.status.success(),
+        "builds list failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+
+    let first_req = rx.recv().unwrap();
+    let second_req = rx.recv().unwrap();
+    handle.join().unwrap();
+    assert!(first_req.starts_with(&format!("GET /v1/compute/apps/{app_id}/builds ")));
+    assert!(second_req.starts_with(&format!(
+        "GET /v1/compute/apps/{app_id}/deployments?environment=preview "
+    )));
+
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("Preview URLs:"), "stdout:\n{stdout}");
+    assert!(
+        stdout.contains("https://pr158--moverent.txcloud.app"),
+        "stdout:\n{stdout}"
+    );
+    assert!(
+        !stdout.contains("https://8383df2f.moverent.pages.dev"),
+        "stdout:\n{stdout}"
+    );
+}
