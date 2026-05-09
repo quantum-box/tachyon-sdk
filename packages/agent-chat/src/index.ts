@@ -15,6 +15,7 @@ export { createToolSearchApi } from './client/tool-search-api'
 export type {
 	AgentChunk,
 	AgentSource,
+	ClientToolDefinition,
 	ChatRoom,
 	ChatMessage,
 	AgentExecuteRequest,
@@ -67,6 +68,10 @@ export {
 	useAgentChatContext,
 } from './providers/AgentChatProvider'
 export type { AgentChatConfig } from './providers/AgentChatProvider'
+export type {
+	ClientToolHandler,
+	ClientToolHandlerResult,
+} from './providers/AgentChatProvider'
 
 // --- Hooks ---
 export { useAgentChat } from './hooks/useAgentChat'

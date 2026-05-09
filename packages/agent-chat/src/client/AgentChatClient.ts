@@ -347,7 +347,7 @@ export class AgentChatClient {
 		payload: SubmitToolResultRequest,
 	): Promise<SubmitToolResultResponse> {
 		return this.request<SubmitToolResultResponse>(
-			`/v1/llms/chatrooms/${chatRoomId}/agent/tool-result`,
+			`/v1/llms/sessions/${chatRoomId}/agent/tool-result`,
 			{
 				method: 'POST',
 				body: JSON.stringify(payload),

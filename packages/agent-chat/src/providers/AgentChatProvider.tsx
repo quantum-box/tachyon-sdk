@@ -3,7 +3,25 @@ import {
 	AgentChatClient,
 	type AgentChatClientConfig,
 } from '../client/AgentChatClient'
-import type { AgentChunk, ToolAccess } from '../client/types'
+import type {
+	AgentChunk,
+	ClientToolDefinition,
+	ToolAccess,
+} from '../client/types'
+
+export type ClientToolHandlerResult =
+	| string
+	| number
+	| boolean
+	| null
+	| Record<string, unknown>
+	| unknown[]
+	| undefined
+
+export type ClientToolHandler = (
+	args: unknown,
+	chunk: AgentChunk,
+) => ClientToolHandlerResult | Promise<ClientToolHandlerResult>
 
 export type AgentChatConfig = AgentChatClientConfig & {
 	defaultModel?: string
@@ -13,6 +31,10 @@ export type AgentChatConfig = AgentChatClientConfig & {
 		data?: Record<string, unknown>
 	}
 	toolAccess?: ToolAccess
+	clientTools?: ClientToolDefinition[]
+	clientToolHandlers?: Record<string, ClientToolHandler>
+	onCanvasToolCall?: ClientToolHandler
+	enableCanvasTool?: boolean
 	onError?: (error: Error) => void
 	onMessage?: (message: AgentChunk) => void
 }

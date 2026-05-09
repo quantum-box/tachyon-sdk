@@ -41,8 +41,7 @@ function mergeChunks(chunks: AgentChunk[]): AgentChunk[] {
 					current = {
 						...current,
 						text: (current.text ?? '') + (chunk.text ?? ''),
-						thinking:
-							(current.thinking ?? '') + (chunk.thinking ?? ''),
+						thinking: (current.thinking ?? '') + (chunk.thinking ?? ''),
 						is_finished: chunk.is_finished,
 					} as AgentChunk
 					merged[merged.length - 1] = current

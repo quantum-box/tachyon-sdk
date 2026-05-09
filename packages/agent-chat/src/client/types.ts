@@ -26,6 +26,9 @@ export type AgentChunk = {
 		| 'completion'
 		| 'usage'
 		| 'tool_job_started'
+		| 'artifact'
+		| 'error'
+		| 'done'
 	id: string
 	text?: string
 	created_at: string
@@ -35,6 +38,7 @@ export type AgentChunk = {
 	tool_arguments?: string
 	tool_result?: string
 	tool_id?: string
+	fire_and_forget?: boolean
 	args?: unknown
 	content?: string
 	result?: string
@@ -53,6 +57,25 @@ export type AgentChunk = {
 	provider?: string
 	// Sub-agent metadata
 	agent?: AgentSource
+	// artifact fields
+	artifact_id?: string
+	content_type?: string
+	filename?: string | null
+	url?: string
+	size_bytes?: number | null
+	metadata?: unknown
+	// error fields
+	message?: string
+	code?: string | null
+	debug_info?: string | null
+}
+
+/** User-defined client-side tool definition sent to the Agent API. */
+export type ClientToolDefinition = {
+	name: string
+	description: string
+	parameters: unknown
+	fire_and_forget?: boolean
 }
 
 /** Response from creating a chat room */
@@ -73,6 +96,8 @@ export type AgentExecuteRequest = {
 	model?: string
 	mcp_hub_config_json?: string
 	additional_tool_description?: string
+	client_tools?: ClientToolDefinition[]
+	use_json_tool_calls?: boolean
 	auto_approve?: boolean
 	max_requests?: number
 	tool_access?: ToolAccess

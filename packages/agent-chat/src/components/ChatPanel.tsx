@@ -40,6 +40,9 @@ export function ChatPanel({
 					<ModelSelector
 						selectedModel={stream.selectedModel}
 						onModelChange={stream.setSelectedModel}
+						models={stream.availableModels}
+						isLoading={stream.modelsLoading}
+						error={stream.modelsError}
 						disabled={stream.isLoading}
 						className='max-w-xs'
 					/>
