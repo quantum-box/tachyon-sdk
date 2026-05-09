@@ -2,6 +2,7 @@ use anyhow::{anyhow, Result};
 use chrono::{DateTime, TimeZone, Utc};
 use clap::{Args, Subcommand, ValueEnum};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::io::Write;
 use std::path::PathBuf;
 use std::process::Command;
@@ -622,15 +623,52 @@ struct DeploymentResponse {
     app_id: Option<String>,
     #[serde(default)]
     build_id: Option<String>,
+    #[serde(default)]
+    pr_number: Option<i32>,
     status: String,
     #[serde(default)]
     source_branch: Option<String>,
+    #[serde(default)]
+    public_url: Option<String>,
     #[serde(default)]
     url: Option<String>,
     #[serde(default)]
     created_at: Option<String>,
     #[serde(default)]
     updated_at: Option<String>,
+}
+
+impl DeploymentResponse {
+    fn display_url(&self) -> String {
+        self.display_url_with_pr(self.pr_number)
+    }
+
+    fn display_url_with_pr(&self, pr_number: Option<i32>) -> String {
+        if let Some(public_url) = self.public_url.as_deref() {
+            return public_url.to_string();
+        }
+
+        let Some(url) = self.url.as_deref() else {
+            return "-".to_string();
+        };
+
+        public_preview_url_from_pages_url(url, pr_number).unwrap_or_else(|| url.to_string())
+    }
+}
+
+fn public_preview_url_from_pages_url(url: &str, pr_number: Option<i32>) -> Option<String> {
+    let pr_number = pr_number?;
+    let host = url
+        .strip_prefix("https://")
+        .or_else(|| url.strip_prefix("http://"))
+        .unwrap_or(url)
+        .split('/')
+        .next()
+        .unwrap_or(url);
+    let pages_project = host.strip_suffix(".pages.dev")?;
+    let app_name = pages_project.rsplit_once('.')?.1;
+
+    Some(format!("https://pr{pr_number}--{app_name}.txcloud.app"))
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -868,6 +906,10 @@ async fn run_builds_list(api: &ApiClient, app_id: &str, limit: usize, json: bool
     }
 
     // Show active preview URLs below the build list.
+    let build_pr_numbers: HashMap<&str, i32> = builds
+        .iter()
+        .filter_map(|build| build.pr_number.map(|pr| (build.id.as_str(), pr)))
+        .collect();
     let preview_url = format!("/v1/compute/apps/{app_id}/deployments?environment=preview");
     if let Ok(dep_resp) = api.get::<ListDeploymentsResponse>(&preview_url).await {
         let active: Vec<_> = dep_resp
@@ -880,8 +922,12 @@ async fn run_builds_list(api: &ApiClient, app_id: &str, limit: usize, json: bool
             println!("Preview URLs:");
             for dep in &active {
                 let branch = dep.source_branch.as_deref().unwrap_or("-");
-                let url = dep.url.as_deref().unwrap_or("-");
-                println!("  [{branch}] {url}");
+                let pr_number = dep.pr_number.or_else(|| {
+                    dep.build_id
+                        .as_deref()
+                        .and_then(|build_id| build_pr_numbers.get(build_id).copied())
+                });
+                println!("  [{branch}] {}", dep.display_url_with_pr(pr_number));
             }
         }
     }
@@ -930,9 +976,8 @@ async fn run_builds_get(api: &ApiClient, build_id: &str, json: bool) -> Result<(
                 .iter()
                 .find(|d| d.build_id.as_deref() == Some(&build.id))
             {
-                if let Some(preview_url) = &dep.url {
-                    println!("Preview:  {preview_url}");
-                }
+                let pr_number = dep.pr_number.or(build.pr_number);
+                println!("Preview:  {}", dep.display_url_with_pr(pr_number));
             }
         }
     }
@@ -1272,7 +1317,7 @@ async fn run_deployments_list(api: &ApiClient, app_id: &str, json: bool) -> Resu
             dep.id,
             dep.status,
             dep.build_id.as_deref().unwrap_or("-"),
-            truncate(dep.url.as_deref().unwrap_or("-"), 40),
+            truncate(&dep.display_url(), 40),
             dep.created_at
                 .as_deref()
                 .map(format_created_at)
@@ -1293,7 +1338,7 @@ async fn run_deployments_get(api: &ApiClient, deployment_id: &str, json: bool) -
     println!("Status:   {}", dep.status);
     println!("App ID:   {}", dep.app_id.as_deref().unwrap_or("-"));
     println!("Build ID: {}", dep.build_id.as_deref().unwrap_or("-"));
-    println!("URL:      {}", dep.url.as_deref().unwrap_or("-"));
+    println!("URL:      {}", dep.display_url());
     println!(
         "Created:  {}",
         dep.created_at
