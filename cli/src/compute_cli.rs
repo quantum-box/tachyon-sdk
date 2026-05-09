@@ -2,6 +2,7 @@ use anyhow::{anyhow, Result};
 use chrono::{DateTime, TimeZone, Utc};
 use clap::{Args, Subcommand, ValueEnum};
 use serde::{Deserialize, Serialize};
+use std::io::Write;
 use std::path::PathBuf;
 use std::process::Command;
 use std::time::Instant;
@@ -85,6 +86,9 @@ pub enum ComputeCommand {
     Logs {
         /// App ID or name (optional when --build-id is specified)
         app_id: Option<String>,
+        /// Tail runtime logs for a Cloudflare-backed app
+        #[arg(long, value_name = "APP_ID")]
+        tail: Option<String>,
         /// Build ID (defaults to the latest build for the given app)
         #[arg(long)]
         build_id: Option<String>,
@@ -1150,6 +1154,43 @@ async fn run_builds_watch(
     }
 }
 
+async fn run_runtime_log_tail(api: &ApiClient, app_id: &str) -> Result<()> {
+    let url = format!("{}/v1/compute/apps/{app_id}/logs/tail", api.base_url);
+    let mut resp = api
+        .client
+        .get(&url)
+        .send()
+        .await
+        .map_err(|e| anyhow!("GET {url} failed: {e}"))?;
+    let status = resp.status();
+    if !status.is_success() {
+        let body = resp.text().await.unwrap_or_default();
+        return Err(anyhow!(
+            "runtime log tail failed: status={status}, body={body}"
+        ));
+    }
+
+    let mut pending = String::new();
+    while let Some(chunk) = resp.chunk().await? {
+        pending.push_str(&String::from_utf8_lossy(&chunk));
+        while let Some(pos) = pending.find('\n') {
+            let line = pending[..pos].trim_end_matches('\r').to_string();
+            pending.drain(..=pos);
+            if let Some(data) = line.strip_prefix("data:") {
+                println!("{}", data.trim_start());
+            } else if let Some(event) = line.strip_prefix("event:") {
+                if event.trim() == "error" {
+                    eprint!("runtime log tail error: ");
+                    std::io::stderr().flush().ok();
+                }
+            }
+        }
+        std::io::stdout().flush().ok();
+    }
+
+    Ok(())
+}
+
 /// Reproduce a Cloud Apps build locally in Docker. See `build_reproduce` for
 /// the parsing/invocation logic; this function wires CLI args and exit codes.
 fn run_builds_reproduce(
@@ -1667,10 +1708,15 @@ pub async fn run(
         }
         ComputeCommand::Logs {
             app_id,
+            tail,
             build_id,
             follow,
             agent,
         } => {
+            if let Some(app_id) = tail {
+                let id = resolve::resolve_app_id(&api, app_id).await?;
+                return run_runtime_log_tail(&api, &id).await;
+            }
             let resolved_app_id = match app_id {
                 Some(id) => Some(resolve::resolve_app_id(&api, id).await?),
                 None => None,
