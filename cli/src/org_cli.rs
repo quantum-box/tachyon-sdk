@@ -215,13 +215,23 @@ struct UserPolicyResponse {
 struct InviteUserRequest {
     tenant_id: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    invitee_id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     invitee_email: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     platform_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     notify_user: Option<bool>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct GrantTenantAccessRequest {
+    tenant_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    user_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    email: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    platform_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -334,29 +344,30 @@ async fn run_users_invite(
     platform_id: Option<&str>,
 ) -> Result<()> {
     let is_email = identifier.contains('@');
-    let req = InviteUserRequest {
-        tenant_id: tenant_id.to_string(),
-        invitee_id: if is_email {
-            None
-        } else {
-            Some(identifier.to_string())
-        },
-        invitee_email: if is_email {
-            Some(identifier.to_string())
-        } else {
-            None
-        },
-        platform_id: platform_id.map(|s| s.to_string()),
-        notify_user: if notify { Some(true) } else { None },
-    };
-    let resp: serde_json::Value = api.post("/v1/auth/users/invite", &req).await?;
     if is_email {
+        let req = InviteUserRequest {
+            tenant_id: tenant_id.to_string(),
+            invitee_email: Some(identifier.to_string()),
+            platform_id: platform_id.map(|s| s.to_string()),
+            notify_user: if notify { Some(true) } else { None },
+        };
+        let resp: serde_json::Value = api.post("/v1/auth/users/invite", &req).await?;
         println!("Invitation sent to {identifier}.");
+        if let Some(email) = resp.get("email").and_then(|v| v.as_str()) {
+            println!("Email: {email}");
+        }
     } else {
+        let req = GrantTenantAccessRequest {
+            tenant_id: tenant_id.to_string(),
+            user_id: Some(identifier.to_string()),
+            email: None,
+            platform_id: platform_id.map(|s| s.to_string()),
+        };
+        let resp: serde_json::Value = api.post("/v1/auth/users/grant-tenant-access", &req).await?;
         println!("User {identifier} invited to tenant.");
-    }
-    if let Some(id) = resp.get("id").and_then(|v| v.as_str()) {
-        println!("User ID: {id}");
+        if let Some(id) = resp.get("id").and_then(|v| v.as_str()) {
+            println!("User ID: {id}");
+        }
     }
     Ok(())
 }

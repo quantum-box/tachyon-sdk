@@ -60,6 +60,37 @@ export function MessageBubble({ chunk }: MessageBubbleProps) {
 					</div>
 				</div>
 			)
+		case 'artifact':
+			return (
+				<div className='flex justify-start mb-3'>
+					<div className='max-w-[80%] rounded-xl px-3 py-2 bg-purple-50 dark:bg-purple-900/20 border border-purple-200 dark:border-purple-800 text-sm'>
+						<div className='font-medium text-purple-700 dark:text-purple-300'>
+							Artifact:{' '}
+							{chunk.filename || chunk.artifact_id || 'generated file'}
+						</div>
+						{chunk.url && (
+							<a
+								href={chunk.url}
+								target='_blank'
+								rel='noreferrer'
+								className='text-xs text-purple-600 dark:text-purple-300 underline'
+							>
+								Open artifact
+							</a>
+						)}
+					</div>
+				</div>
+			)
+		case 'error':
+			return (
+				<div className='flex justify-start mb-3'>
+					<div className='max-w-[80%] rounded-xl px-3 py-2 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 text-sm text-red-700 dark:text-red-300 whitespace-pre-wrap'>
+						{chunk.message || chunk.text || 'Agent execution failed.'}
+					</div>
+				</div>
+			)
+		case 'done':
+			return null
 		case 'ask':
 			return (
 				<div className='flex justify-start mb-3'>
