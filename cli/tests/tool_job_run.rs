@@ -106,7 +106,7 @@ fn tool_job_run_uses_active_profile_config_and_streams_docker_output() {
     assert!(String::from_utf8_lossy(&output.stderr).contains("fake docker stderr"));
 
     let capture = fs::read_to_string(capture_path).unwrap();
-    assert!(capture.contains("args=run|--rm|"));
+    assert!(capture.contains("args=run|--pull|always|--rm|"));
     assert!(capture.contains("-e|TACHYON_API_URL=https://api.test.example|"));
     assert!(capture.contains("-e|TACHYON_API_KEY=profile-token|"));
     assert!(capture.contains("-e|TACHYON_OPERATOR_ID=op_profile|"));
