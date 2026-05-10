@@ -223,6 +223,10 @@ pub struct ToolJobRunArgs {
     #[arg(long)]
     pub no_rm: bool,
 
+    /// Run the tachyond container in the background
+    #[arg(short = 'd', long)]
+    pub detach: bool,
+
     /// Log filter passed to tachyond
     #[arg(
         long,
@@ -285,6 +289,7 @@ struct ToolJobDockerConfig {
     quic_gateway_url: String,
     name: Option<String>,
     rm: bool,
+    detach: bool,
     rust_log: String,
     enable_opencode: bool,
     manage_opencode_server: bool,
@@ -322,6 +327,7 @@ impl ToolJobDockerConfig {
             quic_gateway_url: args.quic_gateway_url.clone(),
             name: args.name.clone(),
             rm: !args.no_rm,
+            detach: args.detach,
             rust_log: args.rust_log.clone(),
             enable_opencode: args.enable_opencode,
             manage_opencode_server: args.manage_opencode_server,
@@ -372,6 +378,9 @@ impl ToolJobDockerConfig {
         if self.rm {
             args.push("--rm".to_string());
         }
+        if self.detach {
+            args.push("--detach".to_string());
+        }
         if let Some(name) = &self.name {
             args.push("--name".to_string());
             args.push(name.clone());
@@ -398,6 +407,14 @@ impl ToolJobDockerConfig {
         println!("  quic gateway: {}", self.quic_gateway_url);
         println!("  rust log: {}", self.rust_log);
         println!(
+            "  mode: {}",
+            if self.detach {
+                "detached"
+            } else {
+                "foreground"
+            }
+        );
+        println!(
             "  opencode: {}",
             if self.enable_opencode {
                 "enabled"
@@ -406,6 +423,9 @@ impl ToolJobDockerConfig {
             }
         );
         println!("Stop with: tachyon agent tool-job stop");
+        if let Some(name) = &self.name {
+            println!("Logs with: docker logs -f {name}");
+        }
         println!();
     }
 }
@@ -1361,6 +1381,7 @@ mod tool_job_tests {
             docker_bin: "docker".to_string(),
             name: Some("tachyond-test".to_string()),
             no_rm: false,
+            detach: false,
             rust_log: "warn,streaming=info,llms=info,tachyon_code=info".to_string(),
             enable_opencode: false,
             manage_opencode_server: false,
@@ -1379,6 +1400,7 @@ mod tool_job_tests {
         let args = config.docker_args();
         assert_eq!(args.first().map(String::as_str), Some("run"));
         assert!(args.contains(&"--rm".to_string()));
+        assert!(!args.contains(&"--detach".to_string()));
         assert!(args.contains(&"--name".to_string()));
         assert!(args.contains(&"tachyond-test".to_string()));
         assert!(args.contains(&"--label".to_string()));
@@ -1421,6 +1443,17 @@ mod tool_job_tests {
         assert!(args.contains(&"OPENCODE_SERVER_PORT=4096".to_string()));
         assert!(args.contains(&"OPENCODE_RESTART_LIMIT=2".to_string()));
         assert!(args.contains(&"OPENCODE_HEALTH_INTERVAL_SECS=10".to_string()));
+    }
+
+    #[test]
+    fn docker_command_builder_allows_detached_mode() {
+        let mut run_args = run_args();
+        run_args.detach = true;
+        let config =
+            ToolJobDockerConfig::from_runtime(&run_args, &test_config(), "op_test").unwrap();
+
+        let args = config.docker_args();
+        assert!(args.contains(&"--detach".to_string()));
     }
 
     #[test]

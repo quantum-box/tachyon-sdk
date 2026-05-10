@@ -129,6 +129,7 @@ fn tool_job_run_uses_active_profile_config_and_streams_docker_output() {
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("Starting tachyond tool job worker..."));
     assert!(stdout.contains("Stop with: tachyon agent tool-job stop"));
+    assert!(stdout.contains("Logs with: docker logs -f tachyond-tool-job-worker"));
     assert!(stdout.contains("fake docker stdout"));
     assert!(String::from_utf8_lossy(&output.stderr).contains("fake docker stderr"));
 
