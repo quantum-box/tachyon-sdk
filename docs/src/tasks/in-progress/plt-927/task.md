@@ -40,9 +40,10 @@ GitHub-hosted runner の現行 label に合わせ、`x86_64-apple-darwin` build 
 - [x] `macos-13` defer コメントの残存を確認
 - [x] `macos-15-intel` + `x86_64-apple-darwin` matrix を復活
 - [x] workflow YAML 検証
-- [ ] PR 作成
+- [x] PR 作成
 
 ## 検証メモ
 
 - `actionlint -ignore 'label "macos-15-intel" is unknown' .github/workflows/auto-release-cli.yml .github/workflows/release-cli.yml`: pass
 - ローカルの `actionlint` は `macos-15-intel` label をまだ内蔵リストに持っていないため ignore 指定。GitHub 公式 docs / changelog では同 label が標準 Intel macOS runner として案内されている。
+- PR: https://github.com/quantum-box/tachyon-sdk/pull/87
