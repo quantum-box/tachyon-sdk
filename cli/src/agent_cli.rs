@@ -11,6 +11,8 @@ use crate::resolve;
 
 const DEFAULT_TACHYOND_IMAGE: &str = "ghcr.io/quantum-box/tachyond:latest";
 const DEFAULT_QUIC_GATEWAY_URL: &str = "quic.n1.tachy.one:4433";
+const DEFAULT_TACHYOND_CONTAINER_NAME: &str = "tachyond-tool-job-worker";
+const TACHYOND_CONTAINER_LABEL: &str = "com.tachyon.role=tool-job-worker";
 
 #[derive(Debug, Clone, Args)]
 pub struct AgentArgs {
@@ -186,6 +188,8 @@ pub enum MemoryCommand {
 pub enum ToolJobCommand {
     /// Run tachyond locally via Docker and process tool jobs
     Run(ToolJobRunArgs),
+    /// Stop a local tachyond tool job worker container
+    Stop(ToolJobStopArgs),
 }
 
 #[derive(Debug, Clone, Args)]
@@ -212,12 +216,64 @@ pub struct ToolJobRunArgs {
     pub docker_bin: String,
 
     /// Optional Docker container name
-    #[arg(long)]
+    #[arg(long, default_value = DEFAULT_TACHYOND_CONTAINER_NAME)]
     pub name: Option<String>,
 
     /// Keep the container after it exits
     #[arg(long)]
     pub no_rm: bool,
+
+    /// Log filter passed to tachyond
+    #[arg(
+        long,
+        env = "TACHYOND_RUST_LOG",
+        default_value = "warn,streaming=info,llms=info,tachyon_code=info"
+    )]
+    pub rust_log: String,
+
+    /// Enable OpenCode support in tachyond
+    #[arg(long, env = "TACHYOND_ENABLE_OPENCODE", default_value = "false")]
+    pub enable_opencode: bool,
+
+    /// Start and manage an OpenCode server inside tachyond
+    #[arg(long, env = "MANAGE_OPENCODE_SERVER", default_value = "false")]
+    pub manage_opencode_server: bool,
+
+    /// Port for the managed OpenCode server (0 = auto-assign)
+    #[arg(long, env = "OPENCODE_SERVER_PORT", default_value = "0")]
+    pub opencode_server_port: u16,
+
+    /// Maximum restart attempts for the managed OpenCode server
+    #[arg(long, env = "OPENCODE_RESTART_LIMIT", default_value = "5")]
+    pub opencode_restart_limit: u32,
+
+    /// Health check interval in seconds for the managed OpenCode server
+    #[arg(long, env = "OPENCODE_HEALTH_INTERVAL_SECS", default_value = "30")]
+    pub opencode_health_interval_secs: u64,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct ToolJobStopArgs {
+    /// Tachyond container image to stop when no matching name is found
+    #[arg(long, env = "TACHYON_TACHYOND_IMAGE", default_value = DEFAULT_TACHYOND_IMAGE)]
+    pub image: String,
+
+    /// Docker binary to execute
+    #[arg(
+        long,
+        env = "TACHYON_DOCKER_BIN",
+        default_value = "docker",
+        hide = true
+    )]
+    pub docker_bin: String,
+
+    /// Docker container name
+    #[arg(long, default_value = DEFAULT_TACHYOND_CONTAINER_NAME)]
+    pub name: String,
+
+    /// Seconds to wait before Docker kills the container
+    #[arg(long, default_value = "10")]
+    pub timeout: u16,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -229,6 +285,12 @@ struct ToolJobDockerConfig {
     quic_gateway_url: String,
     name: Option<String>,
     rm: bool,
+    rust_log: String,
+    enable_opencode: bool,
+    manage_opencode_server: bool,
+    opencode_server_port: u16,
+    opencode_restart_limit: u32,
+    opencode_health_interval_secs: u64,
 }
 
 impl ToolJobDockerConfig {
@@ -260,6 +322,12 @@ impl ToolJobDockerConfig {
             quic_gateway_url: args.quic_gateway_url.clone(),
             name: args.name.clone(),
             rm: !args.no_rm,
+            rust_log: args.rust_log.clone(),
+            enable_opencode: args.enable_opencode,
+            manage_opencode_server: args.manage_opencode_server,
+            opencode_server_port: args.opencode_server_port,
+            opencode_restart_limit: args.opencode_restart_limit,
+            opencode_health_interval_secs: args.opencode_health_interval_secs,
         })
     }
 
@@ -274,6 +342,24 @@ impl ToolJobDockerConfig {
             ("TACHYON_AUTH_TOKEN", self.api_key.clone()),
             ("TOOL_JOB_OPERATOR_ID", self.operator_id.clone()),
             ("QUIC_GATEWAY_ADDR", self.quic_gateway_url.clone()),
+            ("RUST_LOG", self.rust_log.clone()),
+            ("TACHYOND_ENABLE_OPENCODE", self.enable_opencode.to_string()),
+            (
+                "MANAGE_OPENCODE_SERVER",
+                self.manage_opencode_server.to_string(),
+            ),
+            (
+                "OPENCODE_SERVER_PORT",
+                self.opencode_server_port.to_string(),
+            ),
+            (
+                "OPENCODE_RESTART_LIMIT",
+                self.opencode_restart_limit.to_string(),
+            ),
+            (
+                "OPENCODE_HEALTH_INTERVAL_SECS",
+                self.opencode_health_interval_secs.to_string(),
+            ),
         ]
     }
 
@@ -290,12 +376,37 @@ impl ToolJobDockerConfig {
             args.push("--name".to_string());
             args.push(name.clone());
         }
+        args.push("--label".to_string());
+        args.push(TACHYOND_CONTAINER_LABEL.to_string());
         for (key, value) in self.env_pairs() {
             args.push("-e".to_string());
             args.push(format!("{key}={value}"));
         }
         args.push(self.image.clone());
         args
+    }
+
+    fn print_startup_summary(&self) {
+        println!("Starting tachyond tool job worker...");
+        println!("  image: {}", self.image);
+        println!(
+            "  container: {}",
+            self.name.as_deref().unwrap_or("(docker generated)")
+        );
+        println!("  api: {}", self.api_url);
+        println!("  operator: {}", self.operator_id);
+        println!("  quic gateway: {}", self.quic_gateway_url);
+        println!("  rust log: {}", self.rust_log);
+        println!(
+            "  opencode: {}",
+            if self.enable_opencode {
+                "enabled"
+            } else {
+                "disabled"
+            }
+        );
+        println!("Stop with: tachyon agent tool-job stop");
+        println!();
     }
 }
 
@@ -1033,6 +1144,7 @@ fn run_tool_job_container_with_docker(
     docker_bin: &str,
     config: &ToolJobDockerConfig,
 ) -> Result<()> {
+    config.print_startup_summary();
     let status = Command::new(docker_bin)
         .args(config.docker_args())
         .stdin(Stdio::inherit())
@@ -1053,6 +1165,113 @@ fn run_tool_job_container_with_docker(
         return Err(anyhow!("tachyond container exited with status {status}"));
     }
     Ok(())
+}
+
+fn stop_tool_job_container(args: &ToolJobStopArgs) -> Result<()> {
+    stop_tool_job_container_with_docker(&args.docker_bin, &args.name, &args.image, args.timeout)
+}
+
+fn stop_tool_job_container_with_docker(
+    docker_bin: &str,
+    name: &str,
+    image: &str,
+    timeout: u16,
+) -> Result<()> {
+    let mut container_ids = docker_container_ids(
+        docker_bin,
+        &[
+            "--filter",
+            &format!("label={TACHYOND_CONTAINER_LABEL}"),
+            "--filter",
+            "status=running",
+        ],
+    )?;
+
+    if container_ids.is_empty() {
+        container_ids = docker_container_ids(
+            docker_bin,
+            &[
+                "--filter",
+                &format!("name=^/{name}$"),
+                "--filter",
+                "status=running",
+            ],
+        )?;
+    }
+
+    if container_ids.is_empty() {
+        container_ids = docker_container_ids(
+            docker_bin,
+            &[
+                "--filter",
+                &format!("ancestor={image}"),
+                "--filter",
+                "status=running",
+            ],
+        )?;
+    }
+
+    if container_ids.is_empty() {
+        println!("No running tachyond tool job worker container found.");
+        return Ok(());
+    }
+
+    let mut command = Command::new(docker_bin);
+    command
+        .arg("stop")
+        .arg("--timeout")
+        .arg(timeout.to_string());
+    command.args(&container_ids);
+    let status = command
+        .stdin(Stdio::inherit())
+        .stdout(Stdio::inherit())
+        .stderr(Stdio::inherit())
+        .status()
+        .map_err(|err| {
+            if err.kind() == std::io::ErrorKind::NotFound {
+                anyhow!(
+                    "Docker is not installed or `{docker_bin}` is not on PATH. Install Docker and retry `tachyon agent tool-job stop`."
+                )
+            } else {
+                anyhow!(err).context(format!("failed to stop Docker container via `{docker_bin}`"))
+            }
+        })?;
+
+    if !status.success() {
+        return Err(anyhow!("failed to stop tachyond container: {status}"));
+    }
+    Ok(())
+}
+
+fn docker_container_ids(docker_bin: &str, filters: &[&str]) -> Result<Vec<String>> {
+    let output = Command::new(docker_bin)
+        .arg("ps")
+        .arg("-q")
+        .args(filters)
+        .output()
+        .map_err(|err| {
+            if err.kind() == std::io::ErrorKind::NotFound {
+                anyhow!(
+                    "Docker is not installed or `{docker_bin}` is not on PATH. Install Docker and retry `tachyon agent tool-job stop`."
+                )
+            } else {
+                anyhow!(err).context(format!("failed to inspect Docker containers via `{docker_bin}`"))
+            }
+        })?;
+
+    if !output.status.success() {
+        return Err(anyhow!(
+            "failed to inspect Docker containers: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+
+    Ok(String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(ToOwned::to_owned)
+        .collect())
 }
 
 // ---- Entry point ----
@@ -1119,6 +1338,7 @@ pub async fn run(args: &AgentArgs, config: &Configuration, tenant_id: &str) -> R
         AgentCommand::Models { json } => run_models_list(&api, *json).await,
         AgentCommand::ToolJob { command } => match command {
             ToolJobCommand::Run(run_args) => run_tool_job_container(run_args, config, tenant_id),
+            ToolJobCommand::Stop(stop_args) => stop_tool_job_container(stop_args),
         },
     }
 }
@@ -1141,6 +1361,12 @@ mod tool_job_tests {
             docker_bin: "docker".to_string(),
             name: Some("tachyond-test".to_string()),
             no_rm: false,
+            rust_log: "warn,streaming=info,llms=info,tachyon_code=info".to_string(),
+            enable_opencode: false,
+            manage_opencode_server: false,
+            opencode_server_port: 0,
+            opencode_restart_limit: 5,
+            opencode_health_interval_secs: 30,
         }
     }
 
@@ -1155,6 +1381,8 @@ mod tool_job_tests {
         assert!(args.contains(&"--rm".to_string()));
         assert!(args.contains(&"--name".to_string()));
         assert!(args.contains(&"tachyond-test".to_string()));
+        assert!(args.contains(&"--label".to_string()));
+        assert!(args.contains(&TACHYOND_CONTAINER_LABEL.to_string()));
         assert!(args.contains(&"TACHYON_API_URL=https://api.example.test".to_string()));
         assert!(args.contains(&"TACHYON_API_KEY=test-token".to_string()));
         assert!(args.contains(&"TACHYON_OPERATOR_ID=op_test".to_string()));
@@ -1162,10 +1390,37 @@ mod tool_job_tests {
         assert!(args.contains(&"TACHYON_AUTH_TOKEN=test-token".to_string()));
         assert!(args.contains(&"TOOL_JOB_OPERATOR_ID=op_test".to_string()));
         assert!(args.contains(&"QUIC_GATEWAY_ADDR=quic.n1.tachy.one:4433".to_string()));
+        assert!(
+            args.contains(&"RUST_LOG=warn,streaming=info,llms=info,tachyon_code=info".to_string())
+        );
+        assert!(args.contains(&"TACHYOND_ENABLE_OPENCODE=false".to_string()));
+        assert!(args.contains(&"MANAGE_OPENCODE_SERVER=false".to_string()));
+        assert!(args.contains(&"OPENCODE_SERVER_PORT=0".to_string()));
+        assert!(args.contains(&"OPENCODE_RESTART_LIMIT=5".to_string()));
+        assert!(args.contains(&"OPENCODE_HEALTH_INTERVAL_SECS=30".to_string()));
         assert_eq!(
             args.last().map(String::as_str),
             Some(DEFAULT_TACHYOND_IMAGE)
         );
+    }
+
+    #[test]
+    fn docker_command_builder_allows_opencode_overrides() {
+        let mut run_args = run_args();
+        run_args.enable_opencode = true;
+        run_args.manage_opencode_server = true;
+        run_args.opencode_server_port = 4096;
+        run_args.opencode_restart_limit = 2;
+        run_args.opencode_health_interval_secs = 10;
+        let config =
+            ToolJobDockerConfig::from_runtime(&run_args, &test_config(), "op_test").unwrap();
+
+        let args = config.docker_args();
+        assert!(args.contains(&"TACHYOND_ENABLE_OPENCODE=true".to_string()));
+        assert!(args.contains(&"MANAGE_OPENCODE_SERVER=true".to_string()));
+        assert!(args.contains(&"OPENCODE_SERVER_PORT=4096".to_string()));
+        assert!(args.contains(&"OPENCODE_RESTART_LIMIT=2".to_string()));
+        assert!(args.contains(&"OPENCODE_HEALTH_INTERVAL_SECS=10".to_string()));
     }
 
     #[test]
