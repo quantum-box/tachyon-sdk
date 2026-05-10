@@ -278,7 +278,11 @@ impl ToolJobDockerConfig {
     }
 
     fn docker_args(&self) -> Vec<String> {
-        let mut args = vec!["run".to_string(), "--pull".to_string(), "always".to_string()];
+        let mut args = vec![
+            "run".to_string(),
+            "--pull".to_string(),
+            "always".to_string(),
+        ];
         if self.rm {
             args.push("--rm".to_string());
         }
