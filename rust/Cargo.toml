@@ -25,4 +25,8 @@ default = ["rustls"]
 native-tls = ["reqwest/native-tls"]
 rustls = ["reqwest/rustls-tls"]
 auth = ["async-trait", "chrono"]
+worker-runtime = ["async-trait", "chrono"]
 test = ["auth", "mockall"]
+
+[dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt"] }
