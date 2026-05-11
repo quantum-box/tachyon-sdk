@@ -52,14 +52,11 @@ class TestAgentExecuteRequest(unittest.TestCase):
                 mcp_hub_config_json = '',
                 model = '',
                 task = '',
-                tool_access = tachyon_sdk.models.agent_tool_access_request.AgentToolAccessRequest(
-                    agent_protocol = True, 
-                    coding_agent_job = True, 
-                    command = True, 
-                    filesystem = True, 
-                    sub_agent = True, 
-                    url_fetch = True, 
-                    web_search = True, ),
+                tool_access = tachyon_sdk.models.agent_tool_access_request.AgentToolAccessRequest.from_dict([
+                    {"type": "builtin", "name": "filesystem"},
+                    {"type": "builtin", "name": "web_search"},
+                    {"type": "builtin", "name": "url_fetch"},
+                ]),
                 use_json_tool_calls = True,
                 user_custom_instructions = ''
             )

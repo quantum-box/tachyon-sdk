@@ -184,8 +184,8 @@ export function MyChatUI() {
 | `setSelectedModel`  | `(model: string \| null) => void`           | Change model                                       |
 | `maxRequests`       | `number`                                    | Max agent loop iterations (default 10)             |
 | `setMaxRequests`    | `(n: number) => void`                       | Change max requests                                |
-| `toolAccess`        | `ToolAccess`                                | Tool permission flags                              |
-| `setToolAccess`     | `(t: ToolAccess) => void`                   | Update tool permissions                            |
+| `toolAccess`        | `ToolAccess`                                | Enabled builtin tools                             |
+| `setToolAccess`     | `(t: ToolAccess) => void`                   | Update enabled builtin tools                      |
 | `chatRooms`         | `ChatRoom[]`                                | List of chatrooms                                  |
 | `chatRoomLoading`   | `boolean`                                   | Chatroom list loading state                        |
 | `chatRoomError`     | `Error \| null`                             | Chatroom list error                                |

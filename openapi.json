@@ -5852,7 +5852,7 @@
                     },
                     "tool_access": {
                         "$ref": "#/components/schemas/AgentToolAccessRequest",
-                        "description": "Per-category tool access flags."
+                        "description": "Builtin tools available to the agent."
                     },
                     "use_json_tool_calls": {
                         "type": [
@@ -6004,54 +6004,10 @@
                 }
             },
             "AgentToolAccessRequest": {
-                "type": "object",
-                "properties": {
-                    "agent_protocol": {
-                        "type": [
-                            "boolean",
-                            "null"
-                        ]
-                    },
-                    "coding_agent_job": {
-                        "type": [
-                            "boolean",
-                            "null"
-                        ]
-                    },
-                    "command": {
-                        "type": [
-                            "boolean",
-                            "null"
-                        ]
-                    },
-                    "filesystem": {
-                        "type": [
-                            "boolean",
-                            "null"
-                        ]
-                    },
-                    "sub_agent": {
-                        "type": [
-                            "boolean",
-                            "null"
-                        ],
-                        "description": "Enable the `execute_sub_agent` tool for spawning child\nagents."
-                    },
-                    "url_fetch": {
-                        "type": [
-                            "boolean",
-                            "null"
-                        ],
-                        "description": "Enable the `fetch_url` URL scraping tool (Firecrawl API)."
-                    },
-                    "web_search": {
-                        "type": [
-                            "boolean",
-                            "null"
-                        ],
-                        "description": "Enable the `search_with_llm` web search tool (Google Custom Search)."
-                    }
-                }
+                "items": {
+                    "$ref": "#/components/schemas/AgentBuiltinToolRequest"
+                },
+                "type": "array"
             },
             "ApiKeyListResponse": {
                 "type": "object",
@@ -10776,6 +10732,27 @@
                         "$ref": "#/components/schemas/User"
                     }
                 }
+            },
+            "AgentBuiltinToolRequest": {
+                "properties": {
+                    "name": {
+                        "type": "string"
+                    },
+                    "type": {
+                        "$ref": "#/components/schemas/AgentBuiltinToolType"
+                    }
+                },
+                "required": [
+                    "type",
+                    "name"
+                ],
+                "type": "object"
+            },
+            "AgentBuiltinToolType": {
+                "enum": [
+                    "builtin"
+                ],
+                "type": "string"
             }
         }
     },

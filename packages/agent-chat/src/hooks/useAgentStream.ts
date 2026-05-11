@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type {
 	AgentChunk,
 	AgentExecuteRequest,
@@ -39,16 +39,24 @@ export function useAgentStream(options: UseAgentStreamOptions) {
 		PERSISTENCE_KEYS.maxRequests,
 		10,
 	)
-	const [toolAccess, setToolAccess] = usePersisted<ToolAccess>(
+	const [rawToolAccess, setRawToolAccess] = usePersisted<unknown>(
 		PERSISTENCE_KEYS.toolAccess,
-		config.toolAccess ?? {
-			filesystem: false,
-			command: false,
-			coding_agent_job: true,
-			web_search: false,
-			url_fetch: false,
-			sub_agent: false,
+		normalizeToolAccess(config.toolAccess),
+	)
+	const toolAccess = useMemo(
+		() => normalizeToolAccess(rawToolAccess),
+		[rawToolAccess],
+	)
+	const setToolAccess = useCallback(
+		(next: ToolAccess | ((prev: ToolAccess) => ToolAccess)) => {
+			setRawToolAccess((prev: unknown) => {
+				const current = normalizeToolAccess(prev)
+				return typeof next === 'function'
+					? next(current)
+					: normalizeToolAccess(next)
+			})
 		},
+		[setRawToolAccess],
 	)
 
 	// Keep model availability in the same hook that performs execution so
@@ -494,6 +502,26 @@ function buildCanvasInstructions(): string {
 		'- Do not say "キャンバスで表示します" or similar future-tense canvas promises unless you actually invoke the `canvas` tool.',
 		'- When the user asks for a canvas, artifact, visual summary, diagram, table, or document-style output, use the `canvas` tool instead of only describing the output in chat.',
 	].join('\n')
+}
+
+function normalizeToolAccess(toolAccess: unknown): ToolAccess {
+	if (Array.isArray(toolAccess)) {
+		return toolAccess.filter(
+			(tool): tool is ToolAccess[number] =>
+				typeof tool === 'object' &&
+				tool !== null &&
+				(tool as { type?: unknown }).type === 'builtin' &&
+				typeof (tool as { name?: unknown }).name === 'string',
+		)
+	}
+
+	if (toolAccess && typeof toolAccess === 'object') {
+		return Object.entries(toolAccess)
+			.filter(([, enabled]) => enabled === true)
+			.map(([name]) => ({ type: 'builtin', name }))
+	}
+
+	return []
 }
 
 function getToolArgs(chunk: AgentChunk): unknown {
