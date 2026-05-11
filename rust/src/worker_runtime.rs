@@ -61,6 +61,8 @@ pub enum WorkerProviderKind {
     CursorAgent,
     /// OpenCode provider.
     OpenCode,
+    /// Codex CLI running inside a Docker container.
+    ContainerizedCodex,
 }
 
 impl fmt::Display for WorkerProviderKind {
@@ -70,6 +72,7 @@ impl fmt::Display for WorkerProviderKind {
             Self::ClaudeCode => write!(f, "claude_code"),
             Self::CursorAgent => write!(f, "cursor_agent"),
             Self::OpenCode => write!(f, "open_code"),
+            Self::ContainerizedCodex => write!(f, "containerized_codex"),
         }
     }
 }
