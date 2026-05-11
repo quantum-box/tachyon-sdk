@@ -15,7 +15,7 @@ Name | Type | Description | Notes
 **mcp_hub_config_json** | Option<**String**> | Optional MCP Hub configuration in JSON string form. | [optional]
 **model** | Option<**String**> | Model identifier. Accepts `provider/model` or just `model` (provider auto-detected).  Examples: - `anthropic/claude-3-sonnet-20241022` - `openai/gpt-4` - `google_ai/gemini-pro`  Auto-detection shortcuts: - `gpt-*` → OpenAI - `claude-*` → Anthropic - `gemini*` → Google AI | [optional]
 **task** | **String** | The task or prompt for the agent to execute. | 
-**tool_access** | Option<[**models::AgentToolAccessRequest**](AgentToolAccessRequest.md)> | Per-category tool access flags. | [optional]
+**tool_access** | Option<[**Vec<models::AgentBuiltinToolRequest>**](AgentBuiltinToolRequest.md)> | Builtin tools available to the agent. | [optional]
 **use_json_tool_calls** | Option<**bool**> | When true, use JSON Schema tool definitions (function calling) instead of XML-based tool parsing. This is automatically enabled when `client_tools` is provided. | [optional]
 **user_custom_instructions** | Option<**String**> | Custom system-level instructions appended to the agent's prompt. | [optional]
 

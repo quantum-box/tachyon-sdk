@@ -20,8 +20,8 @@ import json
 from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictStr
 from typing import Any, ClassVar, Dict, List, Optional
 from typing_extensions import Annotated
+from tachyon_sdk.models.agent_builtin_tool_request import AgentBuiltinToolRequest
 from tachyon_sdk.models.agent_protocol_mode import AgentProtocolMode
-from tachyon_sdk.models.agent_tool_access_request import AgentToolAccessRequest
 from tachyon_sdk.models.chatroom_name_generation import ChatroomNameGeneration
 from tachyon_sdk.models.client_tool_definition import ClientToolDefinition
 from typing import Optional, Set
@@ -42,7 +42,7 @@ class AgentExecuteRequest(BaseModel):
     mcp_hub_config_json: Optional[StrictStr] = Field(default=None, description="Optional MCP Hub configuration in JSON string form.")
     model: Optional[StrictStr] = Field(default=None, description="Model identifier. Accepts `provider/model` or just `model` (provider auto-detected).  Examples: - `anthropic/claude-3-sonnet-20241022` - `openai/gpt-4` - `google_ai/gemini-pro`  Auto-detection shortcuts: - `gpt-*` → OpenAI - `claude-*` → Anthropic - `gemini*` → Google AI")
     task: StrictStr = Field(description="The task or prompt for the agent to execute.")
-    tool_access: Optional[AgentToolAccessRequest] = Field(default=None, description="Builtin tools available to the agent.")
+    tool_access: Optional[List[AgentBuiltinToolRequest]] = Field(default=None, description="Builtin tools available to the agent.")
     use_json_tool_calls: Optional[StrictBool] = Field(default=None, description="When true, use JSON Schema tool definitions (function calling) instead of XML-based tool parsing. This is automatically enabled when `client_tools` is provided.")
     user_custom_instructions: Optional[StrictStr] = Field(default=None, description="Custom system-level instructions appended to the agent's prompt.")
     __properties: ClassVar[List[str]] = ["additional_tool_description", "agent_protocol_id", "agent_protocol_mode", "assistant_name", "auto_approve", "chatroom_name_generation", "client_tools", "max_requests", "mcp_hub_config_json", "model", "task", "tool_access", "use_json_tool_calls", "user_custom_instructions"]
@@ -93,9 +93,13 @@ class AgentExecuteRequest(BaseModel):
                 if _item_client_tools:
                     _items.append(_item_client_tools.to_dict())
             _dict['client_tools'] = _items
-        # override the default output from pydantic by calling `to_dict()` of tool_access
+        # override the default output from pydantic by calling `to_dict()` of each item in tool_access (list)
+        _items = []
         if self.tool_access:
-            _dict['tool_access'] = self.tool_access.to_dict()
+            for _item_tool_access in self.tool_access:
+                if _item_tool_access:
+                    _items.append(_item_tool_access.to_dict())
+            _dict['tool_access'] = _items
         # set to None if additional_tool_description (nullable) is None
         # and model_fields_set contains the field
         if self.additional_tool_description is None and "additional_tool_description" in self.model_fields_set:
@@ -159,9 +163,10 @@ class AgentExecuteRequest(BaseModel):
             "mcp_hub_config_json": obj.get("mcp_hub_config_json"),
             "model": obj.get("model"),
             "task": obj.get("task"),
-            "tool_access": AgentToolAccessRequest.from_dict(obj["tool_access"]) if obj.get("tool_access") is not None else None,
+            "tool_access": [AgentBuiltinToolRequest.from_dict(_item) for _item in obj["tool_access"]] if obj.get("tool_access") is not None else None,
             "use_json_tool_calls": obj.get("use_json_tool_calls"),
             "user_custom_instructions": obj.get("user_custom_instructions")
         })
         return _obj
+
 

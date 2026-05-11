@@ -52,21 +52,6 @@ example().catch(console.error);
 
 All URIs are relative to *http://localhost*
 
-### StoreKit storefront client
-
-StoreKit is the storefront-oriented client for building external EC sites with product browsing, carts, coupons, checkout, orders, and customers without calling raw commerce endpoints directly.
-
-See [StoreKit](docs/StoreKit.md).
-
-Reference flow:
-
-```bash
-BAKUURE_API_BASE_URL=http://localhost:14001 \
-BAKUURE_OPERATOR_ID=tn_01hjryxysgey07h5jz5wagqj0m \
-BAKUURE_API_KEY=dummy-token \
-npx ts-node examples/storekit-reference-flow.ts
-```
-
 | Class | Method | HTTP request | Description
 | ----- | ------ | ------------ | -------------
 *AgentApi* | [**createAgentSession**](docs/AgentApi.md#createagentsessionoperation) | **POST** /v1/llms/sessions | Create a new independent agent session.
@@ -177,6 +162,8 @@ npx ts-node examples/storekit-reference-flow.ts
 - [AddUserToTenantRequest](docs/AddUserToTenantRequest.md)
 - [AddressRequest](docs/AddressRequest.md)
 - [AddressResponse](docs/AddressResponse.md)
+- [AgentBuiltinToolRequest](docs/AgentBuiltinToolRequest.md)
+- [AgentBuiltinToolType](docs/AgentBuiltinToolType.md)
 - [AgentChunk](docs/AgentChunk.md)
 - [AgentChunkEvent](docs/AgentChunkEvent.md)
 - [AgentChunkEventOneOf](docs/AgentChunkEventOneOf.md)
@@ -197,7 +184,6 @@ npx ts-node examples/storekit-reference-flow.ts
 - [AgentSessionEntry](docs/AgentSessionEntry.md)
 - [AgentSource](docs/AgentSource.md)
 - [AgentStatusResponse](docs/AgentStatusResponse.md)
-- [AgentToolAccessRequest](docs/AgentToolAccessRequest.md)
 - [ApiKeyListResponse](docs/ApiKeyListResponse.md)
 - [ApiKeyResponse](docs/ApiKeyResponse.md)
 - [Ask](docs/Ask.md)

@@ -9,6 +9,8 @@ docs/AddUserToTenantRequest.md
 docs/AddressRequest.md
 docs/AddressResponse.md
 docs/AgentApi.md
+docs/AgentBuiltinToolRequest.md
+docs/AgentBuiltinToolType.md
 docs/AgentChunk.md
 docs/AgentChunkEvent.md
 docs/AgentChunkEventOneOf.md
@@ -29,7 +31,6 @@ docs/AgentProtocolMode.md
 docs/AgentSessionEntry.md
 docs/AgentSource.md
 docs/AgentStatusResponse.md
-docs/AgentToolAccessRequest.md
 docs/ApiKeyListResponse.md
 docs/ApiKeyResponse.md
 docs/Ask.md
@@ -256,6 +257,8 @@ src/models/ActionResponse.ts
 src/models/AddUserToTenantRequest.ts
 src/models/AddressRequest.ts
 src/models/AddressResponse.ts
+src/models/AgentBuiltinToolRequest.ts
+src/models/AgentBuiltinToolType.ts
 src/models/AgentChunk.ts
 src/models/AgentChunkEvent.ts
 src/models/AgentChunkEventOneOf.ts
@@ -276,7 +279,6 @@ src/models/AgentProtocolMode.ts
 src/models/AgentSessionEntry.ts
 src/models/AgentSource.ts
 src/models/AgentStatusResponse.ts
-src/models/AgentToolAccessRequest.ts
 src/models/ApiKeyListResponse.ts
 src/models/ApiKeyResponse.ts
 src/models/Ask.ts

@@ -12,6 +12,10 @@ pub mod address_request;
 pub use self::address_request::AddressRequest;
 pub mod address_response;
 pub use self::address_response::AddressResponse;
+pub mod agent_builtin_tool_request;
+pub use self::agent_builtin_tool_request::AgentBuiltinToolRequest;
+pub mod agent_builtin_tool_type;
+pub use self::agent_builtin_tool_type::AgentBuiltinToolType;
 pub mod agent_chunk;
 pub use self::agent_chunk::AgentChunk;
 pub mod agent_chunk_event;
@@ -52,10 +56,6 @@ pub mod agent_source;
 pub use self::agent_source::AgentSource;
 pub mod agent_status_response;
 pub use self::agent_status_response::AgentStatusResponse;
-pub mod agent_tool_access_request;
-pub use self::agent_tool_access_request::{
-    AgentBuiltinToolRequest, AgentToolAccessRequest,
-};
 pub mod api_key_list_response;
 pub use self::api_key_list_response::ApiKeyListResponse;
 pub mod api_key_response;

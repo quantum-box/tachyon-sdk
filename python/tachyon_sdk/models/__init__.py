@@ -20,6 +20,8 @@ from tachyon_sdk.models.action_response import ActionResponse
 from tachyon_sdk.models.add_user_to_tenant_request import AddUserToTenantRequest
 from tachyon_sdk.models.address_request import AddressRequest
 from tachyon_sdk.models.address_response import AddressResponse
+from tachyon_sdk.models.agent_builtin_tool_request import AgentBuiltinToolRequest
+from tachyon_sdk.models.agent_builtin_tool_type import AgentBuiltinToolType
 from tachyon_sdk.models.agent_chunk import AgentChunk
 from tachyon_sdk.models.agent_chunk_event import AgentChunkEvent
 from tachyon_sdk.models.agent_chunk_event_one_of import AgentChunkEventOneOf
@@ -40,7 +42,6 @@ from tachyon_sdk.models.agent_protocol_mode import AgentProtocolMode
 from tachyon_sdk.models.agent_session_entry import AgentSessionEntry
 from tachyon_sdk.models.agent_source import AgentSource
 from tachyon_sdk.models.agent_status_response import AgentStatusResponse
-from tachyon_sdk.models.agent_tool_access_request import AgentBuiltinToolRequest, AgentToolAccessRequest
 from tachyon_sdk.models.api_key_list_response import ApiKeyListResponse
 from tachyon_sdk.models.api_key_response import ApiKeyResponse
 from tachyon_sdk.models.ask import Ask
@@ -198,3 +199,4 @@ from tachyon_sdk.models.verify_api_key_request import VerifyApiKeyRequest
 from tachyon_sdk.models.verify_api_key_response import VerifyApiKeyResponse
 from tachyon_sdk.models.verify_request import VerifyRequest
 from tachyon_sdk.models.verify_response import VerifyResponse
+
