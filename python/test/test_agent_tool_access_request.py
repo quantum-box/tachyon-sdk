@@ -32,20 +32,14 @@ class TestAgentToolAccessRequest(unittest.TestCase):
             optional params are included """
         # uncomment below to create an instance of `AgentToolAccessRequest`
         """
-        model = AgentToolAccessRequest()
         if include_optional:
-            return AgentToolAccessRequest(
-                agent_protocol = True,
-                coding_agent_job = True,
-                command = True,
-                filesystem = True,
-                sub_agent = True,
-                url_fetch = True,
-                web_search = True
-            )
+            return AgentToolAccessRequest.from_dict([
+                {"type": "builtin", "name": "filesystem"},
+                {"type": "builtin", "name": "web_search"},
+                {"type": "builtin", "name": "url_fetch"},
+            ])
         else:
-            return AgentToolAccessRequest(
-        )
+            return AgentToolAccessRequest.from_dict([])
         """
 
     def testAgentToolAccessRequest(self):

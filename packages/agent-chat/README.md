@@ -184,8 +184,8 @@ export function MyChatUI() {
 | `setSelectedModel`  | `(model: string \| null) => void`           | Change model                                       |
 | `maxRequests`       | `number`                                    | Max agent loop iterations (default 10)             |
 | `setMaxRequests`    | `(n: number) => void`                       | Change max requests                                |
-| `toolAccess`        | `ToolAccess`                                | Tool permission flags                              |
-| `setToolAccess`     | `(t: ToolAccess) => void`                   | Update tool permissions                            |
+| `toolAccess`        | `ToolAccess`                                | Enabled builtin tools                             |
+| `setToolAccess`     | `(t: ToolAccess) => void`                   | Update enabled builtin tools                      |
 | `chatRooms`         | `ChatRoom[]`                                | List of chatrooms                                  |
 | `chatRoomLoading`   | `boolean`                                   | Chatroom list loading state                        |
 | `chatRoomError`     | `Error \| null`                             | Chatroom list error                                |
@@ -353,7 +353,7 @@ for await (const chunk of client.streamAgent(room.chatroom.id, {
   task: 'Summarise the latest quarterly report',
   model: 'anthropic/claude-sonnet-4.5',
   max_requests: 5,
-  tool_access: { web_search: true },
+  tool_access: [{ type: 'builtin', name: 'web_search' }],
 })) {
   if (chunk.type === 'say' || chunk.type === 'attempt_completion') {
     process.stdout.write(chunk.text ?? '')
@@ -426,18 +426,13 @@ type AgentChunk = {
 
 ---
 
-## `ToolAccess` flags
+## `ToolAccess`
 
 ```ts
-type ToolAccess = {
-  filesystem?: boolean       // Read/write local files
-  command?: boolean          // Execute shell commands
-  coding_agent_job?: boolean // Spawn coding agent jobs (default: true)
-  agent_protocol?: boolean   // Use agent protocols
-  web_search?: boolean       // Web search
-  url_fetch?: boolean        // Fetch URLs
-  sub_agent?: boolean        // Spawn sub-agents
-}
+type ToolAccess = Array<{
+  type: 'builtin'
+  name: string
+}>
 ```
 
 ---

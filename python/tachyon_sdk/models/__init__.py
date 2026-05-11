@@ -40,7 +40,7 @@ from tachyon_sdk.models.agent_protocol_mode import AgentProtocolMode
 from tachyon_sdk.models.agent_session_entry import AgentSessionEntry
 from tachyon_sdk.models.agent_source import AgentSource
 from tachyon_sdk.models.agent_status_response import AgentStatusResponse
-from tachyon_sdk.models.agent_tool_access_request import AgentToolAccessRequest
+from tachyon_sdk.models.agent_tool_access_request import AgentBuiltinToolRequest, AgentToolAccessRequest
 from tachyon_sdk.models.api_key_list_response import ApiKeyListResponse
 from tachyon_sdk.models.api_key_response import ApiKeyResponse
 from tachyon_sdk.models.ask import Ask
@@ -198,4 +198,3 @@ from tachyon_sdk.models.verify_api_key_request import VerifyApiKeyRequest
 from tachyon_sdk.models.verify_api_key_response import VerifyApiKeyResponse
 from tachyon_sdk.models.verify_request import VerifyRequest
 from tachyon_sdk.models.verify_response import VerifyResponse
-

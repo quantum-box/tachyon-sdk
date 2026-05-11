@@ -13,27 +13,16 @@
 
 
 from __future__ import annotations
-import pprint
-import re  # noqa: F401
 import json
 
-from pydantic import BaseModel, ConfigDict, Field, StrictBool
-from typing import Any, ClassVar, Dict, List, Optional
-from typing import Optional, Set
-from typing_extensions import Self
+from pydantic import BaseModel, ConfigDict, Field, RootModel, StrictStr
+from typing import Any, Dict, List, Optional
+from typing_extensions import Literal, Self
 
-class AgentToolAccessRequest(BaseModel):
-    """
-    AgentToolAccessRequest
-    """ # noqa: E501
-    agent_protocol: Optional[StrictBool] = None
-    coding_agent_job: Optional[StrictBool] = None
-    command: Optional[StrictBool] = None
-    filesystem: Optional[StrictBool] = None
-    sub_agent: Optional[StrictBool] = Field(default=None, description="Enable the `execute_sub_agent` tool for spawning child agents.")
-    url_fetch: Optional[StrictBool] = Field(default=None, description="Enable the `fetch_url` URL scraping tool (Firecrawl API).")
-    web_search: Optional[StrictBool] = Field(default=None, description="Enable the `search_with_llm` web search tool (Google Custom Search).")
-    __properties: ClassVar[List[str]] = ["agent_protocol", "coding_agent_job", "command", "filesystem", "sub_agent", "url_fetch", "web_search"]
+
+class AgentBuiltinToolRequest(BaseModel):
+    type: Literal["builtin"] = Field(alias="type")
+    name: StrictStr
 
     model_config = ConfigDict(
         populate_by_name=True,
@@ -41,94 +30,40 @@ class AgentToolAccessRequest(BaseModel):
         protected_namespaces=(),
     )
 
+    def to_dict(self) -> Dict[str, Any]:
+        return self.model_dump(by_alias=True, exclude_none=True)
+
+    @classmethod
+    def from_dict(
+        cls, obj: Optional[Dict[str, Any]]
+    ) -> Optional["AgentBuiltinToolRequest"]:
+        if obj is None:
+            return None
+        return cls.model_validate(obj)
+
+
+class AgentToolAccessRequest(RootModel[List[AgentBuiltinToolRequest]]):
+    """
+    AgentToolAccessRequest
+    """  # noqa: E501
+
+    root: List[AgentBuiltinToolRequest]
 
     def to_str(self) -> str:
-        """Returns the string representation of the model using alias"""
-        return pprint.pformat(self.model_dump(by_alias=True))
+        return str(self.to_dict())
 
     def to_json(self) -> str:
-        """Returns the JSON representation of the model using alias"""
-        # TODO: pydantic v2: use .model_dump_json(by_alias=True, exclude_unset=True) instead
         return json.dumps(self.to_dict())
 
     @classmethod
     def from_json(cls, json_str: str) -> Optional[Self]:
-        """Create an instance of AgentToolAccessRequest from a JSON string"""
         return cls.from_dict(json.loads(json_str))
 
-    def to_dict(self) -> Dict[str, Any]:
-        """Return the dictionary representation of the model using alias.
-
-        This has the following differences from calling pydantic's
-        `self.model_dump(by_alias=True)`:
-
-        * `None` is only added to the output dict for nullable fields that
-          were set at model initialization. Other fields with value `None`
-          are ignored.
-        """
-        excluded_fields: Set[str] = set([
-        ])
-
-        _dict = self.model_dump(
-            by_alias=True,
-            exclude=excluded_fields,
-            exclude_none=True,
-        )
-        # set to None if agent_protocol (nullable) is None
-        # and model_fields_set contains the field
-        if self.agent_protocol is None and "agent_protocol" in self.model_fields_set:
-            _dict['agent_protocol'] = None
-
-        # set to None if coding_agent_job (nullable) is None
-        # and model_fields_set contains the field
-        if self.coding_agent_job is None and "coding_agent_job" in self.model_fields_set:
-            _dict['coding_agent_job'] = None
-
-        # set to None if command (nullable) is None
-        # and model_fields_set contains the field
-        if self.command is None and "command" in self.model_fields_set:
-            _dict['command'] = None
-
-        # set to None if filesystem (nullable) is None
-        # and model_fields_set contains the field
-        if self.filesystem is None and "filesystem" in self.model_fields_set:
-            _dict['filesystem'] = None
-
-        # set to None if sub_agent (nullable) is None
-        # and model_fields_set contains the field
-        if self.sub_agent is None and "sub_agent" in self.model_fields_set:
-            _dict['sub_agent'] = None
-
-        # set to None if url_fetch (nullable) is None
-        # and model_fields_set contains the field
-        if self.url_fetch is None and "url_fetch" in self.model_fields_set:
-            _dict['url_fetch'] = None
-
-        # set to None if web_search (nullable) is None
-        # and model_fields_set contains the field
-        if self.web_search is None and "web_search" in self.model_fields_set:
-            _dict['web_search'] = None
-
-        return _dict
+    def to_dict(self) -> List[Dict[str, Any]]:
+        return [tool.to_dict() for tool in self.root]
 
     @classmethod
-    def from_dict(cls, obj: Optional[Dict[str, Any]]) -> Optional[Self]:
-        """Create an instance of AgentToolAccessRequest from a dict"""
+    def from_dict(cls, obj: Optional[List[Dict[str, Any]]]) -> Optional[Self]:
         if obj is None:
             return None
-
-        if not isinstance(obj, dict):
-            return cls.model_validate(obj)
-
-        _obj = cls.model_validate({
-            "agent_protocol": obj.get("agent_protocol"),
-            "coding_agent_job": obj.get("coding_agent_job"),
-            "command": obj.get("command"),
-            "filesystem": obj.get("filesystem"),
-            "sub_agent": obj.get("sub_agent"),
-            "url_fetch": obj.get("url_fetch"),
-            "web_search": obj.get("web_search")
-        })
-        return _obj
-
-
+        return cls.model_validate(obj)

@@ -53,7 +53,9 @@ pub use self::agent_source::AgentSource;
 pub mod agent_status_response;
 pub use self::agent_status_response::AgentStatusResponse;
 pub mod agent_tool_access_request;
-pub use self::agent_tool_access_request::AgentToolAccessRequest;
+pub use self::agent_tool_access_request::{
+    AgentBuiltinToolRequest, AgentToolAccessRequest,
+};
 pub mod api_key_list_response;
 pub use self::api_key_list_response::ApiKeyListResponse;
 pub mod api_key_response;

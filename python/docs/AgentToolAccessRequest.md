@@ -1,35 +1,33 @@
 # AgentToolAccessRequest
 
+Builtin tools enabled for agent execution. Omitted tools are disabled.
 
-## Properties
+## Type
 
-Name | Type | Description | Notes
------------- | ------------- | ------------- | -------------
-**agent_protocol** | **bool** |  | [optional] 
-**coding_agent_job** | **bool** |  | [optional] 
-**command** | **bool** |  | [optional] 
-**filesystem** | **bool** |  | [optional] 
-**sub_agent** | **bool** | Enable the &#x60;execute_sub_agent&#x60; tool for spawning child agents. | [optional] 
-**url_fetch** | **bool** | Enable the &#x60;fetch_url&#x60; URL scraping tool (Firecrawl API). | [optional] 
-**web_search** | **bool** | Enable the &#x60;search_with_llm&#x60; web search tool (Google Custom Search). | [optional] 
+```python
+list[dict[str, str]]
+```
+
+Each item has:
+
+Name | Type | Description
+------------ | ------------- | -------------
+**type** | **str** | Must be `builtin`
+**name** | **str** | Builtin tool name
 
 ## Example
 
 ```python
 from tachyon_sdk.models.agent_tool_access_request import AgentToolAccessRequest
 
-# TODO update the JSON string below
-json = "{}"
-# create an instance of AgentToolAccessRequest from a JSON string
-agent_tool_access_request_instance = AgentToolAccessRequest.from_json(json)
-# print the JSON string representation of the object
-print(AgentToolAccessRequest.to_json())
+tools = AgentToolAccessRequest.from_dict([
+    {"type": "builtin", "name": "filesystem"},
+    {"type": "builtin", "name": "web_search"},
+    {"type": "builtin", "name": "url_fetch"},
+])
 
-# convert the object into a dict
-agent_tool_access_request_dict = agent_tool_access_request_instance.to_dict()
-# create an instance of AgentToolAccessRequest from a dict
-agent_tool_access_request_from_dict = AgentToolAccessRequest.from_dict(agent_tool_access_request_dict)
+print(tools.to_json())
+print(tools.to_dict())
 ```
+
 [[Back to Model list]](../README.md#documentation-for-models) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to README]](../README.md)
-
-
