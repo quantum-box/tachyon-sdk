@@ -12,63 +12,33 @@
  * Do not edit the class manually.
  */
 
-import { mapValues } from '../runtime';
 /**
  * 
  * @export
- * @interface AgentToolAccessRequest
+ * @interface AgentBuiltinToolRequest
  */
-export interface AgentToolAccessRequest {
+export interface AgentBuiltinToolRequest {
     /**
      * 
-     * @type {boolean}
-     * @memberof AgentToolAccessRequest
+     * @type {string}
+     * @memberof AgentBuiltinToolRequest
      */
-    agentProtocol?: boolean | null;
+    type: 'builtin';
     /**
      * 
-     * @type {boolean}
-     * @memberof AgentToolAccessRequest
+     * @type {string}
+     * @memberof AgentBuiltinToolRequest
      */
-    codingAgentJob?: boolean | null;
-    /**
-     * 
-     * @type {boolean}
-     * @memberof AgentToolAccessRequest
-     */
-    command?: boolean | null;
-    /**
-     * 
-     * @type {boolean}
-     * @memberof AgentToolAccessRequest
-     */
-    filesystem?: boolean | null;
-    /**
-     * Enable the `execute_sub_agent` tool for spawning child
-     * agents.
-     * @type {boolean}
-     * @memberof AgentToolAccessRequest
-     */
-    subAgent?: boolean | null;
-    /**
-     * Enable the `fetch_url` URL scraping tool (Firecrawl API).
-     * @type {boolean}
-     * @memberof AgentToolAccessRequest
-     */
-    urlFetch?: boolean | null;
-    /**
-     * Enable the `search_with_llm` web search tool (Google Custom Search).
-     * @type {boolean}
-     * @memberof AgentToolAccessRequest
-     */
-    webSearch?: boolean | null;
+    name: string;
 }
+
+export type AgentToolAccessRequest = Array<AgentBuiltinToolRequest>;
 
 /**
  * Check if a given object implements the AgentToolAccessRequest interface.
  */
 export function instanceOfAgentToolAccessRequest(value: object): value is AgentToolAccessRequest {
-    return true;
+    return Array.isArray(value);
 }
 
 export function AgentToolAccessRequestFromJSON(json: any): AgentToolAccessRequest {
@@ -79,16 +49,10 @@ export function AgentToolAccessRequestFromJSONTyped(json: any, ignoreDiscriminat
     if (json == null) {
         return json;
     }
-    return {
-        
-        'agentProtocol': json['agent_protocol'] == null ? undefined : json['agent_protocol'],
-        'codingAgentJob': json['coding_agent_job'] == null ? undefined : json['coding_agent_job'],
-        'command': json['command'] == null ? undefined : json['command'],
-        'filesystem': json['filesystem'] == null ? undefined : json['filesystem'],
-        'subAgent': json['sub_agent'] == null ? undefined : json['sub_agent'],
-        'urlFetch': json['url_fetch'] == null ? undefined : json['url_fetch'],
-        'webSearch': json['web_search'] == null ? undefined : json['web_search'],
-    };
+    return json.map((tool: any) => ({
+        'type': tool['type'],
+        'name': tool['name'],
+    }));
 }
 
 export function AgentToolAccessRequestToJSON(json: any): AgentToolAccessRequest {
@@ -100,15 +64,8 @@ export function AgentToolAccessRequestToJSONTyped(value?: AgentToolAccessRequest
         return value;
     }
 
-    return {
-        
-        'agent_protocol': value['agentProtocol'],
-        'coding_agent_job': value['codingAgentJob'],
-        'command': value['command'],
-        'filesystem': value['filesystem'],
-        'sub_agent': value['subAgent'],
-        'url_fetch': value['urlFetch'],
-        'web_search': value['webSearch'],
-    };
+    return value.map((tool) => ({
+        'type': tool['type'],
+        'name': tool['name'],
+    }));
 }
-

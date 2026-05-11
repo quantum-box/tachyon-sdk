@@ -42,7 +42,7 @@ class AgentExecuteRequest(BaseModel):
     mcp_hub_config_json: Optional[StrictStr] = Field(default=None, description="Optional MCP Hub configuration in JSON string form.")
     model: Optional[StrictStr] = Field(default=None, description="Model identifier. Accepts `provider/model` or just `model` (provider auto-detected).  Examples: - `anthropic/claude-3-sonnet-20241022` - `openai/gpt-4` - `google_ai/gemini-pro`  Auto-detection shortcuts: - `gpt-*` → OpenAI - `claude-*` → Anthropic - `gemini*` → Google AI")
     task: StrictStr = Field(description="The task or prompt for the agent to execute.")
-    tool_access: Optional[AgentToolAccessRequest] = Field(default=None, description="Per-category tool access flags.")
+    tool_access: Optional[AgentToolAccessRequest] = Field(default=None, description="Builtin tools available to the agent.")
     use_json_tool_calls: Optional[StrictBool] = Field(default=None, description="When true, use JSON Schema tool definitions (function calling) instead of XML-based tool parsing. This is automatically enabled when `client_tools` is provided.")
     user_custom_instructions: Optional[StrictStr] = Field(default=None, description="Custom system-level instructions appended to the agent's prompt.")
     __properties: ClassVar[List[str]] = ["additional_tool_description", "agent_protocol_id", "agent_protocol_mode", "assistant_name", "auto_approve", "chatroom_name_generation", "client_tools", "max_requests", "mcp_hub_config_json", "model", "task", "tool_access", "use_json_tool_calls", "user_custom_instructions"]
@@ -164,5 +164,4 @@ class AgentExecuteRequest(BaseModel):
             "user_custom_instructions": obj.get("user_custom_instructions")
         })
         return _obj
-
 

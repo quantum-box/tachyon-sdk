@@ -50,15 +50,10 @@ export type AgentExecuteRequest = {
   additional_tool_description?: string
   auto_approve?: boolean
   max_requests?: number
-  tool_access?: {
-    filesystem?: boolean
-    command?: boolean
-    coding_agent_job?: boolean
-    agent_protocol?: boolean
-    web_search?: boolean
-    url_fetch?: boolean
-    sub_agent?: boolean
-  }
+  tool_access?: Array<{
+    type: 'builtin'
+    name: string
+  }>
 }
 
 export type ChatRoom = {
