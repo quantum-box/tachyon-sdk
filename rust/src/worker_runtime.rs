@@ -63,6 +63,8 @@ pub enum WorkerProviderKind {
     OpenCode,
     /// Codex CLI running inside a Docker container.
     ContainerizedCodex,
+    /// Cloud App build provider — triggers a CodeBuild build via tachyon-api.
+    CloudAppBuild,
 }
 
 impl fmt::Display for WorkerProviderKind {
@@ -73,6 +75,7 @@ impl fmt::Display for WorkerProviderKind {
             Self::CursorAgent => write!(f, "cursor_agent"),
             Self::OpenCode => write!(f, "open_code"),
             Self::ContainerizedCodex => write!(f, "containerized_codex"),
+            Self::CloudAppBuild => write!(f, "cloud_app_build"),
         }
     }
 }
