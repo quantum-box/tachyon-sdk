@@ -61,6 +61,9 @@ pub enum WorkerProviderKind {
     CursorAgent,
     /// OpenCode provider.
     OpenCode,
+    /// Cloud App build provider — triggers a CodeBuild build and
+    /// polls for completion asynchronously.
+    CloudAppBuild,
 }
 
 impl fmt::Display for WorkerProviderKind {
@@ -70,6 +73,7 @@ impl fmt::Display for WorkerProviderKind {
             Self::ClaudeCode => write!(f, "claude_code"),
             Self::CursorAgent => write!(f, "cursor_agent"),
             Self::OpenCode => write!(f, "open_code"),
+            Self::CloudAppBuild => write!(f, "cloud_app_build"),
         }
     }
 }
