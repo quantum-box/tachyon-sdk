@@ -25,6 +25,7 @@ default = ["rustls"]
 native-tls = ["reqwest/native-tls"]
 rustls = ["reqwest/rustls-tls"]
 auth = ["async-trait", "chrono"]
+platform-traits = ["auth", "async-trait", "chrono"]
 worker-runtime = ["async-trait", "chrono"]
 test = ["auth", "mockall"]
 
