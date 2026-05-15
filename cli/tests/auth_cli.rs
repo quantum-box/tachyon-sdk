@@ -43,7 +43,7 @@ fn start_auth_server() -> (String, mpsc::Receiver<String>, thread::JoinHandle<()
             let req = String::from_utf8_lossy(&buf[..n]).to_string();
             tx.send(req).unwrap();
 
-            let body = r#"{"client_id":"dummy-client","client_secret":"dummy-secret","secret_arn":"arn:aws:secretsmanager:ap-northeast-1:123:secret:test","expires_at":"2026-06-01T00:00:00Z"}"#;
+            let body = r#"{"client_id":"dummy-client","client_secret":"dummy-secret","user_pool_id":"ap-northeast-1_8Ga4bK5M4","secret_arn":"arn:aws:secretsmanager:ap-northeast-1:123:secret:test","expires_at":"2026-06-01T00:00:00Z"}"#;
             let response = format!(
                 "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
                 body.len(),
@@ -70,6 +70,8 @@ fn auth_init_non_interactive_updates_tachyon_yml() {
             "oauth2_client_credentials",
             "--audience",
             "https://api.tachyon.cloud",
+            "--user-pool",
+            "shared",
             "--non-interactive",
         ])
         .output()
@@ -85,6 +87,7 @@ fn auth_init_non_interactive_updates_tachyon_yml() {
     assert!(yaml.contains("auth:"));
     assert!(yaml.contains("name: cognito-default"));
     assert!(yaml.contains("type: oauth2_client_credentials"));
+    assert!(yaml.contains("user_pool: shared"));
     assert!(yaml.contains("audience: https://api.tachyon.cloud"));
     assert!(yaml.contains("expiry_days: 90"));
 }
@@ -120,7 +123,7 @@ fn auth_issue_dev_writes_local_credentials() {
         .env("TACHYON_API_URL", api_url)
         .env("TACHYON_API_KEY", "test-token")
         .env("TACHYON_ENV", "dev")
-        .args(["auth", "issue", "cognito-default"])
+        .args(["auth", "issue", "cognito-default", "--shared-pool"])
         .output()
         .expect("run tachyon auth issue");
 
@@ -134,12 +137,18 @@ fn auth_issue_dev_writes_local_credentials() {
     handle.join().unwrap();
     assert!(req.starts_with("POST /v1/cloud-apps/test-app/auth/credentials "));
     assert!(req.contains("authorization: Bearer test-token"));
+    assert!(req.contains(r#""user_pool":"shared""#));
     assert!(tmp.path().join(".tachyon/credentials.json").is_file());
     assert!(fs::read_to_string(tmp.path().join(".gitignore"))
         .unwrap()
         .contains(".tachyon/credentials.json"));
     let yaml = fs::read_to_string(tmp.path().join("tachyon.yml")).unwrap();
     assert!(yaml.contains("secret_ref: .tachyon/credentials.json#cognito-default"));
+    assert!(
+        fs::read_to_string(tmp.path().join(".tachyon/credentials.json"))
+            .unwrap()
+            .contains("ap-northeast-1_8Ga4bK5M4")
+    );
     assert!(!String::from_utf8_lossy(&output.stdout).contains("dummy-secret"));
 }
 

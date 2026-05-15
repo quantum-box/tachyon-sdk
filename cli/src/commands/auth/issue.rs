@@ -8,7 +8,7 @@ use serde_yaml::Value as YamlValue;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use crate::config::auth::AuthProvider;
+use crate::config::auth::{AuthProvider, AuthUserPool};
 use crate::config::loader;
 
 #[derive(Debug, Clone, Args)]
@@ -21,6 +21,9 @@ pub struct IssueAuthArgs {
     /// Print only the secret reference path/ARN; never prints plaintext secrets
     #[arg(long)]
     pub show_secret: bool,
+    /// Issue from the Tachyon shared Cognito User Pool
+    #[arg(long)]
+    pub shared_pool: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -32,16 +35,21 @@ struct IssueRequest<'a> {
     audience: Option<&'a str>,
     expiry_days: u32,
     rotate: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    user_pool: Option<&'a str>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 struct IssueResponse {
     client_id: String,
-    client_secret: String,
+    #[serde(default)]
+    client_secret: Option<String>,
     #[serde(default)]
     secret_arn: Option<String>,
     #[serde(default)]
     local_path: Option<String>,
+    #[serde(default)]
+    user_pool_id: Option<String>,
     expires_at: DateTime<Utc>,
 }
 
@@ -85,12 +93,14 @@ pub async fn run(
         .as_deref()
         .ok_or_else(|| anyhow!("metadata.name is required in tachyon.yml"))?;
     let env = TachyonEnv::detect()?;
+    let user_pool = resolve_user_pool(loaded.config.auth.as_ref(), args.shared_pool);
 
     let response = issue_from_backend(
         api_url,
         app_id,
         provider,
         args.rotate,
+        user_pool,
         bearer_token.as_deref(),
         tenant_id,
     )
@@ -145,6 +155,7 @@ async fn issue_from_backend(
     app_id: &str,
     provider: &AuthProvider,
     rotate: bool,
+    user_pool: Option<AuthUserPool>,
     bearer_token: Option<&str>,
     tenant_id: &str,
 ) -> Result<IssueResponse> {
@@ -159,6 +170,7 @@ async fn issue_from_backend(
         audience: provider.audience.as_deref(),
         expiry_days: provider.expiry_days,
         rotate,
+        user_pool: user_pool.map(AuthUserPool::as_str),
     };
 
     let client = reqwest::Client::new();
@@ -228,7 +240,14 @@ fn store_dev_credentials(
 
     let mut entry = Map::new();
     entry.insert("client_id".to_string(), json!(response.client_id));
-    entry.insert("client_secret".to_string(), json!(response.client_secret));
+    let client_secret = response
+        .client_secret
+        .as_deref()
+        .ok_or_else(|| anyhow!("backend response did not include client_secret"))?;
+    entry.insert("client_secret".to_string(), json!(client_secret));
+    if let Some(user_pool_id) = &response.user_pool_id {
+        entry.insert("user_pool_id".to_string(), json!(user_pool_id));
+    }
     entry.insert("expires_at".to_string(), json!(response.expires_at));
     providers.insert(provider_name.to_string(), JsonValue::Object(entry));
 
@@ -308,6 +327,16 @@ fn update_secret_ref(config_path: &Path, provider_name: &str, secret_ref: &str) 
         .with_context(|| format!("write {}", config_path.display()))
 }
 
+fn resolve_user_pool(
+    auth: Option<&crate::config::auth::AuthConfig>,
+    shared_pool: bool,
+) -> Option<AuthUserPool> {
+    if shared_pool {
+        return Some(AuthUserPool::Shared);
+    }
+    auth.and_then(|auth| auth.user_pool)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -318,9 +347,10 @@ mod tests {
     fn response() -> IssueResponse {
         IssueResponse {
             client_id: "dummy-client".to_string(),
-            client_secret: "dummy-secret".to_string(),
+            client_secret: Some("dummy-secret".to_string()),
             secret_arn: Some("arn:aws:secretsmanager:ap-northeast-1:123:secret:test".to_string()),
             local_path: None,
+            user_pool_id: Some("ap-northeast-1_8Ga4bK5M4".to_string()),
             expires_at: "2026-06-01T00:00:00Z".parse().unwrap(),
         }
     }
@@ -347,6 +377,8 @@ mod tests {
             .contains(".tachyon/credentials.json"));
         let mode = fs::metadata(&path).unwrap().permissions().mode() & 0o777;
         assert_eq!(mode, 0o600);
+        let raw = fs::read_to_string(path).unwrap();
+        assert!(raw.contains("ap-northeast-1_8Ga4bK5M4"));
     }
 
     #[test]
@@ -371,6 +403,7 @@ mod tests {
         let config = loader::ProjectConfig {
             metadata: Default::default(),
             auth: Some(crate::config::auth::AuthConfig {
+                user_pool: Some(AuthUserPool::Shared),
                 providers: vec![AuthProvider {
                     name: "cognito-default".to_string(),
                     type_: AuthProviderType::Oauth2ClientCredentials,
@@ -383,5 +416,20 @@ mod tests {
 
         assert!(find_provider(&config, "cognito-default").is_ok());
         assert!(find_provider(&config, "missing").is_err());
+    }
+
+    #[test]
+    fn resolves_shared_pool_from_flag_or_config() {
+        assert_eq!(resolve_user_pool(None, true), Some(AuthUserPool::Shared));
+        assert_eq!(
+            resolve_user_pool(
+                Some(&crate::config::auth::AuthConfig {
+                    user_pool: Some(AuthUserPool::Shared),
+                    providers: vec![],
+                }),
+                false,
+            ),
+            Some(AuthUserPool::Shared)
+        );
     }
 }

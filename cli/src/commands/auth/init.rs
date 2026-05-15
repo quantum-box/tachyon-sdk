@@ -5,7 +5,7 @@ use serde_yaml::{Mapping, Value};
 use std::fs;
 use std::path::Path;
 
-use crate::config::auth::{default_expiry_days, AuthProvider, AuthProviderType};
+use crate::config::auth::{default_expiry_days, AuthProvider, AuthProviderType, AuthUserPool};
 use crate::config::loader;
 
 const PENDING_SECRET_REF: &str = "<pending; populated by tachyon auth issue>";
@@ -26,6 +26,9 @@ pub struct InitAuthArgs {
     /// Credential expiry in days
     #[arg(long)]
     pub expiry_days: Option<u32>,
+    /// User Pool strategy for this app
+    #[arg(long, value_enum)]
+    pub user_pool: Option<AuthUserPool>,
     /// Skip prompts and use provided flags/defaults
     #[arg(long)]
     pub non_interactive: bool,
@@ -39,7 +42,7 @@ pub fn run(args: &InitAuthArgs, config_flag: Option<&Path>) -> Result<()> {
         .ok_or_else(|| anyhow!("tachyon.yml not found. Run `tachyon init` first."))?;
     let provider = resolve_provider(args)?;
 
-    upsert_provider(&loaded.path, &provider, args.force)?;
+    upsert_auth(&loaded.path, &provider, args.user_pool, args.force)?;
     println!(
         "Updated {} with auth provider '{}'.",
         loaded.path.display(),
@@ -105,7 +108,12 @@ fn resolve_provider(args: &InitAuthArgs) -> Result<AuthProvider> {
     })
 }
 
-pub(crate) fn upsert_provider(path: &Path, provider: &AuthProvider, force: bool) -> Result<()> {
+pub(crate) fn upsert_auth(
+    path: &Path,
+    provider: &AuthProvider,
+    user_pool: Option<AuthUserPool>,
+    force: bool,
+) -> Result<()> {
     let raw = fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;
     let mut doc: Value =
         serde_yaml::from_str(&raw).with_context(|| format!("parse {}", path.display()))?;
@@ -114,6 +122,12 @@ pub(crate) fn upsert_provider(path: &Path, provider: &AuthProvider, force: bool)
         .ok_or_else(|| anyhow!("{} must contain a YAML mapping", path.display()))?;
 
     let auth = ensure_mapping(root, "auth")?;
+    if let Some(user_pool) = user_pool {
+        auth.insert(
+            Value::String("user_pool".to_string()),
+            Value::String(user_pool.as_str().to_string()),
+        );
+    }
     let providers_key = Value::String("providers".to_string());
     if !auth.contains_key(&providers_key) {
         auth.insert(providers_key.clone(), Value::Sequence(Vec::new()));
@@ -186,6 +200,7 @@ mod tests {
             r#type: Some(AuthProviderType::ApiKey),
             audience: Some("aud".to_string()),
             expiry_days: Some(30),
+            user_pool: Some(AuthUserPool::Shared),
             non_interactive: true,
             force: false,
         };
@@ -210,8 +225,8 @@ mod tests {
             secret_ref: Some(PENDING_SECRET_REF.to_string()),
         };
 
-        upsert_provider(&path, &provider, false).unwrap();
-        let err = upsert_provider(&path, &provider, false).unwrap_err();
+        upsert_auth(&path, &provider, None, false).unwrap();
+        let err = upsert_auth(&path, &provider, None, false).unwrap_err();
 
         assert!(err.to_string().contains("already exists"));
     }
@@ -228,11 +243,12 @@ mod tests {
             secret_ref: Some(PENDING_SECRET_REF.to_string()),
         };
 
-        upsert_provider(&path, &provider, false).unwrap();
+        upsert_auth(&path, &provider, None, false).unwrap();
         provider.expiry_days = 7;
-        upsert_provider(&path, &provider, true).unwrap();
+        upsert_auth(&path, &provider, Some(AuthUserPool::Shared), true).unwrap();
         let yaml = fs::read_to_string(path).unwrap();
 
         assert!(yaml.contains("expiry_days: 7"));
+        assert!(yaml.contains("user_pool: shared"));
     }
 }

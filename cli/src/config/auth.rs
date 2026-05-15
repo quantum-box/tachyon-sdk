@@ -2,8 +2,27 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AuthConfig {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub user_pool: Option<AuthUserPool>,
     #[serde(default)]
     pub providers: Vec<AuthProvider>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, clap::ValueEnum)]
+#[value(rename_all = "snake_case")]
+#[serde(rename_all = "snake_case")]
+pub enum AuthUserPool {
+    Shared,
+    Dedicated,
+}
+
+impl AuthUserPool {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Shared => "shared",
+            Self::Dedicated => "dedicated",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -61,6 +80,7 @@ mod tests {
     #[test]
     fn auth_config_round_trips() {
         let config = AuthConfig {
+            user_pool: Some(AuthUserPool::Shared),
             providers: vec![AuthProvider {
                 name: "cognito-default".to_string(),
                 type_: AuthProviderType::Oauth2ClientCredentials,
@@ -74,6 +94,7 @@ mod tests {
         let parsed: AuthConfig = serde_yaml::from_str(&yaml).unwrap();
 
         assert_eq!(parsed, config);
+        assert!(yaml.contains("user_pool: shared"));
         assert!(yaml.contains("type: oauth2_client_credentials"));
     }
 }
