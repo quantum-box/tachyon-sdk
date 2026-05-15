@@ -3,7 +3,9 @@ use std::fmt::Debug;
 use chrono::{DateTime, Utc};
 use serde_json::Value;
 
-use crate::auth::{AuthError, AuthResult, ExecutorAction, MultiTenancyAction, TenantId};
+use crate::auth::{
+    AuthError, AuthResult, ExecutorAction, MultiTenancyAction, TenantId,
+};
 
 #[derive(Clone, Debug)]
 pub struct VariantProcurementLink {
@@ -305,7 +307,10 @@ impl ProcurementApp for NoOpProcurementApp {
         input: &CommitReceivingInput<'_>,
     ) -> AuthResult<CommitReceivingResult> {
         Ok(CommitReceivingResult {
-            receiving_record_id: format!("noop-receiving-{}", input.slip_id),
+            receiving_record_id: format!(
+                "noop-receiving-{}",
+                input.slip_id
+            ),
             discrepancy_count: 0,
             supplier_snapshot: None,
             evidence_snapshot: None,
