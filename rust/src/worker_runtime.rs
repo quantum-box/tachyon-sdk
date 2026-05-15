@@ -55,8 +55,12 @@ impl std::error::Error for WorkerRuntimeError {}
 pub enum WorkerProviderKind {
     /// Codex CLI provider.
     Codex,
+    /// Cloud App Build provider.
+    CloudAppBuild,
     /// Claude Code CLI provider.
     ClaudeCode,
+    /// Containerized Codex provider.
+    ContainerizedCodex,
     /// Cursor Agent provider.
     CursorAgent,
     /// OpenCode provider.
@@ -67,7 +71,11 @@ impl fmt::Display for WorkerProviderKind {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Codex => write!(f, "codex"),
+            Self::CloudAppBuild => write!(f, "cloud_app_build"),
             Self::ClaudeCode => write!(f, "claude_code"),
+            Self::ContainerizedCodex => {
+                write!(f, "containerized_codex")
+            }
             Self::CursorAgent => write!(f, "cursor_agent"),
             Self::OpenCode => write!(f, "open_code"),
         }
@@ -354,6 +362,33 @@ pub trait WorkerHandle: Send + Sync + fmt::Debug {
 mod tests {
     use super::*;
     use std::sync::{Arc, Mutex};
+
+    #[test]
+    fn worker_provider_kind_names_are_stable() {
+        let cases = [
+            (WorkerProviderKind::Codex, "codex"),
+            (WorkerProviderKind::CloudAppBuild, "cloud_app_build"),
+            (WorkerProviderKind::ClaudeCode, "claude_code"),
+            (
+                WorkerProviderKind::ContainerizedCodex,
+                "containerized_codex",
+            ),
+            (WorkerProviderKind::CursorAgent, "cursor_agent"),
+            (WorkerProviderKind::OpenCode, "open_code"),
+        ];
+
+        for (provider, expected) in cases {
+            assert_eq!(provider.to_string(), expected);
+            assert_eq!(
+                serde_json::to_string(&provider).unwrap(),
+                format!("\"{expected}\"")
+            );
+            assert_eq!(
+                serde_json::from_str::<WorkerProviderKind>(&format!("\"{expected}\"")).unwrap(),
+                provider
+            );
+        }
+    }
 
     #[test]
     fn queued_job_roundtrip_preserves_runtime_fields() {
