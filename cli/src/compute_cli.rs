@@ -2,9 +2,10 @@ use anyhow::{anyhow, Result};
 use chrono::{DateTime, TimeZone, Utc};
 use clap::{Args, Subcommand, ValueEnum};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use serde_json::{json, Value};
+use std::collections::{BTreeSet, HashMap};
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Instant;
 use tachyon_sdk::apis::configuration::Configuration;
@@ -312,6 +313,21 @@ pub enum AppsCommand {
         /// App ID or name
         app_id: Option<String>,
     },
+    /// Create or update compute apps from tachyon.yml
+    Apply {
+        /// Manifest file path
+        #[arg(short = 'f', long, default_value = "tachyon.yml")]
+        file: PathBuf,
+        /// App name to select from a multi-app CloudApps manifest
+        #[arg(long)]
+        app: Option<String>,
+        /// Target environment label for this apply operation
+        #[arg(long, default_value = "sandbox")]
+        environment: String,
+        /// Preview changes without mutating Cloud Apps
+        #[arg(long)]
+        dry_run: bool,
+    },
 }
 
 // --- Builds subcommands ---
@@ -540,6 +556,30 @@ struct AppResponse {
     #[serde(default)]
     repository_url: Option<String>,
     #[serde(default)]
+    repository_owner: Option<String>,
+    #[serde(default)]
+    repository_name: Option<String>,
+    #[serde(default)]
+    default_branch: Option<String>,
+    #[serde(default)]
+    deployment_target: Option<String>,
+    #[serde(default)]
+    connection_id: Option<String>,
+    #[serde(default)]
+    root_directory: Option<String>,
+    #[serde(default)]
+    docker_context: Option<String>,
+    #[serde(default)]
+    build_command: Option<String>,
+    #[serde(default)]
+    install_command: Option<String>,
+    #[serde(default)]
+    output_directory: Option<String>,
+    #[serde(default)]
+    node_version: Option<String>,
+    #[serde(default)]
+    buildspec_strategy: Option<String>,
+    #[serde(default)]
     status: Option<String>,
     #[serde(default)]
     created_at: Option<String>,
@@ -683,6 +723,8 @@ struct EnvVarResponse {
     #[serde(default)]
     value: Option<String>,
     #[serde(default)]
+    target: Option<String>,
+    #[serde(default)]
     is_secret: Option<bool>,
 }
 
@@ -691,10 +733,14 @@ struct SetEnvVarsRequest {
     env_vars: Vec<SetEnvVarEntry>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Clone)]
 struct SetEnvVarEntry {
     key: String,
     value: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    target: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    branch: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     is_secret: Option<bool>,
 }
@@ -867,6 +913,448 @@ async fn run_apps_delete(api: &ApiClient, app_id: &str) -> Result<()> {
     api.delete(&format!("/v1/compute/apps/{app_id}")).await?;
     println!("App {app_id} deleted.");
     Ok(())
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum ApplyAction {
+    Create,
+    Update,
+    NoChange,
+}
+
+#[derive(Debug, Default)]
+struct EnvPlan {
+    plain: Vec<SetEnvVarEntry>,
+    secret_refs: Vec<SecretEnvRef>,
+}
+
+#[derive(Debug)]
+struct SecretEnvRef {
+    key: String,
+    target: String,
+}
+
+async fn run_apps_apply(
+    api: &ApiClient,
+    file: &Path,
+    selected_app: Option<&str>,
+    environment: &str,
+    dry_run: bool,
+) -> Result<()> {
+    let manifest = load_cloud_apps_manifest(file)?;
+    let entries = select_app_entries(&manifest, selected_app)?;
+    let live: ListAppsResponse = api.get("/v1/compute/apps").await?;
+
+    println!("Manifest:    {}", file.display());
+    println!("Environment: {environment}");
+    println!("Mode:        {}", if dry_run { "dry-run" } else { "apply" });
+    println!();
+
+    let mut created = 0;
+    let mut updated = 0;
+    let mut unchanged = 0;
+    for entry in entries {
+        let name = entry
+            .get("name")
+            .and_then(Value::as_str)
+            .ok_or_else(|| anyhow!("app entry is missing name"))?;
+        let body = app_entry_to_api_body(&entry)?;
+        let env_plan = plan_env_vars(&entry, environment)?;
+        let existing = live.apps.iter().find(|app| app.name == name);
+        let (action, changed_fields) = classify_app_action(existing, &body);
+        let app_id = match (existing, &action, dry_run) {
+            (Some(app), ApplyAction::Update, false) => {
+                let updated: AppResponse = api
+                    .patch(&format!("/v1/compute/apps/{}", app.id), &body)
+                    .await?;
+                updated.id
+            }
+            (Some(app), _, _) => app.id.clone(),
+            (None, ApplyAction::Create, false) => {
+                let created: AppResponse = api.post("/v1/compute/apps", &body).await?;
+                created.id
+            }
+            (None, _, true) => "<new app>".to_string(),
+            (None, _, false) => unreachable!(),
+        };
+
+        let (env_changed, missing_secrets) =
+            apply_env_plan(api, &app_id, &env_plan, dry_run).await?;
+        match action {
+            ApplyAction::Create => created += 1,
+            ApplyAction::Update => updated += 1,
+            ApplyAction::NoChange => unchanged += 1,
+        }
+        let label = match action {
+            ApplyAction::Create => "CREATED",
+            ApplyAction::Update => "UPDATED",
+            ApplyAction::NoChange => "UNCHANGED",
+        };
+        println!("{label} {name} ({app_id})");
+        println!("  environment: {environment}");
+        println!("  manifest:    {}", file.display());
+        if changed_fields.is_empty() {
+            println!("  changed:     <none>");
+        } else {
+            println!("  changed:     {}", changed_fields.join(", "));
+        }
+        if !env_changed.is_empty() {
+            println!("  env:         {}", env_changed.join(", "));
+        }
+        if !missing_secrets.is_empty() {
+            println!("  missing secrets: {}", missing_secrets.join(", "));
+            println!("  next:        tachyon compute env set {app_id} KEY=<value>");
+        }
+    }
+
+    println!();
+    println!("Summary: {created} created, {updated} updated, {unchanged} unchanged");
+    Ok(())
+}
+
+fn load_cloud_apps_manifest(path: &Path) -> Result<Value> {
+    let content = std::fs::read_to_string(path)?;
+    let value: Value = serde_yaml::from_str(&content)?;
+    match value.get("kind").and_then(Value::as_str) {
+        Some("CloudApps") => Ok(value),
+        Some("CloudApp") => {
+            let name = value
+                .get("metadata")
+                .and_then(|m| m.get("name"))
+                .and_then(Value::as_str)
+                .ok_or_else(|| anyhow!("CloudApp manifest is missing metadata.name"))?;
+            let mut entry = value.get("spec").cloned().unwrap_or_else(|| json!({}));
+            entry
+                .as_object_mut()
+                .ok_or_else(|| anyhow!("CloudApp spec must be an object"))?
+                .insert("name".to_string(), Value::String(name.to_string()));
+            Ok(json!({
+                "apiVersion": "apps.tachy.one/v1alpha",
+                "kind": "CloudApps",
+                "metadata": { "name": name },
+                "spec": { "apps": [entry] }
+            }))
+        }
+        Some(kind) => Err(anyhow!("unsupported manifest kind: {kind}")),
+        None => Err(anyhow!("manifest is missing kind")),
+    }
+}
+
+fn select_app_entries(manifest: &Value, app: Option<&str>) -> Result<Vec<Value>> {
+    let apps = manifest
+        .get("spec")
+        .and_then(|s| s.get("apps"))
+        .and_then(Value::as_array)
+        .ok_or_else(|| anyhow!("CloudApps manifest must contain spec.apps[]"))?;
+    let entries = apps
+        .iter()
+        .filter(|entry| {
+            app.is_none_or(|name| entry.get("name").and_then(Value::as_str) == Some(name))
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    if entries.is_empty() {
+        return Err(anyhow!(
+            "no app entry matched {}",
+            app.unwrap_or("<all apps>")
+        ));
+    }
+    Ok(entries)
+}
+
+fn app_entry_to_api_body(entry: &Value) -> Result<Value> {
+    let name = entry
+        .get("name")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow!("app entry is missing name"))?;
+    let repo = entry
+        .get("repository")
+        .and_then(Value::as_object)
+        .ok_or_else(|| anyhow!("app entry {name} is missing repository"))?;
+    let repo_str = |key: &str| -> Result<String> {
+        repo.get(key)
+            .and_then(Value::as_str)
+            .map(ToString::to_string)
+            .ok_or_else(|| anyhow!("app entry {name} repository.{key} is required"))
+    };
+    let framework = entry
+        .get("framework")
+        .and_then(Value::as_str)
+        .unwrap_or("next_js");
+    let deployment_target = entry
+        .get("deploymentTarget")
+        .and_then(Value::as_str)
+        .unwrap_or("cloud_run");
+    let build = entry.get("build").and_then(Value::as_object);
+    let build_command = build.and_then(|b| {
+        b.get("command")
+            .and_then(Value::as_str)
+            .map(ToString::to_string)
+            .or_else(|| cargo_lambda_build_command(framework, b))
+    });
+    let mut body = json!({
+        "name": name,
+        "repository_url": repo_str("url")?,
+        "repository_owner": repo_str("owner")?,
+        "repository_name": repo_str("name")?,
+        "default_branch": repo.get("defaultBranch").and_then(Value::as_str).unwrap_or("main"),
+        "framework": framework,
+        "deployment_target": deployment_target,
+    });
+    let obj = body.as_object_mut().unwrap();
+    copy_string_field(entry, obj, "rootDirectory", "root_directory");
+    copy_string_field(entry, obj, "dockerContext", "docker_context");
+    copy_string_field(entry, obj, "buildspecStrategy", "buildspec_strategy");
+    if let Some(command) = build_command {
+        obj.insert("build_command".to_string(), Value::String(command));
+    }
+    if let Some(build) = build {
+        copy_string_field_from_map(build, obj, "installCommand", "install_command");
+        copy_string_field_from_map(build, obj, "outputDirectory", "output_directory");
+        copy_string_field_from_map(build, obj, "nodeVersion", "node_version");
+    }
+    Ok(body)
+}
+
+fn copy_string_field(
+    source: &Value,
+    target: &mut serde_json::Map<String, Value>,
+    from: &str,
+    to: &str,
+) {
+    if let Some(value) = source.get(from).and_then(Value::as_str) {
+        target.insert(to.to_string(), Value::String(value.to_string()));
+    }
+}
+
+fn copy_string_field_from_map(
+    source: &serde_json::Map<String, Value>,
+    target: &mut serde_json::Map<String, Value>,
+    from: &str,
+    to: &str,
+) {
+    if let Some(value) = source.get(from).and_then(Value::as_str) {
+        target.insert(to.to_string(), Value::String(value.to_string()));
+    }
+}
+
+fn cargo_lambda_build_command(
+    framework: &str,
+    build: &serde_json::Map<String, Value>,
+) -> Option<String> {
+    if framework != "cargo_lambda" {
+        return None;
+    }
+    let package = build.get("package").and_then(Value::as_str)?;
+    let binary = build.get("binary").and_then(Value::as_str);
+    let release = build
+        .get("release")
+        .and_then(Value::as_bool)
+        .unwrap_or(true);
+    let arch = build.get("arch").and_then(Value::as_str).unwrap_or("arm64");
+    let mut command = format!("cargo lambda build --package {package}");
+    if let Some(binary) = binary {
+        command.push_str(&format!(" --bin {binary}"));
+    }
+    if release {
+        command.push_str(" --release");
+    }
+    if arch == "arm64" {
+        command.push_str(" --arm64");
+    }
+    Some(command)
+}
+
+fn classify_app_action(existing: Option<&AppResponse>, body: &Value) -> (ApplyAction, Vec<String>) {
+    match existing {
+        None => (ApplyAction::Create, manifest_body_fields(body)),
+        Some(app) => {
+            let fields = manifest_body_fields(body)
+                .into_iter()
+                .filter(|field| app_field_value(app, field) != body[field])
+                .collect::<Vec<_>>();
+            let action = if fields.is_empty() {
+                ApplyAction::NoChange
+            } else {
+                ApplyAction::Update
+            };
+            (action, fields)
+        }
+    }
+}
+
+fn manifest_body_fields(body: &Value) -> Vec<String> {
+    body.as_object()
+        .map(|obj| obj.keys().cloned().collect())
+        .unwrap_or_default()
+}
+
+fn app_field_value(app: &AppResponse, field: &str) -> Value {
+    match field {
+        "name" => json!(app.name),
+        "repository_url" => opt_string_value(app.repository_url.as_deref()),
+        "repository_owner" => opt_string_value(app.repository_owner.as_deref()),
+        "repository_name" => opt_string_value(app.repository_name.as_deref()),
+        "default_branch" => opt_string_value(app.default_branch.as_deref()),
+        "framework" => opt_string_value(app.framework.as_deref()),
+        "deployment_target" => opt_string_value(app.deployment_target.as_deref()),
+        "connection_id" => opt_string_value(app.connection_id.as_deref()),
+        "root_directory" => opt_string_value(app.root_directory.as_deref()),
+        "docker_context" => opt_string_value(app.docker_context.as_deref()),
+        "build_command" => opt_string_value(app.build_command.as_deref()),
+        "install_command" => opt_string_value(app.install_command.as_deref()),
+        "output_directory" => opt_string_value(app.output_directory.as_deref()),
+        "node_version" => opt_string_value(app.node_version.as_deref()),
+        "buildspec_strategy" => {
+            opt_string_value(app.buildspec_strategy.as_deref().or(Some("inline")))
+        }
+        _ => Value::Null,
+    }
+}
+
+fn opt_string_value(value: Option<&str>) -> Value {
+    match value.filter(|v| !v.is_empty()) {
+        Some(value) => Value::String(value.to_string()),
+        None => Value::Null,
+    }
+}
+
+fn plan_env_vars(entry: &Value, environment: &str) -> Result<EnvPlan> {
+    let Some(env_vars) = entry.get("envVars") else {
+        return Ok(EnvPlan::default());
+    };
+    let env_vars = env_vars
+        .as_array()
+        .ok_or_else(|| anyhow!("envVars must be an array"))?;
+    let mut plan = EnvPlan::default();
+    for env in env_vars {
+        let key = env
+            .get("name")
+            .and_then(Value::as_str)
+            .ok_or_else(|| anyhow!("env var entry is missing name"))?;
+        let target = env
+            .get("target")
+            .and_then(Value::as_str)
+            .map(ToString::to_string)
+            .unwrap_or_else(|| default_env_target(environment).to_string());
+        let env_type = env.get("type").and_then(Value::as_str).unwrap_or("plain");
+        let value = env.get("value").and_then(Value::as_str);
+        let value_from = env.get("valueFrom");
+        if env_type == "credential" || value_from.is_some() {
+            if value.is_some() {
+                return Err(anyhow!("credential env var {key} must use valueFrom.secret; literal values are not allowed"));
+            }
+            let secret = extract_secret_ref(
+                key,
+                value_from
+                    .ok_or_else(|| anyhow!("credential env var {key} is missing valueFrom"))?,
+            )?;
+            plan.secret_refs.push(SecretEnvRef {
+                key: secret,
+                target,
+            });
+        } else {
+            plan.plain.push(SetEnvVarEntry {
+                key: key.to_string(),
+                value: value
+                    .ok_or_else(|| anyhow!("plain env var {key} must define value"))?
+                    .to_string(),
+                target: Some(target),
+                branch: None,
+                is_secret: Some(false),
+            });
+        }
+    }
+    Ok(plan)
+}
+
+fn default_env_target(environment: &str) -> &'static str {
+    match environment {
+        "production" | "prod" => "production",
+        "preview" => "preview",
+        _ => "all",
+    }
+}
+
+fn extract_secret_ref(key: &str, value_from: &Value) -> Result<String> {
+    let secret = value_from
+        .get("secret")
+        .ok_or_else(|| anyhow!("env var {key} only supports valueFrom.secret"))?;
+    let path = if let Some(path) = secret.as_str() {
+        path
+    } else if let Some(path) = secret.get("path").and_then(Value::as_str) {
+        if secret.get("field").is_some() {
+            return Err(anyhow!(
+                "env var {key} valueFrom.secret.field is not supported"
+            ));
+        }
+        path
+    } else {
+        return Err(anyhow!(
+            "env var {key} valueFrom.secret must be a key string or object with path"
+        ));
+    };
+    if path.is_empty() || path.contains('/') {
+        return Err(anyhow!(
+            "env var {key} valueFrom.secret must reference a single env key"
+        ));
+    }
+    Ok(path.to_string())
+}
+
+async fn apply_env_plan(
+    api: &ApiClient,
+    app_id: &str,
+    plan: &EnvPlan,
+    dry_run: bool,
+) -> Result<(Vec<String>, Vec<String>)> {
+    let changed = plan
+        .plain
+        .iter()
+        .map(|entry| {
+            format!(
+                "{}({})",
+                entry.key,
+                entry.target.as_deref().unwrap_or("all")
+            )
+        })
+        .collect::<Vec<_>>();
+    if !plan.plain.is_empty() && !dry_run && app_id != "<new app>" {
+        let req = SetEnvVarsRequest {
+            env_vars: plan.plain.clone(),
+        };
+        let _: ListEnvVarsResponse = api
+            .put(&format!("/v1/compute/apps/{app_id}/env"), &req)
+            .await?;
+    }
+
+    let mut missing = Vec::new();
+    if !plan.secret_refs.is_empty() && !dry_run && app_id != "<new app>" {
+        let resp: ListEnvVarsResponse = api
+            .get(&format!("/v1/compute/apps/{app_id}/env"))
+            .await
+            .unwrap_or(ListEnvVarsResponse { env_vars: vec![] });
+        let current = resp
+            .env_vars
+            .into_iter()
+            .filter(|var| var.is_secret.unwrap_or(false))
+            .map(|var| (var.key, var.target.unwrap_or_else(|| "all".to_string())))
+            .collect::<BTreeSet<_>>();
+        for secret in &plan.secret_refs {
+            if !current.contains(&(secret.key.clone(), secret.target.clone()))
+                && !current.contains(&(secret.key.clone(), "all".to_string()))
+            {
+                missing.push(format!("{}({})", secret.key, secret.target));
+            }
+        }
+    } else {
+        missing.extend(
+            plan.secret_refs
+                .iter()
+                .map(|secret| format!("{}({})", secret.key, secret.target)),
+        );
+    }
+    Ok((changed, missing))
 }
 
 async fn run_builds_list(api: &ApiClient, app_id: &str, limit: usize, json: bool) -> Result<()> {
@@ -1404,6 +1892,8 @@ async fn run_env_set(api: &ApiClient, app_id: &str, vars: &[String]) -> Result<(
             Ok(SetEnvVarEntry {
                 key: key.to_string(),
                 value: value.to_string(),
+                target: None,
+                branch: None,
                 is_secret: None,
             })
         })
@@ -1599,6 +2089,12 @@ pub async fn run(
                 let id = resolve::resolve_app_id(&api, app_id).await?;
                 run_apps_delete(&api, &id).await
             }
+            AppsCommand::Apply {
+                file,
+                app,
+                environment,
+                dry_run,
+            } => run_apps_apply(&api, file, app.as_deref(), environment, *dry_run).await,
         },
         ComputeCommand::Builds { command } => match command {
             BuildsCommand::List {

@@ -60,6 +60,45 @@ fn start_compute_server() -> (String, mpsc::Receiver<String>, thread::JoinHandle
     (url, rx, handle)
 }
 
+fn start_apply_server() -> (String, mpsc::Receiver<String>, thread::JoinHandle<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    let (tx, rx) = mpsc::channel();
+    let handle = thread::spawn(move || {
+        for _ in 0..4 {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut buf = [0_u8; 8192];
+            let n = stream.read(&mut buf).unwrap();
+            let req = String::from_utf8_lossy(&buf[..n]).to_string();
+            tx.send(req.clone()).unwrap();
+
+            let body = if req.starts_with("GET /v1/compute/apps ") {
+                r#"{"apps":[]}"#
+            } else if req.starts_with("POST /v1/compute/apps ") {
+                r#"{"id":"app_created","name":"bakuure-api","repository_url":"https://github.com/quantum-box/erp","repository_owner":"quantum-box","repository_name":"erp","default_branch":"main","framework":"cargo_lambda","deployment_target":"lambda","root_directory":"apps/bakuure-api","docker_context":".","build_command":"cargo lambda build --package bakuure-api --bin lambda-bakuure-api --release --arm64","buildspec_strategy":"repo:.codebuild/bakuure_api_lambda_buildspec.yml"}"#
+            } else if req.starts_with("PUT /v1/compute/apps/app_created/env ") {
+                r#"{"env_vars":[{"id":"env_01testtesttesttesttesttest","key":"ENVIRONMENT","value":"sandbox","target":"all","is_secret":false}]}"#
+            } else if req.starts_with("GET /v1/compute/apps/app_created/env ") {
+                r#"{"env_vars":[{"id":"env_secret","key":"DATABASE_URL","value":"********","target":"all","is_secret":true}]}"#
+            } else {
+                r#"{"error":"unexpected request"}"#
+            };
+            let status = if body.contains("unexpected request") {
+                "HTTP/1.1 500 Internal Server Error"
+            } else {
+                "HTTP/1.1 200 OK"
+            };
+            let response = format!(
+                "{status}\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            stream.write_all(response.as_bytes()).unwrap();
+        }
+    });
+    (url, rx, handle)
+}
+
 #[test]
 fn init_non_interactive_creates_and_force_overwrites_tachyon_yml() {
     let tmp = TempDir::new().unwrap();
@@ -182,4 +221,88 @@ fn explicit_app_id_overrides_project_config_name() {
     let second = rx.recv().unwrap();
     handle.join().unwrap();
     assert!(second.starts_with("GET /v1/compute/apps/app_explicit/builds "));
+}
+
+#[test]
+fn compute_apps_apply_creates_from_manifest_and_preserves_secret_refs() {
+    let tmp = TempDir::new().unwrap();
+    let manifest = tmp.path().join("bakuure.tachyon.yml");
+    fs::write(
+        &manifest,
+        r#"
+apiVersion: apps.tachy.one/v1alpha
+kind: CloudApps
+metadata:
+  name: bakuure-api
+spec:
+  apps:
+    - name: bakuure-api
+      repository:
+        url: https://github.com/quantum-box/erp
+        owner: quantum-box
+        name: erp
+        defaultBranch: main
+      rootDirectory: apps/bakuure-api
+      dockerContext: "."
+      framework: cargo_lambda
+      deploymentTarget: lambda
+      buildspecStrategy: repo:.codebuild/bakuure_api_lambda_buildspec.yml
+      build:
+        package: bakuure-api
+        binary: lambda-bakuure-api
+        release: true
+        arch: arm64
+      envVars:
+        - name: ENVIRONMENT
+          value: sandbox
+        - name: DATABASE_URL
+          type: credential
+          valueFrom:
+            secret: DATABASE_URL
+"#,
+    )
+    .unwrap();
+    let (api_url, rx, handle) = start_apply_server();
+
+    let mut cmd = isolated_command(tmp.path());
+    let output = cmd
+        .current_dir(tmp.path())
+        .env("TACHYON_API_URL", api_url)
+        .env("TACHYON_API_KEY", "test-token")
+        .env("TACHYON_TENANT_ID", "tn_01hjryxysgey07h5jz5wagqj0m")
+        .args([
+            "compute",
+            "apps",
+            "apply",
+            "-f",
+            manifest.to_str().unwrap(),
+            "--environment",
+            "sandbox",
+        ])
+        .output()
+        .expect("run compute apps apply");
+    assert!(
+        output.status.success(),
+        "apply failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let first = rx.recv().unwrap();
+    let second = rx.recv().unwrap();
+    let third = rx.recv().unwrap();
+    let fourth = rx.recv().unwrap();
+    handle.join().unwrap();
+
+    assert!(first.starts_with("GET /v1/compute/apps "));
+    assert!(second.starts_with("POST /v1/compute/apps "));
+    assert!(second.contains("\"root_directory\":\"apps/bakuure-api\""));
+    assert!(second.contains("\"docker_context\":\".\""));
+    assert!(!second.contains("mysql://"));
+    assert!(third.starts_with("PUT /v1/compute/apps/app_created/env "));
+    assert!(third.contains("\"key\":\"ENVIRONMENT\""));
+    assert!(fourth.starts_with("GET /v1/compute/apps/app_created/env "));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("CREATED bakuure-api (app_created)"));
+    assert!(stdout.contains("Environment: sandbox"));
 }
