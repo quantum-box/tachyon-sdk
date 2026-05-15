@@ -1049,9 +1049,7 @@ fn select_app_entries(manifest: &Value, app: Option<&str>) -> Result<Vec<Value>>
     let entries = apps
         .iter()
         .filter(|entry| {
-            app.is_none_or(|name| {
-                entry.get("name").and_then(Value::as_str) == Some(name)
-            })
+            app.is_none_or(|name| entry.get("name").and_then(Value::as_str) == Some(name))
         })
         .cloned()
         .collect::<Vec<_>>();
