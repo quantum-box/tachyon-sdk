@@ -384,7 +384,10 @@ mod tests {
                 format!("\"{expected}\"")
             );
             assert_eq!(
-                serde_json::from_str::<WorkerProviderKind>(&format!("\"{expected}\"")).unwrap(),
+                serde_json::from_str::<WorkerProviderKind>(&format!(
+                    "\"{expected}\""
+                ))
+                .unwrap(),
                 provider
             );
         }

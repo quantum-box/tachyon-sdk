@@ -1,11 +1,16 @@
 use std::fmt::Debug;
 
-use crate::auth::{AuthResult, ExecutorAction, MultiTenancyAction, TenantId};
+use crate::auth::{
+    AuthResult, ExecutorAction, MultiTenancyAction, TenantId,
+};
 
 #[async_trait::async_trait]
 #[cfg_attr(feature = "test", mockall::automock)]
 pub trait PaymentApp: Debug + Send + Sync + 'static {
-    async fn check_billing<'a>(&self, input: &CheckBillingInput<'a>) -> AuthResult<()>;
+    async fn check_billing<'a>(
+        &self,
+        input: &CheckBillingInput<'a>,
+    ) -> AuthResult<()>;
 
     async fn consume_credits<'a>(
         &self,
