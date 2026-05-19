@@ -15,6 +15,7 @@ from tachyon_sdk.api.crm_object_mappings_api import CRMObjectMappingsApi
 from tachyon_sdk.api.delivery_shipping_api import DeliveryShippingApi
 from tachyon_sdk.api.delivery_software_api import DeliverySoftwareApi
 from tachyon_sdk.api.integrations_api import IntegrationsApi
+from tachyon_sdk.api.notifications_api import NotificationsApi
 from tachyon_sdk.api.order_checkout_api import OrderCheckoutApi
 from tachyon_sdk.api.order_clients_api import OrderClientsApi
 from tachyon_sdk.api.order_products_api import OrderProductsApi

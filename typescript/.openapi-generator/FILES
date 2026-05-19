@@ -126,6 +126,7 @@ docs/MessageContent.md
 docs/ModelInfo.md
 docs/ModelsApi.md
 docs/ModelsResponse.md
+docs/NotificationsApi.md
 docs/OAuthCallbackResponse.md
 docs/OAuthTokenDetailResponse.md
 docs/OAuthTokenListResponse.md
@@ -173,6 +174,8 @@ docs/ResponseFormat.md
 docs/Role.md
 docs/RotateSecretResponse.md
 docs/SaveOAuthTokenRequest.md
+docs/SendSmsNotificationRequest.md
+docs/SendSmsNotificationResponse.md
 docs/ServiceAccountListResponse.md
 docs/ServiceAccountResponse.md
 docs/ShippingAvailabilityResponse.md
@@ -238,6 +241,7 @@ src/apis/DeliverySoftwareApi.ts
 src/apis/FeatureFlagsApi.ts
 src/apis/IntegrationsApi.ts
 src/apis/ModelsApi.ts
+src/apis/NotificationsApi.ts
 src/apis/OauthApi.ts
 src/apis/OrderCheckoutApi.ts
 src/apis/OrderClientsApi.ts
@@ -392,6 +396,8 @@ src/models/ResponseFormat.ts
 src/models/Role.ts
 src/models/RotateSecretResponse.ts
 src/models/SaveOAuthTokenRequest.ts
+src/models/SendSmsNotificationRequest.ts
+src/models/SendSmsNotificationResponse.ts
 src/models/ServiceAccountListResponse.ts
 src/models/ServiceAccountResponse.ts
 src/models/ShippingAvailabilityResponse.ts

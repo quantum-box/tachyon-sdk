@@ -128,6 +128,7 @@ docs/MessageContent.md
 docs/ModelInfo.md
 docs/ModelsApi.md
 docs/ModelsResponse.md
+docs/NotificationsApi.md
 docs/OAuthCallbackResponse.md
 docs/OAuthTokenDetailResponse.md
 docs/OAuthTokenListResponse.md
@@ -175,6 +176,8 @@ docs/ResponseFormat.md
 docs/Role.md
 docs/RotateSecretResponse.md
 docs/SaveOAuthTokenRequest.md
+docs/SendSmsNotificationRequest.md
+docs/SendSmsNotificationResponse.md
 docs/ServiceAccountListResponse.md
 docs/ServiceAccountResponse.md
 docs/ShippingAvailabilityResponse.md
@@ -246,6 +249,7 @@ tachyon_sdk/api/delivery_software_api.py
 tachyon_sdk/api/feature_flags_api.py
 tachyon_sdk/api/integrations_api.py
 tachyon_sdk/api/models_api.py
+tachyon_sdk/api/notifications_api.py
 tachyon_sdk/api/oauth_api.py
 tachyon_sdk/api/order_checkout_api.py
 tachyon_sdk/api/order_clients_api.py
@@ -403,6 +407,8 @@ tachyon_sdk/models/response_format.py
 tachyon_sdk/models/role.py
 tachyon_sdk/models/rotate_secret_response.py
 tachyon_sdk/models/save_o_auth_token_request.py
+tachyon_sdk/models/send_sms_notification_request.py
+tachyon_sdk/models/send_sms_notification_response.py
 tachyon_sdk/models/service_account_list_response.py
 tachyon_sdk/models/service_account_response.py
 tachyon_sdk/models/shipping_availability_response.py
@@ -453,4 +459,7 @@ test-requirements.txt
 test/__init__.py
 test/test_agent_builtin_tool_request.py
 test/test_agent_builtin_tool_type.py
+test/test_notifications_api.py
+test/test_send_sms_notification_request.py
+test/test_send_sms_notification_response.py
 tox.ini

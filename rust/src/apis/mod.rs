@@ -131,6 +131,7 @@ pub mod delivery_software_api;
 pub mod feature_flags_api;
 pub mod integrations_api;
 pub mod models_api;
+pub mod notifications_api;
 pub mod oauth_api;
 pub mod order_checkout_api;
 pub mod order_clients_api;

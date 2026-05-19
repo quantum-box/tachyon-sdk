@@ -32,6 +32,7 @@ __all__ = [
     "DeliveryShippingApi",
     "DeliverySoftwareApi",
     "IntegrationsApi",
+    "NotificationsApi",
     "OrderCheckoutApi",
     "OrderClientsApi",
     "OrderProductsApi",
@@ -199,6 +200,8 @@ __all__ = [
     "Role",
     "RotateSecretResponse",
     "SaveOAuthTokenRequest",
+    "SendSmsNotificationRequest",
+    "SendSmsNotificationResponse",
     "ServiceAccountListResponse",
     "ServiceAccountResponse",
     "ShippingAvailabilityResponse",
@@ -260,6 +263,7 @@ from tachyon_sdk.api.crm_object_mappings_api import CRMObjectMappingsApi as CRMO
 from tachyon_sdk.api.delivery_shipping_api import DeliveryShippingApi as DeliveryShippingApi
 from tachyon_sdk.api.delivery_software_api import DeliverySoftwareApi as DeliverySoftwareApi
 from tachyon_sdk.api.integrations_api import IntegrationsApi as IntegrationsApi
+from tachyon_sdk.api.notifications_api import NotificationsApi as NotificationsApi
 from tachyon_sdk.api.order_checkout_api import OrderCheckoutApi as OrderCheckoutApi
 from tachyon_sdk.api.order_clients_api import OrderClientsApi as OrderClientsApi
 from tachyon_sdk.api.order_products_api import OrderProductsApi as OrderProductsApi
@@ -431,6 +435,8 @@ from tachyon_sdk.models.response_format import ResponseFormat as ResponseFormat
 from tachyon_sdk.models.role import Role as Role
 from tachyon_sdk.models.rotate_secret_response import RotateSecretResponse as RotateSecretResponse
 from tachyon_sdk.models.save_o_auth_token_request import SaveOAuthTokenRequest as SaveOAuthTokenRequest
+from tachyon_sdk.models.send_sms_notification_request import SendSmsNotificationRequest as SendSmsNotificationRequest
+from tachyon_sdk.models.send_sms_notification_response import SendSmsNotificationResponse as SendSmsNotificationResponse
 from tachyon_sdk.models.service_account_list_response import ServiceAccountListResponse as ServiceAccountListResponse
 from tachyon_sdk.models.service_account_response import ServiceAccountResponse as ServiceAccountResponse
 from tachyon_sdk.models.shipping_availability_response import ShippingAvailabilityResponse as ShippingAvailabilityResponse
