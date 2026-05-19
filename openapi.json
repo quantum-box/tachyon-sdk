@@ -5286,6 +5286,100 @@
                     }
                 }
             }
+        },
+        "/v1/notifications/sms": {
+            "post": {
+                "tags": [
+                    "Notifications"
+                ],
+                "summary": "Send an SMS notification",
+                "description": "Sends a plain text SMS notification through Tachyon notification providers. Provider-specific services such as AWS SNS are not exposed through the SDK API.",
+                "operationId": "send_sms_notification",
+                "parameters": [
+                    {
+                        "name": "x-operator-id",
+                        "in": "header",
+                        "description": "Operator ID",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        },
+                        "example": "tn_xxxxxx"
+                    },
+                    {
+                        "name": "Authorization",
+                        "in": "header",
+                        "description": "Authorization",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        },
+                        "example": "Bearer xxxxx"
+                    }
+                ],
+                "requestBody": {
+                    "required": true,
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/SendSmsNotificationRequest"
+                            }
+                        }
+                    }
+                },
+                "responses": {
+                    "202": {
+                        "description": "SMS notification accepted",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/SendSmsNotificationResponse"
+                                }
+                            }
+                        }
+                    },
+                    "400": {
+                        "description": "Bad request",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/ErrorResponse"
+                                }
+                            }
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/ErrorResponse"
+                                }
+                            }
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/ErrorResponse"
+                                }
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "Internal server error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/ErrorResponse"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
         }
     },
     "components": {
@@ -7740,6 +7834,39 @@
                     "message": {
                         "type": "string",
                         "description": "Error message"
+                    }
+                }
+            },
+            "SendSmsNotificationRequest": {
+                "type": "object",
+                "description": "Request to send a text SMS notification through Tachyon notification providers.",
+                "required": [
+                    "phoneNumber",
+                    "message"
+                ],
+                "properties": {
+                    "phoneNumber": {
+                        "type": "string",
+                        "description": "Destination phone number. E.164 format is recommended, for example +15551234567.",
+                        "example": "+15551234567"
+                    },
+                    "message": {
+                        "type": "string",
+                        "description": "Plain text SMS message body.",
+                        "example": "Your verification code is 123456."
+                    }
+                }
+            },
+            "SendSmsNotificationResponse": {
+                "type": "object",
+                "description": "Response returned after an SMS notification send request is accepted.",
+                "required": [
+                    "accepted"
+                ],
+                "properties": {
+                    "accepted": {
+                        "type": "boolean",
+                        "description": "Whether Tachyon accepted the SMS notification for delivery."
                     }
                 }
             },
@@ -10872,6 +10999,10 @@
         {
             "name": "Integrations",
             "description": "Integration marketplace and connection management"
+        },
+        {
+            "name": "Notifications",
+            "description": "Notification delivery APIs"
         }
     ]
 }

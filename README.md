@@ -144,6 +144,39 @@ npm install @tachyon/sdk
 pip install tachyon-sdk
 ```
 
+## SMS Notifications
+
+SDK users can send SMS notifications through Tachyon's notification boundary
+without importing AWS SDKs or provider-specific APIs.
+
+```typescript
+import {
+  Configuration,
+  NotificationsApi,
+  type SendSmsNotificationRequest,
+} from "@tachyon/sdk";
+
+const notifications = new NotificationsApi(
+  new Configuration({ basePath: "https://api.n1.tachy.one" }),
+);
+
+const request: SendSmsNotificationRequest = {
+  phoneNumber: "+15551234567",
+  message: "Your verification code is 123456.",
+};
+
+await notifications.sendSmsNotification({
+  xOperatorId: "tn_xxxx",
+  authorization: `Bearer ${process.env.TACHYON_API_KEY}`,
+  sendSmsNotificationRequest: request,
+});
+```
+
+Use E.164 format for `phoneNumber`, for example `+15551234567`. Runtime
+delivery can depend on provider account settings such as AWS SNS sandbox mode,
+SMS spend limits, origination identity configuration, and destination country
+support.
+
 ## npm Packages
 
 Additional domain-specific TypeScript SDKs published under the `@tachyon-sdk/*` scope:

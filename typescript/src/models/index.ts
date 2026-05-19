@@ -142,6 +142,8 @@ export * from './ResponseFormat';
 export * from './Role';
 export * from './RotateSecretResponse';
 export * from './SaveOAuthTokenRequest';
+export * from './SendSmsNotificationRequest';
+export * from './SendSmsNotificationResponse';
 export * from './ServiceAccountListResponse';
 export * from './ServiceAccountResponse';
 export * from './ShippingAvailabilityResponse';

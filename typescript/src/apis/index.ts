@@ -20,6 +20,7 @@ export * from './DeliverySoftwareApi';
 export * from './FeatureFlagsApi';
 export * from './IntegrationsApi';
 export * from './ModelsApi';
+export * from './NotificationsApi';
 export * from './OauthApi';
 export * from './OrderCheckoutApi';
 export * from './OrderClientsApi';

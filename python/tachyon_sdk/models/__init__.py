@@ -155,6 +155,8 @@ from tachyon_sdk.models.response_format import ResponseFormat
 from tachyon_sdk.models.role import Role
 from tachyon_sdk.models.rotate_secret_response import RotateSecretResponse
 from tachyon_sdk.models.save_o_auth_token_request import SaveOAuthTokenRequest
+from tachyon_sdk.models.send_sms_notification_request import SendSmsNotificationRequest
+from tachyon_sdk.models.send_sms_notification_response import SendSmsNotificationResponse
 from tachyon_sdk.models.service_account_list_response import ServiceAccountListResponse
 from tachyon_sdk.models.service_account_response import ServiceAccountResponse
 from tachyon_sdk.models.shipping_availability_response import ShippingAvailabilityResponse
