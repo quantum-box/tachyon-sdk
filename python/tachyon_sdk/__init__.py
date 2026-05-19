@@ -64,6 +64,8 @@ __all__ = [
     "AddUserToTenantRequest",
     "AddressRequest",
     "AddressResponse",
+    "AgentBuiltinToolRequest",
+    "AgentBuiltinToolType",
     "AgentChunk",
     "AgentChunkEvent",
     "AgentChunkEventOneOf",
@@ -84,7 +86,6 @@ __all__ = [
     "AgentSessionEntry",
     "AgentSource",
     "AgentStatusResponse",
-    "AgentToolAccessRequest",
     "ApiKeyListResponse",
     "ApiKeyResponse",
     "Ask",
@@ -295,6 +296,8 @@ from tachyon_sdk.models.action_response import ActionResponse as ActionResponse
 from tachyon_sdk.models.add_user_to_tenant_request import AddUserToTenantRequest as AddUserToTenantRequest
 from tachyon_sdk.models.address_request import AddressRequest as AddressRequest
 from tachyon_sdk.models.address_response import AddressResponse as AddressResponse
+from tachyon_sdk.models.agent_builtin_tool_request import AgentBuiltinToolRequest as AgentBuiltinToolRequest
+from tachyon_sdk.models.agent_builtin_tool_type import AgentBuiltinToolType as AgentBuiltinToolType
 from tachyon_sdk.models.agent_chunk import AgentChunk as AgentChunk
 from tachyon_sdk.models.agent_chunk_event import AgentChunkEvent as AgentChunkEvent
 from tachyon_sdk.models.agent_chunk_event_one_of import AgentChunkEventOneOf as AgentChunkEventOneOf
@@ -315,7 +318,6 @@ from tachyon_sdk.models.agent_protocol_mode import AgentProtocolMode as AgentPro
 from tachyon_sdk.models.agent_session_entry import AgentSessionEntry as AgentSessionEntry
 from tachyon_sdk.models.agent_source import AgentSource as AgentSource
 from tachyon_sdk.models.agent_status_response import AgentStatusResponse as AgentStatusResponse
-from tachyon_sdk.models.agent_tool_access_request import AgentToolAccessRequest as AgentToolAccessRequest
 from tachyon_sdk.models.api_key_list_response import ApiKeyListResponse as ApiKeyListResponse
 from tachyon_sdk.models.api_key_response import ApiKeyResponse as ApiKeyResponse
 from tachyon_sdk.models.ask import Ask as Ask

@@ -1,16 +1,11 @@
 #![allow(unused_imports)]
-#![allow(clippy::derivable_impls)]
-#![allow(clippy::empty_docs)]
-#![allow(clippy::into_iter_on_ref)]
-#![allow(clippy::needless_return)]
 #![allow(clippy::too_many_arguments)]
-#![allow(clippy::uninlined_format_args)]
 
-pub extern crate reqwest;
+extern crate serde_repr;
 extern crate serde;
 extern crate serde_json;
-extern crate serde_repr;
 extern crate url;
+extern crate reqwest;
 
 pub mod apis;
 pub mod models;

@@ -18,7 +18,7 @@ Name | Type
 `mcpHubConfigJson` | string
 `model` | string
 `task` | string
-`toolAccess` | [AgentToolAccessRequest](AgentToolAccessRequest.md)
+`toolAccess` | [Array&lt;AgentBuiltinToolRequest&gt;](AgentBuiltinToolRequest.md)
 `useJsonToolCalls` | boolean
 `userCustomInstructions` | string
 

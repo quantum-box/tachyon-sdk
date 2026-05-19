@@ -10,6 +10,8 @@ docs/AddUserToTenantRequest.md
 docs/AddressRequest.md
 docs/AddressResponse.md
 docs/AgentApi.md
+docs/AgentBuiltinToolRequest.md
+docs/AgentBuiltinToolType.md
 docs/AgentChunk.md
 docs/AgentChunkEvent.md
 docs/AgentChunkEventOneOf.md
@@ -30,7 +32,6 @@ docs/AgentProtocolMode.md
 docs/AgentSessionEntry.md
 docs/AgentSource.md
 docs/AgentStatusResponse.md
-docs/AgentToolAccessRequest.md
 docs/ApiKeyListResponse.md
 docs/ApiKeyResponse.md
 docs/Ask.md
@@ -258,6 +259,8 @@ src/models/action_response.rs
 src/models/add_user_to_tenant_request.rs
 src/models/address_request.rs
 src/models/address_response.rs
+src/models/agent_builtin_tool_request.rs
+src/models/agent_builtin_tool_type.rs
 src/models/agent_chunk.rs
 src/models/agent_chunk_event.rs
 src/models/agent_chunk_event_one_of.rs
@@ -278,7 +281,6 @@ src/models/agent_protocol_mode.rs
 src/models/agent_session_entry.rs
 src/models/agent_source.rs
 src/models/agent_status_response.rs
-src/models/agent_tool_access_request.rs
 src/models/api_key_list_response.rs
 src/models/api_key_response.rs
 src/models/ask.rs

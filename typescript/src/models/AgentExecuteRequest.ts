@@ -13,6 +13,13 @@
  */
 
 import { mapValues } from '../runtime';
+import type { AgentBuiltinToolRequest } from './AgentBuiltinToolRequest';
+import {
+    AgentBuiltinToolRequestFromJSON,
+    AgentBuiltinToolRequestFromJSONTyped,
+    AgentBuiltinToolRequestToJSON,
+    AgentBuiltinToolRequestToJSONTyped,
+} from './AgentBuiltinToolRequest';
 import type { ChatroomNameGeneration } from './ChatroomNameGeneration';
 import {
     ChatroomNameGenerationFromJSON,
@@ -27,13 +34,6 @@ import {
     ClientToolDefinitionToJSON,
     ClientToolDefinitionToJSONTyped,
 } from './ClientToolDefinition';
-import type { AgentToolAccessRequest } from './AgentToolAccessRequest';
-import {
-    AgentToolAccessRequestFromJSON,
-    AgentToolAccessRequestFromJSONTyped,
-    AgentToolAccessRequestToJSON,
-    AgentToolAccessRequestToJSONTyped,
-} from './AgentToolAccessRequest';
 import type { AgentProtocolMode } from './AgentProtocolMode';
 import {
     AgentProtocolModeFromJSON,
@@ -164,11 +164,11 @@ export interface AgentExecuteRequest {
      */
     task: string;
     /**
-     * Per-category tool access flags.
-     * @type {AgentToolAccessRequest}
+     * Builtin tools available to the agent.
+     * @type {Array<AgentBuiltinToolRequest>}
      * @memberof AgentExecuteRequest
      */
-    toolAccess?: AgentToolAccessRequest;
+    toolAccess?: Array<AgentBuiltinToolRequest>;
     /**
      * When true, use JSON Schema tool definitions (function
      * calling) instead of XML-based tool parsing. This is
@@ -217,7 +217,7 @@ export function AgentExecuteRequestFromJSONTyped(json: any, ignoreDiscriminator:
         'mcpHubConfigJson': json['mcp_hub_config_json'] == null ? undefined : json['mcp_hub_config_json'],
         'model': json['model'] == null ? undefined : json['model'],
         'task': json['task'],
-        'toolAccess': json['tool_access'] == null ? undefined : AgentToolAccessRequestFromJSON(json['tool_access']),
+        'toolAccess': json['tool_access'] == null ? undefined : ((json['tool_access'] as Array<any>).map(AgentBuiltinToolRequestFromJSON)),
         'useJsonToolCalls': json['use_json_tool_calls'] == null ? undefined : json['use_json_tool_calls'],
         'userCustomInstructions': json['user_custom_instructions'] == null ? undefined : json['user_custom_instructions'],
     };
@@ -245,7 +245,7 @@ export function AgentExecuteRequestToJSONTyped(value?: AgentExecuteRequest | nul
         'mcp_hub_config_json': value['mcpHubConfigJson'],
         'model': value['model'],
         'task': value['task'],
-        'tool_access': AgentToolAccessRequestToJSON(value['toolAccess']),
+        'tool_access': value['toolAccess'] == null ? undefined : ((value['toolAccess'] as Array<any>).map(AgentBuiltinToolRequestToJSON)),
         'use_json_tool_calls': value['useJsonToolCalls'],
         'user_custom_instructions': value['userCustomInstructions'],
     };
