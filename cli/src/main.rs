@@ -13,6 +13,7 @@ mod mcp_cli;
 mod ops_cli;
 mod org_cli;
 mod resolve;
+mod slack_cli;
 mod switch_cli;
 mod tts_cli;
 
@@ -109,6 +110,43 @@ mod tests {
             _ => panic!("expected ops slack send command"),
         }
     }
+
+    #[test]
+    fn parses_top_level_slack_send_command() {
+        let cli = Cli::try_parse_from([
+            "tachyon",
+            "slack",
+            "send",
+            "--tenant-id",
+            "tn_test",
+            "--integration",
+            "int_slack",
+            "--channel",
+            "#tachyon-test",
+            "--message",
+            "hello",
+        ])
+        .unwrap();
+
+        assert_eq!(cli.tenant_id, "tn_test");
+        match cli.command {
+            Commands::Slack(slack_cli::SlackArgs {
+                command:
+                    slack_cli::SlackCommand::Send {
+                        integration,
+                        channel,
+                        message,
+                        json,
+                    },
+            }) => {
+                assert_eq!(integration, "int_slack");
+                assert_eq!(channel, "#tachyon-test");
+                assert_eq!(message, "hello");
+                assert!(!json);
+            }
+            _ => panic!("expected slack send command"),
+        }
+    }
 }
 
 #[derive(Subcommand)]
@@ -133,6 +171,8 @@ enum Commands {
     Ops(ops_cli::OpsArgs),
     /// Generate AI images from text prompts
     Image(image_cli::ImageArgs),
+    /// Send Slack messages through connected integrations
+    Slack(slack_cli::SlackArgs),
     /// Convert text to speech using AI TTS models
     Tts(tts_cli::TtsArgs),
     /// Run as an MCP (Model Context Protocol) server (stdio or HTTP)
@@ -366,6 +406,13 @@ async fn run() -> Result<()> {
             let config = build_config(&cli, &active).await;
             let tenant_id = resolve::resolve_tenant_id(&config, tenant_arg, &active).await?;
             image_cli::run(args, &config, &tenant_id).await
+        }
+        Commands::Slack(args) => {
+            let project_config = config::loader::load(cli.config.as_deref())?;
+            let tenant_arg = tenant_arg(&cli, project_config.as_ref());
+            let config = build_config(&cli, &active).await;
+            let tenant_id = resolve::resolve_tenant_id(&config, tenant_arg, &active).await?;
+            slack_cli::run(args, &config, &tenant_id).await
         }
         Commands::Tts(args) => {
             let project_config = config::loader::load(cli.config.as_deref())?;
