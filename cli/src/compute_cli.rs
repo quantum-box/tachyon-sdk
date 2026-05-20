@@ -1,6 +1,7 @@
 use anyhow::{anyhow, Result};
 use chrono::{DateTime, TimeZone, Utc};
 use clap::{Args, Subcommand, ValueEnum};
+use dialoguer::{theme::ColorfulTheme, Password};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::{BTreeSet, HashMap};
@@ -20,6 +21,12 @@ use crate::resolve;
 pub struct ComputeArgs {
     #[command(subcommand)]
     pub command: ComputeCommand,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct EnvArgs {
+    #[command(subcommand)]
+    pub command: EnvCommand,
 }
 
 #[derive(Debug, Clone, Subcommand)]
@@ -470,9 +477,18 @@ pub enum EnvCommand {
     /// Set environment variables for an app
     Set {
         /// App ID or name
-        app_id: String,
+        app_id: Option<String>,
+        /// App ID or name (alternative to positional app_id)
+        #[arg(long)]
+        app: Option<String>,
+        /// Register this key as a Cloudflare Pages secret
+        #[arg(long)]
+        secret: Option<String>,
+        /// Secret target environment
+        #[arg(long, default_value = "all")]
+        target: String,
         /// Variables in KEY=VALUE format
-        #[arg(required = true, num_args = 1..)]
+        #[arg(num_args = 0..)]
         vars: Vec<String>,
     },
     /// Delete an environment variable
@@ -731,6 +747,19 @@ struct EnvVarResponse {
 #[derive(Debug, Serialize)]
 struct SetEnvVarsRequest {
     env_vars: Vec<SetEnvVarEntry>,
+}
+
+#[derive(Serialize)]
+struct SetAppSecretRequest {
+    key: String,
+    value: String,
+    target: String,
+}
+
+#[derive(Deserialize)]
+struct SetAppSecretResponse {
+    key: String,
+    target: String,
 }
 
 #[derive(Debug, Serialize, Clone)]
@@ -1883,6 +1912,12 @@ async fn run_env_list(api: &ApiClient, app_id: &str, json: bool) -> Result<()> {
 }
 
 async fn run_env_set(api: &ApiClient, app_id: &str, vars: &[String]) -> Result<()> {
+    if vars.is_empty() {
+        return Err(anyhow!(
+            "at least one KEY=VALUE pair is required unless --secret is used"
+        ));
+    }
+
     let entries: Vec<SetEnvVarEntry> = vars
         .iter()
         .map(|v| {
@@ -1905,6 +1940,202 @@ async fn run_env_set(api: &ApiClient, app_id: &str, vars: &[String]) -> Result<(
         .await?;
     println!("Set {} environment variable(s).", resp.env_vars.len());
     Ok(())
+}
+
+async fn run_env_set_secret(
+    api: &ApiClient,
+    app_id: &str,
+    key: &str,
+    target: &str,
+    config_flag: Option<&Path>,
+) -> Result<()> {
+    validate_secret_key(key)?;
+    validate_secret_target(target)?;
+    let value = read_secret_value(key)?;
+    let req = SetAppSecretRequest {
+        key: key.to_string(),
+        value,
+        target: target.to_string(),
+    };
+    let resp: SetAppSecretResponse = api
+        .post(&format!("/v1/apps/{app_id}/secrets"), &req)
+        .await?;
+
+    update_manifest_secret_ref(config_flag, &resp.key, &resp.target)?;
+    println!("Set secret {} for target {}.", resp.key, resp.target);
+    println!("Updated tachyon.yml with valueFrom.secret: {}", resp.key);
+    Ok(())
+}
+
+fn validate_secret_key(key: &str) -> Result<()> {
+    if key.is_empty() {
+        return Err(anyhow!("secret key must not be empty"));
+    }
+    if !key
+        .chars()
+        .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_')
+    {
+        return Err(anyhow!(
+            "secret key must contain only uppercase ASCII letters, digits, and underscores"
+        ));
+    }
+    Ok(())
+}
+
+fn validate_secret_target(target: &str) -> Result<()> {
+    match target {
+        "production" | "preview" | "all" => Ok(()),
+        _ => Err(anyhow!(
+            "invalid target '{target}' (expected production, preview, or all)"
+        )),
+    }
+}
+
+fn read_secret_value(key: &str) -> Result<String> {
+    if let Ok(value) = std::env::var("TACHYON_SECRET_VALUE") {
+        if value.is_empty() {
+            return Err(anyhow!("TACHYON_SECRET_VALUE must not be empty"));
+        }
+        return Ok(value);
+    }
+
+    let value = Password::with_theme(&ColorfulTheme::default())
+        .with_prompt(format!("Enter value for {key}"))
+        .allow_empty_password(false)
+        .interact()?;
+    Ok(value)
+}
+
+fn update_manifest_secret_ref(config_flag: Option<&Path>, key: &str, target: &str) -> Result<()> {
+    let loaded = crate::config::loader::load_with_path(config_flag)?
+        .ok_or_else(|| anyhow!("tachyon.yml not found. Run `tachyon init` first."))?;
+    upsert_manifest_secret_ref(&loaded.path, key, target)
+}
+
+fn upsert_manifest_secret_ref(path: &Path, key: &str, target: &str) -> Result<()> {
+    let raw = std::fs::read_to_string(path)?;
+    let mut doc: serde_yaml::Value = serde_yaml::from_str(&raw)?;
+    let kind = doc
+        .get("kind")
+        .and_then(serde_yaml::Value::as_str)
+        .unwrap_or("CloudApp");
+
+    match kind {
+        "CloudApp" => {
+            let spec = ensure_mapping_child(&mut doc, "spec")?;
+            upsert_env_var_ref(spec, key, target)?;
+        }
+        "CloudApps" => {
+            let app_name = doc
+                .get("metadata")
+                .and_then(|m| m.get("name"))
+                .and_then(serde_yaml::Value::as_str)
+                .map(ToString::to_string);
+            let apps = doc
+                .get_mut("spec")
+                .and_then(|s| s.get_mut("apps"))
+                .and_then(serde_yaml::Value::as_sequence_mut)
+                .ok_or_else(|| anyhow!("CloudApps manifest is missing spec.apps"))?;
+            let entry_index = app_name
+                .as_deref()
+                .and_then(|name| {
+                    apps.iter().position(|app| {
+                        app.get("name").and_then(serde_yaml::Value::as_str) == Some(name)
+                    })
+                })
+                .unwrap_or(0);
+            let entry = apps
+                .get_mut(entry_index)
+                .ok_or_else(|| anyhow!("CloudApps manifest has no apps"))?;
+            let mapping = entry
+                .as_mapping_mut()
+                .ok_or_else(|| anyhow!("CloudApps spec.apps entry must be an object"))?;
+            upsert_env_var_ref(mapping, key, target)?;
+        }
+        other => return Err(anyhow!("unsupported manifest kind: {other}")),
+    }
+
+    let next = serde_yaml::to_string(&doc)?;
+    std::fs::write(path, next)?;
+    Ok(())
+}
+
+fn ensure_mapping_child<'a>(
+    value: &'a mut serde_yaml::Value,
+    key: &str,
+) -> Result<&'a mut serde_yaml::Mapping> {
+    let mapping = value
+        .as_mapping_mut()
+        .ok_or_else(|| anyhow!("manifest root must be an object"))?;
+    let key_value = serde_yaml::Value::String(key.to_string());
+    if !mapping.contains_key(&key_value) {
+        mapping.insert(
+            key_value.clone(),
+            serde_yaml::Value::Mapping(serde_yaml::Mapping::new()),
+        );
+    }
+    mapping
+        .get_mut(&key_value)
+        .and_then(serde_yaml::Value::as_mapping_mut)
+        .ok_or_else(|| anyhow!("{key} must be an object"))
+}
+
+fn upsert_env_var_ref(spec: &mut serde_yaml::Mapping, key: &str, target: &str) -> Result<()> {
+    let env_key = serde_yaml::Value::String("envVars".to_string());
+    if !spec.contains_key(&env_key) {
+        spec.insert(env_key.clone(), serde_yaml::Value::Sequence(Vec::new()));
+    }
+    let env_vars = spec
+        .get_mut(&env_key)
+        .and_then(serde_yaml::Value::as_sequence_mut)
+        .ok_or_else(|| anyhow!("spec.envVars must be an array"))?;
+
+    if let Some(existing) = env_vars
+        .iter_mut()
+        .find(|env| env.get("name").and_then(serde_yaml::Value::as_str) == Some(key))
+    {
+        let mapping = existing
+            .as_mapping_mut()
+            .ok_or_else(|| anyhow!("spec.envVars entries must be objects"))?;
+        set_secret_env_mapping(mapping, key, target);
+        return Ok(());
+    }
+
+    let mut mapping = serde_yaml::Mapping::new();
+    set_secret_env_mapping(&mut mapping, key, target);
+    env_vars.push(serde_yaml::Value::Mapping(mapping));
+    Ok(())
+}
+
+fn set_secret_env_mapping(mapping: &mut serde_yaml::Mapping, key: &str, target: &str) {
+    mapping.insert(yaml_key("name"), serde_yaml::Value::String(key.to_string()));
+    mapping.insert(
+        yaml_key("type"),
+        serde_yaml::Value::String("credential".to_string()),
+    );
+    mapping.remove(yaml_key("value"));
+    if target == "all" {
+        mapping.remove(yaml_key("target"));
+    } else {
+        mapping.insert(
+            yaml_key("target"),
+            serde_yaml::Value::String(target.to_string()),
+        );
+    }
+
+    let mut value_from = serde_yaml::Mapping::new();
+    value_from.insert(
+        yaml_key("secret"),
+        serde_yaml::Value::String(key.to_string()),
+    );
+    mapping.insert(
+        yaml_key("valueFrom"),
+        serde_yaml::Value::Mapping(value_from),
+    );
+}
+
+fn yaml_key(key: &str) -> serde_yaml::Value {
+    serde_yaml::Value::String(key.to_string())
 }
 
 async fn run_env_delete(api: &ApiClient, app_id: &str, env_id: &str) -> Result<()> {
@@ -2040,8 +2271,14 @@ fn app_id_or_default<'a>(
     app_id: &'a Option<String>,
     project_config: Option<&'a ProjectConfig>,
 ) -> Result<&'a str> {
+    app_id_or_default_value(app_id.as_deref(), project_config)
+}
+
+fn app_id_or_default_value<'a>(
+    app_id: Option<&'a str>,
+    project_config: Option<&'a ProjectConfig>,
+) -> Result<&'a str> {
     app_id
-        .as_deref()
         .or_else(|| {
             project_config
                 .and_then(|config| config.metadata.name.as_deref())
@@ -2055,6 +2292,7 @@ pub async fn run(
     config: &Configuration,
     tenant_id: &str,
     project_config: Option<&ProjectConfig>,
+    config_flag: Option<&Path>,
 ) -> Result<()> {
     // Local-only commands (no API call needed)
     match &args.command {
@@ -2202,9 +2440,25 @@ pub async fn run(
                 let id = resolve::resolve_app_id(&api, app_id).await?;
                 run_env_list(&api, &id, *json).await
             }
-            EnvCommand::Set { app_id, vars } => {
+            EnvCommand::Set {
+                app_id,
+                app,
+                secret,
+                target,
+                vars,
+            } => {
+                let selected_app = app.as_ref().or(app_id.as_ref());
+                let app_id =
+                    app_id_or_default_value(selected_app.map(String::as_str), project_config)?;
                 let id = resolve::resolve_app_id(&api, app_id).await?;
-                run_env_set(&api, &id, vars).await
+                if let Some(key) = secret {
+                    if !vars.is_empty() {
+                        return Err(anyhow!("KEY=VALUE arguments cannot be used with --secret"));
+                    }
+                    run_env_set_secret(&api, &id, key, target, config_flag).await
+                } else {
+                    run_env_set(&api, &id, vars).await
+                }
             }
             EnvCommand::Delete { app_id, env_id } => {
                 let id = resolve::resolve_app_id(&api, app_id).await?;
@@ -2275,4 +2529,26 @@ pub async fn run(
             .await
         }
     }
+}
+
+pub async fn run_env(
+    args: &EnvArgs,
+    config: &Configuration,
+    tenant_id: &str,
+    project_config: Option<&ProjectConfig>,
+    config_flag: Option<&Path>,
+) -> Result<()> {
+    let compute_args = ComputeArgs {
+        command: ComputeCommand::Env {
+            command: args.command.clone(),
+        },
+    };
+    run(
+        &compute_args,
+        config,
+        tenant_id,
+        project_config,
+        config_flag,
+    )
+    .await
 }
