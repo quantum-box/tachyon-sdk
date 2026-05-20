@@ -55,6 +55,38 @@ describe("CartOperations", () => {
     cart = new CartOperations(mockClient as any);
   });
 
+  describe("get", () => {
+    it("should return a cart by id", async () => {
+      const activeCart = makeCart();
+      mockClient.query.mockResolvedValueOnce({ cart: activeCart });
+
+      const result = await cart.get("cart-1");
+
+      expect(result).toEqual(activeCart);
+      expect(mockClient.query).toHaveBeenCalledWith(
+        expect.stringContaining("cart"),
+        { cartId: "cart-1" },
+      );
+    });
+
+    it("should propagate GraphQLClientError for a not-found cart", async () => {
+      const err = new GraphQLClientError("GraphQL query failed", [
+        { message: "Cart not found" },
+      ]);
+      mockClient.query.mockRejectedValueOnce(err);
+
+      await expect(cart.get("does-not-exist")).rejects.toBeInstanceOf(
+        GraphQLClientError,
+      );
+    });
+
+    it("should propagate a generic network Error", async () => {
+      mockClient.query.mockRejectedValueOnce(new Error("network failure"));
+
+      await expect(cart.get("cart-1")).rejects.toThrow("network failure");
+    });
+  });
+
   describe("create", () => {
     it("should create a guest cart with sessionId", async () => {
       const guestCart = makeCart({ sessionId: "session-guest", userId: null });
@@ -234,6 +266,64 @@ describe("CartOperations", () => {
             cartId: "cart-1",
             fulfillmentMethod: "delivery",
             paymentMethod: "online",
+          }),
+        },
+      );
+    });
+
+    it("should checkout pickup x online and return an order", async () => {
+      const order = makeOrder({
+        fulfillmentMethod: "pickup",
+        paymentMethod: "online",
+      });
+      mockClient.mutate.mockResolvedValueOnce({ checkout: order });
+
+      const result = await cart.checkout({
+        cartId: "cart-1",
+        fulfillmentMethod: "pickup",
+        paymentMethod: "online",
+      });
+
+      expect(result).toEqual(order);
+      expect(mockClient.mutate).toHaveBeenCalledWith(
+        expect.stringContaining("checkout"),
+        {
+          input: {
+            cartId: "cart-1",
+            fulfillmentMethod: "pickup",
+            paymentMethod: "online",
+          },
+        },
+      );
+    });
+
+    it("should checkout delivery x in_store and return an order", async () => {
+      const order = makeOrder({
+        fulfillmentMethod: "delivery",
+        paymentMethod: "in_store",
+        shippingName: "Buyer",
+        shippingAddress: "1-1-1 Shibuya",
+        shippingPhone: "080-0000-0000",
+      });
+      mockClient.mutate.mockResolvedValueOnce({ checkout: order });
+
+      const result = await cart.checkout({
+        cartId: "cart-1",
+        fulfillmentMethod: "delivery",
+        paymentMethod: "in_store",
+        shippingName: "Buyer",
+        shippingAddress: "1-1-1 Shibuya",
+        shippingPhone: "080-0000-0000",
+      });
+
+      expect(result).toEqual(order);
+      expect(mockClient.mutate).toHaveBeenCalledWith(
+        expect.any(String),
+        {
+          input: expect.objectContaining({
+            cartId: "cart-1",
+            fulfillmentMethod: "delivery",
+            paymentMethod: "in_store",
           }),
         },
       );
