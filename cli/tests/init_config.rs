@@ -18,7 +18,8 @@ fn isolated_command(home: &Path) -> Command {
         .env("XDG_CONFIG_HOME", home.join(".config"))
         .env_remove("TACHYON_CONFIG")
         .env_remove("TACHYON_TENANT_ID")
-        .env_remove("TACHYON_PROFILE");
+        .env_remove("TACHYON_PROFILE")
+        .env_remove("TACHYON_SECRET_VALUE");
     cmd
 }
 
@@ -80,6 +81,41 @@ fn start_apply_server() -> (String, mpsc::Receiver<String>, thread::JoinHandle<(
                 r#"{"env_vars":[{"id":"env_01testtesttesttesttesttest","key":"ENVIRONMENT","value":"sandbox","target":"all","is_secret":false}]}"#
             } else if req.starts_with("GET /v1/compute/apps/app_created/env ") {
                 r#"{"env_vars":[{"id":"env_secret","key":"DATABASE_URL","value":"********","target":"all","is_secret":true}]}"#
+            } else {
+                r#"{"error":"unexpected request"}"#
+            };
+            let status = if body.contains("unexpected request") {
+                "HTTP/1.1 500 Internal Server Error"
+            } else {
+                "HTTP/1.1 200 OK"
+            };
+            let response = format!(
+                "{status}\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            stream.write_all(response.as_bytes()).unwrap();
+        }
+    });
+    (url, rx, handle)
+}
+
+fn start_secret_server() -> (String, mpsc::Receiver<String>, thread::JoinHandle<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    let (tx, rx) = mpsc::channel();
+    let handle = thread::spawn(move || {
+        for idx in 0..2 {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut buf = [0_u8; 8192];
+            let n = stream.read(&mut buf).unwrap();
+            let req = String::from_utf8_lossy(&buf[..n]).to_string();
+            tx.send(req.clone()).unwrap();
+
+            let body = if idx == 0 {
+                r#"{"apps":[{"id":"app_configured","name":"configured-app"}]}"#
+            } else if req.starts_with("POST /v1/apps/app_configured/secrets ") {
+                r#"{"key":"RESEND_API_KEY","target":"production"}"#
             } else {
                 r#"{"error":"unexpected request"}"#
             };
@@ -305,4 +341,57 @@ spec:
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("CREATED bakuure-api (app_created)"));
     assert!(stdout.contains("Environment: sandbox"));
+}
+
+#[test]
+fn env_set_secret_posts_value_and_updates_manifest_reference_only() {
+    let tmp = TempDir::new().unwrap();
+    write_project_config(
+        tmp.path(),
+        "configured-app",
+        "tn_01hjryxysgey07h5jz5wagqj0m",
+    );
+    let (api_url, rx, handle) = start_secret_server();
+
+    let mut cmd = isolated_command(tmp.path());
+    let output = cmd
+        .current_dir(tmp.path())
+        .env("TACHYON_API_URL", api_url)
+        .env("TACHYON_API_KEY", "x")
+        .env("TACHYON_SECRET_VALUE", "x")
+        .args([
+            "env",
+            "set",
+            "--secret",
+            "RESEND_API_KEY",
+            "--target",
+            "production",
+        ])
+        .output()
+        .expect("run env set secret");
+    assert!(
+        output.status.success(),
+        "env set secret failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let _list_req = rx.recv().unwrap();
+    let post_req = rx.recv().unwrap();
+    handle.join().unwrap();
+
+    assert!(post_req.starts_with("POST /v1/apps/app_configured/secrets "));
+    assert!(post_req.contains(r#""key":"RESEND_API_KEY""#));
+    assert!(post_req.contains(r#""value":"x""#));
+    assert!(post_req.contains(r#""target":"production""#));
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("Set secret RESEND_API_KEY"));
+
+    let yaml = fs::read_to_string(tmp.path().join("tachyon.yml")).unwrap();
+    assert!(yaml.contains("name: RESEND_API_KEY"));
+    assert!(yaml.contains("type: credential"));
+    assert!(yaml.contains("target: production"));
+    assert!(yaml.contains("secret: RESEND_API_KEY"));
+    assert!(!yaml.contains("\n  value:"));
 }
