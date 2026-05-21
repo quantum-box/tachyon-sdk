@@ -135,6 +135,47 @@ fn start_secret_server() -> (String, mpsc::Receiver<String>, thread::JoinHandle<
     (url, rx, handle)
 }
 
+fn start_env_mutation_server() -> (String, mpsc::Receiver<String>, thread::JoinHandle<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    let (tx, rx) = mpsc::channel();
+    let handle = thread::spawn(move || {
+        for idx in 0..4 {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut buf = [0_u8; 8192];
+            let n = stream.read(&mut buf).unwrap();
+            let req = String::from_utf8_lossy(&buf[..n]).to_string();
+            tx.send(req.clone()).unwrap();
+
+            let body = if idx == 0 || idx == 2 {
+                r#"{"apps":[{"id":"app_configured","name":"configured-app"}]}"#
+            } else if req.starts_with("POST /v1/apps/app_configured/env ") {
+                r#"{"env_vars":[{"id":"env_01testtesttesttesttesttest","key":"PLT1510_PREVIEW","value":"plain","target":"preview","branch":"feature/plt-1510","is_secret":false}]}"#
+            } else if req
+                .starts_with("DELETE /v1/apps/app_configured/env/PLT1510_PREVIEW?target=preview ")
+            {
+                ""
+            } else {
+                r#"{"error":"unexpected request"}"#
+            };
+            let status = if body.contains("unexpected request") {
+                "HTTP/1.1 500 Internal Server Error"
+            } else if body.is_empty() {
+                "HTTP/1.1 204 No Content"
+            } else {
+                "HTTP/1.1 200 OK"
+            };
+            let response = format!(
+                "{status}\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            stream.write_all(response.as_bytes()).unwrap();
+        }
+    });
+    (url, rx, handle)
+}
+
 #[test]
 fn init_non_interactive_creates_and_force_overwrites_tachyon_yml() {
     let tmp = TempDir::new().unwrap();
@@ -394,4 +435,71 @@ fn env_set_secret_posts_value_and_updates_manifest_reference_only() {
     assert!(yaml.contains("target: production"));
     assert!(yaml.contains("secret: RESEND_API_KEY"));
     assert!(!yaml.contains("\n  value:"));
+}
+
+#[test]
+fn env_set_preview_plain_and_unset_key_use_targeted_paths() {
+    let tmp = TempDir::new().unwrap();
+    write_project_config(
+        tmp.path(),
+        "configured-app",
+        "tn_01hjryxysgey07h5jz5wagqj0m",
+    );
+    let (api_url, rx, handle) = start_env_mutation_server();
+
+    let mut set_cmd = isolated_command(tmp.path());
+    let set_output = set_cmd
+        .current_dir(tmp.path())
+        .env("TACHYON_API_URL", api_url.clone())
+        .env("TACHYON_API_KEY", "x")
+        .args([
+            "env",
+            "set",
+            "--target",
+            "preview",
+            "--branch",
+            "feature/plt-1510",
+            "PLT1510_PREVIEW=plain",
+        ])
+        .output()
+        .expect("run env set preview");
+    assert!(
+        set_output.status.success(),
+        "env set failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&set_output.stdout),
+        String::from_utf8_lossy(&set_output.stderr)
+    );
+
+    let mut unset_cmd = isolated_command(tmp.path());
+    let unset_output = unset_cmd
+        .current_dir(tmp.path())
+        .env("TACHYON_API_URL", api_url)
+        .env("TACHYON_API_KEY", "x")
+        .args(["env", "unset", "--target", "preview", "PLT1510_PREVIEW"])
+        .output()
+        .expect("run env unset preview");
+    assert!(
+        unset_output.status.success(),
+        "env unset failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&unset_output.stdout),
+        String::from_utf8_lossy(&unset_output.stderr)
+    );
+
+    let list_before_set = rx.recv().unwrap();
+    let put_req = rx.recv().unwrap();
+    let list_before_unset = rx.recv().unwrap();
+    let delete_req = rx.recv().unwrap();
+    handle.join().unwrap();
+
+    assert!(list_before_set.starts_with("GET /v1/compute/apps "));
+    assert!(put_req.starts_with("POST /v1/apps/app_configured/env "));
+    assert!(put_req.contains(r#""key":"PLT1510_PREVIEW""#));
+    assert!(put_req.contains(r#""target":"preview""#));
+    assert!(put_req.contains(r#""branch":"feature/plt-1510""#));
+    assert!(list_before_unset.starts_with("GET /v1/compute/apps "));
+    assert!(
+        delete_req
+            .starts_with("DELETE /v1/apps/app_configured/env/PLT1510_PREVIEW?target=preview "),
+        "delete request was {delete_req}"
+    );
 }

@@ -484,12 +484,27 @@ pub enum EnvCommand {
         /// Register this key as a Cloudflare Pages secret
         #[arg(long)]
         secret: Option<String>,
-        /// Secret target environment
+        /// Target environment
         #[arg(long, default_value = "all")]
         target: String,
+        /// Git branch to scope plain variables to
+        #[arg(long)]
+        branch: Option<String>,
         /// Variables in KEY=VALUE format
         #[arg(num_args = 0..)]
         vars: Vec<String>,
+    },
+    /// Delete environment variables by key
+    Unset {
+        /// App ID or name (alternative to positional app_id)
+        #[arg(long)]
+        app: Option<String>,
+        /// Target environment to delete
+        #[arg(long)]
+        target: Option<String>,
+        /// KEY, or APP KEY when no project config is available
+        #[arg(num_args = 1..=2)]
+        args: Vec<String>,
     },
     /// Delete an environment variable
     Delete {
@@ -740,6 +755,8 @@ struct EnvVarResponse {
     value: Option<String>,
     #[serde(default)]
     target: Option<String>,
+    #[serde(default)]
+    branch: Option<String>,
     #[serde(default)]
     is_secret: Option<bool>,
 }
@@ -1883,7 +1900,7 @@ async fn run_deployments_rollback(
 }
 
 async fn run_env_list(api: &ApiClient, app_id: &str, json: bool) -> Result<()> {
-    let resp: ListEnvVarsResponse = api.get(&format!("/v1/compute/apps/{app_id}/env")).await?;
+    let resp: ListEnvVarsResponse = api.get(&format!("/v1/apps/{app_id}/env")).await?;
     if json {
         return print_json(&resp.env_vars);
     }
@@ -1891,19 +1908,27 @@ async fn run_env_list(api: &ApiClient, app_id: &str, json: bool) -> Result<()> {
         println!("No environment variables set for app {app_id}");
         return Ok(());
     }
-    println!("{:<28}  {:<24}  {:<8}  VALUE", "ID", "KEY", "SECRET");
-    println!("{:-<28}  {:-<24}  {:-<8}  {:-<40}", "", "", "", "");
+    println!(
+        "{:<28}  {:<24}  {:<11}  {:<16}  {:<8}  VALUE",
+        "ID", "KEY", "TARGET", "BRANCH", "SECRET"
+    );
+    println!(
+        "{:-<28}  {:-<24}  {:-<11}  {:-<16}  {:-<8}  {:-<40}",
+        "", "", "", "", "", ""
+    );
     for var in &resp.env_vars {
         let is_secret = var.is_secret.unwrap_or(false);
         let value = if is_secret {
-            "********".to_string()
+            "****".to_string()
         } else {
             var.value.as_deref().unwrap_or("-").to_string()
         };
         println!(
-            "{:<28}  {:<24}  {:<8}  {}",
+            "{:<28}  {:<24}  {:<11}  {:<16}  {:<8}  {}",
             var.id,
             var.key,
+            var.target.as_deref().unwrap_or("all"),
+            var.branch.as_deref().unwrap_or("-"),
             if is_secret { "yes" } else { "no" },
             value,
         );
@@ -1911,12 +1936,19 @@ async fn run_env_list(api: &ApiClient, app_id: &str, json: bool) -> Result<()> {
     Ok(())
 }
 
-async fn run_env_set(api: &ApiClient, app_id: &str, vars: &[String]) -> Result<()> {
+async fn run_env_set(
+    api: &ApiClient,
+    app_id: &str,
+    vars: &[String],
+    target: &str,
+    branch: Option<&str>,
+) -> Result<()> {
     if vars.is_empty() {
         return Err(anyhow!(
             "at least one KEY=VALUE pair is required unless --secret is used"
         ));
     }
+    validate_secret_target(target)?;
 
     let entries: Vec<SetEnvVarEntry> = vars
         .iter()
@@ -1927,18 +1959,34 @@ async fn run_env_set(api: &ApiClient, app_id: &str, vars: &[String]) -> Result<(
             Ok(SetEnvVarEntry {
                 key: key.to_string(),
                 value: value.to_string(),
-                target: None,
-                branch: None,
+                target: Some(target.to_string()),
+                branch: branch.filter(|b| !b.is_empty()).map(ToString::to_string),
                 is_secret: None,
             })
         })
         .collect::<Result<Vec<_>>>()?;
 
     let req = SetEnvVarsRequest { env_vars: entries };
-    let resp: ListEnvVarsResponse = api
-        .put(&format!("/v1/compute/apps/{app_id}/env"), &req)
-        .await?;
+    let resp: ListEnvVarsResponse = api.post(&format!("/v1/apps/{app_id}/env"), &req).await?;
     println!("Set {} environment variable(s).", resp.env_vars.len());
+    Ok(())
+}
+
+async fn run_env_unset_key(
+    api: &ApiClient,
+    app_id: &str,
+    key: &str,
+    target: Option<&str>,
+) -> Result<()> {
+    if let Some(target) = target {
+        validate_secret_target(target)?;
+    }
+    let suffix = target
+        .map(|target| format!("?target={target}"))
+        .unwrap_or_default();
+    api.delete(&format!("/v1/apps/{app_id}/env/{key}{suffix}"))
+        .await?;
+    println!("Environment variable {key} deleted.");
     Ok(())
 }
 
@@ -2139,7 +2187,7 @@ fn yaml_key(key: &str) -> serde_yaml::Value {
 }
 
 async fn run_env_delete(api: &ApiClient, app_id: &str, env_id: &str) -> Result<()> {
-    api.delete(&format!("/v1/compute/apps/{app_id}/env/{env_id}"))
+    api.delete(&format!("/v1/apps/{app_id}/env/{env_id}"))
         .await?;
     println!("Environment variable {env_id} deleted.");
     Ok(())
@@ -2445,9 +2493,19 @@ pub async fn run(
                 app,
                 secret,
                 target,
+                branch,
                 vars,
             } => {
-                let selected_app = app.as_ref().or(app_id.as_ref());
+                let mut vars = vars.clone();
+                let positional_app = app_id.as_ref().and_then(|value| {
+                    if value.contains('=') {
+                        vars.insert(0, value.clone());
+                        None
+                    } else {
+                        Some(value)
+                    }
+                });
+                let selected_app = app.as_ref().or(positional_app);
                 let app_id =
                     app_id_or_default_value(selected_app.map(String::as_str), project_config)?;
                 let id = resolve::resolve_app_id(&api, app_id).await?;
@@ -2457,8 +2515,20 @@ pub async fn run(
                     }
                     run_env_set_secret(&api, &id, key, target, config_flag).await
                 } else {
-                    run_env_set(&api, &id, vars).await
+                    run_env_set(&api, &id, &vars, target, branch.as_deref()).await
                 }
+            }
+            EnvCommand::Unset { app, target, args } => {
+                let (positional_app, key) = match args.as_slice() {
+                    [key] => (None, key),
+                    [app_id, key] => (Some(app_id), key),
+                    _ => unreachable!("clap enforces one or two unset args"),
+                };
+                let selected_app = app.as_ref().or(positional_app);
+                let app_id =
+                    app_id_or_default_value(selected_app.map(String::as_str), project_config)?;
+                let id = resolve::resolve_app_id(&api, app_id).await?;
+                run_env_unset_key(&api, &id, key, target.as_deref()).await
             }
             EnvCommand::Delete { app_id, env_id } => {
                 let id = resolve::resolve_app_id(&api, app_id).await?;
