@@ -1,0 +1,19 @@
+name: Release Tag Prefix Lint
+
+on:
+  push:
+    tags:
+      - '*'
+
+jobs:
+  lint:
+    name: Lint pushed release tag
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate release tag prefix config
+        run: node scripts/lint-release-tag-prefix.mjs --check-config
+
+      - name: Validate pushed tag
+        run: node scripts/lint-release-tag-prefix.mjs --tag "$GITHUB_REF_NAME"

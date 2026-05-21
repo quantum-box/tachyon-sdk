@@ -7,6 +7,19 @@ on:
   pull_request:
 
 jobs:
+  release-tag-prefix-lint:
+    name: Release tag prefix lint
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate release tag prefix config
+        run: node scripts/lint-release-tag-prefix.mjs --check-config
+
+      - name: Test release tag prefix lint
+        run: node scripts/test-release-tag-prefix-lint.mjs
+
   check:
     name: Check CLI
     runs-on: ubuntu-latest
