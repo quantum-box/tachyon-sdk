@@ -1,0 +1,16 @@
+{
+  "releaseTags": [
+    {
+      "name": "tachyon-cli",
+      "packageName": "tachyon",
+      "tagPrefix": "tachyon-cli-v",
+      "versionFile": "cli/Cargo.toml",
+      "selfUpdateSource": "cli/src/install_cli.rs",
+      "selfUpdateConstant": "TAG_PREFIX",
+      "releaseWorkflows": [
+        ".github/workflows/release-cli.yml",
+        ".github/workflows/auto-release-cli.yml"
+      ]
+    }
+  ]
+}
