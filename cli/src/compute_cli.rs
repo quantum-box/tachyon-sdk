@@ -2497,7 +2497,16 @@ pub async fn run(
                 branch,
                 vars,
             } => {
-                let selected_app = app.as_ref().or(app_id.as_ref());
+                let mut vars = vars.clone();
+                let positional_app = app_id.as_ref().and_then(|value| {
+                    if value.contains('=') {
+                        vars.insert(0, value.clone());
+                        None
+                    } else {
+                        Some(value)
+                    }
+                });
+                let selected_app = app.as_ref().or(positional_app);
                 let app_id =
                     app_id_or_default_value(selected_app.map(String::as_str), project_config)?;
                 let id = resolve::resolve_app_id(&api, app_id).await?;
@@ -2507,7 +2516,7 @@ pub async fn run(
                     }
                     run_env_set_secret(&api, &id, key, target, config_flag).await
                 } else {
-                    run_env_set(&api, &id, vars, target, branch.as_deref()).await
+                    run_env_set(&api, &id, &vars, target, branch.as_deref()).await
                 }
             }
             EnvCommand::Unset {
