@@ -1,4 +1,5 @@
 mod agent_cli;
+mod api_key_cli;
 mod auth;
 mod build_reproduce;
 mod client;
@@ -147,6 +148,36 @@ mod tests {
             _ => panic!("expected slack send command"),
         }
     }
+
+    #[test]
+    fn parses_top_level_api_key_create_command() {
+        let cli = Cli::try_parse_from([
+            "tachyon",
+            "api-key",
+            "create",
+            "sa_123456789012",
+            "--name",
+            "CEO key",
+            "--json",
+        ])
+        .unwrap();
+
+        match cli.command {
+            Commands::ApiKey(api_key_cli::ApiKeyArgs {
+                command:
+                    api_key_cli::ApiKeyCommand::Create {
+                        service_account,
+                        name,
+                        json,
+                    },
+            }) => {
+                assert_eq!(service_account, "sa_123456789012");
+                assert_eq!(name, "CEO key");
+                assert!(json);
+            }
+            _ => panic!("expected api-key create command"),
+        }
+    }
 }
 
 #[derive(Subcommand)]
@@ -165,6 +196,9 @@ enum Commands {
     Init(commands::init::InitArgs),
     /// Manage organizations, users, service accounts, and policies
     Org(org_cli::OrgArgs),
+    /// Manage service-account API keys
+    #[command(name = "api-key")]
+    ApiKey(api_key_cli::ApiKeyArgs),
     /// Manage agent sessions, protocols, workers, and memory
     Agent(agent_cli::AgentArgs),
     /// Infrastructure-as-Code: integrations, OAuth providers, connections
@@ -401,6 +435,13 @@ async fn run() -> Result<()> {
             let config = build_config(&cli, &active).await;
             let tenant_id = resolve::resolve_tenant_id(&config, tenant_arg, &active).await?;
             org_cli::run(args, &config, &tenant_id).await
+        }
+        Commands::ApiKey(args) => {
+            let project_config = config::loader::load(cli.config.as_deref())?;
+            let tenant_arg = tenant_arg(&cli, project_config.as_ref());
+            let config = build_config(&cli, &active).await;
+            let tenant_id = resolve::resolve_tenant_id(&config, tenant_arg, &active).await?;
+            api_key_cli::run(args, &config, &tenant_id).await
         }
         Commands::Agent(args) => {
             let project_config = config::loader::load(cli.config.as_deref())?;
