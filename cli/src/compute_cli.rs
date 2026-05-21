@@ -496,16 +496,15 @@ pub enum EnvCommand {
     },
     /// Delete environment variables by key
     Unset {
-        /// App ID or name
-        app_id: Option<String>,
         /// App ID or name (alternative to positional app_id)
         #[arg(long)]
         app: Option<String>,
         /// Target environment to delete
         #[arg(long)]
         target: Option<String>,
-        /// Variable key to delete
-        key: String,
+        /// KEY, or APP KEY when no project config is available
+        #[arg(num_args = 1..=2)]
+        args: Vec<String>,
     },
     /// Delete an environment variable
     Delete {
@@ -2519,13 +2518,13 @@ pub async fn run(
                     run_env_set(&api, &id, &vars, target, branch.as_deref()).await
                 }
             }
-            EnvCommand::Unset {
-                app_id,
-                app,
-                target,
-                key,
-            } => {
-                let selected_app = app.as_ref().or(app_id.as_ref());
+            EnvCommand::Unset { app, target, args } => {
+                let (positional_app, key) = match args.as_slice() {
+                    [key] => (None, key),
+                    [app_id, key] => (Some(app_id), key),
+                    _ => unreachable!("clap enforces one or two unset args"),
+                };
+                let selected_app = app.as_ref().or(positional_app);
                 let app_id =
                     app_id_or_default_value(selected_app.map(String::as_str), project_config)?;
                 let id = resolve::resolve_app_id(&api, app_id).await?;
