@@ -111,6 +111,26 @@ impl ApiClient {
         Ok(status.to_string())
     }
 
+    /// POST a JSON body where no response body is needed.
+    pub async fn post_no_response<B: serde::Serialize>(&self, path: &str, body: &B) -> Result<()> {
+        let url = format!("{}{}", self.base_url, path);
+        let resp = self
+            .client
+            .post(&url)
+            .json(body)
+            .send()
+            .await
+            .with_context(|| format!("POST {url}"))?;
+        let status = resp.status();
+        if !status.is_success() {
+            let body_text = resp.text().await.unwrap_or_default();
+            return Err(anyhow!(
+                "POST {path} failed: status={status}, body={body_text}"
+            ));
+        }
+        Ok(())
+    }
+
     /// PATCH a JSON body.
     pub async fn patch<B: serde::Serialize, T: DeserializeOwned>(
         &self,
