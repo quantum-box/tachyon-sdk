@@ -1,0 +1,43 @@
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Tachyon CLI
+        run: curl -fsSL https://cli.tachy.one/install.sh | sh
+
+      - name: Validate auth manifest
+        run: tachyon auth manifest validate
+        env:
+          TACHYON_API_URL: ${{ secrets.TACHYON_API_URL }}
+          TACHYON_API_KEY: ${{ secrets.TACHYON_API_KEY }}
+          TACHYON_TENANT_ID: ${{ secrets.TACHYON_TENANT_ID }}
+
+      - name: Plan auth manifest
+        run: tachyon auth manifest plan --json
+        env:
+          TACHYON_API_URL: ${{ secrets.TACHYON_API_URL }}
+          TACHYON_API_KEY: ${{ secrets.TACHYON_API_KEY }}
+          TACHYON_TENANT_ID: ${{ secrets.TACHYON_TENANT_ID }}
+
+      - name: Apply auth manifest
+        run: tachyon auth manifest apply
+        env:
+          TACHYON_API_URL: ${{ secrets.TACHYON_API_URL }}
+          TACHYON_API_KEY: ${{ secrets.TACHYON_API_KEY }}
+          TACHYON_TENANT_ID: ${{ secrets.TACHYON_TENANT_ID }}
+
+      # Alternative: use `tachyon reconcile` to handle Cloud Apps + auth manifest in one step
+      # - name: Reconcile all (Cloud Apps + auth manifest)
+      #   run: tachyon reconcile
+      #   env:
+      #     TACHYON_API_URL: ${{ secrets.TACHYON_API_URL }}
+      #     TACHYON_API_KEY: ${{ secrets.TACHYON_API_KEY }}
+      #     TACHYON_TENANT_ID: ${{ secrets.TACHYON_TENANT_ID }}

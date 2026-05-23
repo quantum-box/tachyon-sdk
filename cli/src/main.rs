@@ -12,6 +12,7 @@ mod mcp;
 mod mcp_cli;
 mod ops_cli;
 mod org_cli;
+mod reconcile_cli;
 mod resolve;
 mod switch_cli;
 mod tts_cli;
@@ -142,6 +143,8 @@ enum Commands {
     SelfUpdate,
     /// Switch the active tenant (updates saved credentials)
     Switch(switch_cli::SwitchArgs),
+    /// Reconcile Cloud Apps and auth manifest with Tachyon API
+    Reconcile(reconcile_cli::ReconcileArgs),
 }
 
 #[derive(Args)]
@@ -164,6 +167,8 @@ enum AuthCommand {
     List,
     /// Switch the active profile (must already be logged in)
     Use(UseArgs),
+    /// Manage auth manifest (custom actions and policies as code)
+    Manifest(commands::auth::manifest::ManifestArgs),
 }
 
 #[derive(Args)]
@@ -307,6 +312,14 @@ async fn run() -> Result<()> {
             }
             AuthCommand::List => auth::list_profiles_command(),
             AuthCommand::Use(use_args) => auth::use_profile(&use_args.profile),
+            AuthCommand::Manifest(manifest_args) => {
+                let project_config = config::loader::load(cli.config.as_deref())?;
+                let tenant_arg = tenant_arg(&cli, project_config.as_ref());
+                let config = build_config(&cli, &active).await;
+                let tenant_id =
+                    resolve::resolve_tenant_id(&config, tenant_arg, &active).await?;
+                commands::auth::manifest::run(manifest_args, &config, &tenant_id).await
+            }
         },
         Commands::Login(login_args) => {
             let oauth_config = build_oauth_config(&cli);
@@ -380,6 +393,13 @@ async fn run() -> Result<()> {
         Commands::Switch(args) => {
             let config = build_config(&cli, &active).await;
             switch_cli::run(args, &config, &active).await
+        }
+        Commands::Reconcile(args) => {
+            let project_config = config::loader::load(cli.config.as_deref())?;
+            let tenant_arg = tenant_arg(&cli, project_config.as_ref());
+            let config = build_config(&cli, &active).await;
+            let tenant_id = resolve::resolve_tenant_id(&config, tenant_arg, &active).await?;
+            reconcile_cli::run(args, &config, &tenant_id).await
         }
     }
 }

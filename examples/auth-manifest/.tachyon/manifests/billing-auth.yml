@@ -1,0 +1,17 @@
+actions:
+  - context: billing
+    name: ViewInvoices
+    description: View invoices
+  - context: billing
+    name: DownloadInvoice
+    description: Download a specific invoice
+    resource_pattern: trn:billing:invoice:*
+
+policies:
+  - name: BillingViewer
+    description: View-only billing access
+    actions:
+      - action: billing:ViewInvoices
+        effect: allow
+      - action: billing:DownloadInvoice
+        effect: allow

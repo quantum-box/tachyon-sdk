@@ -1,0 +1,38 @@
+apiVersion: apps.tachy.one/v1alpha
+kind: CloudApp
+metadata:
+  name: my-app
+  tenant_id: tn_01hjryxysgey07h5jz5wagqj0m
+spec:
+  framework: nextjs
+  build_command: yarn build
+  output_dir: .next
+
+# Auth manifest section: custom actions and policies managed as code.
+# Reconciled via `tachyon auth manifest plan/apply` or `tachyon reconcile`.
+auth:
+  manifest:
+    actions:
+      - context: myapp
+        name: ListItems
+        description: List all items
+      - context: myapp
+        name: CreateItem
+        description: Create a new item
+      - context: myapp
+        name: DeleteItem
+        description: Delete an item
+
+    policies:
+      - name: MyAppReadOnly
+        description: Read-only access to myapp resources
+        actions:
+          - action: myapp:ListItems
+            effect: allow
+
+      - name: MyAppFullAccess
+        description: Full access to myapp resources
+        action_patterns:
+          - context_pattern: myapp
+            name_pattern: "*"
+            effect: allow
