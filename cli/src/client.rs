@@ -3,15 +3,33 @@ use reqwest::{header, Client};
 use serde::de::DeserializeOwned;
 use tachyon_sdk::apis::configuration::Configuration;
 
+/// Non-secret context used to explain authentication failures.
+#[derive(Debug, Clone)]
+pub struct AuthDiagnostics {
+    pub profile: Option<String>,
+    pub token_kind: Option<String>,
+    pub oauth_client_configured: bool,
+}
+
 /// Shared API client that carries Tachyon auth headers.
 pub struct ApiClient {
     pub client: Client,
     pub base_url: String,
+    auth_diagnostics: Option<AuthDiagnostics>,
 }
 
 impl ApiClient {
     /// Build from SDK configuration and tenant ID.
     pub fn new(config: &Configuration, tenant_id: &str) -> Result<Self> {
+        Self::new_with_auth_diagnostics(config, tenant_id, None)
+    }
+
+    /// Build from SDK configuration and tenant ID with auth diagnostics.
+    pub fn new_with_auth_diagnostics(
+        config: &Configuration,
+        tenant_id: &str,
+        auth_diagnostics: Option<AuthDiagnostics>,
+    ) -> Result<Self> {
         let mut headers = header::HeaderMap::new();
         headers.insert("x-operator-id", header::HeaderValue::from_str(tenant_id)?);
         if let Some(token) = &config.bearer_access_token {
@@ -22,7 +40,11 @@ impl ApiClient {
         }
         let client = Client::builder().default_headers(headers).build()?;
         let base_url = config.base_path.trim_end_matches('/').to_string();
-        Ok(Self { client, base_url })
+        Ok(Self {
+            client,
+            base_url,
+            auth_diagnostics,
+        })
     }
 
     /// GET a JSON endpoint and deserialize the response.
@@ -37,7 +59,7 @@ impl ApiClient {
         let status = resp.status();
         if !status.is_success() {
             let body = resp.text().await.unwrap_or_default();
-            return Err(anyhow!("GET {path} failed: status={status}, body={body}"));
+            return Err(self.http_error("GET", path, status, &body));
         }
         resp.json()
             .await
@@ -61,7 +83,7 @@ impl ApiClient {
         let status = resp.status();
         if !status.is_success() {
             let body = resp.text().await.unwrap_or_default();
-            return Err(anyhow!("GET {path} failed: status={status}, body={body}"));
+            return Err(self.http_error("GET", path, status, &body));
         }
         resp.json()
             .await
@@ -85,9 +107,7 @@ impl ApiClient {
         let status = resp.status();
         if !status.is_success() {
             let body_text = resp.text().await.unwrap_or_default();
-            return Err(anyhow!(
-                "POST {path} failed: status={status}, body={body_text}"
-            ));
+            return Err(self.http_error("POST", path, status, &body_text));
         }
         resp.json()
             .await
@@ -106,7 +126,7 @@ impl ApiClient {
         let status = resp.status();
         if !status.is_success() {
             let body = resp.text().await.unwrap_or_default();
-            return Err(anyhow!("POST {path} failed: status={status}, body={body}"));
+            return Err(self.http_error("POST", path, status, &body));
         }
         Ok(status.to_string())
     }
@@ -148,9 +168,7 @@ impl ApiClient {
         let status = resp.status();
         if !status.is_success() {
             let body_text = resp.text().await.unwrap_or_default();
-            return Err(anyhow!(
-                "PATCH {path} failed: status={status}, body={body_text}"
-            ));
+            return Err(self.http_error("PATCH", path, status, &body_text));
         }
         resp.json()
             .await
@@ -174,9 +192,7 @@ impl ApiClient {
         let status = resp.status();
         if !status.is_success() {
             let body_text = resp.text().await.unwrap_or_default();
-            return Err(anyhow!(
-                "PUT {path} failed: status={status}, body={body_text}"
-            ));
+            return Err(self.http_error("PUT", path, status, &body_text));
         }
         resp.json()
             .await
@@ -195,11 +211,47 @@ impl ApiClient {
         let status = resp.status();
         if !status.is_success() {
             let body = resp.text().await.unwrap_or_default();
-            return Err(anyhow!(
-                "DELETE {path} failed: status={status}, body={body}"
-            ));
+            return Err(self.http_error("DELETE", path, status, &body));
         }
         Ok(())
+    }
+
+    fn http_error(
+        &self,
+        method: &str,
+        path: &str,
+        status: reqwest::StatusCode,
+        body: &str,
+    ) -> anyhow::Error {
+        let base = format!("{method} {path} failed: status={status}, body={body}");
+        if status != reqwest::StatusCode::UNAUTHORIZED {
+            return anyhow!(base);
+        }
+
+        let Some(diagnostics) = &self.auth_diagnostics else {
+            return anyhow!(base);
+        };
+
+        let profile = diagnostics.profile.as_deref().unwrap_or("-");
+        let token_kind = diagnostics.token_kind.as_deref().unwrap_or("-");
+        let oauth_client = if diagnostics.oauth_client_configured {
+            "configured"
+        } else {
+            "not configured"
+        };
+
+        anyhow!(
+            "{base}\n\
+             Authentication diagnostics: profile='{profile}', token_kind='{token_kind}', \
+             oauth_client={oauth_client}, api_base='{}'. \
+             If this is `verify token failed`, check that the profile was created \
+             by the intended Cognito OAuth client, the token issuer matches the \
+             API Cognito user pool, and the API COGNITO_ALLOWED_CLIENT_IDS includes \
+             the CLI OAuth client. For ID tokens inspect `aud`; for access tokens \
+             inspect `client_id`. Re-run `tachyon auth login --profile {profile}` \
+             after correcting the client/issuer/audience configuration.",
+            self.base_url
+        )
     }
 }
 

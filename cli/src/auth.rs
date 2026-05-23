@@ -69,6 +69,53 @@ pub struct StoredCredentials {
     pub operator_id: Option<String>,
 }
 
+/// Token kind selected for Tachyon API Bearer authentication.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ApiTokenKind {
+    Access,
+    Id,
+    ApiKey,
+}
+
+impl ApiTokenKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Access => "access_token",
+            Self::Id => "id_token",
+            Self::ApiKey => "api_key",
+        }
+    }
+}
+
+/// Bearer token selected for Tachyon API calls.
+#[derive(Debug, Clone)]
+pub struct ApiBearerToken {
+    pub value: String,
+    pub kind: ApiTokenKind,
+}
+
+/// Select the token used as `Authorization: Bearer ...` for Tachyon API calls.
+///
+/// Cognito and Tachyon OAuth access tokens are the API credential. ID tokens
+/// are only a fallback for legacy profile files that do not contain an access
+/// token.
+pub fn select_api_bearer_token(creds: &StoredCredentials) -> Option<ApiBearerToken> {
+    if !creds.access_token.trim().is_empty() {
+        return Some(ApiBearerToken {
+            value: creds.access_token.clone(),
+            kind: ApiTokenKind::Access,
+        });
+    }
+    creds
+        .id_token
+        .as_ref()
+        .filter(|token| !token.trim().is_empty())
+        .map(|token| ApiBearerToken {
+            value: token.clone(),
+            kind: ApiTokenKind::Id,
+        })
+}
+
 /// Cognito token endpoint response.
 #[derive(Debug, Deserialize)]
 struct TokenResponse {
@@ -518,10 +565,20 @@ pub async fn login(oauth_config: &OAuthConfig, api_url: &str, profile: &str) -> 
         operator_id: None,
     };
 
-    // Fetch operators and save the default one.
-    creds.operator_id = fetch_default_operator(api_url, &creds.access_token)
-        .await
-        .ok();
+    // Fetch operators and save the default one. If this fails, keep the login
+    // result but make the auth/API mismatch visible immediately.
+    match fetch_default_operator(api_url, &creds.access_token).await {
+        Ok(operator_id) => {
+            creds.operator_id = Some(operator_id);
+        }
+        Err(e) => {
+            eprintln!("Warning: login completed but Tachyon API token verification failed: {e}");
+            eprintln!(
+                "Check the selected profile, OAuth client ID, Cognito issuer, \
+                 token audience/client_id, and API COGNITO_ALLOWED_CLIENT_IDS."
+            );
+        }
+    }
 
     save_profile(profile, &creds)?;
 
@@ -699,6 +756,40 @@ mod tests {
         assert!(url.contains("code_challenge=CHALLENGE"));
         assert!(url.contains("code_challenge_method=S256"));
         assert!(url.contains("scope=openid+profile"));
+    }
+
+    #[test]
+    fn api_bearer_prefers_access_token_over_id_token() {
+        let creds = StoredCredentials {
+            access_token: "access-token".to_string(),
+            refresh_token: Some("refresh-token".to_string()),
+            id_token: Some("id-token".to_string()),
+            expires_at: None,
+            token_type: "Bearer".to_string(),
+            operator_id: None,
+        };
+
+        let selected = select_api_bearer_token(&creds).expect("token selected");
+
+        assert_eq!(selected.kind, ApiTokenKind::Access);
+        assert_eq!(selected.value, "access-token");
+    }
+
+    #[test]
+    fn api_bearer_falls_back_to_id_token_for_legacy_profiles() {
+        let creds = StoredCredentials {
+            access_token: String::new(),
+            refresh_token: None,
+            id_token: Some("id-token".to_string()),
+            expires_at: None,
+            token_type: "Bearer".to_string(),
+            operator_id: None,
+        };
+
+        let selected = select_api_bearer_token(&creds).expect("token selected");
+
+        assert_eq!(selected.kind, ApiTokenKind::Id);
+        assert_eq!(selected.value, "id-token");
     }
 
     #[test]
