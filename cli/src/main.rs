@@ -24,6 +24,8 @@ use clap::{Args, Parser, Subcommand};
 use std::path::PathBuf;
 use tachyon_sdk::apis::configuration::Configuration;
 
+use crate::client::AuthDiagnostics;
+
 /// Default Cognito domain for the Tachyon production environment.
 const DEFAULT_COGNITO_DOMAIN: &str = "https://auth-pool.n1.tachy.one";
 /// Default Cognito client ID (tachyon-app-client).
@@ -272,9 +274,12 @@ struct UseArgs {
 /// Resolve the bearer token from CLI args or stored credentials for the given
 /// profile. If the stored token is expired, attempt to refresh it automatically
 /// (writing back to the same profile).
-async fn resolve_token(cli: &Cli, profile: &str) -> Option<String> {
+async fn resolve_token(cli: &Cli, profile: &str) -> Option<auth::ApiBearerToken> {
     if cli.api_key.is_some() {
-        return cli.api_key.clone();
+        return cli.api_key.clone().map(|value| auth::ApiBearerToken {
+            value,
+            kind: auth::ApiTokenKind::ApiKey,
+        });
     }
     match auth::load_profile(profile) {
         Ok(Some(creds)) => {
@@ -287,8 +292,15 @@ async fn resolve_token(cli: &Cli, profile: &str) -> Option<String> {
                 let oauth_config = build_oauth_config(cli);
                 match auth::refresh_access_token(&oauth_config, profile, &creds).await {
                     Ok(new_creds) => {
-                        eprintln!("Token refreshed successfully (profile: {profile}).");
-                        return Some(new_creds.access_token);
+                        let selected = auth::select_api_bearer_token(&new_creds);
+                        let token_kind = selected
+                            .as_ref()
+                            .map(|token| token.kind.as_str())
+                            .unwrap_or("none");
+                        eprintln!(
+                            "Token refreshed successfully (profile: {profile}, api_token={token_kind})."
+                        );
+                        return selected;
                     }
                     Err(e) => {
                         eprintln!(
@@ -300,7 +312,7 @@ async fn resolve_token(cli: &Cli, profile: &str) -> Option<String> {
                 }
             }
 
-            Some(creds.access_token)
+            auth::select_api_bearer_token(&creds)
         }
         Ok(None) => None,
         Err(e) => {
@@ -326,8 +338,26 @@ fn build_oauth_config(cli: &Cli) -> auth::OAuthConfig {
 async fn build_config(cli: &Cli, profile: &str) -> Configuration {
     let mut config = Configuration::new();
     config.base_path = cli.api_url.clone();
-    config.bearer_access_token = resolve_token(cli, profile).await;
+    config.bearer_access_token = resolve_token(cli, profile).await.map(|token| token.value);
     config
+}
+
+async fn build_config_with_auth(
+    cli: &Cli,
+    profile: &str,
+) -> (Configuration, Option<AuthDiagnostics>) {
+    let mut config = Configuration::new();
+    config.base_path = cli.api_url.clone();
+    let resolved = resolve_token(cli, profile).await;
+    let diagnostics = Some(AuthDiagnostics {
+        profile: Some(profile.to_string()),
+        token_kind: resolved
+            .as_ref()
+            .map(|token| token.kind.as_str().to_string()),
+        oauth_client_configured: !cli.cognito_client_id.trim().is_empty(),
+    });
+    config.bearer_access_token = resolved.map(|token| token.value);
+    (config, diagnostics)
 }
 
 #[tokio::main]
@@ -368,7 +398,7 @@ async fn run() -> Result<()> {
             AuthCommand::Issue(issue_args) => {
                 let project_config = config::loader::load(cli.config.as_deref())?;
                 let tenant_arg = tenant_arg(&cli, project_config.as_ref()).to_string();
-                let token = resolve_token(&cli, &active).await;
+                let token = resolve_token(&cli, &active).await.map(|token| token.value);
                 commands::auth::issue::run(
                     issue_args,
                     cli.config.as_deref(),
@@ -391,10 +421,10 @@ async fn run() -> Result<()> {
             AuthCommand::Manifest(manifest_args) => {
                 let project_config = config::loader::load(cli.config.as_deref())?;
                 let tenant_arg = tenant_arg(&cli, project_config.as_ref());
-                let config = build_config(&cli, &active).await;
-                let tenant_id =
-                    resolve::resolve_tenant_id(&config, tenant_arg, &active).await?;
-                commands::auth::manifest::run(manifest_args, &config, &tenant_id).await
+                let (config, auth_diagnostics) = build_config_with_auth(&cli, &active).await;
+                let tenant_id = resolve::resolve_tenant_id(&config, tenant_arg, &active).await?;
+                commands::auth::manifest::run(manifest_args, &config, &tenant_id, auth_diagnostics)
+                    .await
             }
         },
         Commands::Login(login_args) => {

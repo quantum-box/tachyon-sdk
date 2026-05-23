@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use tachyon_sdk::apis::configuration::Configuration;
 
-use crate::client::{print_json, ApiClient};
+use crate::client::{print_json, ApiClient, AuthDiagnostics};
 
 // ---- CLI args ----
 
@@ -249,10 +249,7 @@ struct TachyonYmlRoot {
     auth: Option<TachyonYmlAuth>,
 }
 
-pub fn discover_manifests(
-    explicit_file: Option<&Path>,
-    cwd: &Path,
-) -> Result<Vec<LoadedManifest>> {
+pub fn discover_manifests(explicit_file: Option<&Path>, cwd: &Path) -> Result<Vec<LoadedManifest>> {
     if let Some(path) = explicit_file {
         let path = if path.is_absolute() {
             path.to_path_buf()
@@ -269,8 +266,8 @@ pub fn discover_manifests(
     if let Some(yml_path) = tachyon_yml {
         let raw = std::fs::read_to_string(&yml_path)
             .with_context(|| format!("read {}", yml_path.display()))?;
-        let root: TachyonYmlRoot = serde_yaml::from_str(&raw)
-            .with_context(|| format!("parse {}", yml_path.display()))?;
+        let root: TachyonYmlRoot =
+            serde_yaml::from_str(&raw).with_context(|| format!("parse {}", yml_path.display()))?;
         if let Some(auth) = root.auth {
             if let Some(manifest) = auth.manifest {
                 if !manifest.actions.is_empty() || !manifest.policies.is_empty() {
@@ -312,9 +309,7 @@ fn find_tachyon_yml(cwd: &Path) -> Option<PathBuf> {
 
 fn collect_yaml_files(dir: &Path) -> Result<Vec<PathBuf>> {
     let mut result = Vec::new();
-    for entry in std::fs::read_dir(dir)
-        .with_context(|| format!("read dir {}", dir.display()))?
-    {
+    for entry in std::fs::read_dir(dir).with_context(|| format!("read dir {}", dir.display()))? {
         let entry = entry?;
         let path = entry.path();
         if path.is_dir() {
@@ -345,8 +340,8 @@ fn load_single_manifest(path: &Path) -> Result<LoadedManifest> {
         }
     }
 
-    let manifest: AuthManifest = serde_yaml::from_str(&raw)
-        .with_context(|| format!("parse manifest {}", path.display()))?;
+    let manifest: AuthManifest =
+        serde_yaml::from_str(&raw).with_context(|| format!("parse manifest {}", path.display()))?;
     Ok(LoadedManifest {
         path: path.to_path_buf(),
         manifest,
@@ -384,7 +379,10 @@ pub fn validate_manifest(manifest: &AuthManifest) -> Result<()> {
             return Err(anyhow!("action missing context: {:?}", action));
         }
         if action.name.is_empty() {
-            return Err(anyhow!("action missing name in context '{}'", action.context));
+            return Err(anyhow!(
+                "action missing name in context '{}'",
+                action.context
+            ));
         }
     }
     for policy in &manifest.policies {
@@ -509,7 +507,10 @@ fn print_plan(report: &PlanReport) {
             ChangeKind::Unchanged => "=",
             ChangeKind::PruneUnsupported => "!",
         };
-        println!("  {symbol} {} [note: current state unknown – no list endpoint]", item.name);
+        println!(
+            "  {symbol} {} [note: current state unknown – no list endpoint]",
+            item.name
+        );
     }
 
     if report.prune_unsupported {
@@ -561,12 +562,18 @@ pub async fn apply_manifest(
             description: spec.description.as_deref(),
             resource_pattern: spec.resource_pattern.as_deref(),
         };
-        let outcome = match api.post::<_, serde_json::Value>("/v1/auth/actions", &req).await {
+        let outcome = match api
+            .post::<_, serde_json::Value>("/v1/auth/actions", &req)
+            .await
+        {
             Ok(_) => ApplyOutcome::Created,
             Err(e) => {
                 let msg = e.to_string();
                 // 409 / duplicate means it already exists – treat as skipped
-                if msg.contains("409") || msg.contains("already exists") || msg.contains("duplicate") {
+                if msg.contains("409")
+                    || msg.contains("already exists")
+                    || msg.contains("duplicate")
+                {
                     ApplyOutcome::Skipped
                 } else {
                     ApplyOutcome::Error(msg)
@@ -602,11 +609,17 @@ pub async fn apply_manifest(
                 })
                 .collect(),
         };
-        let outcome = match api.post::<_, serde_json::Value>("/v1/auth/policies", &req).await {
+        let outcome = match api
+            .post::<_, serde_json::Value>("/v1/auth/policies", &req)
+            .await
+        {
             Ok(_) => ApplyOutcome::Created,
             Err(e) => {
                 let msg = e.to_string();
-                if msg.contains("409") || msg.contains("already exists") || msg.contains("duplicate") {
+                if msg.contains("409")
+                    || msg.contains("already exists")
+                    || msg.contains("duplicate")
+                {
                     ApplyOutcome::Skipped
                 } else {
                     ApplyOutcome::Error(msg)
@@ -691,9 +704,7 @@ fn print_apply_result(result: &ApplyResult) {
     );
 
     if result.prune_skipped > 0 {
-        println!(
-            "Note: --prune was set but no delete endpoint is available; 0 resources deleted."
-        );
+        println!("Note: --prune was set but no delete endpoint is available; 0 resources deleted.");
     }
 }
 
@@ -709,6 +720,7 @@ pub async fn run(
     args: &ManifestArgs,
     config: &Configuration,
     tenant_id: &str,
+    auth_diagnostics: Option<AuthDiagnostics>,
 ) -> Result<()> {
     let cwd = std::env::current_dir()?;
 
@@ -774,7 +786,8 @@ pub async fn run(
             let merged = merge_manifests(manifests);
             validate_manifest(&merged)?;
 
-            let api = ApiClient::new(config, tenant_id)?;
+            let api =
+                ApiClient::new_with_auth_diagnostics(config, tenant_id, auth_diagnostics.clone())?;
             let report = build_plan(&api, &merged, *prune).await?;
 
             if *json {
@@ -793,11 +806,18 @@ pub async fn run(
             let merged = merge_manifests(manifests);
             validate_manifest(&merged)?;
 
-            let api = ApiClient::new(config, tenant_id)?;
+            let api =
+                ApiClient::new_with_auth_diagnostics(config, tenant_id, auth_diagnostics.clone())?;
             let result = apply_manifest(&api, &merged, *prune).await?;
 
-            let has_errors = result.actions.iter().any(|a| matches!(a.outcome, ApplyOutcome::Error(_)))
-                || result.policies.iter().any(|p| matches!(p.outcome, ApplyOutcome::Error(_)));
+            let has_errors = result
+                .actions
+                .iter()
+                .any(|a| matches!(a.outcome, ApplyOutcome::Error(_)))
+                || result
+                    .policies
+                    .iter()
+                    .any(|p| matches!(p.outcome, ApplyOutcome::Error(_)));
 
             if *json {
                 print_json(&result)?;
@@ -854,8 +874,14 @@ pub async fn reconcile_in(
         }
     } else {
         let result = apply_manifest(api, &merged, prune).await?;
-        let has_errors = result.actions.iter().any(|a| matches!(a.outcome, ApplyOutcome::Error(_)))
-            || result.policies.iter().any(|p| matches!(p.outcome, ApplyOutcome::Error(_)));
+        let has_errors = result
+            .actions
+            .iter()
+            .any(|a| matches!(a.outcome, ApplyOutcome::Error(_)))
+            || result
+                .policies
+                .iter()
+                .any(|p| matches!(p.outcome, ApplyOutcome::Error(_)));
         if json {
             print_json(&result)?;
         } else {
@@ -999,7 +1025,11 @@ mod tests {
         let api = ApiClient::new(&dummy_config, "tn_test").unwrap();
 
         let result = reconcile_in(&api, false, None, false, false, tmp.path()).await;
-        assert!(matches!(result, Ok(None)), "expected Ok(None) but got {:?}", result);
+        assert!(
+            matches!(result, Ok(None)),
+            "expected Ok(None) but got {:?}",
+            result
+        );
     }
 
     #[test]

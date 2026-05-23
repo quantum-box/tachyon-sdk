@@ -36,11 +36,7 @@ pub struct ReconcileArgs {
     pub json: bool,
 }
 
-pub async fn run(
-    args: &ReconcileArgs,
-    config: &Configuration,
-    tenant_id: &str,
-) -> Result<()> {
+pub async fn run(args: &ReconcileArgs, config: &Configuration, tenant_id: &str) -> Result<()> {
     let api = ApiClient::new(config, tenant_id)?;
 
     // --- 1. Cloud Apps reconcile ---
@@ -59,7 +55,7 @@ pub async fn run(
                 },
             },
         };
-        compute_cli::run(&apps_args, config, tenant_id, None).await?;
+        compute_cli::run(&apps_args, config, tenant_id, None, None).await?;
         if !args.json {
             println!();
         }
