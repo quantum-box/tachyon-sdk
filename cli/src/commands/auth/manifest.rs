@@ -90,10 +90,34 @@ pub struct PolicySpec {
     pub name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub namespace: Option<String>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub global: bool,
     #[serde(default)]
     pub actions: Vec<PolicyActionSpec>,
     #[serde(default)]
     pub action_patterns: Vec<PolicyActionPatternSpec>,
+}
+
+impl PolicySpec {
+    fn scope_label(&self) -> String {
+        if self.global {
+            "global".to_string()
+        } else if let Some(namespace) = &self.namespace {
+            format!("namespace/{namespace}")
+        } else {
+            "caller-tenant".to_string()
+        }
+    }
+
+    fn target_tenant_id<'a>(&'a self, default_tenant_id: &'a str) -> Option<&'a str> {
+        if self.global {
+            None
+        } else {
+            Some(self.namespace.as_deref().unwrap_or(default_tenant_id))
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -163,6 +187,9 @@ struct RegisterPolicyRequest<'a> {
     description: Option<&'a str>,
     #[serde(rename = "isSystem")]
     is_system: bool,
+    global: bool,
+    #[serde(rename = "tenantId", skip_serializing_if = "Option::is_none")]
+    tenant_id: Option<&'a str>,
     actions: Vec<PolicyActionReq<'a>>,
     #[serde(rename = "actionPatterns")]
     action_patterns: Vec<PolicyActionPatternReq<'a>>,
@@ -186,6 +213,7 @@ pub struct ActionPlanItem {
 #[derive(Debug, Clone, Serialize)]
 pub struct PolicyPlanItem {
     pub name: String,
+    pub scope: String,
     pub change: ChangeKind,
 }
 
@@ -216,6 +244,7 @@ pub struct ActionApplyItem {
 #[derive(Debug, Clone, Serialize)]
 pub struct PolicyApplyItem {
     pub name: String,
+    pub scope: String,
     pub outcome: ApplyOutcome,
 }
 
@@ -240,7 +269,7 @@ pub struct LoadedManifest {
 #[derive(Debug, Default, Deserialize)]
 struct TachyonYmlAuth {
     #[serde(default)]
-    manifest: Option<AuthManifest>,
+    manifest: Option<serde_yaml::Value>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -269,7 +298,9 @@ pub fn discover_manifests(explicit_file: Option<&Path>, cwd: &Path) -> Result<Ve
         let root: TachyonYmlRoot =
             serde_yaml::from_str(&raw).with_context(|| format!("parse {}", yml_path.display()))?;
         if let Some(auth) = root.auth {
-            if let Some(manifest) = auth.manifest {
+            if let Some(manifest_value) = auth.manifest {
+                let manifest = parse_manifest_value(manifest_value)
+                    .with_context(|| format!("parse auth.manifest in {}", yml_path.display()))?;
                 if !manifest.actions.is_empty() || !manifest.policies.is_empty() {
                     found.push(LoadedManifest {
                         path: yml_path,
@@ -334,18 +365,112 @@ fn load_single_manifest(path: &Path) -> Result<LoadedManifest> {
             if let Some(manifest) = auth.manifest {
                 return Ok(LoadedManifest {
                     path: path.to_path_buf(),
-                    manifest,
+                    manifest: parse_manifest_value(manifest)
+                        .with_context(|| format!("parse auth.manifest in {}", path.display()))?,
                 });
             }
         }
     }
 
-    let manifest: AuthManifest =
+    let value: serde_yaml::Value =
         serde_yaml::from_str(&raw).with_context(|| format!("parse manifest {}", path.display()))?;
+    let manifest = parse_manifest_value(value)
+        .with_context(|| format!("parse manifest {}", path.display()))?;
     Ok(LoadedManifest {
         path: path.to_path_buf(),
         manifest,
     })
+}
+
+fn parse_manifest_value(value: serde_yaml::Value) -> Result<AuthManifest> {
+    if let Some(mapping) = value.as_mapping() {
+        if mapping.contains_key("actions") || mapping.contains_key("policies") {
+            return Ok(serde_yaml::from_value(value)?);
+        }
+        if mapping.contains_key("apiVersion") && mapping.contains_key("kind") {
+            return parse_k8s_documents(vec![value]);
+        }
+        if let Some(items) = mapping.get("items") {
+            if let Some(sequence) = items.as_sequence() {
+                return parse_k8s_documents(sequence.clone());
+            }
+        }
+    }
+
+    if let Some(sequence) = value.as_sequence() {
+        return parse_k8s_documents(sequence.clone());
+    }
+
+    Err(anyhow!(
+        "auth manifest must be flat actions/policies or k8s style document(s)"
+    ))
+}
+
+fn parse_k8s_documents(documents: Vec<serde_yaml::Value>) -> Result<AuthManifest> {
+    let mut manifest = AuthManifest::default();
+    for document in documents {
+        let doc: K8sAuthDocument = serde_yaml::from_value(document)?;
+        if doc.api_version != "auth.tachyon.io/v1" {
+            return Err(anyhow!(
+                "unsupported auth manifest apiVersion '{}'",
+                doc.api_version
+            ));
+        }
+        match doc.kind.as_str() {
+            "ActionSet" => {
+                let spec: ActionSetSpec = serde_yaml::from_value(doc.spec)?;
+                manifest.actions.extend(spec.actions);
+            }
+            "Policy" => {
+                let spec: K8sPolicySpec = serde_yaml::from_value(doc.spec)?;
+                let namespace = doc.metadata.namespace;
+                manifest.policies.push(PolicySpec {
+                    name: doc.metadata.name,
+                    description: spec.description,
+                    global: namespace.is_none(),
+                    namespace,
+                    actions: spec.actions,
+                    action_patterns: spec.action_patterns,
+                });
+            }
+            other => {
+                return Err(anyhow!("unsupported auth manifest kind '{}'", other));
+            }
+        }
+    }
+    Ok(manifest)
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct K8sAuthDocument {
+    api_version: String,
+    kind: String,
+    metadata: K8sMetadata,
+    spec: serde_yaml::Value,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct K8sMetadata {
+    name: String,
+    #[serde(default)]
+    namespace: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ActionSetSpec {
+    #[serde(default)]
+    actions: Vec<ActionSpec>,
+}
+
+#[derive(Debug, Deserialize)]
+struct K8sPolicySpec {
+    #[serde(default)]
+    description: Option<String>,
+    #[serde(default)]
+    actions: Vec<PolicyActionSpec>,
+    #[serde(default)]
+    action_patterns: Vec<PolicyActionPatternSpec>,
 }
 
 /// Merge multiple manifests into one, deduplicating by full_name / policy name.
@@ -362,7 +487,8 @@ pub fn merge_manifests(manifests: Vec<LoadedManifest>) -> AuthManifest {
             }
         }
         for policy in loaded.manifest.policies {
-            if seen_policies.insert(policy.name.clone()) {
+            let key = format!("{}:{}", policy.scope_label(), policy.name);
+            if seen_policies.insert(key) {
                 merged.policies.push(policy);
             }
         }
@@ -388,6 +514,12 @@ pub fn validate_manifest(manifest: &AuthManifest) -> Result<()> {
     for policy in &manifest.policies {
         if policy.name.is_empty() {
             return Err(anyhow!("policy missing name"));
+        }
+        if policy.global && policy.namespace.is_some() {
+            return Err(anyhow!(
+                "policy '{}': global policy cannot set namespace",
+                policy.name
+            ));
         }
         for pa in &policy.actions {
             if !pa.action.contains(':') {
@@ -465,6 +597,7 @@ pub async fn build_plan(
         .iter()
         .map(|p| PolicyPlanItem {
             name: p.name.clone(),
+            scope: p.scope_label(),
             change: ChangeKind::Create,
         })
         .collect();
@@ -508,8 +641,8 @@ fn print_plan(report: &PlanReport) {
             ChangeKind::PruneUnsupported => "!",
         };
         println!(
-            "  {symbol} {} [note: current state unknown – no list endpoint]",
-            item.name
+            "  {symbol} {} ({}) [note: current state unknown – no list endpoint]",
+            item.name, item.scope
         );
     }
 
@@ -550,6 +683,7 @@ pub async fn apply_manifest(
     api: &ApiClient,
     manifest: &AuthManifest,
     prune: bool,
+    default_tenant_id: &str,
 ) -> Result<ApplyResult> {
     let mut action_items = Vec::new();
     let mut policy_items = Vec::new();
@@ -591,6 +725,8 @@ pub async fn apply_manifest(
             name: &spec.name,
             description: spec.description.as_deref(),
             is_system: false,
+            global: spec.global,
+            tenant_id: spec.target_tenant_id(default_tenant_id),
             actions: spec
                 .actions
                 .iter()
@@ -628,6 +764,7 @@ pub async fn apply_manifest(
         };
         policy_items.push(PolicyApplyItem {
             name: spec.name.clone(),
+            scope: spec.scope_label(),
             outcome,
         });
     }
@@ -662,7 +799,7 @@ fn print_apply_result(result: &ApplyResult) {
             ApplyOutcome::Skipped => ("=", " (already exists)".to_string()),
             ApplyOutcome::Error(e) => ("!", format!(" ERROR: {e}")),
         };
-        println!("  {symbol} {}{note}", item.name);
+        println!("  {symbol} {} ({}){note}", item.name, item.scope);
     }
 
     let a_created = result
@@ -808,7 +945,7 @@ pub async fn run(
 
             let api =
                 ApiClient::new_with_auth_diagnostics(config, tenant_id, auth_diagnostics.clone())?;
-            let result = apply_manifest(&api, &merged, *prune).await?;
+            let result = apply_manifest(&api, &merged, *prune, tenant_id).await?;
 
             let has_errors = result
                 .actions
@@ -840,17 +977,19 @@ pub async fn run(
 /// Returns None if no manifests found (skip gracefully).
 pub async fn reconcile(
     api: &ApiClient,
+    default_tenant_id: &str,
     dry_run: bool,
     file: Option<&Path>,
     prune: bool,
     json: bool,
 ) -> Result<Option<()>> {
     let cwd = std::env::current_dir()?;
-    reconcile_in(api, dry_run, file, prune, json, &cwd).await
+    reconcile_in(api, default_tenant_id, dry_run, file, prune, json, &cwd).await
 }
 
 pub async fn reconcile_in(
     api: &ApiClient,
+    default_tenant_id: &str,
     dry_run: bool,
     file: Option<&Path>,
     prune: bool,
@@ -873,7 +1012,7 @@ pub async fn reconcile_in(
             print_plan(&report);
         }
     } else {
-        let result = apply_manifest(api, &merged, prune).await?;
+        let result = apply_manifest(api, &merged, prune, default_tenant_id).await?;
         let has_errors = result
             .actions
             .iter()
@@ -922,6 +1061,8 @@ mod tests {
             policies: vec![PolicySpec {
                 name: "MyAppReadOnly".into(),
                 description: None,
+                namespace: None,
+                global: false,
                 actions: vec![PolicyActionSpec {
                     action: "myapp:ListItems".into(),
                     effect: "allow".into(),
@@ -1024,7 +1165,7 @@ mod tests {
         let dummy_config = tachyon_sdk::apis::configuration::Configuration::default();
         let api = ApiClient::new(&dummy_config, "tn_test").unwrap();
 
-        let result = reconcile_in(&api, false, None, false, false, tmp.path()).await;
+        let result = reconcile_in(&api, "tn_test", false, None, false, false, tmp.path()).await;
         assert!(
             matches!(result, Ok(None)),
             "expected Ok(None) but got {:?}",
@@ -1068,5 +1209,67 @@ mod tests {
         let yaml = fmt_manifest(&m).unwrap();
         let parsed: AuthManifest = serde_yaml::from_str(&yaml).unwrap();
         assert_eq!(parsed, m);
+    }
+
+    #[test]
+    fn parse_k8s_action_set_and_global_policy() {
+        let yaml = r#"
+- apiVersion: auth.tachyon.io/v1
+  kind: ActionSet
+  metadata:
+    name: billing-actions
+  spec:
+    actions:
+      - context: billing
+        name: ViewInvoices
+- apiVersion: auth.tachyon.io/v1
+  kind: Policy
+  metadata:
+    name: BillingViewer
+  spec:
+    description: View invoices
+    actions:
+      - action: billing:ViewInvoices
+        effect: allow
+"#;
+        let value: serde_yaml::Value = serde_yaml::from_str(yaml).unwrap();
+        let manifest = parse_manifest_value(value).unwrap();
+        assert_eq!(manifest.actions[0].full_name(), "billing:ViewInvoices");
+        assert_eq!(manifest.policies[0].name, "BillingViewer");
+        assert!(manifest.policies[0].global);
+        assert_eq!(manifest.policies[0].target_tenant_id("tn_default"), None);
+    }
+
+    #[test]
+    fn parse_k8s_namespaced_policy() {
+        let yaml = r#"
+apiVersion: auth.tachyon.io/v1
+kind: Policy
+metadata:
+  name: TenantBillingViewer
+  namespace: tn_01hjryxysgey07h5jz5wagqj0m
+spec:
+  action_patterns:
+    - context_pattern: billing
+      name_pattern: '*'
+      effect: allow
+"#;
+        let value: serde_yaml::Value = serde_yaml::from_str(yaml).unwrap();
+        let manifest = parse_manifest_value(value).unwrap();
+        let policy = &manifest.policies[0];
+        assert!(!policy.global);
+        assert_eq!(
+            policy.target_tenant_id("tn_default"),
+            Some("tn_01hjryxysgey07h5jz5wagqj0m")
+        );
+    }
+
+    #[test]
+    fn flat_policy_uses_caller_tenant_scope() {
+        let manifest: AuthManifest =
+            serde_yaml::from_str("actions: []\npolicies:\n  - name: FlatPolicy\n").unwrap();
+        let policy = &manifest.policies[0];
+        assert!(!policy.global);
+        assert_eq!(policy.target_tenant_id("tn_default"), Some("tn_default"));
     }
 }
