@@ -401,7 +401,9 @@ mod tests {
     #[test]
     fn finds_registered_provider() {
         let config = loader::ProjectConfig {
+            kind: Default::default(),
             metadata: Default::default(),
+            spec: Default::default(),
             auth: Some(crate::config::auth::AuthConfig {
                 user_pool: Some(AuthUserPool::Shared),
                 providers: vec![AuthProvider {

@@ -1,6 +1,7 @@
 use std::{
     collections::HashMap,
     io::{self, Read},
+    path::{Path, PathBuf},
     time::{Duration, Instant},
 };
 
@@ -11,6 +12,7 @@ use serde_json::{json, Value};
 use tachyon_sdk::apis::configuration::Configuration;
 
 use crate::client::{print_json, truncate, ApiClient};
+use crate::config::loader::{self, LoadedProjectConfig, ProjectConfig, RepositoryConfig};
 use crate::resolve;
 
 #[derive(Debug, Clone, Args)]
@@ -92,6 +94,12 @@ pub enum ToolJobsCommand {
         /// Working directory recorded in metadata.cwd
         #[arg(long)]
         cwd: Option<String>,
+        /// Repository name whose manifest repository.localPath is used as metadata.cwd
+        #[arg(long)]
+        repo: Option<String>,
+        /// CloudApp manifest app name used to find its repository cwd
+        #[arg(long = "cloud-app")]
+        cloud_app: Option<String>,
         /// Environment variable to pass, formatted as KEY=VALUE.
         #[arg(long = "env")]
         environment: Vec<String>,
@@ -417,6 +425,235 @@ fn build_tool_job_metadata(
     Ok(metadata)
 }
 
+fn resolve_manifest_path(manifest_path: &Path, value: &Path) -> PathBuf {
+    if value.is_absolute() {
+        value.to_path_buf()
+    } else {
+        manifest_path
+            .parent()
+            .unwrap_or_else(|| Path::new("."))
+            .join(value)
+    }
+}
+
+#[derive(Debug)]
+struct ManifestRepository<'a> {
+    app_name: &'a str,
+    repo_name: &'a str,
+    local_path: &'a Path,
+}
+
+#[derive(Debug)]
+struct ResolvedToolJobCwd {
+    cwd: String,
+}
+
+fn repository_entry<'a>(
+    manifest_path: &Path,
+    app_name: &'a str,
+    repository: Option<&'a RepositoryConfig>,
+) -> Result<ManifestRepository<'a>> {
+    let repository = repository.ok_or_else(|| {
+        anyhow!(
+            "cloud app '{app_name}' in {} is missing repository",
+            manifest_path.display()
+        )
+    })?;
+    let repo_name = repository.name.as_deref().ok_or_else(|| {
+        anyhow!(
+            "cloud app '{app_name}' in {} is missing repository.name",
+            manifest_path.display()
+        )
+    })?;
+    let local_path = repository.local_path.as_deref().ok_or_else(|| {
+        anyhow!(
+            "repository '{repo_name}' for cloud app '{app_name}' in {} is missing repository.localPath",
+            manifest_path.display()
+        )
+    })?;
+    Ok(ManifestRepository {
+        app_name,
+        repo_name,
+        local_path,
+    })
+}
+
+fn collect_manifest_repositories<'a>(
+    loaded: &'a LoadedProjectConfig,
+) -> Result<Vec<ManifestRepository<'a>>> {
+    let ProjectConfig {
+        kind,
+        metadata,
+        spec,
+        ..
+    } = &loaded.config;
+    match kind.as_deref().unwrap_or("CloudApp") {
+        "CloudApp" => {
+            let manifest_app_name = metadata
+                .name
+                .as_deref()
+                .ok_or_else(|| anyhow!("CloudApp manifest is missing metadata.name"))?;
+            Ok(vec![repository_entry(
+                &loaded.path,
+                manifest_app_name,
+                spec.repository.as_ref(),
+            )?])
+        }
+        "CloudApps" => spec
+            .apps
+            .iter()
+            .map(|app| {
+                let app_name = app.name.as_deref().ok_or_else(|| {
+                    anyhow!(
+                        "CloudApps entry in {} is missing name",
+                        loaded.path.display()
+                    )
+                })?;
+                repository_entry(&loaded.path, app_name, app.repository.as_ref())
+            })
+            .collect(),
+        other => Err(anyhow!(
+            "unsupported manifest kind '{other}' in {}",
+            loaded.path.display()
+        )),
+    }
+}
+
+fn available_repos(repositories: &[ManifestRepository<'_>]) -> String {
+    let mut names = repositories
+        .iter()
+        .map(|repository| repository.repo_name)
+        .collect::<Vec<_>>();
+    names.sort_unstable();
+    names.dedup();
+    if names.is_empty() {
+        "<none>".to_string()
+    } else {
+        names.join(", ")
+    }
+}
+
+fn available_cloud_apps(repositories: &[ManifestRepository<'_>]) -> String {
+    let mut names = repositories
+        .iter()
+        .map(|repository| repository.app_name)
+        .collect::<Vec<_>>();
+    names.sort_unstable();
+    names.dedup();
+    if names.is_empty() {
+        "<none>".to_string()
+    } else {
+        names.join(", ")
+    }
+}
+
+fn resolve_repo_cwd_from_loaded(
+    loaded: &LoadedProjectConfig,
+    repo_name: &str,
+) -> Result<ResolvedToolJobCwd> {
+    let repositories = collect_manifest_repositories(loaded)?;
+    let matches = repositories
+        .iter()
+        .filter(|repository| repository.repo_name == repo_name)
+        .collect::<Vec<_>>();
+    match matches.len() {
+        0 => Err(anyhow!(
+            "unknown repo '{repo_name}' in {}. Available repos: {}",
+            loaded.path.display(),
+            available_repos(&repositories)
+        )),
+        1 => Ok(ResolvedToolJobCwd {
+            cwd: resolve_manifest_path(&loaded.path, matches[0].local_path)
+                .display()
+                .to_string(),
+        }),
+        _ => {
+            let mut paths = matches
+                .iter()
+                .map(|repository| {
+                    resolve_manifest_path(&loaded.path, repository.local_path)
+                        .display()
+                        .to_string()
+                })
+                .collect::<Vec<_>>();
+            paths.sort();
+            paths.dedup();
+            if paths.len() == 1 {
+                Ok(ResolvedToolJobCwd {
+                    cwd: paths[0].clone(),
+                })
+            } else {
+                Err(anyhow!(
+                    "multiple repositories named '{repo_name}' in {} have different local paths: {}",
+                    loaded.path.display(),
+                    paths.join(", ")
+                ))
+            }
+        }
+    }
+}
+
+fn resolve_cloud_app_cwd_from_loaded(
+    loaded: &LoadedProjectConfig,
+    app_name: &str,
+) -> Result<ResolvedToolJobCwd> {
+    let repositories = collect_manifest_repositories(loaded)?;
+    let matches = repositories
+        .iter()
+        .filter(|repository| repository.app_name == app_name)
+        .collect::<Vec<_>>();
+    match matches.len() {
+        0 => Err(anyhow!(
+            "unknown cloud app '{app_name}' in {}. Available cloud apps: {}",
+            loaded.path.display(),
+            available_cloud_apps(&repositories)
+        )),
+        1 => resolve_repo_cwd_from_loaded(loaded, matches[0].repo_name),
+        _ => Err(anyhow!(
+            "multiple cloud apps named '{app_name}' in {}",
+            loaded.path.display()
+        )),
+    }
+}
+
+fn resolve_tool_job_cwd(
+    config_flag: Option<&Path>,
+    cwd: Option<&str>,
+    repo: Option<&str>,
+    cloud_app: Option<&str>,
+) -> Result<Option<String>> {
+    let specified = [cwd.is_some(), repo.is_some(), cloud_app.is_some()]
+        .into_iter()
+        .filter(|specified| *specified)
+        .count();
+    if specified > 1 {
+        return Err(anyhow!(
+            "--cwd, --repo, and --cloud-app are mutually exclusive"
+        ));
+    }
+
+    if let Some(cwd) = cwd {
+        return Ok(Some(cwd.to_string()));
+    }
+
+    match (repo, cloud_app) {
+        (None, None) => Ok(None),
+        (Some(repo), None) => {
+            let loaded = loader::load_with_path(config_flag)?
+                .ok_or_else(|| anyhow!("tachyon.yml not found. Run `tachyon init` first."))?;
+            Ok(Some(resolve_repo_cwd_from_loaded(&loaded, repo)?.cwd))
+        }
+        (None, Some(cloud_app)) => {
+            let loaded = loader::load_with_path(config_flag)?
+                .ok_or_else(|| anyhow!("tachyon.yml not found. Run `tachyon init` first."))?;
+            Ok(Some(
+                resolve_cloud_app_cwd_from_loaded(&loaded, cloud_app)?.cwd,
+            ))
+        }
+        (Some(_), Some(_)) => unreachable!("mutual exclusion checked above"),
+    }
+}
+
 fn is_terminal_tool_job_status(status: Option<&str>) -> bool {
     matches!(status, Some("succeeded" | "failed" | "cancelled"))
 }
@@ -480,10 +717,13 @@ async fn wait_tool_job(
 #[allow(clippy::too_many_arguments)]
 async fn run_tool_jobs_create(
     api: &ApiClient,
+    config_flag: Option<&Path>,
     provider: &str,
     prompt: &Option<String>,
     context_paths: &[String],
     cwd: Option<&str>,
+    repo: Option<&str>,
+    cloud_app: Option<&str>,
     environment: &[String],
     output_profile: Option<&str>,
     resume_session_id: Option<&str>,
@@ -497,6 +737,7 @@ async fn run_tool_jobs_create(
     json: bool,
 ) -> Result<()> {
     let prompt = read_prompt(prompt)?;
+    let cwd = resolve_tool_job_cwd(config_flag, cwd, repo, cloud_app)?;
     let context_paths = if context_paths.is_empty() {
         vec![".".to_string()]
     } else {
@@ -512,7 +753,7 @@ async fn run_tool_jobs_create(
         context_paths,
         output_profile: output_profile.map(ToString::to_string),
         environment: parse_environment(environment)?,
-        metadata: build_tool_job_metadata(provider, cwd, codex_mode)?,
+        metadata: build_tool_job_metadata(provider, cwd.as_deref(), codex_mode)?,
         resume_session_id: resume_session_id.map(ToString::to_string),
         use_worktree,
         auto_merge,
@@ -628,7 +869,12 @@ async fn run_notify_send(api: &ApiClient, text: &str, json: bool) -> Result<()> 
 
 // ---- Entry point ----
 
-pub async fn run(args: &OpsArgs, config: &Configuration, tenant_id: &str) -> Result<()> {
+pub async fn run(
+    args: &OpsArgs,
+    config: &Configuration,
+    tenant_id: &str,
+    config_flag: Option<&Path>,
+) -> Result<()> {
     let api = ApiClient::new(config, tenant_id)?;
 
     match &args.command {
@@ -646,6 +892,8 @@ pub async fn run(args: &OpsArgs, config: &Configuration, tenant_id: &str) -> Res
                 prompt,
                 context_paths,
                 cwd,
+                repo,
+                cloud_app,
                 environment,
                 output_profile,
                 resume_session_id,
@@ -660,10 +908,13 @@ pub async fn run(args: &OpsArgs, config: &Configuration, tenant_id: &str) -> Res
             } => {
                 run_tool_jobs_create(
                     &api,
+                    config_flag,
                     provider,
                     prompt,
                     context_paths,
                     cwd.as_deref(),
+                    repo.as_deref(),
+                    cloud_app.as_deref(),
                     environment,
                     output_profile.as_deref(),
                     resume_session_id.as_deref(),

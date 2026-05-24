@@ -9,7 +9,11 @@ const CONFIG_ENV: &str = "TACHYON_CONFIG";
 #[derive(Debug, Clone, Default, Deserialize, PartialEq, Eq)]
 pub struct ProjectConfig {
     #[serde(default)]
+    pub kind: Option<String>,
+    #[serde(default)]
     pub metadata: ProjectMetadata,
+    #[serde(default)]
+    pub spec: ProjectSpec,
     #[serde(default)]
     pub auth: Option<crate::config::auth::AuthConfig>,
 }
@@ -20,6 +24,30 @@ pub struct ProjectMetadata {
     pub name: Option<String>,
     #[serde(default, alias = "tenantId")]
     pub tenant_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize, PartialEq, Eq)]
+pub struct ProjectSpec {
+    #[serde(default)]
+    pub repository: Option<RepositoryConfig>,
+    #[serde(default)]
+    pub apps: Vec<CloudAppEntry>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize, PartialEq, Eq)]
+pub struct CloudAppEntry {
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub repository: Option<RepositoryConfig>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize, PartialEq, Eq)]
+pub struct RepositoryConfig {
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default, alias = "localPath", alias = "local_path")]
+    pub local_path: Option<PathBuf>,
 }
 
 pub fn load(config_flag: Option<&Path>) -> Result<Option<ProjectConfig>> {
