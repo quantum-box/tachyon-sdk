@@ -19,9 +19,9 @@ mod slack_cli;
 mod switch_cli;
 mod tts_cli;
 
-use anyhow::Result;
+use anyhow::{anyhow, Result};
 use clap::{Args, Parser, Subcommand};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use tachyon_sdk::apis::configuration::Configuration;
 
 use crate::client::AuthDiagnostics;
@@ -419,10 +419,21 @@ async fn run() -> Result<()> {
             AuthCommand::List => auth::list_profiles_command(),
             AuthCommand::Use(use_args) => auth::use_profile(&use_args.profile),
             AuthCommand::Manifest(manifest_args) => {
-                let project_config = config::loader::load(cli.config.as_deref())?;
-                let tenant_arg = tenant_arg(&cli, project_config.as_ref());
                 let (config, auth_diagnostics) = build_config_with_auth(&cli, &active).await;
-                let tenant_id = resolve::resolve_tenant_id(&config, tenant_arg, &active).await?;
+                let tenant_id = if auth_manifest_needs_tenant(manifest_args) {
+                    let manifest_file = auth_manifest_file(manifest_args);
+                    let (project_config, searched_paths) =
+                        load_project_config_for_context(&cli, manifest_file)?;
+                    let tenant_arg = strict_tenant_arg(
+                        &cli,
+                        project_config.as_ref(),
+                        &searched_paths,
+                        "auth manifest",
+                    )?;
+                    resolve::resolve_tenant_id(&config, tenant_arg, &active).await?
+                } else {
+                    String::new()
+                };
                 commands::auth::manifest::run(manifest_args, &config, &tenant_id, auth_diagnostics)
                     .await
             }
@@ -536,8 +547,10 @@ async fn run() -> Result<()> {
             switch_cli::run(args, &config, &active).await
         }
         Commands::Reconcile(args) => {
-            let project_config = config::loader::load(cli.config.as_deref())?;
-            let tenant_arg = tenant_arg(&cli, project_config.as_ref());
+            let (project_config, searched_paths) =
+                load_project_config_for_context(&cli, Some(args.file.as_path()))?;
+            let tenant_arg =
+                strict_tenant_arg(&cli, project_config.as_ref(), &searched_paths, "reconcile")?;
             let config = build_config(&cli, &active).await;
             let tenant_id = resolve::resolve_tenant_id(&config, tenant_arg, &active).await?;
             reconcile_cli::run(args, &config, &tenant_id).await
@@ -556,4 +569,104 @@ fn tenant_arg<'a>(
     project_config
         .and_then(|config| config.metadata.tenant_id.as_deref())
         .unwrap_or("")
+}
+
+fn auth_manifest_file(args: &commands::auth::manifest::ManifestArgs) -> Option<&Path> {
+    use commands::auth::manifest::ManifestCommand;
+
+    match &args.command {
+        ManifestCommand::Fmt { file, .. }
+        | ManifestCommand::Validate { file }
+        | ManifestCommand::Plan { file, .. }
+        | ManifestCommand::Apply { file, .. } => file.as_deref(),
+    }
+}
+
+fn auth_manifest_needs_tenant(args: &commands::auth::manifest::ManifestArgs) -> bool {
+    !matches!(
+        &args.command,
+        commands::auth::manifest::ManifestCommand::Fmt { .. }
+    )
+}
+
+fn strict_tenant_arg<'a>(
+    cli: &'a Cli,
+    project_config: Option<&'a config::loader::LoadedProjectConfig>,
+    searched_paths: &[PathBuf],
+    command_name: &str,
+) -> Result<&'a str> {
+    if !cli.tenant_id.is_empty() {
+        return Ok(cli.tenant_id.as_str());
+    }
+
+    if let Some(tenant_id) = project_config
+        .and_then(|loaded| loaded.config.metadata.tenant_id.as_deref())
+        .filter(|tenant_id| !tenant_id.trim().is_empty())
+    {
+        return Ok(tenant_id);
+    }
+
+    let paths = if searched_paths.is_empty() {
+        "none".to_string()
+    } else {
+        searched_paths
+            .iter()
+            .map(|path| path.display().to_string())
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    Err(anyhow!(
+        "tenant could not be resolved for {command_name}. Tried --tenant-id, \
+         TACHYON_TENANT_ID, then tachyon.yml metadata.tenantId/metadata.tenant_id. \
+         Searched config path(s): {paths}. Set --tenant-id, export \
+         TACHYON_TENANT_ID, or add metadata.tenantId to tachyon.yml."
+    ))
+}
+
+fn load_project_config_for_context(
+    cli: &Cli,
+    context_file: Option<&Path>,
+) -> Result<(Option<config::loader::LoadedProjectConfig>, Vec<PathBuf>)> {
+    if std::env::var_os("TACHYON_CONFIG").is_some() || cli.config.is_some() {
+        let loaded = config::loader::load_with_path(cli.config.as_deref())?;
+        let searched_paths = loaded
+            .as_ref()
+            .map(|loaded| vec![loaded.path.clone()])
+            .unwrap_or_default();
+        return Ok((loaded, searched_paths));
+    }
+
+    let start = project_config_search_start(context_file)?;
+    let searched_paths = tachyon_yml_search_paths(&start);
+    let loaded = config::loader::load_with_path_from_dir(&start, None)?;
+    Ok((loaded, searched_paths))
+}
+
+fn project_config_search_start(context_file: Option<&Path>) -> Result<PathBuf> {
+    let cwd = std::env::current_dir()?;
+    let Some(path) = context_file else {
+        return Ok(cwd);
+    };
+    let resolved = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        cwd.join(path)
+    };
+    Ok(resolved.parent().unwrap_or(&cwd).to_path_buf())
+}
+
+fn tachyon_yml_search_paths(start: &Path) -> Vec<PathBuf> {
+    let mut paths = Vec::new();
+    let mut dir = start;
+    loop {
+        paths.push(dir.join("tachyon.yml"));
+        if dir.join(".git").exists() {
+            break;
+        }
+        let Some(parent) = dir.parent() else {
+            break;
+        };
+        dir = parent;
+    }
+    paths
 }

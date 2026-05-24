@@ -18,7 +18,7 @@ pub struct ProjectConfig {
 pub struct ProjectMetadata {
     #[serde(default)]
     pub name: Option<String>,
-    #[serde(default)]
+    #[serde(default, alias = "tenantId")]
     pub tenant_id: Option<String>,
 }
 
@@ -30,6 +30,13 @@ pub fn load(config_flag: Option<&Path>) -> Result<Option<ProjectConfig>> {
 pub fn load_with_path(config_flag: Option<&Path>) -> Result<Option<LoadedProjectConfig>> {
     let cwd = env::current_dir()?;
     load_with_path_from(&cwd, config_flag)
+}
+
+pub fn load_with_path_from_dir(
+    cwd: &Path,
+    config_flag: Option<&Path>,
+) -> Result<Option<LoadedProjectConfig>> {
+    load_with_path_from(cwd, config_flag)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -136,6 +143,16 @@ mod tests {
         .unwrap();
     }
 
+    fn write_camel_config(path: &Path, name: &str, tenant_id: &str) {
+        std::fs::write(
+            path,
+            format!(
+                "apiVersion: tachyon/v1\nkind: CloudApp\nmetadata:\n  name: {name}\n  tenantId: {tenant_id}\nspec:\n  framework: vite\n"
+            ),
+        )
+        .unwrap();
+    }
+
     #[test]
     fn discovers_config_from_parent_until_git_root() {
         let _lock = ENV_LOCK.lock().unwrap();
@@ -148,6 +165,18 @@ mod tests {
         let loaded = load_from(&tmp.path().join("a/b"), None).unwrap().unwrap();
         assert_eq!(loaded.metadata.name.as_deref(), Some("from-parent"));
         assert_eq!(loaded.metadata.tenant_id.as_deref(), Some("tn_parent"));
+    }
+
+    #[test]
+    fn parses_camel_case_tenant_id_alias() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        let _guard = EnvGuard::remove(CONFIG_ENV);
+        let tmp = TempDir::new().unwrap();
+        write_camel_config(&tmp.path().join(CONFIG_FILE), "camel", "tn_camel");
+
+        let loaded = load_from(tmp.path(), None).unwrap().unwrap();
+        assert_eq!(loaded.metadata.name.as_deref(), Some("camel"));
+        assert_eq!(loaded.metadata.tenant_id.as_deref(), Some("tn_camel"));
     }
 
     #[test]
