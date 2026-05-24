@@ -1,14 +1,22 @@
-actions:
-  - context: billing
-    name: ViewInvoices
-    description: View invoices
-  - context: billing
-    name: DownloadInvoice
-    description: Download a specific invoice
-    resource_pattern: trn:billing:invoice:*
+- apiVersion: auth.tachyon.io/v1
+  kind: ActionSet
+  metadata:
+    name: billing-actions
+  spec:
+    actions:
+      - context: billing
+        name: ViewInvoices
+        description: View invoices
+      - context: billing
+        name: DownloadInvoice
+        description: Download a specific invoice
+        resource_pattern: trn:billing:invoice:*
 
-policies:
-  - name: BillingViewer
+- apiVersion: auth.tachyon.io/v1
+  kind: Policy
+  metadata:
+    name: BillingViewer
+  spec:
     description: View-only billing access
     actions:
       - action: billing:ViewInvoices

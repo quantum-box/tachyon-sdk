@@ -12,25 +12,37 @@ spec:
 # Reconciled via `tachyon auth manifest plan/apply` or `tachyon reconcile`.
 auth:
   manifest:
-    actions:
-      - context: myapp
-        name: ListItems
-        description: List all items
-      - context: myapp
-        name: CreateItem
-        description: Create a new item
-      - context: myapp
-        name: DeleteItem
-        description: Delete an item
+    - apiVersion: auth.tachyon.io/v1
+      kind: ActionSet
+      metadata:
+        name: myapp-actions
+      spec:
+        actions:
+          - context: myapp
+            name: ListItems
+            description: List all items
+          - context: myapp
+            name: CreateItem
+            description: Create a new item
+          - context: myapp
+            name: DeleteItem
+            description: Delete an item
 
-    policies:
-      - name: MyAppReadOnly
+    - apiVersion: auth.tachyon.io/v1
+      kind: Policy
+      metadata:
+        name: MyAppReadOnly
+      spec:
         description: Read-only access to myapp resources
         actions:
           - action: myapp:ListItems
             effect: allow
 
-      - name: MyAppFullAccess
+    - apiVersion: auth.tachyon.io/v1
+      kind: Policy
+      metadata:
+        name: MyAppFullAccess
+      spec:
         description: Full access to myapp resources
         action_patterns:
           - context_pattern: myapp

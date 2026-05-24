@@ -71,6 +71,7 @@ pub async fn run(args: &ReconcileArgs, config: &Configuration, tenant_id: &str) 
     // and .tachyon/manifests/**/*.yml.  Silently skipped if nothing is found.
     let auth_result = auth_manifest::reconcile(
         &api,
+        tenant_id,
         args.dry_run,
         None, // auto-discovery; --file is for Cloud Apps
         args.prune,
