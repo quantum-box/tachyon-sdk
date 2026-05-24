@@ -115,6 +115,12 @@ cancelled, and timed-out builds return non-zero so automation can stop early.
 > container. Phase 1 requires `--mock <path>`; the live build-config endpoint
 > (PLT-913) lands in Phase 2.
 
+### Agent workspace design
+
+PLT-1622 tracks the design for first-class Agent workspaces: named multi-repo
+project definitions for `tachyon ops tool-jobs create --project <name>`. See
+[`docs/in-progress/plt-1622-agent-workspaces/task.md`](docs/in-progress/plt-1622-agent-workspaces/task.md).
+
 ## Languages
 
 | Language | Directory | Package |
