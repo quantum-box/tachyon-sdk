@@ -111,18 +111,11 @@ impl PolicySpec {
         }
     }
 
-    fn target_tenant_id<'a>(
-        &'a self,
-        default_tenant_id: &'a str,
-    ) -> Option<&'a str> {
+    fn target_tenant_id<'a>(&'a self, default_tenant_id: &'a str) -> Option<&'a str> {
         if self.global {
             None
         } else {
-            Some(
-                self.namespace
-                    .as_deref()
-                    .unwrap_or(default_tenant_id),
-            )
+            Some(self.namespace.as_deref().unwrap_or(default_tenant_id))
         }
     }
 }
@@ -306,13 +299,8 @@ pub fn discover_manifests(explicit_file: Option<&Path>, cwd: &Path) -> Result<Ve
             serde_yaml::from_str(&raw).with_context(|| format!("parse {}", yml_path.display()))?;
         if let Some(auth) = root.auth {
             if let Some(manifest_value) = auth.manifest {
-                let manifest =
-                    parse_manifest_value(manifest_value).with_context(|| {
-                        format!(
-                            "parse auth.manifest in {}",
-                            yml_path.display()
-                        )
-                    })?;
+                let manifest = parse_manifest_value(manifest_value)
+                    .with_context(|| format!("parse auth.manifest in {}", yml_path.display()))?;
                 if !manifest.actions.is_empty() || !manifest.policies.is_empty() {
                     found.push(LoadedManifest {
                         path: yml_path,
@@ -378,21 +366,14 @@ fn load_single_manifest(path: &Path) -> Result<LoadedManifest> {
                 return Ok(LoadedManifest {
                     path: path.to_path_buf(),
                     manifest: parse_manifest_value(manifest)
-                        .with_context(|| {
-                            format!(
-                                "parse auth.manifest in {}",
-                                path.display()
-                            )
-                        })?,
+                        .with_context(|| format!("parse auth.manifest in {}", path.display()))?,
                 });
             }
         }
     }
 
     let value: serde_yaml::Value =
-        serde_yaml::from_str(&raw).with_context(|| {
-            format!("parse manifest {}", path.display())
-        })?;
+        serde_yaml::from_str(&raw).with_context(|| format!("parse manifest {}", path.display()))?;
     let manifest = parse_manifest_value(value)
         .with_context(|| format!("parse manifest {}", path.display()))?;
     Ok(LoadedManifest {
@@ -425,9 +406,7 @@ fn parse_manifest_value(value: serde_yaml::Value) -> Result<AuthManifest> {
     ))
 }
 
-fn parse_k8s_documents(
-    documents: Vec<serde_yaml::Value>,
-) -> Result<AuthManifest> {
+fn parse_k8s_documents(documents: Vec<serde_yaml::Value>) -> Result<AuthManifest> {
     let mut manifest = AuthManifest::default();
     for document in documents {
         let doc: K8sAuthDocument = serde_yaml::from_value(document)?;
@@ -439,13 +418,11 @@ fn parse_k8s_documents(
         }
         match doc.kind.as_str() {
             "ActionSet" => {
-                let spec: ActionSetSpec =
-                    serde_yaml::from_value(doc.spec)?;
+                let spec: ActionSetSpec = serde_yaml::from_value(doc.spec)?;
                 manifest.actions.extend(spec.actions);
             }
             "Policy" => {
-                let spec: K8sPolicySpec =
-                    serde_yaml::from_value(doc.spec)?;
+                let spec: K8sPolicySpec = serde_yaml::from_value(doc.spec)?;
                 let namespace = doc.metadata.namespace;
                 manifest.policies.push(PolicySpec {
                     name: doc.metadata.name,
@@ -457,10 +434,7 @@ fn parse_k8s_documents(
                 });
             }
             other => {
-                return Err(anyhow!(
-                    "unsupported auth manifest kind '{}'",
-                    other
-                ));
+                return Err(anyhow!("unsupported auth manifest kind '{}'", other));
             }
         }
     }
@@ -513,11 +487,7 @@ pub fn merge_manifests(manifests: Vec<LoadedManifest>) -> AuthManifest {
             }
         }
         for policy in loaded.manifest.policies {
-            let key = format!(
-                "{}:{}",
-                policy.scope_label(),
-                policy.name
-            );
+            let key = format!("{}:{}", policy.scope_label(), policy.name);
             if seen_policies.insert(key) {
                 merged.policies.push(policy);
             }
@@ -975,8 +945,7 @@ pub async fn run(
 
             let api =
                 ApiClient::new_with_auth_diagnostics(config, tenant_id, auth_diagnostics.clone())?;
-            let result =
-                apply_manifest(&api, &merged, *prune, tenant_id).await?;
+            let result = apply_manifest(&api, &merged, *prune, tenant_id).await?;
 
             let has_errors = result
                 .actions
@@ -1015,8 +984,7 @@ pub async fn reconcile(
     json: bool,
 ) -> Result<Option<()>> {
     let cwd = std::env::current_dir()?;
-    reconcile_in(api, default_tenant_id, dry_run, file, prune, json, &cwd)
-        .await
+    reconcile_in(api, default_tenant_id, dry_run, file, prune, json, &cwd).await
 }
 
 pub async fn reconcile_in(
@@ -1044,8 +1012,7 @@ pub async fn reconcile_in(
             print_plan(&report);
         }
     } else {
-        let result =
-            apply_manifest(api, &merged, prune, default_tenant_id).await?;
+        let result = apply_manifest(api, &merged, prune, default_tenant_id).await?;
         let has_errors = result
             .actions
             .iter()
@@ -1198,9 +1165,7 @@ mod tests {
         let dummy_config = tachyon_sdk::apis::configuration::Configuration::default();
         let api = ApiClient::new(&dummy_config, "tn_test").unwrap();
 
-        let result =
-            reconcile_in(&api, "tn_test", false, None, false, false, tmp.path())
-                .await;
+        let result = reconcile_in(&api, "tn_test", false, None, false, false, tmp.path()).await;
         assert!(
             matches!(result, Ok(None)),
             "expected Ok(None) but got {:?}",
@@ -1301,10 +1266,8 @@ spec:
 
     #[test]
     fn flat_policy_uses_caller_tenant_scope() {
-        let manifest: AuthManifest = serde_yaml::from_str(
-            "actions: []\npolicies:\n  - name: FlatPolicy\n",
-        )
-        .unwrap();
+        let manifest: AuthManifest =
+            serde_yaml::from_str("actions: []\npolicies:\n  - name: FlatPolicy\n").unwrap();
         let policy = &manifest.policies[0];
         assert!(!policy.global);
         assert_eq!(policy.target_tenant_id("tn_default"), Some("tn_default"));
