@@ -380,6 +380,9 @@ async fn run() -> Result<()> {
     // one-shot override). `auth login` / `auth use` choose their own target
     // profile, so they ignore `active`.
     let active = auth::resolve_active_profile(cli.profile.as_deref())?;
+    if cli.api_key.is_none() {
+        auth::set_runtime_auth_context(active.clone(), build_oauth_config(&cli));
+    }
 
     match &cli.command {
         Commands::Auth(args) => match &args.command {

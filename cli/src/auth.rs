@@ -5,6 +5,7 @@ use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::path::PathBuf;
+use std::sync::OnceLock;
 use std::time::Duration;
 
 /// Polling interval when waiting for the callback relay.
@@ -23,6 +24,26 @@ pub struct OAuthConfig {
     pub client_secret: String,
     pub redirect_uri: String,
     pub scopes: Vec<String>,
+}
+
+/// Runtime OAuth context used by HTTP clients to refresh after a 401.
+#[derive(Debug, Clone)]
+pub struct RuntimeAuthContext {
+    pub profile: String,
+    pub oauth_config: OAuthConfig,
+}
+
+static RUNTIME_AUTH_CONTEXT: OnceLock<RuntimeAuthContext> = OnceLock::new();
+
+pub fn set_runtime_auth_context(profile: String, oauth_config: OAuthConfig) {
+    let _ = RUNTIME_AUTH_CONTEXT.set(RuntimeAuthContext {
+        profile,
+        oauth_config,
+    });
+}
+
+pub fn runtime_auth_context() -> Option<&'static RuntimeAuthContext> {
+    RUNTIME_AUTH_CONTEXT.get()
 }
 
 impl OAuthConfig {
@@ -320,6 +341,25 @@ pub fn save_profile(name: &str, creds: &StoredCredentials) -> Result<()> {
     Ok(())
 }
 
+/// Save the legacy single-account credentials file for older tooling and
+/// scripts that still read `~/.config/tachyon/credentials.json` directly.
+pub fn save_legacy_credentials(creds: &StoredCredentials) -> Result<()> {
+    let dir = config_dir()?;
+    std::fs::create_dir_all(&dir).with_context(|| format!("failed to create {}", dir.display()))?;
+    let path = credentials_path()?;
+    let tmp = path.with_extension("tmp");
+    let data = serde_json::to_string_pretty(creds)?;
+    std::fs::write(&tmp, data).with_context(|| format!("failed to write {}", tmp.display()))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o600))?;
+    }
+    std::fs::rename(&tmp, &path)
+        .with_context(|| format!("failed to rename {} -> {}", tmp.display(), path.display()))?;
+    Ok(())
+}
+
 /// Delete a profile's credentials file. Returns `true` if the file existed.
 pub fn delete_profile(name: &str) -> Result<bool> {
     let path = profile_path(name)?;
@@ -524,6 +564,7 @@ pub async fn refresh_access_token(
     };
 
     save_profile(profile, &new_creds)?;
+    save_legacy_credentials(&new_creds)?;
     Ok(new_creds)
 }
 
@@ -581,6 +622,7 @@ pub async fn login(oauth_config: &OAuthConfig, api_url: &str, profile: &str) -> 
     }
 
     save_profile(profile, &creds)?;
+    save_legacy_credentials(&creds)?;
 
     // First-time setup: if no active_profile pointer exists yet, point at the
     // freshly-logged-in profile so subsequent commands work without an extra

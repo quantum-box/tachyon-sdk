@@ -4,8 +4,12 @@
 //! both `HOME` and `XDG_CONFIG_HOME` (covers Linux + macOS lookup paths).
 
 use std::fs;
+use std::io::{Read, Write};
+use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::mpsc;
+use std::thread;
 
 use tempfile::TempDir;
 
@@ -23,6 +27,16 @@ fn run(home: &Path, args: &[&str]) -> std::process::Output {
         .args(args)
         .output()
         .expect("run tachyon binary")
+}
+
+fn isolated_command(home: &Path) -> Command {
+    let mut cmd = Command::new(bin());
+    cmd.env("HOME", home)
+        .env("XDG_CONFIG_HOME", home.join(".config"))
+        .env_remove("TACHYON_PROFILE")
+        .env_remove("TACHYON_API_KEY")
+        .env_remove("TACHYON_TENANT_ID");
+    cmd
 }
 
 fn config_root(home: &Path) -> PathBuf {
@@ -55,6 +69,38 @@ fn assert_ok(output: &std::process::Output, label: &str) {
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr),
     );
+}
+
+fn start_login_server() -> (String, mpsc::Receiver<String>, thread::JoinHandle<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    let (tx, rx) = mpsc::channel();
+    let handle = thread::spawn(move || {
+        for _ in 0..3 {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut buf = [0_u8; 8192];
+            let n = stream.read(&mut buf).unwrap();
+            let req = String::from_utf8_lossy(&buf[..n]).to_string();
+            tx.send(req.clone()).unwrap();
+
+            let body = if req.starts_with("GET /v1/auth/cli/poll") {
+                r#"{"code":"callback-code"}"#.to_string()
+            } else if req.starts_with("POST /oauth2/token") {
+                r#"{"access_token":"access-after-login","refresh_token":"refresh-after-login","id_token":"id-after-login","expires_in":3600,"token_type":"Bearer"}"#.to_string()
+            } else if req.starts_with("GET /v1/auth/operators/by-user") {
+                r#"[{"id":"tn_login123","alias":"login-tenant"}]"#.to_string()
+            } else {
+                r#"{"error":"unexpected request"}"#.to_string()
+            };
+            let response = format!(
+                "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            stream.write_all(response.as_bytes()).unwrap();
+        }
+    });
+    (url, rx, handle)
 }
 
 #[test]
@@ -214,6 +260,42 @@ fn legacy_credentials_auto_migrate_to_default_profile() {
         default_line.trim_start().starts_with('*'),
         "default should be active: {default_line:?}"
     );
+}
+
+#[test]
+fn auth_login_writes_profile_and_legacy_credentials_json() {
+    let tmp = TempDir::new().unwrap();
+    let (server_url, rx, handle) = start_login_server();
+
+    let out = isolated_command(tmp.path())
+        .env("TACHYON_API_URL", &server_url)
+        .env("TACHYON_COGNITO_DOMAIN", &server_url)
+        .env("TACHYON_COGNITO_CLIENT_ID", "client-id")
+        .env("TACHYON_COGNITO_CLIENT_SECRET", "client-secret")
+        .args(["auth", "login", "--profile", "work"])
+        .output()
+        .expect("run tachyon auth login");
+
+    assert_ok(&out, "auth login");
+    handle.join().unwrap();
+    let requests: Vec<String> = rx.try_iter().collect();
+    assert!(requests
+        .iter()
+        .any(|r| r.starts_with("GET /v1/auth/cli/poll")));
+    assert!(requests.iter().any(|r| r.starts_with("POST /oauth2/token")));
+    assert!(requests
+        .iter()
+        .any(|r| r.starts_with("GET /v1/auth/operators/by-user")));
+
+    let profile_path = config_root(tmp.path()).join("profiles/work.json");
+    let legacy_path = config_root(tmp.path()).join("credentials.json");
+    assert!(profile_path.exists());
+    assert!(legacy_path.exists());
+    let profile = fs::read_to_string(profile_path).unwrap();
+    let legacy = fs::read_to_string(legacy_path).unwrap();
+    assert!(profile.contains("access-after-login"));
+    assert!(legacy.contains("access-after-login"));
+    assert!(legacy.contains("tn_login123"));
 }
 
 #[test]
