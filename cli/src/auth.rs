@@ -14,6 +14,12 @@ const POLL_TIMEOUT: Duration = Duration::from_secs(300);
 
 /// Default profile name when none is configured.
 pub const DEFAULT_PROFILE: &str = "default";
+pub const DEFAULT_OAUTH_SCOPES: &[&str] = &[
+    "openid",
+    "profile",
+    "email",
+    "aws.cognito.signin.user.admin",
+];
 
 /// Cognito OAuth configuration.
 #[derive(Debug, Clone)]
@@ -51,7 +57,10 @@ impl Default for OAuthConfig {
             client_id: String::new(),
             client_secret: String::new(),
             redirect_uri: String::new(),
-            scopes: vec!["openid".into(), "profile".into(), "email".into()],
+            scopes: DEFAULT_OAUTH_SCOPES
+                .iter()
+                .map(|scope| (*scope).to_string())
+                .collect(),
         }
     }
 }
