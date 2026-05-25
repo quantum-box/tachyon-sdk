@@ -1340,7 +1340,7 @@ fn extract_secret_ref(key: &str, value_from: &Value) -> Result<String> {
             "env var {key} valueFrom.secret must be a key string or object with path"
         ));
     };
-    if path.is_empty() || path.contains('/') {
+    if path.is_empty() {
         return Err(anyhow!(
             "env var {key} valueFrom.secret must reference a single env key"
         ));
