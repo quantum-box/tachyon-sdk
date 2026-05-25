@@ -23,6 +23,15 @@ fn isolated_command(home: &Path) -> Command {
     cmd
 }
 
+fn assert_ok(output: &std::process::Output, label: &str) {
+    assert!(
+        output.status.success(),
+        "{label} failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+}
+
 fn write_profile(home: &Path) {
     let root = home.join(".config").join("tachyon");
     let profiles = root.join("profiles");
@@ -34,6 +43,25 @@ fn write_profile(home: &Path) {
   "access_token": "access-token-for-api",
   "refresh_token": null,
   "id_token": "id-token-not-selected",
+  "expires_at": null,
+  "token_type": "Bearer",
+  "operator_id": "tn_test1234567890"
+}"#,
+    )
+    .unwrap();
+}
+
+fn write_refreshable_profile(home: &Path) {
+    let root = home.join(".config").join("tachyon");
+    let profiles = root.join("profiles");
+    fs::create_dir_all(&profiles).unwrap();
+    fs::write(root.join("active_profile"), "default\n").unwrap();
+    fs::write(
+        profiles.join("default.json"),
+        r#"{
+  "access_token": "stale-access-token",
+  "refresh_token": "refresh-token-for-api",
+  "id_token": "stale-id-token",
   "expires_at": null,
   "token_type": "Bearer",
   "operator_id": "tn_test1234567890"
@@ -86,6 +114,52 @@ fn start_actions_server() -> (String, mpsc::Receiver<String>, thread::JoinHandle
     (url, rx, handle)
 }
 
+fn start_refresh_then_actions_server() -> (String, mpsc::Receiver<String>, thread::JoinHandle<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    let (tx, rx) = mpsc::channel();
+    let handle = thread::spawn(move || {
+        for _ in 0..3 {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut buf = [0_u8; 8192];
+            let n = stream.read(&mut buf).unwrap();
+            let req = String::from_utf8_lossy(&buf[..n]).to_string();
+            tx.send(req.clone()).unwrap();
+
+            let (status, body) = if req.starts_with("GET /v1/auth/actions")
+                && req.contains("authorization: Bearer stale-access-token")
+            {
+                (
+                    "401 Unauthorized",
+                    r#"{"code":"UNAUTHORIZED","message":"expired"}"#,
+                )
+            } else if req.starts_with("POST /oauth2/token") {
+                (
+                    "200 OK",
+                    r#"{"access_token":"fresh-access-token","refresh_token":"fresh-refresh-token","id_token":"fresh-id-token","expires_in":3600,"token_type":"Bearer"}"#,
+                )
+            } else if req.starts_with("GET /v1/auth/actions")
+                && req.contains("authorization: Bearer fresh-access-token")
+            {
+                ("200 OK", r#"{"actions":[]}"#)
+            } else {
+                (
+                    "500 Internal Server Error",
+                    r#"{"error":"unexpected request"}"#,
+                )
+            };
+
+            let response = format!(
+                "HTTP/1.1 {status}\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            stream.write_all(response.as_bytes()).unwrap();
+        }
+    });
+    (url, rx, handle)
+}
+
 #[test]
 fn auth_manifest_plan_uses_access_token_and_explains_unauthorized() {
     let tmp = TempDir::new().unwrap();
@@ -126,6 +200,55 @@ fn auth_manifest_plan_uses_access_token_and_explains_unauthorized() {
     assert!(stderr.contains("issuer"));
     assert!(stderr.contains("audience"));
     assert!(stderr.contains("COGNITO_ALLOWED_CLIENT_IDS"));
+}
+
+#[test]
+fn auth_manifest_plan_refreshes_access_token_after_401() {
+    let tmp = TempDir::new().unwrap();
+    write_refreshable_profile(tmp.path());
+    fs::write(
+        tmp.path().join("auth.yml"),
+        "actions:\n  - context: test\n    name: List\npolicies: []\n",
+    )
+    .unwrap();
+    let (api_url, rx, handle) = start_refresh_then_actions_server();
+
+    let output = isolated_command(tmp.path())
+        .current_dir(tmp.path())
+        .env("TACHYON_API_URL", &api_url)
+        .env("TACHYON_COGNITO_DOMAIN", &api_url)
+        .env("TACHYON_COGNITO_CLIENT_ID", "client-id")
+        .env("TACHYON_COGNITO_CLIENT_SECRET", "client-secret")
+        .args([
+            "--tenant-id",
+            "tn_test1234567890",
+            "auth",
+            "manifest",
+            "plan",
+            "--file",
+            "auth.yml",
+        ])
+        .output()
+        .expect("run tachyon auth manifest plan");
+
+    handle.join().unwrap();
+    let requests: Vec<String> = rx.try_iter().collect();
+    assert_ok(&output, "auth manifest plan with refresh");
+    assert_eq!(
+        requests
+            .iter()
+            .filter(|r| r.starts_with("GET /v1/auth/actions"))
+            .count(),
+        2
+    );
+    assert!(requests.iter().any(|r| r.starts_with("POST /oauth2/token")));
+
+    let profile =
+        fs::read_to_string(tmp.path().join(".config/tachyon/profiles/default.json")).unwrap();
+    assert!(profile.contains("fresh-access-token"));
+    assert!(profile.contains("fresh-refresh-token"));
+    let legacy = fs::read_to_string(tmp.path().join(".config/tachyon/credentials.json")).unwrap();
+    assert!(legacy.contains("fresh-access-token"));
 }
 
 #[test]

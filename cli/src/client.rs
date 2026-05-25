@@ -3,6 +3,8 @@ use reqwest::{header, Client};
 use serde::de::DeserializeOwned;
 use tachyon_sdk::apis::configuration::Configuration;
 
+use crate::auth;
+
 /// Non-secret context used to explain authentication failures.
 #[derive(Debug, Clone)]
 pub struct AuthDiagnostics {
@@ -58,6 +60,18 @@ impl ApiClient {
             .with_context(|| format!("GET {url}"))?;
         let status = resp.status();
         if !status.is_success() {
+            if status == reqwest::StatusCode::UNAUTHORIZED {
+                if let Some(token) = self.refresh_bearer_after_401().await {
+                    let retry = self
+                        .client
+                        .get(&url)
+                        .bearer_auth(token)
+                        .send()
+                        .await
+                        .with_context(|| format!("GET {url}"))?;
+                    return self.json_or_error("GET", path, retry).await;
+                }
+            }
             let body = resp.text().await.unwrap_or_default();
             return Err(self.http_error("GET", path, status, &body));
         }
@@ -82,6 +96,19 @@ impl ApiClient {
             .with_context(|| format!("GET {url}"))?;
         let status = resp.status();
         if !status.is_success() {
+            if status == reqwest::StatusCode::UNAUTHORIZED {
+                if let Some(token) = self.refresh_bearer_after_401().await {
+                    let retry = self
+                        .client
+                        .get(&url)
+                        .query(query)
+                        .bearer_auth(token)
+                        .send()
+                        .await
+                        .with_context(|| format!("GET {url}"))?;
+                    return self.json_or_error("GET", path, retry).await;
+                }
+            }
             let body = resp.text().await.unwrap_or_default();
             return Err(self.http_error("GET", path, status, &body));
         }
@@ -106,6 +133,19 @@ impl ApiClient {
             .with_context(|| format!("POST {url}"))?;
         let status = resp.status();
         if !status.is_success() {
+            if status == reqwest::StatusCode::UNAUTHORIZED {
+                if let Some(token) = self.refresh_bearer_after_401().await {
+                    let retry = self
+                        .client
+                        .post(&url)
+                        .json(body)
+                        .bearer_auth(token)
+                        .send()
+                        .await
+                        .with_context(|| format!("POST {url}"))?;
+                    return self.json_or_error("POST", path, retry).await;
+                }
+            }
             let body_text = resp.text().await.unwrap_or_default();
             return Err(self.http_error("POST", path, status, &body_text));
         }
@@ -125,6 +165,23 @@ impl ApiClient {
             .with_context(|| format!("POST {url}"))?;
         let status = resp.status();
         if !status.is_success() {
+            if status == reqwest::StatusCode::UNAUTHORIZED {
+                if let Some(token) = self.refresh_bearer_after_401().await {
+                    let retry = self
+                        .client
+                        .post(&url)
+                        .bearer_auth(token)
+                        .send()
+                        .await
+                        .with_context(|| format!("POST {url}"))?;
+                    let retry_status = retry.status();
+                    if retry_status.is_success() {
+                        return Ok(retry_status.to_string());
+                    }
+                    let body = retry.text().await.unwrap_or_default();
+                    return Err(self.http_error("POST", path, retry_status, &body));
+                }
+            }
             let body = resp.text().await.unwrap_or_default();
             return Err(self.http_error("POST", path, status, &body));
         }
@@ -143,6 +200,24 @@ impl ApiClient {
             .with_context(|| format!("POST {url}"))?;
         let status = resp.status();
         if !status.is_success() {
+            if status == reqwest::StatusCode::UNAUTHORIZED {
+                if let Some(token) = self.refresh_bearer_after_401().await {
+                    let retry = self
+                        .client
+                        .post(&url)
+                        .json(body)
+                        .bearer_auth(token)
+                        .send()
+                        .await
+                        .with_context(|| format!("POST {url}"))?;
+                    let retry_status = retry.status();
+                    if retry_status.is_success() {
+                        return Ok(());
+                    }
+                    let body_text = retry.text().await.unwrap_or_default();
+                    return Err(self.http_error("POST", path, retry_status, &body_text));
+                }
+            }
             let body_text = resp.text().await.unwrap_or_default();
             return Err(anyhow!(
                 "POST {path} failed: status={status}, body={body_text}"
@@ -167,6 +242,19 @@ impl ApiClient {
             .with_context(|| format!("PATCH {url}"))?;
         let status = resp.status();
         if !status.is_success() {
+            if status == reqwest::StatusCode::UNAUTHORIZED {
+                if let Some(token) = self.refresh_bearer_after_401().await {
+                    let retry = self
+                        .client
+                        .patch(&url)
+                        .json(body)
+                        .bearer_auth(token)
+                        .send()
+                        .await
+                        .with_context(|| format!("PATCH {url}"))?;
+                    return self.json_or_error("PATCH", path, retry).await;
+                }
+            }
             let body_text = resp.text().await.unwrap_or_default();
             return Err(self.http_error("PATCH", path, status, &body_text));
         }
@@ -191,6 +279,19 @@ impl ApiClient {
             .with_context(|| format!("PUT {url}"))?;
         let status = resp.status();
         if !status.is_success() {
+            if status == reqwest::StatusCode::UNAUTHORIZED {
+                if let Some(token) = self.refresh_bearer_after_401().await {
+                    let retry = self
+                        .client
+                        .put(&url)
+                        .json(body)
+                        .bearer_auth(token)
+                        .send()
+                        .await
+                        .with_context(|| format!("PUT {url}"))?;
+                    return self.json_or_error("PUT", path, retry).await;
+                }
+            }
             let body_text = resp.text().await.unwrap_or_default();
             return Err(self.http_error("PUT", path, status, &body_text));
         }
@@ -210,10 +311,88 @@ impl ApiClient {
             .with_context(|| format!("DELETE {url}"))?;
         let status = resp.status();
         if !status.is_success() {
+            if status == reqwest::StatusCode::UNAUTHORIZED {
+                if let Some(token) = self.refresh_bearer_after_401().await {
+                    let retry = self
+                        .client
+                        .delete(&url)
+                        .bearer_auth(token)
+                        .send()
+                        .await
+                        .with_context(|| format!("DELETE {url}"))?;
+                    let retry_status = retry.status();
+                    if retry_status.is_success() {
+                        return Ok(());
+                    }
+                    let body = retry.text().await.unwrap_or_default();
+                    return Err(self.http_error("DELETE", path, retry_status, &body));
+                }
+            }
             let body = resp.text().await.unwrap_or_default();
             return Err(self.http_error("DELETE", path, status, &body));
         }
         Ok(())
+    }
+
+    async fn json_or_error<T: DeserializeOwned>(
+        &self,
+        method: &str,
+        path: &str,
+        resp: reqwest::Response,
+    ) -> Result<T> {
+        let status = resp.status();
+        if !status.is_success() {
+            let body = resp.text().await.unwrap_or_default();
+            return Err(self.http_error(method, path, status, &body));
+        }
+        resp.json()
+            .await
+            .with_context(|| format!("parse {method} {path}"))
+    }
+
+    async fn refresh_bearer_after_401(&self) -> Option<String> {
+        let context = auth::runtime_auth_context()?;
+        let creds = match auth::load_profile(&context.profile) {
+            Ok(Some(creds)) => creds,
+            Ok(None) => return None,
+            Err(err) => {
+                eprintln!(
+                    "Warning: failed to load profile '{}' for token refresh: {err}",
+                    context.profile
+                );
+                return None;
+            }
+        };
+        if creds
+            .refresh_token
+            .as_deref()
+            .unwrap_or_default()
+            .is_empty()
+        {
+            return None;
+        }
+
+        match auth::refresh_access_token(&context.oauth_config, &context.profile, &creds).await {
+            Ok(new_creds) => {
+                let selected = auth::select_api_bearer_token(&new_creds);
+                let token_kind = selected
+                    .as_ref()
+                    .map(|token| token.kind.as_str())
+                    .unwrap_or("none");
+                eprintln!(
+                    "Token refreshed after 401 (profile: {}, api_token={token_kind}).",
+                    context.profile
+                );
+                selected.map(|token| token.value)
+            }
+            Err(err) => {
+                eprintln!(
+                    "Warning: token refresh after 401 failed for profile '{}': {err}.",
+                    context.profile
+                );
+                None
+            }
+        }
     }
 
     fn http_error(
