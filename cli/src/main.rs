@@ -330,7 +330,10 @@ fn build_oauth_config(cli: &Cli) -> auth::OAuthConfig {
         client_id: cli.cognito_client_id.clone(),
         client_secret: cli.cognito_client_secret.clone(),
         redirect_uri,
-        scopes: vec!["openid".into(), "profile".into(), "email".into()],
+        scopes: auth::DEFAULT_OAUTH_SCOPES
+            .iter()
+            .map(|scope| (*scope).to_string())
+            .collect(),
     }
 }
 
