@@ -9,6 +9,7 @@ mod config;
 mod iac_cli;
 mod image_cli;
 mod install_cli;
+mod linear_cli;
 mod mcp;
 mod mcp_cli;
 mod ops_cli;
@@ -212,6 +213,8 @@ enum Commands {
     Image(image_cli::ImageArgs),
     /// Send Slack messages through connected integrations
     Slack(slack_cli::SlackArgs),
+    /// Manage Linear issues through connected integrations
+    Linear(linear_cli::LinearArgs),
     /// Convert text to speech using AI TTS models
     Tts(tts_cli::TtsArgs),
     /// Run as an MCP (Model Context Protocol) server (stdio or HTTP)
@@ -537,6 +540,13 @@ async fn run() -> Result<()> {
             let config = build_config(&cli, &active).await;
             let tenant_id = resolve::resolve_tenant_id(&config, tenant_arg, &active).await?;
             slack_cli::run(args, &config, &tenant_id).await
+        }
+        Commands::Linear(args) => {
+            let project_config = config::loader::load(cli.config.as_deref())?;
+            let tenant_arg = tenant_arg(&cli, project_config.as_ref());
+            let config = build_config(&cli, &active).await;
+            let tenant_id = resolve::resolve_tenant_id(&config, tenant_arg, &active).await?;
+            linear_cli::run(args, &config, &tenant_id).await
         }
         Commands::Tts(args) => {
             let project_config = config::loader::load(cli.config.as_deref())?;
