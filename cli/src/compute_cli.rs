@@ -108,6 +108,9 @@ pub enum ComputeCommand {
         /// Emit compact JSON Lines for coding agents
         #[arg(long)]
         agent: bool,
+        /// Emit raw runtime log JSON Lines when used with --tail
+        #[arg(long)]
+        json: bool,
     },
 }
 
@@ -1733,11 +1736,66 @@ async fn run_builds_watch(
     }
 }
 
-async fn run_runtime_log_tail(api: &ApiClient, app_id: &str) -> Result<()> {
+#[derive(Debug, Clone, Copy)]
+struct RuntimeLogTailOptions {
+    raw_json: bool,
+}
+
+#[derive(Debug, Default)]
+struct SseEvent {
+    event: Option<String>,
+    data: Vec<String>,
+}
+
+async fn run_runtime_log_tail(
+    api: &ApiClient,
+    app_id: &str,
+    options: RuntimeLogTailOptions,
+) -> Result<()> {
     let url = format!("{}/v1/compute/apps/{app_id}/logs/tail", api.base_url);
+    let mut backoff = Duration::from_secs(1);
+    let max_backoff = Duration::from_secs(30);
+
+    loop {
+        let result = tokio::select! {
+            biased;
+            signal = tokio::signal::ctrl_c() => {
+                signal?;
+                eprintln!("runtime log tail stopped.");
+                return Ok(());
+            }
+            result = run_runtime_log_tail_once(api, &url, options) => result,
+        };
+
+        if let Err(error) = result {
+            eprintln!("runtime log tail error: {error}");
+        } else {
+            eprintln!("runtime log tail disconnected.");
+        }
+
+        eprintln!("reconnecting in {}s...", backoff.as_secs());
+        tokio::select! {
+            biased;
+            signal = tokio::signal::ctrl_c() => {
+                signal?;
+                eprintln!("runtime log tail stopped.");
+                return Ok(());
+            }
+            _ = sleep(backoff) => {}
+        }
+        backoff = std::cmp::min(backoff * 2, max_backoff);
+    }
+}
+
+async fn run_runtime_log_tail_once(
+    api: &ApiClient,
+    url: &str,
+    options: RuntimeLogTailOptions,
+) -> Result<()> {
     let mut resp = api
         .client
-        .get(&url)
+        .get(url)
+        .header(reqwest::header::ACCEPT, "text/event-stream")
         .send()
         .await
         .map_err(|e| anyhow!("GET {url} failed: {e}"))?;
@@ -1752,22 +1810,306 @@ async fn run_runtime_log_tail(api: &ApiClient, app_id: &str) -> Result<()> {
     let mut pending = String::new();
     while let Some(chunk) = resp.chunk().await? {
         pending.push_str(&String::from_utf8_lossy(&chunk));
-        while let Some(pos) = pending.find('\n') {
-            let line = pending[..pos].trim_end_matches('\r').to_string();
-            pending.drain(..=pos);
-            if let Some(data) = line.strip_prefix("data:") {
-                println!("{}", data.trim_start());
-            } else if let Some(event) = line.strip_prefix("event:") {
-                if event.trim() == "error" {
-                    eprint!("runtime log tail error: ");
-                    std::io::stderr().flush().ok();
-                }
+        for event in drain_sse_events(&mut pending) {
+            if print_runtime_log_tail_event(&event, options.raw_json)? {
+                return Err(anyhow!("runtime log tail stream error"));
             }
+        }
+        std::io::stdout().flush().ok();
+    }
+    if let Some(event) = parse_sse_event(&pending) {
+        if print_runtime_log_tail_event(&event, options.raw_json)? {
+            return Err(anyhow!("runtime log tail stream error"));
         }
         std::io::stdout().flush().ok();
     }
 
     Ok(())
+}
+
+fn drain_sse_events(pending: &mut String) -> Vec<SseEvent> {
+    let mut events = Vec::new();
+    while let Some((pos, delimiter_len)) = find_sse_event_boundary(pending) {
+        let raw = pending[..pos].to_string();
+        pending.drain(..pos + delimiter_len);
+        if let Some(event) = parse_sse_event(&raw) {
+            events.push(event);
+        }
+    }
+    events
+}
+
+fn find_sse_event_boundary(input: &str) -> Option<(usize, usize)> {
+    match (input.find("\r\n\r\n"), input.find("\n\n")) {
+        (Some(crlf), Some(lf)) if crlf <= lf => Some((crlf, 4)),
+        (Some(_), Some(lf)) => Some((lf, 2)),
+        (Some(crlf), None) => Some((crlf, 4)),
+        (None, Some(lf)) => Some((lf, 2)),
+        (None, None) => None,
+    }
+}
+
+fn parse_sse_event(raw: &str) -> Option<SseEvent> {
+    let mut event = SseEvent::default();
+    for line in raw.lines() {
+        let line = line.trim_end_matches('\r');
+        if line.is_empty() || line.starts_with(':') {
+            continue;
+        }
+        if let Some(value) = line.strip_prefix("event:") {
+            event.event = Some(value.trim().to_string());
+        } else if let Some(value) = line.strip_prefix("data:") {
+            event.data.push(value.trim_start().to_string());
+        }
+    }
+    (!event.data.is_empty()).then_some(event)
+}
+
+fn print_runtime_log_tail_event(event: &SseEvent, raw_json: bool) -> Result<bool> {
+    let data = event.data.join("\n");
+    if event.event.as_deref() == Some("error") {
+        eprintln!(
+            "runtime log tail stream error: {}",
+            format_runtime_log_line(&data)
+        );
+        return Ok(true);
+    }
+
+    if raw_json {
+        println!("{data}");
+    } else {
+        for line in format_runtime_log_lines(&data) {
+            println!("{line}");
+        }
+    }
+    Ok(false)
+}
+
+fn format_runtime_log_lines(data: &str) -> Vec<String> {
+    let Ok(value) = serde_json::from_str::<Value>(data) else {
+        return vec![data.to_string()];
+    };
+    let Some(object) = value.as_object() else {
+        return vec![format_runtime_log_value(&value)];
+    };
+
+    let timestamp = runtime_log_timestamp(object);
+    let mut lines = Vec::new();
+
+    if let Some(summary) = runtime_log_request_summary(object) {
+        lines.push(format!("{timestamp} {summary}"));
+    }
+
+    if let Some(exceptions) = object.get("exceptions").and_then(Value::as_array) {
+        for exception in exceptions {
+            lines.push(format!(
+                "{timestamp} ERROR {}",
+                format_runtime_log_exception(exception)
+            ));
+        }
+    }
+
+    if let Some(logs) = object.get("logs").and_then(Value::as_array) {
+        for log in logs {
+            lines.push(format!("{timestamp} {}", format_runtime_log_console(log)));
+        }
+    }
+
+    if lines.is_empty() {
+        lines.push(format!(
+            "{timestamp} {}",
+            runtime_log_generic_summary(object, &value)
+        ));
+    }
+
+    lines
+}
+
+fn format_runtime_log_line(data: &str) -> String {
+    format_runtime_log_lines(data).join(" | ")
+}
+
+fn runtime_log_timestamp(object: &serde_json::Map<String, Value>) -> String {
+    let millis = object
+        .get("eventTimestamp")
+        .or_else(|| object.get("timestamp"))
+        .and_then(value_to_i64);
+    if let Some(millis) = millis {
+        return match Utc.timestamp_millis_opt(millis) {
+            chrono::LocalResult::Single(dt) => format!("[{}]", dt.format("%H:%M:%S")),
+            _ => format!("[{millis}]"),
+        };
+    }
+
+    let timestamp = object
+        .get("timestamp")
+        .or_else(|| object.get("eventTimestamp"))
+        .and_then(Value::as_str);
+    if let Some(timestamp) = timestamp {
+        if let Ok(parsed) = DateTime::parse_from_rfc3339(timestamp) {
+            return format!("[{}]", parsed.with_timezone(&Utc).format("%H:%M:%S"));
+        }
+    }
+
+    format!("[{}]", Utc::now().format("%H:%M:%S"))
+}
+
+fn runtime_log_request_summary(object: &serde_json::Map<String, Value>) -> Option<String> {
+    let request = object.get("request")?.as_object()?;
+    let method = request
+        .get("method")
+        .or_else(|| request.get("requestMethod"))
+        .and_then(Value::as_str)
+        .unwrap_or("REQUEST");
+    let url = request
+        .get("url")
+        .or_else(|| request.get("path"))
+        .and_then(Value::as_str)
+        .unwrap_or("-");
+    let path = runtime_log_url_path(url);
+    let status = object
+        .get("response")
+        .and_then(Value::as_object)
+        .and_then(|response| {
+            response
+                .get("status")
+                .or_else(|| response.get("statusCode"))
+                .and_then(value_to_i64)
+        })
+        .map(|status| status.to_string())
+        .unwrap_or_else(|| "-".to_string());
+    let cpu = object
+        .get("cpuTime")
+        .or_else(|| object.get("cpu_time"))
+        .and_then(value_to_i64);
+    let source = object
+        .get("scriptName")
+        .or_else(|| object.get("source"))
+        .and_then(Value::as_str);
+
+    let mut line = format!("{method} {path} {status}");
+    if let Some(cpu) = cpu {
+        line.push_str(&format!("  (cpu: {cpu}ms)"));
+    }
+    if let Some(source) = source {
+        line.push_str(&format!("  source={source}"));
+    }
+    Some(line)
+}
+
+fn runtime_log_generic_summary(object: &serde_json::Map<String, Value>, value: &Value) -> String {
+    let level = object
+        .get("level")
+        .or_else(|| object.get("severity"))
+        .and_then(Value::as_str)
+        .map(|level| level.to_ascii_uppercase());
+    let source = object
+        .get("source")
+        .or_else(|| object.get("scriptName"))
+        .and_then(Value::as_str);
+    let message = runtime_log_message(object).unwrap_or_else(|| format_runtime_log_value(value));
+
+    let mut parts = Vec::new();
+    if let Some(level) = level {
+        parts.push(level);
+    }
+    parts.push(message);
+    if let Some(source) = source {
+        parts.push(format!("source={source}"));
+    }
+    parts.join(" ")
+}
+
+fn runtime_log_message(object: &serde_json::Map<String, Value>) -> Option<String> {
+    for key in ["message", "outcome", "event"] {
+        if let Some(value) = object.get(key) {
+            let text = format_runtime_log_value(value);
+            if !text.is_empty() {
+                return Some(text);
+            }
+        }
+    }
+    None
+}
+
+fn runtime_log_url_path(url: &str) -> String {
+    if let Ok(parsed) = reqwest::Url::parse(url) {
+        let mut path = parsed.path().to_string();
+        if let Some(query) = parsed.query() {
+            path.push('?');
+            path.push_str(query);
+        }
+        if path.is_empty() {
+            "/".to_string()
+        } else {
+            path
+        }
+    } else {
+        url.to_string()
+    }
+}
+
+fn format_runtime_log_console(value: &Value) -> String {
+    if let Some(object) = value.as_object() {
+        let level = object
+            .get("level")
+            .or_else(|| object.get("severity"))
+            .and_then(Value::as_str)
+            .map(|level| level.to_ascii_uppercase());
+        let message = object
+            .get("message")
+            .or_else(|| object.get("text"))
+            .or_else(|| object.get("args"))
+            .map(format_runtime_log_value)
+            .unwrap_or_else(|| format_runtime_log_value(value));
+        if let Some(level) = level {
+            return format!("{level} {message}");
+        }
+        return message;
+    }
+    format_runtime_log_value(value)
+}
+
+fn format_runtime_log_exception(value: &Value) -> String {
+    if let Some(object) = value.as_object() {
+        let name = object
+            .get("name")
+            .and_then(Value::as_str)
+            .unwrap_or("Exception");
+        let message = object
+            .get("message")
+            .or_else(|| object.get("text"))
+            .map(format_runtime_log_value)
+            .unwrap_or_else(|| format_runtime_log_value(value));
+        if message.starts_with(name) {
+            message
+        } else {
+            format!("{name}: {message}")
+        }
+    } else {
+        format_runtime_log_value(value)
+    }
+}
+
+fn format_runtime_log_value(value: &Value) -> String {
+    match value {
+        Value::Null => String::new(),
+        Value::String(s) => s.clone(),
+        Value::Array(items) => items
+            .iter()
+            .map(format_runtime_log_value)
+            .filter(|item| !item.is_empty())
+            .collect::<Vec<_>>()
+            .join(" "),
+        _ => serde_json::to_string(value).unwrap_or_else(|_| value.to_string()),
+    }
+}
+
+fn value_to_i64(value: &Value) -> Option<i64> {
+    value
+        .as_i64()
+        .or_else(|| value.as_u64().and_then(|value| i64::try_from(value).ok()))
+        .or_else(|| value.as_f64().map(|value| value as i64))
 }
 
 /// Reproduce a Cloud Apps build locally in Docker. See `build_reproduce` for
@@ -2577,10 +2919,15 @@ pub async fn run(
             build_id,
             follow,
             agent,
+            json,
         } => {
             if let Some(app_id) = tail {
                 let id = resolve::resolve_app_id(&api, app_id).await?;
-                return run_runtime_log_tail(&api, &id).await;
+                return run_runtime_log_tail(&api, &id, RuntimeLogTailOptions { raw_json: *json })
+                    .await;
+            }
+            if *json {
+                return Err(anyhow!("--json is only supported with compute logs --tail"));
             }
             let resolved_app_id = match app_id {
                 Some(id) => Some(resolve::resolve_app_id(&api, id).await?),
@@ -2621,4 +2968,82 @@ pub async fn run_env(
         config_flag,
     )
     .await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn runtime_tail_formatter_summarizes_cloudflare_request_logs_and_exceptions() {
+        let raw = r#"{
+            "eventTimestamp": 1767273332000,
+            "scriptName": "tachyon-console",
+            "cpuTime": 86,
+            "request": {
+                "method": "GET",
+                "url": "https://example.com/api/reservations?limit=1"
+            },
+            "response": { "status": 200 },
+            "logs": [
+                { "level": "log", "message": ["reservation", 42] }
+            ],
+            "exceptions": [
+                { "name": "TypeError", "message": "Cannot read property 'id' of undefined" }
+            ]
+        }"#;
+
+        let lines = format_runtime_log_lines(raw);
+
+        assert_eq!(
+            lines,
+            vec![
+                "[13:15:32] GET /api/reservations?limit=1 200  (cpu: 86ms)  source=tachyon-console",
+                "[13:15:32] ERROR TypeError: Cannot read property 'id' of undefined",
+                "[13:15:32] LOG reservation 42",
+            ]
+        );
+    }
+
+    #[test]
+    fn runtime_tail_formatter_falls_back_for_unknown_payloads() {
+        let json_lines = format_runtime_log_lines(r#"{"unexpected":{"nested":true}}"#);
+        assert_eq!(json_lines.len(), 1);
+        assert!(json_lines[0].starts_with('['));
+        assert!(json_lines[0].contains(r#""unexpected":{"nested":true}"#));
+
+        assert_eq!(
+            format_runtime_log_lines("not json"),
+            vec!["not json".to_string()]
+        );
+    }
+
+    #[test]
+    fn runtime_tail_formatter_includes_top_level_level_message_and_source() {
+        let lines = format_runtime_log_lines(
+            r#"{"timestamp":"2026-01-01T20:15:40Z","level":"error","message":"boom","source":"worker"}"#,
+        );
+
+        assert_eq!(lines, vec!["[20:15:40] ERROR boom source=worker"]);
+    }
+
+    #[test]
+    fn runtime_tail_sse_parser_handles_multiline_data_and_crlf() {
+        let mut pending =
+            "event: log\r\ndata: {\"message\":\"a\"}\r\ndata: {\"message\":\"b\"}\r\n\r\n"
+                .to_string();
+
+        let events = drain_sse_events(&mut pending);
+
+        assert!(pending.is_empty());
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].event.as_deref(), Some("log"));
+        assert_eq!(
+            events[0].data,
+            vec![
+                "{\"message\":\"a\"}".to_string(),
+                "{\"message\":\"b\"}".to_string(),
+            ]
+        );
+    }
 }
