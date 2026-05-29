@@ -1,6 +1,6 @@
 ---
 name: cloud-app-deploy
-description: "Use when working on Tachyon Cloud Apps: creating or updating `tachyon.yml` manifests, setting Cloud App env vars or secrets, running `tachyon apps apply`, importing Cloud Apps, triggering deployments, checking build status/logs, diagnosing deploy failures, or explaining Tachyon CLI usage for Cloud App delivery."
+description: "Use when working on Tachyon Cloud Apps: creating or updating `tachyon.yml` manifests, setting Cloud App env vars or secrets, running `tachyon compute apps apply`, triggering builds/deployments, checking build status/logs, diagnosing deploy failures, collecting user feedback, or explaining Tachyon CLI usage for Cloud App delivery."
 ---
 
 # Cloud App Deploy
@@ -16,23 +16,24 @@ Help Tachyon Cloud Apps reach a real deployable state. Prefer live CLI/API evide
 
 ```bash
 tachyon --version
-tachyon apps --help
-tachyon apps env --help
+tachyon compute --help
+tachyon compute apps --help
+tachyon compute env --help
 ```
 
 3. If the task is about an existing app, inspect the live registry and recent builds before editing manifests:
 
 ```bash
-tachyon apps status <app_id> --limit 10
-tachyon apps logs <app_id> --follow
+tachyon compute status <app_id> --limit 10
+tachyon compute logs <app_id> --follow
 ```
 
 4. If the task is about setup from a repo checkout, use the repo manifest as the source of truth:
 
 ```bash
-tachyon apps import --repo <owner/name> --write
-tachyon apps apply -f tachyon.yml --app <app_name> --environment sandbox --dry-run
-tachyon apps apply -f tachyon.yml --app <app_name> --environment sandbox
+tachyon init --name <app_name> --framework <framework> --tenant-id <tenant_id> --non-interactive
+tachyon compute apps apply -f tachyon.yml --app <app_name> --environment sandbox --dry-run
+tachyon compute apps apply -f tachyon.yml --app <app_name> --environment sandbox
 ```
 
 Use `--api-url`, `--tenant-id`, `--user-id`, or `TACHYON_AUTH_TOKEN` only when the current profile/config does not already point at the intended Tachyon API and operator.
@@ -59,14 +60,14 @@ When creating or changing `tachyon.yml`, read [references/cloud-app-operations.m
 Use manifest `envVars` for desired configuration, and the CLI env API for real values:
 
 ```bash
-tachyon apps env set <app_id> KEY=value --target production
-tachyon apps env set <app_id> PUBLIC_KEY=value --target production --plain
-tachyon apps env list <app_id>
+tachyon compute env set <app_id> KEY=value --target production --secret KEY
+tachyon compute env set <app_id> PUBLIC_KEY=value --target production
+tachyon compute env list <app_id>
 ```
 
 Rules:
 
-- Treat `KEY=value` command inputs as secrets unless `--plain` is used.
+- Treat `KEY=value` command inputs as secrets when the key is passed to `--secret`; otherwise they are registered as plain provider variables.
 - Never repeat secret values in the final answer. Report only key names and whether the operation succeeded.
 - In `tachyon.yml`, reference secrets with `valueFrom.secret: <vault>/<key>` or the shape already used by the repo.
 - Do not add a tenant prefix inside `valueFrom.secret`; the tenant comes from the operator context.
@@ -77,15 +78,12 @@ Rules:
 For pull-style Cloud Apps, a successful manifest apply is not the same thing as a deployed build. Verify the build/deployment path:
 
 ```bash
-tachyon apps status <app_id> --limit 10
-tachyon apps logs <app_id> --follow
+tachyon compute status <app_id> --limit 10
+tachyon compute logs <app_id> --follow
 ```
 
-For pre-built Cloudflare Pages artifacts only, direct-upload is available:
-
-```bash
-tachyon apps deploy <app_id> --dir <dist_dir> --environment production
-```
+For pull-style apps, trigger and watch a build with `tachyon compute builds trigger`
+and `tachyon compute builds watch` when the app is ready to deploy from source.
 
 After deploy, verify the live URL or platform UI when the user asks for behavior confirmation. API-only checks are insufficient for "動作確認" in this repo.
 
@@ -114,8 +112,8 @@ For `txcloud.app` public apps, do not create Cloudflare routes, Pages custom dom
 - `401` / `UNAUTHORIZED`: verify login/profile/token. Do not print tokens.
 - `403 PermissionDenied`: verify `--tenant-id`, operator access, and saved CLI tenant context.
 - Missing secret: register the secret value through Tachyon env/secrets flow, then apply again.
-- Build failed: inspect `tachyon apps logs <app_id> --follow`; quote the failing command/error, not secret-bearing env.
-- Manifest drift: compare the live Cloud App registry against `tachyon.yml`; prefer `tachyon apps import` before hand-editing when the live record is authoritative.
+- Build failed: inspect `tachyon compute logs <app_id> --follow`; quote the failing command/error, not secret-bearing env.
+- Manifest drift: compare the live Cloud App registry against `tachyon.yml` before hand-editing when the live record is authoritative.
 - Production route mismatch: check txcloud-proxy desired state before touching Cloudflare directly.
 
 ## Reporting

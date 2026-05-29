@@ -37,7 +37,7 @@ Required fields for most apps:
 - `metadata.name`: manifest-level name, usually repo or suite name.
 - `metadata.tenantId`: owning operator/tenant. Do not invent this; use the target operator context.
 - `spec.apps[].name`: stable Cloud App name.
-- `repository`: GitHub repo metadata. If omitted, `tachyon apps apply --repo <owner/name>` may fill gaps, but explicit is better for distribution.
+- `repository`: GitHub repo metadata. Keep it explicit in distributed manifests so another agent can apply the same app without guessing repository context.
 - `rootDirectory`: where the app lives in the checkout. Use `""` only for repo-root apps.
 - `framework`: examples include `vite`, `next_js`, `worker`, `cargo_lambda`.
 - `deploymentTarget`: examples include `cloudflare_pages`, `cloudflare_workers`, `lambda`, `cloud_run`.
@@ -185,7 +185,7 @@ environments:
 
 Resolution order is:
 
-1. Explicit CLI file: `tachyon plan -f <path>` / `tachyon apply -f <path>` / `tachyon apps apply -f <path>`
+1. Explicit CLI file: `tachyon compute apps apply -f <path>`
 2. `TACHYON_CONFIG`
 3. `tachyon.preview.yml` or `tachyon.production.yml` for selected preview/production builds
 4. `tachyon.yml`, then `tachyon.yaml`
@@ -202,16 +202,16 @@ Before apply:
 4. Run dry-run:
 
 ```bash
-tachyon apps apply -f tachyon.yml --app <app_name> --environment sandbox --dry-run
+tachyon compute apps apply -f tachyon.yml --app <app_name> --environment sandbox --dry-run
 ```
 
 5. Apply only after checking the changed fields:
 
 ```bash
-tachyon apps apply -f tachyon.yml --app <app_name> --environment sandbox
+tachyon compute apps apply -f tachyon.yml --app <app_name> --environment sandbox
 ```
 
-After apply, check build/deploy separately with `tachyon apps status` and `tachyon apps logs`; manifest apply alone does not prove the live app is serving correctly.
+After apply, check build/deploy separately with `tachyon compute status` and `tachyon compute logs`; manifest apply alone does not prove the live app is serving correctly.
 
 ## Deployment Target Notes
 
@@ -224,28 +224,28 @@ After apply, check build/deploy separately with `tachyon apps status` and `tachy
 
 ```bash
 # Import live Cloud Apps into repo manifest
-tachyon apps import --repo <owner/name> --write
-tachyon apps import --repo <owner/name> --app <app_name> --write
+tachyon init --name <app_name> --framework <framework> --tenant-id <tenant_id> --non-interactive
 
 # Preview and apply manifest
-tachyon apps apply -f tachyon.yml --app <app_name> --environment sandbox --dry-run
-tachyon apps apply -f tachyon.yml --app <app_name> --environment sandbox
+tachyon compute apps apply -f tachyon.yml --app <app_name> --environment sandbox --dry-run
+tachyon compute apps apply -f tachyon.yml --app <app_name> --environment sandbox
 
 # Legacy IaC path for generic manifests
-tachyon plan -f tachyon.yml --app <app_name>
-tachyon apply -f tachyon.yml --app <app_name>
+tachyon compute apps apply -f tachyon.yml --app <app_name> --dry-run
+tachyon compute apps apply -f tachyon.yml --app <app_name>
 
 # Env var management
-tachyon apps env set <app_id> SECRET_KEY=value --target production
-tachyon apps env set <app_id> PUBLIC_URL=https://example.com --target production --plain
-tachyon apps env list <app_id>
+tachyon compute env set <app_id> SECRET_KEY=value --target production --secret SECRET_KEY
+tachyon compute env set <app_id> PUBLIC_URL=https://example.com --target production
+tachyon compute env list <app_id>
 
 # Build/deploy observation
-tachyon apps status <app_id> --limit 10
-tachyon apps logs <app_id> --follow
+tachyon compute status <app_id> --limit 10
+tachyon compute logs <app_id> --follow
 
-# Direct upload for pre-built Cloudflare Pages artifacts
-tachyon apps deploy <app_id> --dir dist --environment production
+# Trigger and watch a pull-style build
+tachyon compute builds trigger <app_id> --branch main
+tachyon compute builds watch <app_id>
 
 # Generate a user feedback report
 tachyon compute apps feedback <app_id> --kind bug --severity high --message "User-visible issue"

@@ -238,11 +238,35 @@ npm install @tachyon-sdk/storekit
 
 ## Agent Skills
 
-Pre-built skill definitions for AI agents are in the `skills/` directory.
+Pre-built skill definitions for AI agents are in the `skills/` and
+`.agents/skills/` directories.
 
 | Skill | File | Description |
 |-------|------|-------------|
 | image-gen | [`skills/image-gen.json`](skills/image-gen.json) | Generate AI images via `tachyon image generate` |
+| cloud-app-deploy | [`.agents/skills/cloud-app-deploy/`](.agents/skills/cloud-app-deploy/) | Operate Tachyon Cloud Apps with `tachyon compute`, `tachyon.yml`, env vars, build logs, deployments, and user feedback reports |
+
+### Installing Agent Skills
+
+Install the distributable agent skills into `~/.agents/skills`:
+
+```bash
+./scripts/install-agent-skills.sh
+```
+
+Install into another skill root, for example Codex:
+
+```bash
+TACHYON_AGENT_SKILLS_DIR="$HOME/.codex/skills" ./scripts/install-agent-skills.sh
+```
+
+The Cloud App skill expects the released Tachyon CLI to be available on `PATH`:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/quantum-box/tachyon-sdk/main/scripts/install.sh | sh
+tachyon login
+tachyon compute apps list
+```
 
 ### Using image-gen with Claude Code
 
