@@ -19,6 +19,7 @@ const UNIT_PATH: &str = "/etc/systemd/system/tachyon-worker.service";
 const ENV_DIR: &str = "/etc/tachyon";
 const ENV_PATH: &str = "/etc/tachyon/worker.env";
 const DEFAULT_PROVIDER: &str = "containerized_codex";
+const TOOL_JOB_WORKER_POLICY_ID: &str = "pol_01tooljobworkerpolicy";
 
 #[derive(Args)]
 pub struct WorkerArgs {
@@ -30,6 +31,14 @@ pub struct WorkerArgs {
 pub enum WorkerCommand {
     /// Install and start the local worker as a systemd service
     Start(StartArgs),
+    /// Show the local worker systemd status
+    Status,
+    /// Show local worker logs from journald
+    Logs(LogsArgs),
+    /// Stop the local worker systemd service
+    Stop,
+    /// Restart the local worker systemd service
+    Restart,
     /// Run the worker foreground process used by systemd
     Run(RunArgs),
 }
@@ -76,6 +85,17 @@ pub struct RunArgs {
     pub poll_interval_ms: u64,
 }
 
+#[derive(Args)]
+pub struct LogsArgs {
+    /// Number of recent log lines to show.
+    #[arg(short = 'n', long, default_value_t = 100)]
+    pub lines: u32,
+
+    /// Follow logs.
+    #[arg(short, long)]
+    pub follow: bool,
+}
+
 #[derive(Clone, Debug, ValueEnum)]
 pub enum WorkerProvider {
     #[value(name = "containerized_codex", alias = "containerized-codex")]
@@ -98,6 +118,10 @@ pub async fn run(
 ) -> Result<()> {
     match &args.command {
         WorkerCommand::Start(start_args) => start(start_args, config, tenant_id, profile).await,
+        WorkerCommand::Status => systemctl_status(),
+        WorkerCommand::Logs(logs_args) => journalctl_logs(logs_args),
+        WorkerCommand::Stop => systemctl_simple("stop"),
+        WorkerCommand::Restart => systemctl_simple("restart"),
         WorkerCommand::Run(run_args) => run_foreground(run_args, config, tenant_id).await,
     }
 }
@@ -141,24 +165,33 @@ async fn start(
     if effective_tenant_id.is_empty() {
         bail!("operator id is not configured. Run `tachyon login` or pass `--tenant-id`");
     }
-    if config.bearer_access_token.is_none() && service_profile.is_none() {
+    let install_config = config_for_worker_install(config, service_profile.as_ref());
+    if install_config.bearer_access_token.is_none() {
         bail!("authentication is not configured. Run `tachyon login` before `sudo tachyon worker start`");
     }
 
+    let worker_api_key = if args.dry_run {
+        None
+    } else {
+        Some(create_worker_api_key(&install_config, &effective_tenant_id, &worker_id).await?)
+    };
+
     let env_content = render_env_file(
-        config,
+        &install_config,
         &effective_tenant_id,
         effective_profile,
         &worker_id,
         &args.provider,
         args.max_concurrent_jobs,
         &home,
+        worker_api_key.as_deref(),
     );
     let unit_content = render_unit_file(&binary, &service_user);
 
     if args.dry_run {
         println!("Would write {ENV_PATH}:\n{env_content}");
         println!("Would write {UNIT_PATH}:\n{unit_content}");
+        println!("Would create a dedicated worker API key.");
         println!("Would run: systemctl daemon-reload");
         println!("Would run: systemctl enable --now {SERVICE_NAME}");
         return Ok(());
@@ -177,6 +210,56 @@ async fn start(
     println!("provider: {}", args.provider);
     println!("service: {SERVICE_NAME}");
     Ok(())
+}
+
+async fn create_worker_api_key(
+    config: &Configuration,
+    tenant_id: &str,
+    worker_id: &str,
+) -> Result<String> {
+    let api = ApiClient::new(config, tenant_id)?;
+    let request = CreateOrgApiKeyRequest {
+        name: format!("{worker_id}-key"),
+        service_account_id: None,
+        service_account_name: Some(format!("{SERVICE_NAME}-{worker_id}")),
+        ttl_seconds: None,
+        policy_ids: vec![TOOL_JOB_WORKER_POLICY_ID.to_string()],
+    };
+    let response: ApiKeyResponse = api
+        .post(&format!("/v1/orgs/{tenant_id}/api-keys"), &request)
+        .await
+        .context("failed to create worker API key")?;
+    Ok(response.value)
+}
+
+fn config_for_worker_install(
+    config: &Configuration,
+    service_profile: Option<&(String, StoredCredentials)>,
+) -> Configuration {
+    let mut install_config = config.clone();
+    if install_config.bearer_access_token.is_none() {
+        if let Some((_, credentials)) = service_profile {
+            install_config.bearer_access_token = Some(credentials.access_token.clone());
+        }
+    }
+    install_config
+}
+
+fn systemctl_simple(action: &str) -> Result<()> {
+    run_command("systemctl", &[action, SERVICE_NAME])
+}
+
+fn systemctl_status() -> Result<()> {
+    run_command("systemctl", &["status", SERVICE_NAME, "--no-pager"])
+}
+
+fn journalctl_logs(args: &LogsArgs) -> Result<()> {
+    let lines = args.lines.to_string();
+    let mut command_args = vec!["-u", SERVICE_NAME, "-n", &lines, "--no-pager"];
+    if args.follow {
+        command_args.push("-f");
+    }
+    run_command("journalctl", &command_args)
 }
 
 async fn run_foreground(args: &RunArgs, config: &Configuration, tenant_id: &str) -> Result<()> {
@@ -478,6 +561,22 @@ struct WorkerHeartbeatResponse {
 }
 
 #[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CreateOrgApiKeyRequest {
+    name: String,
+    service_account_id: Option<String>,
+    service_account_name: Option<String>,
+    ttl_seconds: Option<i64>,
+    policy_ids: Vec<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ApiKeyResponse {
+    value: String,
+}
+
+#[derive(Serialize)]
 struct ClaimWorkerToolJobRequest {
     worker_id: String,
     provider: String,
@@ -533,6 +632,7 @@ fn render_env_file(
     provider: &WorkerProvider,
     max_concurrent_jobs: u32,
     home: &Path,
+    worker_api_key: Option<&str>,
 ) -> String {
     let mut lines = vec![
         env_line("TACHYON_API_URL", &config.base_path),
@@ -548,10 +648,8 @@ fn render_env_file(
         env_line("XDG_CONFIG_HOME", &home.join(".config").to_string_lossy()),
     ];
 
-    if let Some(token) = &config.bearer_access_token {
-        if env::var_os("TACHYON_API_KEY").is_some() {
-            lines.push(env_line("TACHYON_API_KEY", token));
-        }
+    if let Some(worker_api_key) = worker_api_key {
+        lines.push(env_line("TACHYON_API_KEY", worker_api_key));
     }
 
     lines.push(String::new());
@@ -792,6 +890,7 @@ mod tests {
             &WorkerProvider::ContainerizedCodex,
             2,
             Path::new("/home/tachyon"),
+            Some("pk_test"),
         );
 
         assert!(env.contains("TACHYON_API_URL='https://api.n1.tachy.one'"));
@@ -800,5 +899,6 @@ mod tests {
         assert!(env.contains("TACHYON_WORKER_ID='worker-test'"));
         assert!(env.contains("TACHYON_WORKER_PROVIDER='containerized_codex'"));
         assert!(env.contains("TACHYON_WORKER_MAX_CONCURRENT_JOBS='2'"));
+        assert!(env.contains("TACHYON_API_KEY='pk_test'"));
     }
 }
