@@ -122,7 +122,7 @@ cancelled, and timed-out builds return non-zero so automation can stop early.
 > container. Phase 1 requires `--mock <path>`; the live build-config endpoint
 > (PLT-913) lands in Phase 2.
 
-### Worker daemon
+### Worker runtime
 
 `tachyon worker` replaces the separately distributed `tachyond` binary for
 local Tool Job workers.
@@ -135,14 +135,17 @@ curl -fsSL https://raw.githubusercontent.com/quantum-box/tachyon-sdk/main/script
 tachyon auth login --profile work
 tachyon auth use work
 
-# Preview the systemd unit and environment file
-sudo tachyon --profile work --tenant-id tn_xxxx worker start --dry-run
+# Run while this shell is open
+tachyon --profile work --tenant-id tn_xxxx worker run
 
-# Install and start the worker as tachyon-worker.service
+# Install as tachyon-worker.service on a Linux systemd host
+sudo tachyon --profile work --tenant-id tn_xxxx worker start --dry-run
 sudo tachyon --profile work --tenant-id tn_xxxx worker start
 
-# Run in the foreground instead of systemd
-tachyon --profile work --tenant-id tn_xxxx worker run
+# Operate the local systemd service
+sudo tachyon worker status
+sudo tachyon worker logs --follow
+sudo tachyon worker restart
 ```
 
 The worker advertises the `containerized_codex` provider by default and uses
@@ -158,6 +161,9 @@ flags or environment variables:
 | `CODEX_CONTAINER_IMAGE` | Docker image used for containerized Codex jobs. |
 | `CODEX_CONTAINER_NETWORK` | Docker network used for job containers. |
 | `CODEX_CONTAINER_MEMORY` | Docker memory limit, for example `2g`. |
+
+See [docs/worker-runtime.md](docs/worker-runtime.md) for foreground and
+systemd operation, installed files, and the E2E checklist.
 
 ## Languages
 
@@ -257,7 +263,13 @@ Install the distributable agent skills into `~/.agents/skills`:
 Install into another skill root, for example Codex:
 
 ```bash
-TACHYON_AGENT_SKILLS_DIR="$HOME/.codex/skills" ./scripts/install-agent-skills.sh
+./scripts/install-agent-skills.sh --codex
+```
+
+Install into a custom skill root:
+
+```bash
+./scripts/install-agent-skills.sh --target-dir "$HOME/.custom-agent/skills"
 ```
 
 The Cloud App skill expects the released Tachyon CLI to be available on `PATH`:

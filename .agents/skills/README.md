@@ -13,7 +13,13 @@ Install the bundled skills into the default agent skill directory:
 Install into a custom directory:
 
 ```bash
-TACHYON_AGENT_SKILLS_DIR="$HOME/.codex/skills" ./scripts/install-agent-skills.sh
+./scripts/install-agent-skills.sh --target-dir "$HOME/.custom-agent/skills"
+```
+
+Install into Codex:
+
+```bash
+./scripts/install-agent-skills.sh --codex
 ```
 
 ## Skills
