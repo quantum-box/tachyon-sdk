@@ -1550,7 +1550,7 @@ fn parse_feedback_metadata(entries: &[String]) -> Result<BTreeMap<String, String
 }
 
 fn is_secret_like_key(key: &str) -> bool {
-    let normalized = key.to_ascii_lowercase().replace('-', "_").replace('.', "_");
+    let normalized = key.to_ascii_lowercase().replace(['-', '.'], "_");
     [
         "secret",
         "token",

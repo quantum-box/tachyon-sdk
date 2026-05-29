@@ -176,16 +176,16 @@ async fn start(
         Some(create_worker_api_key(&install_config, &effective_tenant_id, &worker_id).await?)
     };
 
-    let env_content = render_env_file(
-        &install_config,
-        &effective_tenant_id,
-        effective_profile,
-        &worker_id,
-        &args.provider,
-        args.max_concurrent_jobs,
-        &home,
-        worker_api_key.as_deref(),
-    );
+    let env_content = render_env_file(&WorkerEnvFile {
+        config: &install_config,
+        tenant_id: &effective_tenant_id,
+        profile: effective_profile,
+        worker_id: &worker_id,
+        provider: &args.provider,
+        max_concurrent_jobs: args.max_concurrent_jobs,
+        home: &home,
+        worker_api_key: worker_api_key.as_deref(),
+    });
     let unit_content = render_unit_file(&binary, &service_user);
 
     if args.dry_run {
@@ -624,31 +624,36 @@ struct WorkerJobOutput {
     exit_code: Option<i32>,
 }
 
-fn render_env_file(
-    config: &Configuration,
-    tenant_id: &str,
-    profile: &str,
-    worker_id: &str,
-    provider: &WorkerProvider,
+struct WorkerEnvFile<'a> {
+    config: &'a Configuration,
+    tenant_id: &'a str,
+    profile: &'a str,
+    worker_id: &'a str,
+    provider: &'a WorkerProvider,
     max_concurrent_jobs: u32,
-    home: &Path,
-    worker_api_key: Option<&str>,
-) -> String {
+    home: &'a Path,
+    worker_api_key: Option<&'a str>,
+}
+
+fn render_env_file(env: &WorkerEnvFile<'_>) -> String {
     let mut lines = vec![
-        env_line("TACHYON_API_URL", &config.base_path),
-        env_line("TACHYON_TENANT_ID", tenant_id),
-        env_line("TACHYON_PROFILE", profile),
-        env_line("TACHYON_WORKER_ID", worker_id),
-        env_line("TACHYON_WORKER_PROVIDER", &provider.to_string()),
+        env_line("TACHYON_API_URL", &env.config.base_path),
+        env_line("TACHYON_TENANT_ID", env.tenant_id),
+        env_line("TACHYON_PROFILE", env.profile),
+        env_line("TACHYON_WORKER_ID", env.worker_id),
+        env_line("TACHYON_WORKER_PROVIDER", &env.provider.to_string()),
         env_line(
             "TACHYON_WORKER_MAX_CONCURRENT_JOBS",
-            &max_concurrent_jobs.to_string(),
+            &env.max_concurrent_jobs.to_string(),
         ),
-        env_line("HOME", &home.to_string_lossy()),
-        env_line("XDG_CONFIG_HOME", &home.join(".config").to_string_lossy()),
+        env_line("HOME", &env.home.to_string_lossy()),
+        env_line(
+            "XDG_CONFIG_HOME",
+            &env.home.join(".config").to_string_lossy(),
+        ),
     ];
 
-    if let Some(worker_api_key) = worker_api_key {
+    if let Some(worker_api_key) = env.worker_api_key {
         lines.push(env_line("TACHYON_API_KEY", worker_api_key));
     }
 
@@ -882,16 +887,16 @@ mod tests {
             ..Configuration::default()
         };
 
-        let env = render_env_file(
-            &config,
-            "tn_test",
-            "work",
-            "worker-test",
-            &WorkerProvider::ContainerizedCodex,
-            2,
-            Path::new("/home/tachyon"),
-            Some("pk_test"),
-        );
+        let env = render_env_file(&WorkerEnvFile {
+            config: &config,
+            tenant_id: "tn_test",
+            profile: "work",
+            worker_id: "worker-test",
+            provider: &WorkerProvider::ContainerizedCodex,
+            max_concurrent_jobs: 2,
+            home: Path::new("/home/tachyon"),
+            worker_api_key: Some("pk_test"),
+        });
 
         assert!(env.contains("TACHYON_API_URL='https://api.n1.tachy.one'"));
         assert!(env.contains("TACHYON_TENANT_ID='tn_test'"));
