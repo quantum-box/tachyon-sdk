@@ -19,6 +19,7 @@ mod resolve;
 mod slack_cli;
 mod switch_cli;
 mod tts_cli;
+mod worker_cli;
 
 use anyhow::{anyhow, Result};
 use clap::{Args, Parser, Subcommand};
@@ -205,6 +206,8 @@ enum Commands {
     ApiKey(api_key_cli::ApiKeyArgs),
     /// Manage agent sessions, protocols, workers, and memory
     Agent(agent_cli::AgentArgs),
+    /// Install and run the local Tachyon worker daemon
+    Worker(worker_cli::WorkerArgs),
     /// Infrastructure-as-Code: integrations, OAuth providers, connections
     Iac(iac_cli::IacArgs),
     /// Operations: deployment events, scenario reports, and tool jobs
@@ -512,6 +515,11 @@ async fn run() -> Result<()> {
             let config = build_config(&cli, &active).await;
             let tenant_id = resolve::resolve_tenant_id(&config, tenant_arg, &active).await?;
             agent_cli::run(args, &config, &tenant_id).await
+        }
+        Commands::Worker(args) => {
+            let config = build_config(&cli, &active).await;
+            let tenant_id = resolve::resolve_tenant_id(&config, &cli.tenant_id, &active).await?;
+            worker_cli::run(args, &config, &tenant_id, &active).await
         }
         Commands::Iac(args) => {
             let project_config = config::loader::load(cli.config.as_deref())?;

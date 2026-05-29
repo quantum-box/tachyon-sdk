@@ -100,6 +100,13 @@ tachyon compute builds watch --build-id <build-id>
 tachyon compute builds watch --build-id <build-id> --agent
 tachyon compute logs --build-id <build-id> --follow --agent
 
+# Generate a Cloud App feedback report
+tachyon compute apps feedback <app-id> \
+  --kind bug \
+  --severity high \
+  --url https://example.txcloud.app \
+  "Production page returns 500."
+
 # Reproduce a cloud build locally in Docker (Phase 1: mock fixture)
 # See cli/tests/fixtures/mock-build-config.yaml for the expected shape.
 tachyon compute builds reproduce <build-id> --mock <path/to/build-config.yaml> --dry-run
@@ -114,6 +121,43 @@ cancelled, and timed-out builds return non-zero so automation can stop early.
 > a cloud build and replays it locally in a CodeBuild-compatible Docker
 > container. Phase 1 requires `--mock <path>`; the live build-config endpoint
 > (PLT-913) lands in Phase 2.
+
+### Worker daemon
+
+`tachyon worker` replaces the separately distributed `tachyond` binary for
+local Tool Job workers.
+
+```sh
+# Install or refresh the tachyon CLI first
+curl -fsSL https://raw.githubusercontent.com/quantum-box/tachyon-sdk/main/scripts/install.sh | sh
+
+# Authenticate and select the operator that owns the worker
+tachyon auth login --profile work
+tachyon auth use work
+
+# Preview the systemd unit and environment file
+sudo tachyon --profile work --tenant-id tn_xxxx worker start --dry-run
+
+# Install and start the worker as tachyon-worker.service
+sudo tachyon --profile work --tenant-id tn_xxxx worker start
+
+# Run in the foreground instead of systemd
+tachyon --profile work --tenant-id tn_xxxx worker run
+```
+
+The worker advertises the `containerized_codex` provider by default and uses
+Docker to execute claimed Tool Jobs. Runtime knobs are available through CLI
+flags or environment variables:
+
+| Variable | Purpose |
+| --- | --- |
+| `TACHYON_WORKER_ID` | Stable worker identifier. Defaults to `worker-<hostname>`. |
+| `TACHYON_WORKER_PROVIDER` | Provider capability. Currently `containerized_codex`. |
+| `TACHYON_WORKER_MAX_CONCURRENT_JOBS` | Maximum concurrent jobs advertised to Tachyon Cloud. |
+| `TACHYON_WORKER_POLL_INTERVAL_MS` | Poll interval used by `worker run`. |
+| `CODEX_CONTAINER_IMAGE` | Docker image used for containerized Codex jobs. |
+| `CODEX_CONTAINER_NETWORK` | Docker network used for job containers. |
+| `CODEX_CONTAINER_MEMORY` | Docker memory limit, for example `2g`. |
 
 ## Languages
 
