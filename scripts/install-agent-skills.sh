@@ -3,7 +3,56 @@ set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source_dir="${repo_root}/.agents/skills"
-target_dir="${TACHYON_AGENT_SKILLS_DIR:-${HOME}/.agents/skills}"
+target_dir="${HOME}/.agents/skills"
+
+usage() {
+  cat <<'USAGE'
+Usage: install-agent-skills.sh [OPTIONS]
+
+Install Tachyon agent skills.
+
+Options:
+  --agents              Install to ~/.agents/skills (default)
+  --codex               Install to ~/.codex/skills
+  --claude              Install to ~/.claude/skills
+  --target-dir <dir>    Install to a custom skill directory
+  -h, --help            Show this help
+USAGE
+}
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --agents)
+      target_dir="${HOME}/.agents/skills"
+      shift
+      ;;
+    --codex)
+      target_dir="${HOME}/.codex/skills"
+      shift
+      ;;
+    --claude)
+      target_dir="${HOME}/.claude/skills"
+      shift
+      ;;
+    --target-dir)
+      if [[ $# -lt 2 || -z "$2" ]]; then
+        echo "--target-dir requires a directory" >&2
+        exit 1
+      fi
+      target_dir="$2"
+      shift 2
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      echo "Unknown option: $1" >&2
+      usage >&2
+      exit 1
+      ;;
+  esac
+done
 
 if [[ ! -d "${source_dir}" ]]; then
   echo "No agent skills found at ${source_dir}" >&2
