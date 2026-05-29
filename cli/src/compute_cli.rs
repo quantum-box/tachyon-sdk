@@ -4,7 +4,7 @@ use clap::{Args, Subcommand, ValueEnum};
 use dialoguer::{theme::ColorfulTheme, Password};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -338,6 +338,98 @@ pub enum AppsCommand {
         #[arg(long)]
         dry_run: bool,
     },
+    /// Generate a user feedback report for a compute app
+    Feedback(FeedbackArgs),
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct FeedbackArgs {
+    /// App ID or name the feedback is about.
+    pub app_id: String,
+    /// Feedback body from the user.
+    #[arg(long, short = 'm')]
+    pub message: String,
+    /// Feedback kind.
+    #[arg(long, value_enum, default_value_t = FeedbackKind::Other)]
+    pub kind: FeedbackKind,
+    /// Feedback severity.
+    #[arg(long, value_enum, default_value_t = FeedbackSeverity::Medium)]
+    pub severity: FeedbackSeverity,
+    /// URL where the user observed the issue or request.
+    #[arg(long)]
+    pub url: Option<String>,
+    /// Build ID related to the feedback.
+    #[arg(long)]
+    pub build_id: Option<String>,
+    /// Deployment ID related to the feedback.
+    #[arg(long)]
+    pub deployment_id: Option<String>,
+    /// Optional contact information for follow-up.
+    #[arg(long)]
+    pub contact: Option<String>,
+    /// Additional KEY=VALUE metadata. Secret-like keys are rejected.
+    #[arg(long = "metadata")]
+    pub metadata: Vec<String>,
+    /// Emit a JSON payload instead of Markdown.
+    #[arg(long)]
+    pub json: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ValueEnum)]
+#[serde(rename_all = "snake_case")]
+pub enum FeedbackKind {
+    Bug,
+    Feature,
+    Question,
+    Other,
+}
+
+impl std::fmt::Display for FeedbackKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let value = match self {
+            Self::Bug => "bug",
+            Self::Feature => "feature",
+            Self::Question => "question",
+            Self::Other => "other",
+        };
+        f.write_str(value)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ValueEnum)]
+#[serde(rename_all = "snake_case")]
+pub enum FeedbackSeverity {
+    Low,
+    Medium,
+    High,
+    Critical,
+}
+
+impl std::fmt::Display for FeedbackSeverity {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let value = match self {
+            Self::Low => "low",
+            Self::Medium => "medium",
+            Self::High => "high",
+            Self::Critical => "critical",
+        };
+        f.write_str(value)
+    }
+}
+
+#[derive(Debug, Serialize, PartialEq, Eq)]
+struct FeedbackPayload {
+    app_id: String,
+    operator_id: String,
+    kind: FeedbackKind,
+    severity: FeedbackSeverity,
+    message: String,
+    url: Option<String>,
+    build_id: Option<String>,
+    deployment_id: Option<String>,
+    contact: Option<String>,
+    metadata: BTreeMap<String, String>,
+    created_at: String,
 }
 
 // --- Builds subcommands ---
@@ -1404,6 +1496,114 @@ async fn apply_env_plan(
         );
     }
     Ok((changed, missing))
+}
+
+fn run_apps_feedback(tenant_id: &str, app_id: &str, args: &FeedbackArgs) -> Result<()> {
+    let payload = build_feedback_payload(tenant_id, app_id, args)?;
+    if args.json {
+        print_json(&payload)?;
+    } else {
+        println!("{}", render_feedback_markdown(&payload));
+    }
+    Ok(())
+}
+
+fn build_feedback_payload(
+    tenant_id: &str,
+    app_id: &str,
+    args: &FeedbackArgs,
+) -> Result<FeedbackPayload> {
+    let metadata = parse_feedback_metadata(&args.metadata)?;
+    Ok(FeedbackPayload {
+        app_id: app_id.to_string(),
+        operator_id: tenant_id.to_string(),
+        kind: args.kind,
+        severity: args.severity,
+        message: args.message.clone(),
+        url: args.url.clone(),
+        build_id: args.build_id.clone(),
+        deployment_id: args.deployment_id.clone(),
+        contact: args.contact.clone(),
+        metadata,
+        created_at: Utc::now().to_rfc3339(),
+    })
+}
+
+fn parse_feedback_metadata(entries: &[String]) -> Result<BTreeMap<String, String>> {
+    let mut metadata = BTreeMap::new();
+    for entry in entries {
+        let (key, value) = entry
+            .split_once('=')
+            .ok_or_else(|| anyhow!("metadata must be KEY=VALUE, got `{entry}`"))?;
+        let key = key.trim();
+        if key.is_empty() {
+            return Err(anyhow!("metadata key must not be empty"));
+        }
+        if is_secret_like_key(key) {
+            return Err(anyhow!(
+                "metadata key `{key}` looks secret-like; do not pass secret values to feedback"
+            ));
+        }
+        metadata.insert(key.to_string(), value.trim().to_string());
+    }
+    Ok(metadata)
+}
+
+fn is_secret_like_key(key: &str) -> bool {
+    let normalized = key.to_ascii_lowercase().replace(['-', '.'], "_");
+    [
+        "secret",
+        "token",
+        "password",
+        "passwd",
+        "api_key",
+        "apikey",
+        "private_key",
+        "credential",
+        "authorization",
+    ]
+    .iter()
+    .any(|needle| normalized.contains(needle))
+}
+
+fn render_feedback_markdown(payload: &FeedbackPayload) -> String {
+    let mut lines = vec![
+        "# Cloud App Feedback".to_string(),
+        String::new(),
+        format!("- App ID: {}", payload.app_id),
+        format!("- Operator ID: {}", payload.operator_id),
+        format!("- Kind: {}", payload.kind),
+        format!("- Severity: {}", payload.severity),
+        format!("- Created At: {}", payload.created_at),
+    ];
+
+    if let Some(url) = &payload.url {
+        lines.push(format!("- URL: {url}"));
+    }
+    if let Some(build_id) = &payload.build_id {
+        lines.push(format!("- Build ID: {build_id}"));
+    }
+    if let Some(deployment_id) = &payload.deployment_id {
+        lines.push(format!("- Deployment ID: {deployment_id}"));
+    }
+    if let Some(contact) = &payload.contact {
+        lines.push(format!("- Contact: {contact}"));
+    }
+    if !payload.metadata.is_empty() {
+        lines.push("- Metadata:".to_string());
+        for (key, value) in &payload.metadata {
+            lines.push(format!("  - {key}: {value}"));
+        }
+    }
+
+    lines.extend([
+        String::new(),
+        "## Message".to_string(),
+        String::new(),
+        payload.message.clone(),
+    ]);
+
+    lines.join("\n")
 }
 
 async fn run_builds_list(api: &ApiClient, app_id: &str, limit: usize, json: bool) -> Result<()> {
@@ -2723,6 +2923,10 @@ pub async fn run(
                 environment,
                 dry_run,
             } => run_apps_apply(&api, file, app.as_deref(), environment, *dry_run).await,
+            AppsCommand::Feedback(feedback_args) => {
+                let id = resolve::resolve_app_id(&api, &feedback_args.app_id).await?;
+                run_apps_feedback(tenant_id, &id, feedback_args)
+            }
         },
         ComputeCommand::Builds { command } => match command {
             BuildsCommand::List {
@@ -3045,5 +3249,64 @@ mod tests {
                 "{\"message\":\"b\"}".to_string(),
             ]
         );
+    }
+
+    #[test]
+    fn feedback_payload_includes_cloud_app_context() {
+        let args = FeedbackArgs {
+            app_id: "app_01test".to_string(),
+            message: "The production page returns 500.".to_string(),
+            kind: FeedbackKind::Bug,
+            severity: FeedbackSeverity::High,
+            url: Some("https://example.txcloud.app".to_string()),
+            build_id: Some("bld_01test".to_string()),
+            deployment_id: Some("dep_01test".to_string()),
+            contact: Some("user@example.com".to_string()),
+            metadata: vec!["browser=Chrome".to_string()],
+            json: false,
+        };
+
+        let payload = build_feedback_payload("tn_01test", "app_01resolved", &args).unwrap();
+
+        assert_eq!(payload.app_id, "app_01resolved");
+        assert_eq!(payload.operator_id, "tn_01test");
+        assert_eq!(payload.kind, FeedbackKind::Bug);
+        assert_eq!(payload.severity, FeedbackSeverity::High);
+        assert_eq!(
+            payload.metadata.get("browser").map(String::as_str),
+            Some("Chrome")
+        );
+    }
+
+    #[test]
+    fn feedback_metadata_rejects_secret_like_keys() {
+        let err = parse_feedback_metadata(&["api_key=secret".to_string()]).unwrap_err();
+
+        assert!(err.to_string().contains("secret-like"), "{err}");
+    }
+
+    #[test]
+    fn feedback_markdown_formats_context() {
+        let payload = FeedbackPayload {
+            app_id: "app_01test".to_string(),
+            operator_id: "tn_01test".to_string(),
+            kind: FeedbackKind::Feature,
+            severity: FeedbackSeverity::Medium,
+            message: "Please add CSV export.".to_string(),
+            url: None,
+            build_id: None,
+            deployment_id: None,
+            contact: None,
+            metadata: BTreeMap::from([("browser".to_string(), "Safari".to_string())]),
+            created_at: "2026-05-29T00:00:00+00:00".to_string(),
+        };
+
+        let markdown = render_feedback_markdown(&payload);
+
+        assert!(markdown.contains("# Cloud App Feedback"));
+        assert!(markdown.contains("- App ID: app_01test"));
+        assert!(markdown.contains("- Kind: feature"));
+        assert!(markdown.contains("Please add CSV export."));
+        assert!(markdown.contains("  - browser: Safari"));
     }
 }
