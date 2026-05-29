@@ -7,19 +7,19 @@ This directory contains distributable agent skills for Tachyon workflows.
 Install the bundled skills into the default agent skill directory:
 
 ```bash
-./scripts/install-agent-skills.sh
+tachyon skills install
 ```
 
 Install into a custom directory:
 
 ```bash
-./scripts/install-agent-skills.sh --target-dir "$HOME/.custom-agent/skills"
+tachyon skills install --target-dir "$HOME/.custom-agent/skills"
 ```
 
 Install into Codex:
 
 ```bash
-./scripts/install-agent-skills.sh --codex
+tachyon skills install --codex
 ```
 
 ## Skills
