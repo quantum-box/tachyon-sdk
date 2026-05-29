@@ -165,70 +165,6 @@ impl PagesApp {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn feedback_payload_includes_cloud_app_context() {
-        let args = FeedbackArgs {
-            app_id: "app_01test".to_string(),
-            message: "The production page returns 500.".to_string(),
-            kind: FeedbackKind::Bug,
-            severity: FeedbackSeverity::High,
-            url: Some("https://example.txcloud.app".to_string()),
-            build_id: Some("bld_01test".to_string()),
-            deployment_id: Some("dep_01test".to_string()),
-            contact: Some("user@example.com".to_string()),
-            metadata: vec!["browser=Chrome".to_string()],
-            json: false,
-        };
-
-        let payload = build_feedback_payload("tn_01test", "app_01resolved", &args).unwrap();
-
-        assert_eq!(payload.app_id, "app_01resolved");
-        assert_eq!(payload.operator_id, "tn_01test");
-        assert_eq!(payload.kind, FeedbackKind::Bug);
-        assert_eq!(payload.severity, FeedbackSeverity::High);
-        assert_eq!(
-            payload.metadata.get("browser").map(String::as_str),
-            Some("Chrome")
-        );
-    }
-
-    #[test]
-    fn feedback_metadata_rejects_secret_like_keys() {
-        let err = parse_feedback_metadata(&["api_key=secret".to_string()]).unwrap_err();
-
-        assert!(err.to_string().contains("secret-like"), "{err}");
-    }
-
-    #[test]
-    fn feedback_markdown_formats_context() {
-        let payload = FeedbackPayload {
-            app_id: "app_01test".to_string(),
-            operator_id: "tn_01test".to_string(),
-            kind: FeedbackKind::Feature,
-            severity: FeedbackSeverity::Medium,
-            message: "Please add CSV export.".to_string(),
-            url: None,
-            build_id: None,
-            deployment_id: None,
-            contact: None,
-            metadata: BTreeMap::from([("browser".to_string(), "Safari".to_string())]),
-            created_at: "2026-05-29T00:00:00+00:00".to_string(),
-        };
-
-        let markdown = render_feedback_markdown(&payload);
-
-        assert!(markdown.contains("# Cloud App Feedback"));
-        assert!(markdown.contains("- App ID: app_01test"));
-        assert!(markdown.contains("- Kind: feature"));
-        assert!(markdown.contains("Please add CSV export."));
-        assert!(markdown.contains("  - browser: Safari"));
-    }
-}
-
 // --- Local build pipeline ---
 
 fn run_shell(description: &str, cmd: &str, cwd: &std::path::Path) -> Result<()> {
@@ -3313,5 +3249,64 @@ mod tests {
                 "{\"message\":\"b\"}".to_string(),
             ]
         );
+    }
+
+    #[test]
+    fn feedback_payload_includes_cloud_app_context() {
+        let args = FeedbackArgs {
+            app_id: "app_01test".to_string(),
+            message: "The production page returns 500.".to_string(),
+            kind: FeedbackKind::Bug,
+            severity: FeedbackSeverity::High,
+            url: Some("https://example.txcloud.app".to_string()),
+            build_id: Some("bld_01test".to_string()),
+            deployment_id: Some("dep_01test".to_string()),
+            contact: Some("user@example.com".to_string()),
+            metadata: vec!["browser=Chrome".to_string()],
+            json: false,
+        };
+
+        let payload = build_feedback_payload("tn_01test", "app_01resolved", &args).unwrap();
+
+        assert_eq!(payload.app_id, "app_01resolved");
+        assert_eq!(payload.operator_id, "tn_01test");
+        assert_eq!(payload.kind, FeedbackKind::Bug);
+        assert_eq!(payload.severity, FeedbackSeverity::High);
+        assert_eq!(
+            payload.metadata.get("browser").map(String::as_str),
+            Some("Chrome")
+        );
+    }
+
+    #[test]
+    fn feedback_metadata_rejects_secret_like_keys() {
+        let err = parse_feedback_metadata(&["api_key=secret".to_string()]).unwrap_err();
+
+        assert!(err.to_string().contains("secret-like"), "{err}");
+    }
+
+    #[test]
+    fn feedback_markdown_formats_context() {
+        let payload = FeedbackPayload {
+            app_id: "app_01test".to_string(),
+            operator_id: "tn_01test".to_string(),
+            kind: FeedbackKind::Feature,
+            severity: FeedbackSeverity::Medium,
+            message: "Please add CSV export.".to_string(),
+            url: None,
+            build_id: None,
+            deployment_id: None,
+            contact: None,
+            metadata: BTreeMap::from([("browser".to_string(), "Safari".to_string())]),
+            created_at: "2026-05-29T00:00:00+00:00".to_string(),
+        };
+
+        let markdown = render_feedback_markdown(&payload);
+
+        assert!(markdown.contains("# Cloud App Feedback"));
+        assert!(markdown.contains("- App ID: app_01test"));
+        assert!(markdown.contains("- Kind: feature"));
+        assert!(markdown.contains("Please add CSV export."));
+        assert!(markdown.contains("  - browser: Safari"));
     }
 }
