@@ -257,19 +257,19 @@ Pre-built skill definitions for AI agents are in the `skills/` and
 Install the distributable agent skills into `~/.agents/skills`:
 
 ```bash
-./scripts/install-agent-skills.sh
+tachyon skills install
 ```
 
 Install into another skill root, for example Codex:
 
 ```bash
-./scripts/install-agent-skills.sh --codex
+tachyon skills install --codex
 ```
 
 Install into a custom skill root:
 
 ```bash
-./scripts/install-agent-skills.sh --target-dir "$HOME/.custom-agent/skills"
+tachyon skills install --target-dir "$HOME/.custom-agent/skills"
 ```
 
 The Cloud App skill expects the released Tachyon CLI to be available on `PATH`:
