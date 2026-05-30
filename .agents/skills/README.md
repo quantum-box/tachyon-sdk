@@ -4,22 +4,22 @@ This directory contains distributable agent skills for Tachyon workflows.
 
 ## Install
 
-Install the bundled skills into the default agent skill directory:
+Install the bundled skills interactively:
 
 ```bash
 tachyon skills install
 ```
 
-Install into a custom directory:
+Install into Codex user scope without prompts:
 
 ```bash
-tachyon skills install --target-dir "$HOME/.custom-agent/skills"
+tachyon skills install tachyon-cloud --codex --scope user --non-interactive
 ```
 
-Install into Codex:
+Install into Codex workspace scope without prompts:
 
 ```bash
-tachyon skills install --codex
+tachyon skills install tachyon-cloud --codex --scope workspace --non-interactive
 ```
 
 ## Skills
