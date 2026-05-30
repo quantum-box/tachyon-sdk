@@ -44,31 +44,33 @@ struct SkillAsset {
 #[derive(Debug)]
 struct BundledSkill {
     name: &'static str,
+    aliases: &'static [&'static str],
     description: &'static str,
     files: &'static [SkillAsset],
 }
 
-const CLOUD_APP_DEPLOY_FILES: &[SkillAsset] = &[
+const TACHYON_CLOUD_FILES: &[SkillAsset] = &[
     SkillAsset {
         path: "SKILL.md",
-        contents: include_str!("../../.agents/skills/cloud-app-deploy/SKILL.md"),
+        contents: include_str!("../../.agents/skills/tachyon-cloud/SKILL.md"),
     },
     SkillAsset {
         path: "agents/openai.yaml",
-        contents: include_str!("../../.agents/skills/cloud-app-deploy/agents/openai.yaml"),
+        contents: include_str!("../../.agents/skills/tachyon-cloud/agents/openai.yaml"),
     },
     SkillAsset {
         path: "references/cloud-app-operations.md",
         contents: include_str!(
-            "../../.agents/skills/cloud-app-deploy/references/cloud-app-operations.md"
+            "../../.agents/skills/tachyon-cloud/references/cloud-app-operations.md"
         ),
     },
 ];
 
 const BUNDLED_SKILLS: &[BundledSkill] = &[BundledSkill {
-    name: "cloud-app-deploy",
+    name: "tachyon-cloud",
+    aliases: &["cloud-app-deploy"],
     description: "Operate Tachyon Cloud Apps with tachyon compute, tachyon.yml, env vars, build logs, deployments, and feedback reports",
-    files: CLOUD_APP_DEPLOY_FILES,
+    files: TACHYON_CLOUD_FILES,
 }];
 
 pub fn run(args: &SkillsArgs) -> Result<()> {
@@ -147,7 +149,7 @@ fn select_skills(name: Option<&str>) -> Result<Vec<&'static BundledSkill>> {
     match name {
         Some(name) => BUNDLED_SKILLS
             .iter()
-            .find(|skill| skill.name == name)
+            .find(|skill| skill.name == name || skill.aliases.contains(&name))
             .map(|skill| vec![skill])
             .ok_or_else(|| anyhow!("unknown skill `{name}`")),
         None => Ok(BUNDLED_SKILLS.iter().collect()),
@@ -188,9 +190,16 @@ mod tests {
 
     #[test]
     fn selects_known_skill() {
+        let selected = select_skills(Some("tachyon-cloud")).unwrap();
+        assert_eq!(selected.len(), 1);
+        assert_eq!(selected[0].name, "tachyon-cloud");
+    }
+
+    #[test]
+    fn accepts_legacy_skill_alias() {
         let selected = select_skills(Some("cloud-app-deploy")).unwrap();
         assert_eq!(selected.len(), 1);
-        assert_eq!(selected[0].name, "cloud-app-deploy");
+        assert_eq!(selected[0].name, "tachyon-cloud");
     }
 
     #[test]

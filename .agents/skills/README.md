@@ -26,6 +26,6 @@ tachyon skills install --codex
 
 | Skill | Purpose |
 | --- | --- |
-| `cloud-app-deploy` | Work with Tachyon Cloud Apps, `tachyon.yml`, env vars, builds, logs, deployments, and user feedback reports through the Tachyon CLI. |
+| `tachyon-cloud` | Work with Tachyon Cloud Apps, `tachyon.yml`, env vars, builds, logs, deployments, and user feedback reports through the Tachyon CLI. |
 
 After installing, restart the agent runtime if it only scans skills at startup.

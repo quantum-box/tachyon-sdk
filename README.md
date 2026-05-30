@@ -250,7 +250,7 @@ Pre-built skill definitions for AI agents are in the `skills/` and
 | Skill | File | Description |
 |-------|------|-------------|
 | image-gen | [`skills/image-gen.json`](skills/image-gen.json) | Generate AI images via `tachyon image generate` |
-| cloud-app-deploy | [`.agents/skills/cloud-app-deploy/`](.agents/skills/cloud-app-deploy/) | Operate Tachyon Cloud Apps with `tachyon compute`, `tachyon.yml`, env vars, build logs, deployments, and user feedback reports |
+| tachyon-cloud | [`.agents/skills/tachyon-cloud/`](.agents/skills/tachyon-cloud/) | Operate Tachyon Cloud Apps with `tachyon compute`, `tachyon.yml`, env vars, build logs, deployments, and user feedback reports |
 
 ### Installing Agent Skills
 
@@ -272,7 +272,7 @@ Install into a custom skill root:
 tachyon skills install --target-dir "$HOME/.custom-agent/skills"
 ```
 
-The Cloud App skill expects the released Tachyon CLI to be available on `PATH`:
+The Tachyon Cloud skill expects the released Tachyon CLI to be available on `PATH`:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/quantum-box/tachyon-sdk/main/scripts/install.sh | sh

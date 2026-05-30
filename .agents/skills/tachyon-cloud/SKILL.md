@@ -1,9 +1,9 @@
 ---
-name: cloud-app-deploy
-description: "Use when working on Tachyon Cloud Apps: creating or updating `tachyon.yml` manifests, setting Cloud App env vars or secrets, running `tachyon compute apps apply`, triggering builds/deployments, checking build status/logs, diagnosing deploy failures, collecting user feedback, or explaining Tachyon CLI usage for Cloud App delivery."
+name: tachyon-cloud
+description: "Use when working on Tachyon Cloud: creating or updating `tachyon.yml` manifests, setting Cloud App env vars or secrets, running `tachyon compute apps apply`, triggering builds/deployments, checking build status/logs, diagnosing deploy failures, collecting user feedback, or explaining Tachyon CLI usage for Cloud App delivery."
 ---
 
-# Cloud App Deploy
+# Tachyon Cloud
 
 ## Purpose
 
