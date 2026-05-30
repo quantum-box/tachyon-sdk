@@ -916,7 +916,7 @@ struct RollbackRequest {
 #[derive(Debug, Serialize)]
 struct TriggerBuildRequest {
     #[serde(skip_serializing_if = "Option::is_none")]
-    branch: Option<String>,
+    source_branch: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -1723,7 +1723,7 @@ async fn run_builds_get(api: &ApiClient, build_id: &str, json: bool) -> Result<(
 
 async fn run_builds_trigger(api: &ApiClient, app_id: &str, branch: Option<&str>) -> Result<()> {
     let req = TriggerBuildRequest {
-        branch: branch.map(String::from),
+        source_branch: branch.map(String::from),
     };
     let build: BuildResponse = api
         .post(&format!("/v1/compute/apps/{app_id}/builds"), &req)
