@@ -4,7 +4,7 @@ Auto-generated multi-language API clients for the [Tachyon Platform](https://git
 
 ## CLI
 
-Latest release: **v0.6.8**
+Latest release: **v0.6.9**
 
 ### Install
 
