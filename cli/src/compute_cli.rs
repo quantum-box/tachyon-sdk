@@ -974,12 +974,44 @@ enum ApplyAction {
 struct EnvPlan {
     plain: Vec<SetEnvVarEntry>,
     secret_refs: Vec<SecretEnvRef>,
+    sentry_integrations: Vec<SentryIntegrationPlan>,
 }
 
 #[derive(Debug)]
 struct SecretEnvRef {
     key: String,
     target: String,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct SentryIntegrationPlan {
+    project: String,
+    provider: String,
+    env_vars: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ListIntegrationsResponse {
+    integrations: Vec<IntegrationInfo>,
+}
+
+#[derive(Debug, Deserialize)]
+struct IntegrationInfo {
+    provider: String,
+    is_enabled: bool,
+    #[serde(default)]
+    requires_setup: bool,
+}
+
+#[derive(Debug, Deserialize)]
+struct ListConnectionsResponse {
+    connections: Vec<IntegrationConnection>,
+}
+
+#[derive(Debug, Deserialize)]
+struct IntegrationConnection {
+    provider: String,
+    status: String,
 }
 
 async fn run_apps_apply(
@@ -992,6 +1024,16 @@ async fn run_apps_apply(
     let manifest = load_cloud_apps_manifest(file)?;
     let entries = select_app_entries(&manifest, selected_app)?;
     let live: ListAppsResponse = api.get("/v1/compute/apps").await?;
+    let sentry_plans = entries
+        .iter()
+        .map(|entry| plan_sentry_integration(entry))
+        .collect::<Result<Vec<_>>>()?
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>();
+    if !sentry_plans.is_empty() {
+        validate_sentry_integration(api).await?;
+    }
 
     println!("Manifest:    {}", file.display());
     println!("Environment: {environment}");
@@ -1048,6 +1090,16 @@ async fn run_apps_apply(
         }
         if !env_changed.is_empty() {
             println!("  env:         {}", env_changed.join(", "));
+        }
+        if !env_plan.sentry_integrations.is_empty() {
+            for sentry in &env_plan.sentry_integrations {
+                println!(
+                    "  sentry:      project={} provider={} env={}",
+                    sentry.project,
+                    sentry.provider,
+                    sentry.env_vars.join(", ")
+                );
+            }
         }
         if !missing_secrets.is_empty() {
             println!("  missing secrets: {}", missing_secrets.join(", "));
@@ -1281,52 +1333,148 @@ fn opt_string_value(value: Option<&str>) -> Value {
 }
 
 fn plan_env_vars(entry: &Value, environment: &str) -> Result<EnvPlan> {
-    let Some(env_vars) = entry.get("envVars") else {
-        return Ok(EnvPlan::default());
-    };
-    let env_vars = env_vars
-        .as_array()
-        .ok_or_else(|| anyhow!("envVars must be an array"))?;
     let mut plan = EnvPlan::default();
-    for env in env_vars {
-        let key = env
-            .get("name")
-            .and_then(Value::as_str)
-            .ok_or_else(|| anyhow!("env var entry is missing name"))?;
-        let target = env
-            .get("target")
-            .and_then(Value::as_str)
-            .map(ToString::to_string)
-            .unwrap_or_else(|| default_env_target(environment).to_string());
-        let env_type = env.get("type").and_then(Value::as_str).unwrap_or("plain");
-        let value = env.get("value").and_then(Value::as_str);
-        let value_from = env.get("valueFrom");
-        if env_type == "credential" || value_from.is_some() {
-            if value.is_some() {
-                return Err(anyhow!("credential env var {key} must use valueFrom.secret; literal values are not allowed"));
+
+    if let Some(env_vars) = entry.get("envVars") {
+        let env_vars = env_vars
+            .as_array()
+            .ok_or_else(|| anyhow!("envVars must be an array"))?;
+        for env in env_vars {
+            let key = env
+                .get("name")
+                .and_then(Value::as_str)
+                .ok_or_else(|| anyhow!("env var entry is missing name"))?;
+            let target = env
+                .get("target")
+                .and_then(Value::as_str)
+                .map(ToString::to_string)
+                .unwrap_or_else(|| default_env_target(environment).to_string());
+            let env_type = env.get("type").and_then(Value::as_str).unwrap_or("plain");
+            let value = env.get("value").and_then(Value::as_str);
+            let value_from = env.get("valueFrom");
+            if env_type == "credential" || value_from.is_some() {
+                if value.is_some() {
+                    return Err(anyhow!("credential env var {key} must use valueFrom.secret; literal values are not allowed"));
+                }
+                let secret = extract_secret_ref(
+                    key,
+                    value_from
+                        .ok_or_else(|| anyhow!("credential env var {key} is missing valueFrom"))?,
+                )?;
+                plan.secret_refs.push(SecretEnvRef {
+                    key: secret,
+                    target,
+                });
+            } else {
+                plan.plain.push(SetEnvVarEntry {
+                    key: key.to_string(),
+                    value: value
+                        .ok_or_else(|| anyhow!("plain env var {key} must define value"))?
+                        .to_string(),
+                    target: Some(target),
+                    branch: None,
+                    is_secret: Some(false),
+                });
             }
-            let secret = extract_secret_ref(
-                key,
-                value_from
-                    .ok_or_else(|| anyhow!("credential env var {key} is missing valueFrom"))?,
-            )?;
-            plan.secret_refs.push(SecretEnvRef {
-                key: secret,
-                target,
-            });
-        } else {
-            plan.plain.push(SetEnvVarEntry {
-                key: key.to_string(),
-                value: value
-                    .ok_or_else(|| anyhow!("plain env var {key} must define value"))?
-                    .to_string(),
-                target: Some(target),
-                branch: None,
-                is_secret: Some(false),
-            });
         }
     }
+
+    if let Some(sentry) = plan_sentry_integration(entry)? {
+        plan.sentry_integrations.push(sentry);
+    }
+
     Ok(plan)
+}
+
+fn plan_sentry_integration(entry: &Value) -> Result<Option<SentryIntegrationPlan>> {
+    let Some(project) = entry
+        .get("integrations")
+        .and_then(|integrations| integrations.get("sentry"))
+        .and_then(|sentry| sentry.get("project"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|project| !project.is_empty())
+    else {
+        return Ok(None);
+    };
+
+    let explicit_env_vars = entry
+        .get("envVars")
+        .map(|env_vars| {
+            env_vars
+                .as_array()
+                .ok_or_else(|| anyhow!("envVars must be an array"))
+        })
+        .transpose()?
+        .into_iter()
+        .flatten()
+        .filter_map(|env| env.get("name").and_then(Value::as_str))
+        .collect::<BTreeSet<_>>();
+
+    let env_vars = ["NEXT_PUBLIC_SENTRY_DSN", "SENTRY_DSN"]
+        .into_iter()
+        .filter(|name| !explicit_env_vars.contains(*name))
+        .map(ToString::to_string)
+        .collect::<Vec<_>>();
+
+    Ok(Some(SentryIntegrationPlan {
+        project: project.to_string(),
+        provider: sentry_provider_name(project),
+        env_vars,
+    }))
+}
+
+fn sentry_provider_name(project: &str) -> String {
+    let normalized = project
+        .trim()
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() {
+                ch.to_ascii_lowercase()
+            } else {
+                '_'
+            }
+        })
+        .collect::<String>()
+        .trim_matches('_')
+        .to_string();
+    format!("sentry_{normalized}")
+}
+
+async fn validate_sentry_integration(api: &ApiClient) -> Result<()> {
+    let integrations: ListIntegrationsResponse = api.get("/v1/integrations").await?;
+    let Some(sentry) = integrations
+        .integrations
+        .iter()
+        .find(|integration| integration.provider.eq_ignore_ascii_case("sentry"))
+    else {
+        return Err(anyhow!(
+            "Sentry integration is not available for this tenant. Enable the Sentry integration before running tachyon compute apps apply."
+        ));
+    };
+    if !sentry.is_enabled {
+        return Err(anyhow!(
+            "Sentry integration is disabled for this tenant. Enable it before running tachyon compute apps apply."
+        ));
+    }
+    if sentry.requires_setup {
+        return Err(anyhow!(
+            "Sentry integration requires setup. Configure the Sentry integration provider secrets before running tachyon compute apps apply."
+        ));
+    }
+
+    let connections: ListConnectionsResponse = api.get("/v1/integrations/connections").await?;
+    let active_connection = connections.connections.iter().any(|connection| {
+        connection.provider.eq_ignore_ascii_case("sentry")
+            && connection.status.eq_ignore_ascii_case("active")
+    });
+    if !active_connection {
+        return Err(anyhow!(
+            "Sentry integration is enabled but has no active connection for this tenant. Run tachyon iac integrations get sentry and connect Sentry first."
+        ));
+    }
+
+    Ok(())
 }
 
 fn default_env_target(environment: &str) -> &'static str {
@@ -2636,4 +2784,56 @@ pub async fn run_env(
         config_flag,
     )
     .await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sentry_integration_adds_cli_plan_metadata() {
+        let entry = json!({
+            "name": "planet-library",
+            "integrations": {
+                "sentry": {
+                    "project": "Next.js App"
+                }
+            },
+            "envVars": [
+                {
+                    "name": "SENTRY_DSN",
+                    "valueFrom": {
+                        "secret": "SENTRY_DSN"
+                    }
+                }
+            ]
+        });
+
+        let plan = plan_env_vars(&entry, "production").unwrap();
+
+        assert_eq!(
+            plan.secret_refs
+                .iter()
+                .map(|secret| secret.key.as_str())
+                .collect::<Vec<_>>(),
+            vec!["SENTRY_DSN"]
+        );
+        assert_eq!(
+            plan.sentry_integrations,
+            vec![SentryIntegrationPlan {
+                project: "Next.js App".to_string(),
+                provider: "sentry_next_js_app".to_string(),
+                env_vars: vec!["NEXT_PUBLIC_SENTRY_DSN".to_string()],
+            }]
+        );
+    }
+
+    #[test]
+    fn sentry_provider_name_is_stable() {
+        assert_eq!(sentry_provider_name("nextjs"), "sentry_nextjs");
+        assert_eq!(
+            sentry_provider_name("Field Admin UI"),
+            "sentry_field_admin_ui"
+        );
+    }
 }
