@@ -3099,15 +3099,7 @@ pub async fn run(
                     if !vars.is_empty() {
                         return Err(anyhow!("KEY=VALUE arguments cannot be used with --secret"));
                     }
-                    run_env_set_secret(
-                        &api,
-                        &id,
-                        key,
-                        target,
-                        value.as_deref(),
-                        config_flag,
-                    )
-                    .await
+                    run_env_set_secret(&api, &id, key, target, value.as_deref(), config_flag).await
                 } else {
                     run_env_set(&api, &id, &vars, target, branch.as_deref()).await
                 }
