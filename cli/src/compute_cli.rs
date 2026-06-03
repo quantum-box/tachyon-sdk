@@ -5,7 +5,7 @@ use dialoguer::{theme::ColorfulTheme, Password};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
-use std::io::Write;
+use std::io::{self, IsTerminal, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Instant;
@@ -579,6 +579,14 @@ pub enum EnvCommand {
         /// Register this key as a Cloudflare Pages secret
         #[arg(long)]
         secret: Option<String>,
+        /// Secret value (non-interactive). Use `-` to read from stdin.
+        #[arg(
+            long,
+            value_name = "VALUE",
+            requires = "secret",
+            conflicts_with = "vars"
+        )]
+        value: Option<String>,
         /// Target environment
         #[arg(long, default_value = "all")]
         target: String,
@@ -2537,11 +2545,12 @@ async fn run_env_set_secret(
     app_id: &str,
     key: &str,
     target: &str,
+    value_flag: Option<&str>,
     config_flag: Option<&Path>,
 ) -> Result<()> {
     validate_secret_key(key)?;
     validate_secret_target(target)?;
-    let value = read_secret_value(key)?;
+    let value = read_secret_value(key, value_flag)?;
     let req = SetAppSecretRequest {
         key: key.to_string(),
         value,
@@ -2581,7 +2590,21 @@ fn validate_secret_target(target: &str) -> Result<()> {
     }
 }
 
-fn read_secret_value(key: &str) -> Result<String> {
+/// Resolve a secret value for `env set --secret`.
+///
+/// Priority: `--value` / `--value -` (stdin) → `TACHYON_SECRET_VALUE` → piped
+/// stdin when non-interactive → interactive prompt.
+fn read_secret_value(key: &str, value_flag: Option<&str>) -> Result<String> {
+    if let Some(flag) = value_flag {
+        if flag == "-" {
+            return read_secret_value_from_stdin();
+        }
+        if flag.is_empty() {
+            return Err(anyhow!("--value must not be empty"));
+        }
+        return Ok(flag.to_string());
+    }
+
     if let Ok(value) = std::env::var("TACHYON_SECRET_VALUE") {
         if value.is_empty() {
             return Err(anyhow!("TACHYON_SECRET_VALUE must not be empty"));
@@ -2589,10 +2612,26 @@ fn read_secret_value(key: &str) -> Result<String> {
         return Ok(value);
     }
 
+    if !io::stdin().is_terminal() {
+        return read_secret_value_from_stdin();
+    }
+
     let value = Password::with_theme(&ColorfulTheme::default())
         .with_prompt(format!("Enter value for {key}"))
         .allow_empty_password(false)
         .interact()?;
+    Ok(value)
+}
+
+fn read_secret_value_from_stdin() -> Result<String> {
+    let mut buf = String::new();
+    io::stdin()
+        .read_to_string(&mut buf)
+        .map_err(|error| anyhow!("failed to read secret value from stdin: {error}"))?;
+    let value = buf.trim_end_matches(['\r', '\n']).to_string();
+    if value.is_empty() {
+        return Err(anyhow!("secret value from stdin must not be empty"));
+    }
     Ok(value)
 }
 
@@ -3038,6 +3077,7 @@ pub async fn run(
                 app_id,
                 app,
                 secret,
+                value,
                 target,
                 branch,
                 vars,
@@ -3059,7 +3099,7 @@ pub async fn run(
                     if !vars.is_empty() {
                         return Err(anyhow!("KEY=VALUE arguments cannot be used with --secret"));
                     }
-                    run_env_set_secret(&api, &id, key, target, config_flag).await
+                    run_env_set_secret(&api, &id, key, target, value.as_deref(), config_flag).await
                 } else {
                     run_env_set(&api, &id, &vars, target, branch.as_deref()).await
                 }
