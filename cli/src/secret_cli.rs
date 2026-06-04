@@ -36,7 +36,7 @@ pub enum SecretCommand {
         #[arg(long, env = "CLOUDFLARE_ACCOUNT_ID")]
         account_id: Option<String>,
         /// Cloudflare API token
-        #[arg(long, env = "CLOUDFLARE_API_TOKEN")]
+        #[arg(long, env = "CLOUDFLARE_API_TOKEN", hide_env_values = true)]
         api_token: Option<String>,
         /// Cloudflare Pages project name
         #[arg(long)]
