@@ -15,6 +15,7 @@ mod ops_cli;
 mod org_cli;
 mod reconcile_cli;
 mod resolve;
+mod secret_cli;
 mod slack_cli;
 mod switch_cli;
 mod tts_cli;
@@ -202,6 +203,8 @@ enum Commands {
     /// Manage service-account API keys
     #[command(name = "api-key")]
     ApiKey(api_key_cli::ApiKeyArgs),
+    /// Manage Cloudflare Pages secrets
+    Secret(secret_cli::SecretArgs),
     /// Manage agent sessions, protocols, workers, and memory
     Agent(agent_cli::AgentArgs),
     /// Infrastructure-as-Code: integrations, OAuth providers, connections
@@ -499,6 +502,11 @@ async fn run() -> Result<()> {
             let config = build_config(&cli, &active).await;
             let tenant_id = resolve::resolve_tenant_id(&config, tenant_arg, &active).await?;
             api_key_cli::run(args, &config, &tenant_id).await
+        }
+        Commands::Secret(args) => {
+            let project_config = config::loader::load(cli.config.as_deref())?;
+            let config = build_config(&cli, &active).await;
+            secret_cli::run(args, &config, project_config.as_ref()).await
         }
         Commands::Agent(args) => {
             let project_config = config::loader::load(cli.config.as_deref())?;

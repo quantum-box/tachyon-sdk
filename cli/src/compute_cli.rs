@@ -132,7 +132,7 @@ impl PagesApp {
         }
     }
 
-    fn cf_project_name(&self) -> &str {
+    pub(crate) fn cf_project_name(&self) -> &str {
         match self {
             PagesApp::Tachyon => "tachyon-app",
             PagesApp::Cms => "tachyon-apps-cms-app",
@@ -2178,7 +2178,7 @@ async fn run_env_set_secret(
     Ok(())
 }
 
-fn validate_secret_key(key: &str) -> Result<()> {
+pub(crate) fn validate_secret_key(key: &str) -> Result<()> {
     if key.is_empty() {
         return Err(anyhow!("secret key must not be empty"));
     }
