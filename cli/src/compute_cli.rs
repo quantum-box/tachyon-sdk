@@ -576,17 +576,9 @@ pub enum EnvCommand {
         /// App ID or name (alternative to positional app_id)
         #[arg(long)]
         app: Option<String>,
-        /// Register this key as a Cloudflare Pages secret
+        /// Register this key as a runtime secret (CF Pages secret_text or ASM)
         #[arg(long)]
         secret: Option<String>,
-        /// Secret value (non-interactive). Use `-` to read from stdin.
-        #[arg(
-            long,
-            value_name = "VALUE",
-            requires = "secret",
-            conflicts_with = "vars"
-        )]
-        value: Option<String>,
         /// Target environment
         #[arg(long, default_value = "all")]
         target: String,
@@ -880,6 +872,7 @@ struct SetAppSecretRequest {
 struct SetAppSecretResponse {
     key: String,
     target: String,
+    secret_ref: String,
 }
 
 #[derive(Debug, Serialize, Clone)]
@@ -2540,17 +2533,17 @@ async fn run_env_unset_key(
     Ok(())
 }
 
-async fn run_env_set_secret(
+pub async fn run_env_set_secret(
     api: &ApiClient,
     app_id: &str,
+    app_name: &str,
     key: &str,
     target: &str,
-    value_flag: Option<&str>,
     config_flag: Option<&Path>,
 ) -> Result<()> {
     validate_secret_key(key)?;
     validate_secret_target(target)?;
-    let value = read_secret_value(key, value_flag)?;
+    let value = read_secret_value(key)?;
     let req = SetAppSecretRequest {
         key: key.to_string(),
         value,
@@ -2560,9 +2553,12 @@ async fn run_env_set_secret(
         .post(&format!("/v1/apps/{app_id}/secrets"), &req)
         .await?;
 
-    update_manifest_secret_ref(config_flag, &resp.key, &resp.target)?;
+    update_manifest_secret_ref(config_flag, app_name, &resp.key, &resp.target)?;
     println!("Set secret {} for target {}.", resp.key, resp.target);
-    println!("Updated tachyon.yml with valueFrom.secret: {}", resp.key);
+    println!(
+        "Stored pointer {} (runtime value is not written to git).",
+        resp.secret_ref
+    );
     Ok(())
 }
 
@@ -2590,21 +2586,10 @@ fn validate_secret_target(target: &str) -> Result<()> {
     }
 }
 
-/// Resolve a secret value for `env set --secret`.
+/// Resolve a secret value without accepting it as a CLI argument (shell history safe).
 ///
-/// Priority: `--value` / `--value -` (stdin) → `TACHYON_SECRET_VALUE` → piped
-/// stdin when non-interactive → interactive prompt.
-fn read_secret_value(key: &str, value_flag: Option<&str>) -> Result<String> {
-    if let Some(flag) = value_flag {
-        if flag == "-" {
-            return read_secret_value_from_stdin();
-        }
-        if flag.is_empty() {
-            return Err(anyhow!("--value must not be empty"));
-        }
-        return Ok(flag.to_string());
-    }
-
+/// Priority: `TACHYON_SECRET_VALUE` env → piped stdin when non-interactive → prompt.
+pub fn read_secret_value(key: &str) -> Result<String> {
     if let Ok(value) = std::env::var("TACHYON_SECRET_VALUE") {
         if value.is_empty() {
             return Err(anyhow!("TACHYON_SECRET_VALUE must not be empty"));
@@ -2635,13 +2620,28 @@ fn read_secret_value_from_stdin() -> Result<String> {
     Ok(value)
 }
 
-fn update_manifest_secret_ref(config_flag: Option<&Path>, key: &str, target: &str) -> Result<()> {
-    let loaded = crate::config::loader::load_with_path(config_flag)?
-        .ok_or_else(|| anyhow!("tachyon.yml not found. Run `tachyon init` first."))?;
-    upsert_manifest_secret_ref(&loaded.path, key, target)
+fn manifest_secret_ref(app_name: &str, key: &str) -> String {
+    format!("{app_name}/{key}")
 }
 
-fn upsert_manifest_secret_ref(path: &Path, key: &str, target: &str) -> Result<()> {
+fn update_manifest_secret_ref(
+    config_flag: Option<&Path>,
+    app_name: &str,
+    key: &str,
+    target: &str,
+) -> Result<()> {
+    let loaded = crate::config::loader::load_with_path(config_flag)?
+        .ok_or_else(|| anyhow!("tachyon.yml not found. Run `tachyon init` first."))?;
+    let secret_ref = manifest_secret_ref(app_name, key);
+    upsert_manifest_secret_ref(&loaded.path, key, &secret_ref, target)
+}
+
+fn upsert_manifest_secret_ref(
+    path: &Path,
+    key: &str,
+    secret_ref: &str,
+    target: &str,
+) -> Result<()> {
     let raw = std::fs::read_to_string(path)?;
     let mut doc: serde_yaml::Value = serde_yaml::from_str(&raw)?;
     let kind = doc
@@ -2652,7 +2652,7 @@ fn upsert_manifest_secret_ref(path: &Path, key: &str, target: &str) -> Result<()
     match kind {
         "CloudApp" => {
             let spec = ensure_mapping_child(&mut doc, "spec")?;
-            upsert_env_var_ref(spec, key, target)?;
+            upsert_env_var_ref(spec, key, secret_ref, target)?;
         }
         "CloudApps" => {
             let app_name = doc
@@ -2679,7 +2679,7 @@ fn upsert_manifest_secret_ref(path: &Path, key: &str, target: &str) -> Result<()
             let mapping = entry
                 .as_mapping_mut()
                 .ok_or_else(|| anyhow!("CloudApps spec.apps entry must be an object"))?;
-            upsert_env_var_ref(mapping, key, target)?;
+            upsert_env_var_ref(mapping, key, secret_ref, target)?;
         }
         other => return Err(anyhow!("unsupported manifest kind: {other}")),
     }
@@ -2709,7 +2709,12 @@ fn ensure_mapping_child<'a>(
         .ok_or_else(|| anyhow!("{key} must be an object"))
 }
 
-fn upsert_env_var_ref(spec: &mut serde_yaml::Mapping, key: &str, target: &str) -> Result<()> {
+fn upsert_env_var_ref(
+    spec: &mut serde_yaml::Mapping,
+    key: &str,
+    secret_ref: &str,
+    target: &str,
+) -> Result<()> {
     let env_key = serde_yaml::Value::String("envVars".to_string());
     if !spec.contains_key(&env_key) {
         spec.insert(env_key.clone(), serde_yaml::Value::Sequence(Vec::new()));
@@ -2726,17 +2731,22 @@ fn upsert_env_var_ref(spec: &mut serde_yaml::Mapping, key: &str, target: &str) -
         let mapping = existing
             .as_mapping_mut()
             .ok_or_else(|| anyhow!("spec.envVars entries must be objects"))?;
-        set_secret_env_mapping(mapping, key, target);
+        set_secret_env_mapping(mapping, key, secret_ref, target);
         return Ok(());
     }
 
     let mut mapping = serde_yaml::Mapping::new();
-    set_secret_env_mapping(&mut mapping, key, target);
+    set_secret_env_mapping(&mut mapping, key, secret_ref, target);
     env_vars.push(serde_yaml::Value::Mapping(mapping));
     Ok(())
 }
 
-fn set_secret_env_mapping(mapping: &mut serde_yaml::Mapping, key: &str, target: &str) {
+fn set_secret_env_mapping(
+    mapping: &mut serde_yaml::Mapping,
+    key: &str,
+    secret_ref: &str,
+    target: &str,
+) {
     mapping.insert(yaml_key("name"), serde_yaml::Value::String(key.to_string()));
     mapping.insert(
         yaml_key("type"),
@@ -2755,7 +2765,7 @@ fn set_secret_env_mapping(mapping: &mut serde_yaml::Mapping, key: &str, target: 
     let mut value_from = serde_yaml::Mapping::new();
     value_from.insert(
         yaml_key("secret"),
-        serde_yaml::Value::String(key.to_string()),
+        serde_yaml::Value::String(secret_ref.to_string()),
     );
     mapping.insert(
         yaml_key("valueFrom"),
@@ -3077,10 +3087,10 @@ pub async fn run(
                 app_id,
                 app,
                 secret,
-                value,
                 target,
                 branch,
                 vars,
+                ..
             } => {
                 let mut vars = vars.clone();
                 let positional_app = app_id.as_ref().and_then(|value| {
@@ -3099,7 +3109,18 @@ pub async fn run(
                     if !vars.is_empty() {
                         return Err(anyhow!("KEY=VALUE arguments cannot be used with --secret"));
                     }
-                    run_env_set_secret(&api, &id, key, target, value.as_deref(), config_flag).await
+                    let app_name = project_config
+                        .and_then(|cfg| cfg.metadata.name.as_deref())
+                        .unwrap_or(app_id);
+                    run_env_set_secret(
+                        &api,
+                        &id,
+                        app_name,
+                        key,
+                        target,
+                        config_flag,
+                    )
+                    .await
                 } else {
                     run_env_set(&api, &id, &vars, target, branch.as_deref()).await
                 }

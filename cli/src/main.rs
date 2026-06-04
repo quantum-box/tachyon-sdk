@@ -16,6 +16,7 @@ mod ops_cli;
 mod org_cli;
 mod reconcile_cli;
 mod resolve;
+mod secret_cli;
 mod skills_cli;
 mod slack_cli;
 mod switch_cli;
@@ -198,6 +199,8 @@ enum Commands {
     Compute(compute_cli::ComputeArgs),
     /// Manage Cloud App environment variables
     Env(compute_cli::EnvArgs),
+    /// Manage Cloud App runtime secrets (CF Pages secret_text or ASM)
+    Secret(secret_cli::SecretArgs),
     /// Generate a tachyon.yml project config
     Init(commands::init::InitArgs),
     /// Manage organizations, users, service accounts, and policies
@@ -490,6 +493,20 @@ async fn run() -> Result<()> {
             let config = build_config(&cli, &active).await;
             let tenant_id = resolve::resolve_tenant_id(&config, tenant_arg, &active).await?;
             compute_cli::run_env(
+                args,
+                &config,
+                &tenant_id,
+                project_config.as_ref(),
+                cli.config.as_deref(),
+            )
+            .await
+        }
+        Commands::Secret(args) => {
+            let project_config = config::loader::load(cli.config.as_deref())?;
+            let tenant_arg = tenant_arg(&cli, project_config.as_ref());
+            let config = build_config(&cli, &active).await;
+            let tenant_id = resolve::resolve_tenant_id(&config, tenant_arg, &active).await?;
+            secret_cli::run(
                 args,
                 &config,
                 &tenant_id,
