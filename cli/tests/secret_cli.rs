@@ -281,6 +281,25 @@ fn secret_set_fails_before_api_call_without_account_id() {
 }
 
 #[test]
+fn secret_set_help_does_not_print_cloudflare_api_token_env_value() {
+    let tmp = TempDir::new().unwrap();
+
+    let output = isolated_command(tmp.path())
+        .current_dir(tmp.path())
+        .env("CLOUDFLARE_API_TOKEN", "cf-token-from-env")
+        .args(["secret", "set", "--help"])
+        .output()
+        .expect("run tachyon secret set help");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stdout.contains("CLOUDFLARE_API_TOKEN"));
+    assert!(!stdout.contains("cf-token-from-env"));
+    assert!(!stderr.contains("cf-token-from-env"));
+}
+
+#[test]
 fn secret_set_resolves_single_cloud_apps_app_name() {
     let tmp = TempDir::new().unwrap();
     write_cloud_apps_config(tmp.path(), "configured-app");
