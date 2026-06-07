@@ -17,7 +17,7 @@ use serde::{Deserialize, Serialize};
 #[serde(untagged)]
 pub enum MessageContent {
     String(String),
-    Array(Vec<models::ContentPart>),
+    ArrayVecmodels::ContentPart(Vec<models::ContentPart>),
 }
 
 impl Default for MessageContent {

@@ -6,8 +6,8 @@ Policy action pattern removal entry
 
 Name | Type | Description | Notes
 ------------ | ------------- | ------------- | -------------
-**context_pattern** | **str** | Action context pattern |
-**name_pattern** | **str** | Action name pattern |
+**context_pattern** | **str** | Action context pattern | 
+**name_pattern** | **str** | Action name pattern | 
 
 ## Example
 

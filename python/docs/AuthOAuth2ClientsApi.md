@@ -38,7 +38,7 @@ configuration = tachyon_sdk.Configuration(
 with tachyon_sdk.ApiClient(configuration) as api_client:
     # Create an instance of the API class
     api_instance = tachyon_sdk.AuthOAuth2ClientsApi(api_client)
-    o_auth2_create_client_request = tachyon_sdk.OAuth2CreateClientRequest() # OAuth2CreateClientRequest |
+    o_auth2_create_client_request = tachyon_sdk.OAuth2CreateClientRequest() # OAuth2CreateClientRequest | 
 
     try:
         # Create a new OAuth2 client
@@ -56,7 +56,7 @@ with tachyon_sdk.ApiClient(configuration) as api_client:
 
 Name | Type | Description  | Notes
 ------------- | ------------- | ------------- | -------------
- **o_auth2_create_client_request** | [**OAuth2CreateClientRequest**](OAuth2CreateClientRequest.md)|  |
+ **o_auth2_create_client_request** | [**OAuth2CreateClientRequest**](OAuth2CreateClientRequest.md)|  | 
 
 ### Return type
 
@@ -124,7 +124,7 @@ with tachyon_sdk.ApiClient(configuration) as api_client:
 
 Name | Type | Description  | Notes
 ------------- | ------------- | ------------- | -------------
- **id** | **str**| OAuth2 client ID |
+ **id** | **str**| OAuth2 client ID | 
 
 ### Return type
 
@@ -251,7 +251,7 @@ with tachyon_sdk.ApiClient(configuration) as api_client:
 
 Name | Type | Description  | Notes
 ------------- | ------------- | ------------- | -------------
- **id** | **str**| OAuth2 client ID |
+ **id** | **str**| OAuth2 client ID | 
 
 ### Return type
 
@@ -318,7 +318,7 @@ with tachyon_sdk.ApiClient(configuration) as api_client:
 
 Name | Type | Description  | Notes
 ------------- | ------------- | ------------- | -------------
- **id** | **str**| OAuth2 client ID |
+ **id** | **str**| OAuth2 client ID | 
 
 ### Return type
 
@@ -369,7 +369,7 @@ with tachyon_sdk.ApiClient(configuration) as api_client:
     # Create an instance of the API class
     api_instance = tachyon_sdk.AuthOAuth2ClientsApi(api_client)
     id = 'id_example' # str | OAuth2 client ID
-    o_auth2_update_client_request = tachyon_sdk.OAuth2UpdateClientRequest() # OAuth2UpdateClientRequest |
+    o_auth2_update_client_request = tachyon_sdk.OAuth2UpdateClientRequest() # OAuth2UpdateClientRequest | 
 
     try:
         # Update an OAuth2 client
@@ -387,8 +387,8 @@ with tachyon_sdk.ApiClient(configuration) as api_client:
 
 Name | Type | Description  | Notes
 ------------- | ------------- | ------------- | -------------
- **id** | **str**| OAuth2 client ID |
- **o_auth2_update_client_request** | [**OAuth2UpdateClientRequest**](OAuth2UpdateClientRequest.md)|  |
+ **id** | **str**| OAuth2 client ID | 
+ **o_auth2_update_client_request** | [**OAuth2UpdateClientRequest**](OAuth2UpdateClientRequest.md)|  | 
 
 ### Return type
 
