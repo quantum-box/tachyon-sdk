@@ -10,6 +10,7 @@ mod iac_cli;
 mod image_cli;
 mod install_cli;
 mod linear_cli;
+mod manifest;
 mod mcp;
 mod mcp_cli;
 mod ops_cli;
@@ -214,6 +215,8 @@ enum Commands {
     Worker(worker_cli::WorkerArgs),
     /// Infrastructure-as-Code: integrations, OAuth providers, connections
     Iac(iac_cli::IacArgs),
+    /// Validate, plan, apply, and reconcile manifests
+    Manifest(manifest::ManifestArgs),
     /// Operations: deployment events, scenario reports, and tool jobs
     Ops(ops_cli::OpsArgs),
     /// Generate AI images from text prompts
@@ -539,6 +542,19 @@ async fn run() -> Result<()> {
             let tenant_id = resolve::resolve_tenant_id(&config, tenant_arg, &active).await?;
             iac_cli::run(args, &config, &tenant_id).await
         }
+        Commands::Manifest(args) => {
+            if manifest::needs_tenant(args) {
+                let (project_config, searched_paths) =
+                    load_project_config_for_context(&cli, manifest::context_file(args))?;
+                let tenant_arg =
+                    strict_tenant_arg(&cli, project_config.as_ref(), &searched_paths, "manifest")?;
+                let config = build_config(&cli, &active).await;
+                let tenant_id = resolve::resolve_tenant_id(&config, tenant_arg, &active).await?;
+                manifest::run(args, Some(&config), Some(&tenant_id)).await
+            } else {
+                manifest::run(args, None, None).await
+            }
+        }
         Commands::Ops(args) => {
             let project_config = config::loader::load(cli.config.as_deref())?;
             let tenant_arg = tenant_arg(&cli, project_config.as_ref());
@@ -584,12 +600,12 @@ async fn run() -> Result<()> {
         }
         Commands::Reconcile(args) => {
             let (project_config, searched_paths) =
-                load_project_config_for_context(&cli, Some(args.file.as_path()))?;
+                load_project_config_for_context(&cli, args.file.as_deref())?;
             let tenant_arg =
                 strict_tenant_arg(&cli, project_config.as_ref(), &searched_paths, "reconcile")?;
             let config = build_config(&cli, &active).await;
             let tenant_id = resolve::resolve_tenant_id(&config, tenant_arg, &active).await?;
-            reconcile_cli::run(args, &config, &tenant_id).await
+            manifest::reconcile_alias(args, &config, &tenant_id).await
         }
     }
 }

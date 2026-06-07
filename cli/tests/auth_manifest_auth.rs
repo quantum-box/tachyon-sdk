@@ -114,6 +114,28 @@ fn start_actions_server() -> (String, mpsc::Receiver<String>, thread::JoinHandle
     (url, rx, handle)
 }
 
+fn start_apply_action_server() -> (String, mpsc::Receiver<String>, thread::JoinHandle<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    let (tx, rx) = mpsc::channel();
+    let handle = thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let mut buf = [0_u8; 8192];
+        let n = stream.read(&mut buf).unwrap();
+        let req = String::from_utf8_lossy(&buf[..n]).to_string();
+        tx.send(req).unwrap();
+
+        let body = r#"{"id":"act_manifest_read","full_name":"manifest:Read"}"#;
+        let response = format!(
+            "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+            body.len(),
+            body
+        );
+        stream.write_all(response.as_bytes()).unwrap();
+    });
+    (url, rx, handle)
+}
+
 fn start_refresh_then_actions_server() -> (String, mpsc::Receiver<String>, thread::JoinHandle<()>) {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let url = format!("http://{}", listener.local_addr().unwrap());
@@ -401,4 +423,87 @@ fn reconcile_infers_tenant_from_project_config() {
     );
     assert!(req.starts_with("GET /v1/auth/actions "));
     assert!(req.contains("x-operator-id: tn_reconcile1234567890"));
+}
+
+#[test]
+fn manifest_validate_discovers_auth_manifest_without_tenant() {
+    let tmp = TempDir::new().unwrap();
+    fs::create_dir(tmp.path().join(".git")).unwrap();
+    fs::create_dir_all(tmp.path().join(".tachyon/manifests")).unwrap();
+    fs::write(
+        tmp.path().join(".tachyon/manifests/auth.yml"),
+        "actions:\n  - context: manifest\n    name: Read\npolicies: []\n",
+    )
+    .unwrap();
+
+    let output = isolated_command(tmp.path())
+        .current_dir(tmp.path())
+        .args(["manifest", "validate"])
+        .output()
+        .expect("run tachyon manifest validate");
+
+    assert_ok(&output, "manifest validate");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("Valid:"));
+    assert!(stdout.contains(".tachyon/manifests/auth.yml"));
+}
+
+#[test]
+fn manifest_apply_delegates_auth_manifest_file() {
+    let tmp = TempDir::new().unwrap();
+    fs::create_dir(tmp.path().join(".git")).unwrap();
+    fs::write(
+        tmp.path().join("tachyon.yml"),
+        "metadata:\n  tenantId: tn_manifestapply123456\n",
+    )
+    .unwrap();
+    fs::create_dir_all(tmp.path().join(".tachyon/manifests")).unwrap();
+    fs::write(
+        tmp.path().join(".tachyon/manifests/auth.yml"),
+        "actions:\n  - context: manifest\n    name: Read\npolicies: []\n",
+    )
+    .unwrap();
+    let (api_url, rx, handle) = start_apply_action_server();
+
+    let output = isolated_command(tmp.path())
+        .current_dir(tmp.path())
+        .env("TACHYON_API_URL", api_url)
+        .env("TACHYON_API_KEY", "test-token")
+        .args(["manifest", "apply", "--file", ".tachyon/manifests/auth.yml"])
+        .output()
+        .expect("run tachyon manifest apply auth");
+
+    handle.join().unwrap();
+    let req = rx.recv().unwrap();
+    assert_ok(&output, "manifest apply auth");
+    assert!(req.starts_with("POST /v1/auth/actions "));
+    assert!(req.contains("x-operator-id: tn_manifestapply123456"));
+    assert!(req.contains("\"context\":\"manifest\""));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("=== Auth Manifest Apply ==="));
+    assert!(stdout.contains("manifest:Read"));
+}
+
+#[test]
+fn manifest_apply_reports_unsupported_iac_manifest_without_api_call() {
+    let tmp = TempDir::new().unwrap();
+    fs::create_dir(tmp.path().join(".git")).unwrap();
+    fs::write(
+        tmp.path().join("operator.yml"),
+        "apiVersion: apps.tachy.one/v1alpha\nkind: Operator\nmetadata:\n  name: test\n",
+    )
+    .unwrap();
+
+    let output = isolated_command(tmp.path())
+        .current_dir(tmp.path())
+        .env("TACHYON_API_KEY", "test-token")
+        .env("TACHYON_TENANT_ID", "tn_test1234567890")
+        .args(["manifest", "apply", "--file", "operator.yml"])
+        .output()
+        .expect("run tachyon manifest apply iac");
+
+    assert_ok(&output, "manifest apply unsupported iac");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("IaC manifest:"));
+    assert!(stdout.contains("apply/reconcile is not supported yet"));
 }

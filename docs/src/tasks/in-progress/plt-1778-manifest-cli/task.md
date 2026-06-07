@@ -153,15 +153,23 @@ cli/src/manifest/
 
 | Phase | 内容 | 状態 |
 |-------|------|------|
-| **1** | 本 taskdoc（仕様固定） | **In Progress** |
-| 2a | `cli/src/manifest/` + validate/plan/apply/reconcile（auth + CloudApps） | Pending |
-| 2b | IaC v1alpha discovery + validate | Pending |
-| 3 | docs + `reconcile` alias + 互換テスト | Pending |
+| **1** | 本 taskdoc（仕様固定） | Done |
+| 2a | `cli/src/manifest/` + validate/plan/apply/reconcile（auth + CloudApps） | Done |
+| 2b | IaC v1alpha discovery + validate | Done |
+| 3 | docs + `reconcile` alias + 互換テスト | In Progress |
 | 4 | IaC apply を `ApplyManifest` API に統合 | Optional |
 
 ## 進捗
 
 - [x] Task 1 仕様 taskdoc 化
-- [ ] Phase 2a CLI 実装
+- [x] Phase 2a CLI 実装
+- [x] Phase 2b IaC v1alpha discovery + validate
+- [x] `tachyon reconcile` alias → `tachyon manifest reconcile`
+- [x] 関連 CLI integration tests 追加
 - [ ] PR → CI → merge
 - [ ] tachyon-apps docs 更新（auth-manifest-cli.md 等）
+
+## Verify
+
+- 2026-06-08: `cd cli && cargo fmt --check && cargo check && cargo test --test init_config --test auth_manifest_auth`
+- 2026-06-08: `cd cli && cargo test manifest`
