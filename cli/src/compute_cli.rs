@@ -613,6 +613,8 @@ struct AppResponse {
     #[serde(default)]
     watch_paths: Option<Vec<String>>,
     #[serde(default)]
+    paths_ignore: Option<Vec<String>>,
+    #[serde(default)]
     status: Option<String>,
     #[serde(default)]
     created_at: Option<String>,
@@ -1220,6 +1222,13 @@ fn app_entry_to_api_body(entry: &Value) -> Result<Value> {
             .collect();
         obj.insert("watch_paths".to_string(), Value::Array(paths));
     }
+    if let Some(paths) = entry.get("pathsIgnore").and_then(Value::as_array) {
+        let paths: Vec<Value> = paths
+            .iter()
+            .filter_map(|p| p.as_str().map(|s| Value::String(s.to_string())))
+            .collect();
+        obj.insert("paths_ignore".to_string(), Value::Array(paths));
+    }
     Ok(body)
 }
 
@@ -1316,6 +1325,12 @@ fn app_field_value(app: &AppResponse, field: &str) -> Value {
             opt_string_value(app.buildspec_strategy.as_deref().or(Some("inline")))
         }
         "watch_paths" => match &app.watch_paths {
+            Some(paths) if !paths.is_empty() => {
+                Value::Array(paths.iter().map(|p| Value::String(p.clone())).collect())
+            }
+            _ => Value::Null,
+        },
+        "paths_ignore" => match &app.paths_ignore {
             Some(paths) if !paths.is_empty() => {
                 Value::Array(paths.iter().map(|p| Value::String(p.clone())).collect())
             }
