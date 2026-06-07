@@ -4,18 +4,18 @@ All URIs are relative to *http://localhost*
 
 | Method | HTTP request | Description |
 |------------- | ------------- | -------------|
-| [**createClient**](AuthOAuth2ClientsApi.md#createclientoperation) | **POST** /v1/auth/oauth2-clients | Create a new OAuth2 client |
-| [**getClient**](AuthOAuth2ClientsApi.md#getclient) | **GET** /v1/auth/oauth2-clients/{id} | Get an OAuth2 client by ID |
-| [**listClients**](AuthOAuth2ClientsApi.md#listclients) | **GET** /v1/auth/oauth2-clients | List all OAuth2 clients for the current tenant |
-| [**revokeClient**](AuthOAuth2ClientsApi.md#revokeclient) | **POST** /v1/auth/oauth2-clients/{id}/revoke | Revoke an OAuth2 client |
-| [**rotateSecret**](AuthOAuth2ClientsApi.md#rotatesecret) | **POST** /v1/auth/oauth2-clients/{id}/rotate-secret | Rotate an OAuth2 client secret |
-| [**updateClient**](AuthOAuth2ClientsApi.md#updateclientoperation) | **PUT** /v1/auth/oauth2-clients/{id} | Update an OAuth2 client |
+| [**createOauth2Client**](AuthOAuth2ClientsApi.md#createoauth2client) | **POST** /v1/auth/oauth2-clients | Create a new OAuth2 client |
+| [**getOauth2Client**](AuthOAuth2ClientsApi.md#getoauth2client) | **GET** /v1/auth/oauth2-clients/{id} | Get an OAuth2 client by ID |
+| [**listOauth2Clients**](AuthOAuth2ClientsApi.md#listoauth2clients) | **GET** /v1/auth/oauth2-clients | List all OAuth2 clients for the current tenant |
+| [**revokeOauth2Client**](AuthOAuth2ClientsApi.md#revokeoauth2client) | **POST** /v1/auth/oauth2-clients/{id}/revoke | Revoke an OAuth2 client |
+| [**rotateOauth2ClientSecret**](AuthOAuth2ClientsApi.md#rotateoauth2clientsecret) | **POST** /v1/auth/oauth2-clients/{id}/rotate-secret | Rotate an OAuth2 client secret |
+| [**updateOauth2Client**](AuthOAuth2ClientsApi.md#updateoauth2client) | **PUT** /v1/auth/oauth2-clients/{id} | Update an OAuth2 client |
 
 
 
-## createClient
+## createOauth2Client
 
-> CreateClientResponse createClient(createClientRequest)
+> OAuth2CreateClientResponse createOauth2Client(oAuth2CreateClientRequest)
 
 Create a new OAuth2 client
 
@@ -26,19 +26,19 @@ import {
   Configuration,
   AuthOAuth2ClientsApi,
 } from '@tachyon/sdk';
-import type { CreateClientOperationRequest } from '@tachyon/sdk';
+import type { CreateOauth2ClientRequest } from '@tachyon/sdk';
 
 async function example() {
   console.log("🚀 Testing @tachyon/sdk SDK...");
   const api = new AuthOAuth2ClientsApi();
 
   const body = {
-    // CreateClientRequest
-    createClientRequest: ...,
-  } satisfies CreateClientOperationRequest;
+    // OAuth2CreateClientRequest
+    oAuth2CreateClientRequest: ...,
+  } satisfies CreateOauth2ClientRequest;
 
   try {
-    const data = await api.createClient(body);
+    const data = await api.createOauth2Client(body);
     console.log(data);
   } catch (error) {
     console.error(error);
@@ -54,11 +54,11 @@ example().catch(console.error);
 
 | Name | Type | Description  | Notes |
 |------------- | ------------- | ------------- | -------------|
-| **createClientRequest** | [CreateClientRequest](CreateClientRequest.md) |  | |
+| **oAuth2CreateClientRequest** | [OAuth2CreateClientRequest](OAuth2CreateClientRequest.md) |  | |
 
 ### Return type
 
-[**CreateClientResponse**](CreateClientResponse.md)
+[**OAuth2CreateClientResponse**](OAuth2CreateClientResponse.md)
 
 ### Authorization
 
@@ -80,9 +80,9 @@ No authorization required
 [[Back to top]](#) [[Back to API list]](../README.md#api-endpoints) [[Back to Model list]](../README.md#models) [[Back to README]](../README.md)
 
 
-## getClient
+## getOauth2Client
 
-> ClientResponse getClient(id)
+> OAuth2ClientResponse getOauth2Client(id)
 
 Get an OAuth2 client by ID
 
@@ -93,7 +93,7 @@ import {
   Configuration,
   AuthOAuth2ClientsApi,
 } from '@tachyon/sdk';
-import type { GetClientRequest } from '@tachyon/sdk';
+import type { GetOauth2ClientRequest } from '@tachyon/sdk';
 
 async function example() {
   console.log("🚀 Testing @tachyon/sdk SDK...");
@@ -102,10 +102,10 @@ async function example() {
   const body = {
     // string | OAuth2 client ID
     id: id_example,
-  } satisfies GetClientRequest;
+  } satisfies GetOauth2ClientRequest;
 
   try {
-    const data = await api.getClient(body);
+    const data = await api.getOauth2Client(body);
     console.log(data);
   } catch (error) {
     console.error(error);
@@ -125,7 +125,7 @@ example().catch(console.error);
 
 ### Return type
 
-[**ClientResponse**](ClientResponse.md)
+[**OAuth2ClientResponse**](OAuth2ClientResponse.md)
 
 ### Authorization
 
@@ -146,9 +146,9 @@ No authorization required
 [[Back to top]](#) [[Back to API list]](../README.md#api-endpoints) [[Back to Model list]](../README.md#models) [[Back to README]](../README.md)
 
 
-## listClients
+## listOauth2Clients
 
-> ClientListResponse listClients()
+> OAuth2ClientListResponse listOauth2Clients()
 
 List all OAuth2 clients for the current tenant
 
@@ -159,14 +159,14 @@ import {
   Configuration,
   AuthOAuth2ClientsApi,
 } from '@tachyon/sdk';
-import type { ListClientsRequest } from '@tachyon/sdk';
+import type { ListOauth2ClientsRequest } from '@tachyon/sdk';
 
 async function example() {
   console.log("🚀 Testing @tachyon/sdk SDK...");
   const api = new AuthOAuth2ClientsApi();
 
   try {
-    const data = await api.listClients();
+    const data = await api.listOauth2Clients();
     console.log(data);
   } catch (error) {
     console.error(error);
@@ -183,7 +183,7 @@ This endpoint does not need any parameter.
 
 ### Return type
 
-[**ClientListResponse**](ClientListResponse.md)
+[**OAuth2ClientListResponse**](OAuth2ClientListResponse.md)
 
 ### Authorization
 
@@ -204,9 +204,9 @@ No authorization required
 [[Back to top]](#) [[Back to API list]](../README.md#api-endpoints) [[Back to Model list]](../README.md#models) [[Back to README]](../README.md)
 
 
-## revokeClient
+## revokeOauth2Client
 
-> revokeClient(id)
+> revokeOauth2Client(id)
 
 Revoke an OAuth2 client
 
@@ -217,7 +217,7 @@ import {
   Configuration,
   AuthOAuth2ClientsApi,
 } from '@tachyon/sdk';
-import type { RevokeClientRequest } from '@tachyon/sdk';
+import type { RevokeOauth2ClientRequest } from '@tachyon/sdk';
 
 async function example() {
   console.log("🚀 Testing @tachyon/sdk SDK...");
@@ -226,10 +226,10 @@ async function example() {
   const body = {
     // string | OAuth2 client ID
     id: id_example,
-  } satisfies RevokeClientRequest;
+  } satisfies RevokeOauth2ClientRequest;
 
   try {
-    const data = await api.revokeClient(body);
+    const data = await api.revokeOauth2Client(body);
     console.log(data);
   } catch (error) {
     console.error(error);
@@ -270,9 +270,9 @@ No authorization required
 [[Back to top]](#) [[Back to API list]](../README.md#api-endpoints) [[Back to Model list]](../README.md#models) [[Back to README]](../README.md)
 
 
-## rotateSecret
+## rotateOauth2ClientSecret
 
-> RotateSecretResponse rotateSecret(id)
+> RotateSecretResponse rotateOauth2ClientSecret(id)
 
 Rotate an OAuth2 client secret
 
@@ -283,7 +283,7 @@ import {
   Configuration,
   AuthOAuth2ClientsApi,
 } from '@tachyon/sdk';
-import type { RotateSecretRequest } from '@tachyon/sdk';
+import type { RotateOauth2ClientSecretRequest } from '@tachyon/sdk';
 
 async function example() {
   console.log("🚀 Testing @tachyon/sdk SDK...");
@@ -292,10 +292,10 @@ async function example() {
   const body = {
     // string | OAuth2 client ID
     id: id_example,
-  } satisfies RotateSecretRequest;
+  } satisfies RotateOauth2ClientSecretRequest;
 
   try {
-    const data = await api.rotateSecret(body);
+    const data = await api.rotateOauth2ClientSecret(body);
     console.log(data);
   } catch (error) {
     console.error(error);
@@ -336,9 +336,9 @@ No authorization required
 [[Back to top]](#) [[Back to API list]](../README.md#api-endpoints) [[Back to Model list]](../README.md#models) [[Back to README]](../README.md)
 
 
-## updateClient
+## updateOauth2Client
 
-> ClientResponse updateClient(id, updateClientRequest)
+> OAuth2ClientResponse updateOauth2Client(id, oAuth2UpdateClientRequest)
 
 Update an OAuth2 client
 
@@ -349,7 +349,7 @@ import {
   Configuration,
   AuthOAuth2ClientsApi,
 } from '@tachyon/sdk';
-import type { UpdateClientOperationRequest } from '@tachyon/sdk';
+import type { UpdateOauth2ClientRequest } from '@tachyon/sdk';
 
 async function example() {
   console.log("🚀 Testing @tachyon/sdk SDK...");
@@ -358,12 +358,12 @@ async function example() {
   const body = {
     // string | OAuth2 client ID
     id: id_example,
-    // UpdateClientRequest
-    updateClientRequest: ...,
-  } satisfies UpdateClientOperationRequest;
+    // OAuth2UpdateClientRequest
+    oAuth2UpdateClientRequest: ...,
+  } satisfies UpdateOauth2ClientRequest;
 
   try {
-    const data = await api.updateClient(body);
+    const data = await api.updateOauth2Client(body);
     console.log(data);
   } catch (error) {
     console.error(error);
@@ -380,11 +380,11 @@ example().catch(console.error);
 | Name | Type | Description  | Notes |
 |------------- | ------------- | ------------- | -------------|
 | **id** | `string` | OAuth2 client ID | [Defaults to `undefined`] |
-| **updateClientRequest** | [UpdateClientRequest](UpdateClientRequest.md) |  | |
+| **oAuth2UpdateClientRequest** | [OAuth2UpdateClientRequest](OAuth2UpdateClientRequest.md) |  | |
 
 ### Return type
 
-[**ClientResponse**](ClientResponse.md)
+[**OAuth2ClientResponse**](OAuth2ClientResponse.md)
 
 ### Authorization
 

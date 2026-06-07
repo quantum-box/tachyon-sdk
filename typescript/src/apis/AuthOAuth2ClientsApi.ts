@@ -15,47 +15,47 @@
 
 import * as runtime from '../runtime';
 import type {
-  ClientListResponse,
-  ClientResponse,
-  CreateClientRequest,
-  CreateClientResponse,
+  OAuth2ClientListResponse,
+  OAuth2ClientResponse,
+  OAuth2CreateClientRequest,
+  OAuth2CreateClientResponse,
+  OAuth2UpdateClientRequest,
   RotateSecretResponse,
-  UpdateClientRequest,
 } from '../models/index';
 import {
-    ClientListResponseFromJSON,
-    ClientListResponseToJSON,
-    ClientResponseFromJSON,
-    ClientResponseToJSON,
-    CreateClientRequestFromJSON,
-    CreateClientRequestToJSON,
-    CreateClientResponseFromJSON,
-    CreateClientResponseToJSON,
+    OAuth2ClientListResponseFromJSON,
+    OAuth2ClientListResponseToJSON,
+    OAuth2ClientResponseFromJSON,
+    OAuth2ClientResponseToJSON,
+    OAuth2CreateClientRequestFromJSON,
+    OAuth2CreateClientRequestToJSON,
+    OAuth2CreateClientResponseFromJSON,
+    OAuth2CreateClientResponseToJSON,
+    OAuth2UpdateClientRequestFromJSON,
+    OAuth2UpdateClientRequestToJSON,
     RotateSecretResponseFromJSON,
     RotateSecretResponseToJSON,
-    UpdateClientRequestFromJSON,
-    UpdateClientRequestToJSON,
 } from '../models/index';
 
-export interface CreateClientOperationRequest {
-    createClientRequest: CreateClientRequest;
+export interface CreateOauth2ClientRequest {
+    oAuth2CreateClientRequest: OAuth2CreateClientRequest;
 }
 
-export interface GetClientRequest {
+export interface GetOauth2ClientRequest {
     id: string;
 }
 
-export interface RevokeClientRequest {
+export interface RevokeOauth2ClientRequest {
     id: string;
 }
 
-export interface RotateSecretRequest {
+export interface RotateOauth2ClientSecretRequest {
     id: string;
 }
 
-export interface UpdateClientOperationRequest {
+export interface UpdateOauth2ClientRequest {
     id: string;
-    updateClientRequest: UpdateClientRequest;
+    oAuth2UpdateClientRequest: OAuth2UpdateClientRequest;
 }
 
 /**
@@ -64,13 +64,13 @@ export interface UpdateClientOperationRequest {
 export class AuthOAuth2ClientsApi extends runtime.BaseAPI {
 
     /**
-     * Creates request options for createClient without sending the request
+     * Creates request options for createOauth2Client without sending the request
      */
-    async createClientRequestOpts(requestParameters: CreateClientOperationRequest): Promise<runtime.RequestOpts> {
-        if (requestParameters['createClientRequest'] == null) {
+    async createOauth2ClientRequestOpts(requestParameters: CreateOauth2ClientRequest): Promise<runtime.RequestOpts> {
+        if (requestParameters['oAuth2CreateClientRequest'] == null) {
             throw new runtime.RequiredError(
-                'createClientRequest',
-                'Required parameter "createClientRequest" was null or undefined when calling createClient().'
+                'oAuth2CreateClientRequest',
+                'Required parameter "oAuth2CreateClientRequest" was null or undefined when calling createOauth2Client().'
             );
         }
 
@@ -88,36 +88,36 @@ export class AuthOAuth2ClientsApi extends runtime.BaseAPI {
             method: 'POST',
             headers: headerParameters,
             query: queryParameters,
-            body: CreateClientRequestToJSON(requestParameters['createClientRequest']),
+            body: OAuth2CreateClientRequestToJSON(requestParameters['oAuth2CreateClientRequest']),
         };
     }
 
     /**
      * Create a new OAuth2 client
      */
-    async createClientRaw(requestParameters: CreateClientOperationRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<CreateClientResponse>> {
-        const requestOptions = await this.createClientRequestOpts(requestParameters);
+    async createOauth2ClientRaw(requestParameters: CreateOauth2ClientRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<OAuth2CreateClientResponse>> {
+        const requestOptions = await this.createOauth2ClientRequestOpts(requestParameters);
         const response = await this.request(requestOptions, initOverrides);
 
-        return new runtime.JSONApiResponse(response, (jsonValue) => CreateClientResponseFromJSON(jsonValue));
+        return new runtime.JSONApiResponse(response, (jsonValue) => OAuth2CreateClientResponseFromJSON(jsonValue));
     }
 
     /**
      * Create a new OAuth2 client
      */
-    async createClient(requestParameters: CreateClientOperationRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<CreateClientResponse> {
-        const response = await this.createClientRaw(requestParameters, initOverrides);
+    async createOauth2Client(requestParameters: CreateOauth2ClientRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<OAuth2CreateClientResponse> {
+        const response = await this.createOauth2ClientRaw(requestParameters, initOverrides);
         return await response.value();
     }
 
     /**
-     * Creates request options for getClient without sending the request
+     * Creates request options for getOauth2Client without sending the request
      */
-    async getClientRequestOpts(requestParameters: GetClientRequest): Promise<runtime.RequestOpts> {
+    async getOauth2ClientRequestOpts(requestParameters: GetOauth2ClientRequest): Promise<runtime.RequestOpts> {
         if (requestParameters['id'] == null) {
             throw new runtime.RequiredError(
                 'id',
-                'Required parameter "id" was null or undefined when calling getClient().'
+                'Required parameter "id" was null or undefined when calling getOauth2Client().'
             );
         }
 
@@ -140,25 +140,25 @@ export class AuthOAuth2ClientsApi extends runtime.BaseAPI {
     /**
      * Get an OAuth2 client by ID
      */
-    async getClientRaw(requestParameters: GetClientRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<ClientResponse>> {
-        const requestOptions = await this.getClientRequestOpts(requestParameters);
+    async getOauth2ClientRaw(requestParameters: GetOauth2ClientRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<OAuth2ClientResponse>> {
+        const requestOptions = await this.getOauth2ClientRequestOpts(requestParameters);
         const response = await this.request(requestOptions, initOverrides);
 
-        return new runtime.JSONApiResponse(response, (jsonValue) => ClientResponseFromJSON(jsonValue));
+        return new runtime.JSONApiResponse(response, (jsonValue) => OAuth2ClientResponseFromJSON(jsonValue));
     }
 
     /**
      * Get an OAuth2 client by ID
      */
-    async getClient(requestParameters: GetClientRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<ClientResponse> {
-        const response = await this.getClientRaw(requestParameters, initOverrides);
+    async getOauth2Client(requestParameters: GetOauth2ClientRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<OAuth2ClientResponse> {
+        const response = await this.getOauth2ClientRaw(requestParameters, initOverrides);
         return await response.value();
     }
 
     /**
-     * Creates request options for listClients without sending the request
+     * Creates request options for listOauth2Clients without sending the request
      */
-    async listClientsRequestOpts(): Promise<runtime.RequestOpts> {
+    async listOauth2ClientsRequestOpts(): Promise<runtime.RequestOpts> {
         const queryParameters: any = {};
 
         const headerParameters: runtime.HTTPHeaders = {};
@@ -177,29 +177,29 @@ export class AuthOAuth2ClientsApi extends runtime.BaseAPI {
     /**
      * List all OAuth2 clients for the current tenant
      */
-    async listClientsRaw(initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<ClientListResponse>> {
-        const requestOptions = await this.listClientsRequestOpts();
+    async listOauth2ClientsRaw(initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<OAuth2ClientListResponse>> {
+        const requestOptions = await this.listOauth2ClientsRequestOpts();
         const response = await this.request(requestOptions, initOverrides);
 
-        return new runtime.JSONApiResponse(response, (jsonValue) => ClientListResponseFromJSON(jsonValue));
+        return new runtime.JSONApiResponse(response, (jsonValue) => OAuth2ClientListResponseFromJSON(jsonValue));
     }
 
     /**
      * List all OAuth2 clients for the current tenant
      */
-    async listClients(initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<ClientListResponse> {
-        const response = await this.listClientsRaw(initOverrides);
+    async listOauth2Clients(initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<OAuth2ClientListResponse> {
+        const response = await this.listOauth2ClientsRaw(initOverrides);
         return await response.value();
     }
 
     /**
-     * Creates request options for revokeClient without sending the request
+     * Creates request options for revokeOauth2Client without sending the request
      */
-    async revokeClientRequestOpts(requestParameters: RevokeClientRequest): Promise<runtime.RequestOpts> {
+    async revokeOauth2ClientRequestOpts(requestParameters: RevokeOauth2ClientRequest): Promise<runtime.RequestOpts> {
         if (requestParameters['id'] == null) {
             throw new runtime.RequiredError(
                 'id',
-                'Required parameter "id" was null or undefined when calling revokeClient().'
+                'Required parameter "id" was null or undefined when calling revokeOauth2Client().'
             );
         }
 
@@ -222,8 +222,8 @@ export class AuthOAuth2ClientsApi extends runtime.BaseAPI {
     /**
      * Revoke an OAuth2 client
      */
-    async revokeClientRaw(requestParameters: RevokeClientRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<void>> {
-        const requestOptions = await this.revokeClientRequestOpts(requestParameters);
+    async revokeOauth2ClientRaw(requestParameters: RevokeOauth2ClientRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<void>> {
+        const requestOptions = await this.revokeOauth2ClientRequestOpts(requestParameters);
         const response = await this.request(requestOptions, initOverrides);
 
         return new runtime.VoidApiResponse(response);
@@ -232,18 +232,18 @@ export class AuthOAuth2ClientsApi extends runtime.BaseAPI {
     /**
      * Revoke an OAuth2 client
      */
-    async revokeClient(requestParameters: RevokeClientRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<void> {
-        await this.revokeClientRaw(requestParameters, initOverrides);
+    async revokeOauth2Client(requestParameters: RevokeOauth2ClientRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<void> {
+        await this.revokeOauth2ClientRaw(requestParameters, initOverrides);
     }
 
     /**
-     * Creates request options for rotateSecret without sending the request
+     * Creates request options for rotateOauth2ClientSecret without sending the request
      */
-    async rotateSecretRequestOpts(requestParameters: RotateSecretRequest): Promise<runtime.RequestOpts> {
+    async rotateOauth2ClientSecretRequestOpts(requestParameters: RotateOauth2ClientSecretRequest): Promise<runtime.RequestOpts> {
         if (requestParameters['id'] == null) {
             throw new runtime.RequiredError(
                 'id',
-                'Required parameter "id" was null or undefined when calling rotateSecret().'
+                'Required parameter "id" was null or undefined when calling rotateOauth2ClientSecret().'
             );
         }
 
@@ -266,8 +266,8 @@ export class AuthOAuth2ClientsApi extends runtime.BaseAPI {
     /**
      * Rotate an OAuth2 client secret
      */
-    async rotateSecretRaw(requestParameters: RotateSecretRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<RotateSecretResponse>> {
-        const requestOptions = await this.rotateSecretRequestOpts(requestParameters);
+    async rotateOauth2ClientSecretRaw(requestParameters: RotateOauth2ClientSecretRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<RotateSecretResponse>> {
+        const requestOptions = await this.rotateOauth2ClientSecretRequestOpts(requestParameters);
         const response = await this.request(requestOptions, initOverrides);
 
         return new runtime.JSONApiResponse(response, (jsonValue) => RotateSecretResponseFromJSON(jsonValue));
@@ -276,26 +276,26 @@ export class AuthOAuth2ClientsApi extends runtime.BaseAPI {
     /**
      * Rotate an OAuth2 client secret
      */
-    async rotateSecret(requestParameters: RotateSecretRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<RotateSecretResponse> {
-        const response = await this.rotateSecretRaw(requestParameters, initOverrides);
+    async rotateOauth2ClientSecret(requestParameters: RotateOauth2ClientSecretRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<RotateSecretResponse> {
+        const response = await this.rotateOauth2ClientSecretRaw(requestParameters, initOverrides);
         return await response.value();
     }
 
     /**
-     * Creates request options for updateClient without sending the request
+     * Creates request options for updateOauth2Client without sending the request
      */
-    async updateClientRequestOpts(requestParameters: UpdateClientOperationRequest): Promise<runtime.RequestOpts> {
+    async updateOauth2ClientRequestOpts(requestParameters: UpdateOauth2ClientRequest): Promise<runtime.RequestOpts> {
         if (requestParameters['id'] == null) {
             throw new runtime.RequiredError(
                 'id',
-                'Required parameter "id" was null or undefined when calling updateClient().'
+                'Required parameter "id" was null or undefined when calling updateOauth2Client().'
             );
         }
 
-        if (requestParameters['updateClientRequest'] == null) {
+        if (requestParameters['oAuth2UpdateClientRequest'] == null) {
             throw new runtime.RequiredError(
-                'updateClientRequest',
-                'Required parameter "updateClientRequest" was null or undefined when calling updateClient().'
+                'oAuth2UpdateClientRequest',
+                'Required parameter "oAuth2UpdateClientRequest" was null or undefined when calling updateOauth2Client().'
             );
         }
 
@@ -314,25 +314,25 @@ export class AuthOAuth2ClientsApi extends runtime.BaseAPI {
             method: 'PUT',
             headers: headerParameters,
             query: queryParameters,
-            body: UpdateClientRequestToJSON(requestParameters['updateClientRequest']),
+            body: OAuth2UpdateClientRequestToJSON(requestParameters['oAuth2UpdateClientRequest']),
         };
     }
 
     /**
      * Update an OAuth2 client
      */
-    async updateClientRaw(requestParameters: UpdateClientOperationRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<ClientResponse>> {
-        const requestOptions = await this.updateClientRequestOpts(requestParameters);
+    async updateOauth2ClientRaw(requestParameters: UpdateOauth2ClientRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<OAuth2ClientResponse>> {
+        const requestOptions = await this.updateOauth2ClientRequestOpts(requestParameters);
         const response = await this.request(requestOptions, initOverrides);
 
-        return new runtime.JSONApiResponse(response, (jsonValue) => ClientResponseFromJSON(jsonValue));
+        return new runtime.JSONApiResponse(response, (jsonValue) => OAuth2ClientResponseFromJSON(jsonValue));
     }
 
     /**
      * Update an OAuth2 client
      */
-    async updateClient(requestParameters: UpdateClientOperationRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<ClientResponse> {
-        const response = await this.updateClientRaw(requestParameters, initOverrides);
+    async updateOauth2Client(requestParameters: UpdateOauth2ClientRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<OAuth2ClientResponse> {
+        const response = await this.updateOauth2ClientRaw(requestParameters, initOverrides);
         return await response.value();
     }
 

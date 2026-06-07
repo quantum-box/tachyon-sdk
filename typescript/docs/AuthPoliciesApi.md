@@ -8,6 +8,9 @@ All URIs are relative to *http://localhost*
 | [**evaluatePoliciesBatch**](AuthPoliciesApi.md#evaluatepoliciesbatchoperation) | **POST** /v1/auth/policies/check | Evaluate multiple policy actions in batch |
 | [**getPolicy**](AuthPoliciesApi.md#getpolicy) | **GET** /v1/auth/policies/{id} | Get a policy by ID |
 | [**listActions**](AuthPoliciesApi.md#listactions) | **GET** /v1/auth/actions | List all registered actions |
+| [**registerAction**](AuthPoliciesApi.md#registeractionoperation) | **POST** /v1/auth/actions | Register a custom action |
+| [**registerPolicy**](AuthPoliciesApi.md#registerpolicyoperation) | **POST** /v1/auth/policies | Register a custom policy |
+| [**updatePolicy**](AuthPoliciesApi.md#updatepolicyoperation) | **PATCH** /v1/auth/policies/{id} | Update a custom policy |
 
 
 
@@ -272,6 +275,211 @@ No authorization required
 |-------------|-------------|------------------|
 | **200** | Action list |  -  |
 | **403** | Forbidden |  -  |
+
+[[Back to top]](#) [[Back to API list]](../README.md#api-endpoints) [[Back to Model list]](../README.md#models) [[Back to README]](../README.md)
+
+
+## registerAction
+
+> ActionResponse registerAction(registerActionRequest)
+
+Register a custom action
+
+### Example
+
+```ts
+import {
+  Configuration,
+  AuthPoliciesApi,
+} from '@tachyon/sdk';
+import type { RegisterActionOperationRequest } from '@tachyon/sdk';
+
+async function example() {
+  console.log("🚀 Testing @tachyon/sdk SDK...");
+  const api = new AuthPoliciesApi();
+
+  const body = {
+    // RegisterActionRequest
+    registerActionRequest: ...,
+  } satisfies RegisterActionOperationRequest;
+
+  try {
+    const data = await api.registerAction(body);
+    console.log(data);
+  } catch (error) {
+    console.error(error);
+  }
+}
+
+// Run the test
+example().catch(console.error);
+```
+
+### Parameters
+
+
+| Name | Type | Description  | Notes |
+|------------- | ------------- | ------------- | -------------|
+| **registerActionRequest** | [RegisterActionRequest](RegisterActionRequest.md) |  | |
+
+### Return type
+
+[**ActionResponse**](ActionResponse.md)
+
+### Authorization
+
+No authorization required
+
+### HTTP request headers
+
+- **Content-Type**: `application/json`
+- **Accept**: `application/json`
+
+
+### HTTP response details
+| Status code | Description | Response headers |
+|-------------|-------------|------------------|
+| **201** | Action registered |  -  |
+| **400** | Bad request |  -  |
+| **403** | Forbidden |  -  |
+
+[[Back to top]](#) [[Back to API list]](../README.md#api-endpoints) [[Back to Model list]](../README.md#models) [[Back to README]](../README.md)
+
+
+## registerPolicy
+
+> PolicyResponse registerPolicy(registerPolicyRequest)
+
+Register a custom policy
+
+### Example
+
+```ts
+import {
+  Configuration,
+  AuthPoliciesApi,
+} from '@tachyon/sdk';
+import type { RegisterPolicyOperationRequest } from '@tachyon/sdk';
+
+async function example() {
+  console.log("🚀 Testing @tachyon/sdk SDK...");
+  const api = new AuthPoliciesApi();
+
+  const body = {
+    // RegisterPolicyRequest
+    registerPolicyRequest: ...,
+  } satisfies RegisterPolicyOperationRequest;
+
+  try {
+    const data = await api.registerPolicy(body);
+    console.log(data);
+  } catch (error) {
+    console.error(error);
+  }
+}
+
+// Run the test
+example().catch(console.error);
+```
+
+### Parameters
+
+
+| Name | Type | Description  | Notes |
+|------------- | ------------- | ------------- | -------------|
+| **registerPolicyRequest** | [RegisterPolicyRequest](RegisterPolicyRequest.md) |  | |
+
+### Return type
+
+[**PolicyResponse**](PolicyResponse.md)
+
+### Authorization
+
+No authorization required
+
+### HTTP request headers
+
+- **Content-Type**: `application/json`
+- **Accept**: `application/json`
+
+
+### HTTP response details
+| Status code | Description | Response headers |
+|-------------|-------------|------------------|
+| **201** | Policy registered |  -  |
+| **400** | Bad request |  -  |
+| **403** | Forbidden |  -  |
+
+[[Back to top]](#) [[Back to API list]](../README.md#api-endpoints) [[Back to Model list]](../README.md#models) [[Back to README]](../README.md)
+
+
+## updatePolicy
+
+> PolicyResponse updatePolicy(id, updatePolicyRequest)
+
+Update a custom policy
+
+### Example
+
+```ts
+import {
+  Configuration,
+  AuthPoliciesApi,
+} from '@tachyon/sdk';
+import type { UpdatePolicyOperationRequest } from '@tachyon/sdk';
+
+async function example() {
+  console.log("🚀 Testing @tachyon/sdk SDK...");
+  const api = new AuthPoliciesApi();
+
+  const body = {
+    // string | Policy ID
+    id: id_example,
+    // UpdatePolicyRequest
+    updatePolicyRequest: ...,
+  } satisfies UpdatePolicyOperationRequest;
+
+  try {
+    const data = await api.updatePolicy(body);
+    console.log(data);
+  } catch (error) {
+    console.error(error);
+  }
+}
+
+// Run the test
+example().catch(console.error);
+```
+
+### Parameters
+
+
+| Name | Type | Description  | Notes |
+|------------- | ------------- | ------------- | -------------|
+| **id** | `string` | Policy ID | [Defaults to `undefined`] |
+| **updatePolicyRequest** | [UpdatePolicyRequest](UpdatePolicyRequest.md) |  | |
+
+### Return type
+
+[**PolicyResponse**](PolicyResponse.md)
+
+### Authorization
+
+No authorization required
+
+### HTTP request headers
+
+- **Content-Type**: `application/json`
+- **Accept**: `application/json`
+
+
+### HTTP response details
+| Status code | Description | Response headers |
+|-------------|-------------|------------------|
+| **200** | Policy updated |  -  |
+| **400** | Bad request |  -  |
+| **403** | Forbidden |  -  |
+| **404** | Policy not found |  -  |
 
 [[Back to top]](#) [[Back to API list]](../README.md#api-endpoints) [[Back to Model list]](../README.md#models) [[Back to README]](../README.md)
 

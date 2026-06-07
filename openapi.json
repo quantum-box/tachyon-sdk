@@ -241,6 +241,41 @@
                         "description": "Forbidden"
                     }
                 }
+            },
+            "post": {
+                "tags": [
+                    "Auth - Policies"
+                ],
+                "summary": "Register a custom action",
+                "operationId": "register_action",
+                "requestBody": {
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/RegisterActionRequest"
+                            }
+                        }
+                    },
+                    "required": true
+                },
+                "responses": {
+                    "201": {
+                        "description": "Action registered",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/ActionResponse"
+                                }
+                            }
+                        }
+                    },
+                    "400": {
+                        "description": "Bad request"
+                    },
+                    "403": {
+                        "description": "Forbidden"
+                    }
+                }
             }
         },
         "/v1/auth/api-keys/verify": {
@@ -472,14 +507,14 @@
                     "Auth - OAuth2 Clients"
                 ],
                 "summary": "List all OAuth2 clients for the current tenant",
-                "operationId": "list_clients",
+                "operationId": "list_oauth2_clients",
                 "responses": {
                     "200": {
                         "description": "Client list",
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/ClientListResponse"
+                                    "$ref": "#/components/schemas/OAuth2ClientListResponse"
                                 }
                             }
                         }
@@ -494,12 +529,12 @@
                     "Auth - OAuth2 Clients"
                 ],
                 "summary": "Create a new OAuth2 client",
-                "operationId": "create_client",
+                "operationId": "create_oauth2_client",
                 "requestBody": {
                     "content": {
                         "application/json": {
                             "schema": {
-                                "$ref": "#/components/schemas/CreateClientRequest"
+                                "$ref": "#/components/schemas/OAuth2CreateClientRequest"
                             }
                         }
                     },
@@ -511,7 +546,7 @@
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/CreateClientResponse"
+                                    "$ref": "#/components/schemas/OAuth2CreateClientResponse"
                                 }
                             }
                         }
@@ -531,7 +566,7 @@
                     "Auth - OAuth2 Clients"
                 ],
                 "summary": "Get an OAuth2 client by ID",
-                "operationId": "get_client",
+                "operationId": "get_oauth2_client",
                 "parameters": [
                     {
                         "name": "id",
@@ -549,7 +584,7 @@
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/ClientResponse"
+                                    "$ref": "#/components/schemas/OAuth2ClientResponse"
                                 }
                             }
                         }
@@ -564,7 +599,7 @@
                     "Auth - OAuth2 Clients"
                 ],
                 "summary": "Update an OAuth2 client",
-                "operationId": "update_client",
+                "operationId": "update_oauth2_client",
                 "parameters": [
                     {
                         "name": "id",
@@ -580,7 +615,7 @@
                     "content": {
                         "application/json": {
                             "schema": {
-                                "$ref": "#/components/schemas/UpdateClientRequest"
+                                "$ref": "#/components/schemas/OAuth2UpdateClientRequest"
                             }
                         }
                     },
@@ -592,7 +627,7 @@
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/ClientResponse"
+                                    "$ref": "#/components/schemas/OAuth2ClientResponse"
                                 }
                             }
                         }
@@ -609,7 +644,7 @@
                     "Auth - OAuth2 Clients"
                 ],
                 "summary": "Revoke an OAuth2 client",
-                "operationId": "revoke_client",
+                "operationId": "revoke_oauth2_client",
                 "parameters": [
                     {
                         "name": "id",
@@ -637,7 +672,7 @@
                     "Auth - OAuth2 Clients"
                 ],
                 "summary": "Rotate an OAuth2 client secret",
-                "operationId": "rotate_secret",
+                "operationId": "rotate_oauth2_client_secret",
                 "parameters": [
                     {
                         "name": "id",
@@ -919,6 +954,55 @@
                                 }
                             }
                         }
+                    },
+                    "404": {
+                        "description": "Policy not found"
+                    }
+                }
+            },
+            "patch": {
+                "tags": [
+                    "Auth - Policies"
+                ],
+                "summary": "Update a custom policy",
+                "operationId": "update_policy",
+                "parameters": [
+                    {
+                        "name": "id",
+                        "in": "path",
+                        "description": "Policy ID",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "requestBody": {
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/UpdatePolicyRequest"
+                            }
+                        }
+                    },
+                    "required": true
+                },
+                "responses": {
+                    "200": {
+                        "description": "Policy updated",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/PolicyResponse"
+                                }
+                            }
+                        }
+                    },
+                    "400": {
+                        "description": "Bad request"
+                    },
+                    "403": {
+                        "description": "Forbidden"
                     },
                     "404": {
                         "description": "Policy not found"
@@ -1902,7 +1986,7 @@
                 },
                 "responses": {
                     "200": {
-                        "description": "\u8a55\u4fa1\u7d50\u679c",
+                        "description": "評価結果",
                         "content": {
                             "application/json": {
                                 "schema": {
@@ -1912,7 +1996,7 @@
                         }
                     },
                     "400": {
-                        "description": "\u4e0d\u6b63\u306a\u5165\u529b",
+                        "description": "不正な入力",
                         "content": {
                             "application/json": {
                                 "schema": {
@@ -1922,7 +2006,7 @@
                         }
                     },
                     "401": {
-                        "description": "\u8a8d\u8a3c\u30a8\u30e9\u30fc",
+                        "description": "認証エラー",
                         "content": {
                             "application/json": {
                                 "schema": {
@@ -1932,7 +2016,7 @@
                         }
                     },
                     "403": {
-                        "description": "\u6a29\u9650\u4e0d\u8db3",
+                        "description": "権限不足",
                         "content": {
                             "application/json": {
                                 "schema": {
@@ -1942,7 +2026,7 @@
                         }
                     },
                     "500": {
-                        "description": "\u5185\u90e8\u30a8\u30e9\u30fc",
+                        "description": "内部エラー",
                         "content": {
                             "application/json": {
                                 "schema": {
@@ -2511,7 +2595,7 @@
                     "agent"
                 ],
                 "summary": "Execute agent",
-                "description": "Execute a task using the agent system. Returns an SSE\nstream of `AgentChunk` events.\n\n## Client-Side Tools\n\nYou can provide custom tool definitions via the\n`client_tools` field. When the LLM decides to call one\nof these tools, the server emits a `tool_call_pending`\nSSE event containing the tool name, arguments, and a\nunique `tool_id`. The client should:\n\n1. Execute the tool locally using the provided arguments\n2. Submit the result via\n   `POST /v1/llms/chatrooms/{chatroom_id}/agent/tool-result`\n   with the matching `tool_id`\n3. The agent resumes processing with the tool result\n\nFor **fire-and-forget** tools (`fire_and_forget: true`),\nthe server immediately returns a success message to the\nLLM without waiting for a result submission. The client\nstill receives the `tool_call_pending` event and can\nexecute the tool, but does not need to submit a result.\n\nTool names must not collide with server built-in tools\n(e.g. `read_file`, `execute_command`). The server\nvalidates this and returns an error if a collision is\ndetected.\n\nWhen `client_tools` is provided, JSON tool call mode\nis automatically enabled \u2014 you do not need to set\n`use_json_tool_calls` separately.",
+                "description": "Execute a task using the agent system. Returns an SSE\nstream of `AgentChunk` events.\n\n## Client-Side Tools\n\nYou can provide custom tool definitions via the\n`client_tools` field. When the LLM decides to call one\nof these tools, the server emits a `tool_call_pending`\nSSE event containing the tool name, arguments, and a\nunique `tool_id`. The client should:\n\n1. Execute the tool locally using the provided arguments\n2. Submit the result via\n   `POST /v1/llms/chatrooms/{chatroom_id}/agent/tool-result`\n   with the matching `tool_id`\n3. The agent resumes processing with the tool result\n\nFor **fire-and-forget** tools (`fire_and_forget: true`),\nthe server immediately returns a success message to the\nLLM without waiting for a result submission. The client\nstill receives the `tool_call_pending` event and can\nexecute the tool, but does not need to submit a result.\n\nTool names must not collide with server built-in tools\n(e.g. `read_file`, `execute_command`). The server\nvalidates this and returns an error if a collision is\ndetected.\n\nWhen `client_tools` is provided, JSON tool call mode\nis automatically enabled — you do not need to set\n`use_json_tool_calls` separately.",
                 "operationId": "execute_agent",
                 "parameters": [
                     {
@@ -2667,7 +2751,7 @@
                     {
                         "name": "chatroom_id",
                         "in": "path",
-                        "description": "\u30c1\u30e3\u30c3\u30c8\u30eb\u30fc\u30e0ID",
+                        "description": "チャットルームID",
                         "required": true,
                         "schema": {
                             "type": "string"
@@ -2676,7 +2760,7 @@
                     {
                         "name": "limit",
                         "in": "query",
-                        "description": "\u53d6\u5f97\u3059\u308b\u30e1\u30c3\u30bb\u30fc\u30b8\u306e\u6700\u5927\u6570",
+                        "description": "取得するメッセージの最大数",
                         "required": false,
                         "schema": {
                             "type": [
@@ -2690,7 +2774,7 @@
                     {
                         "name": "offset",
                         "in": "query",
-                        "description": "\u53d6\u5f97\u958b\u59cb\u4f4d\u7f6e",
+                        "description": "取得開始位置",
                         "required": false,
                         "schema": {
                             "type": [
@@ -2724,7 +2808,7 @@
                 ],
                 "responses": {
                     "200": {
-                        "description": "\u30e1\u30c3\u30bb\u30fc\u30b8\u30ed\u30b0\u306e\u53d6\u5f97\u306b\u6210\u529f",
+                        "description": "メッセージログの取得に成功",
                         "content": {
                             "application/json": {
                                 "schema": {
@@ -2777,7 +2861,7 @@
                 ],
                 "responses": {
                     "200": {
-                        "description": "\u6210\u529f\u30ec\u30b9\u30dd\u30f3\u30b9",
+                        "description": "成功レスポンス",
                         "content": {
                             "application/json": {
                                 "schema": {
@@ -2795,7 +2879,7 @@
                     "agent"
                 ],
                 "summary": "Submit the result for a client-side tool call.",
-                "description": "After receiving a `tool_call_pending` SSE event from the\nagent execute stream, call this endpoint with the\nmatching `tool_id` and the tool execution result.\n\nThe agent is blocked waiting for this result (up to 5\nminutes). Once submitted, the agent resumes processing\nwith the provided output.\n\nFor **fire-and-forget** tools, this endpoint does not\nneed to be called \u2014 the agent continues immediately.\nIf called anyway, the server returns 404 (no pending\ntool call).\n\n## Flow\n\n1. Client sends `POST /agent/execute` with `client_tools`\n2. Server streams SSE events; emits `tool_call_pending`\n   when the LLM calls a client tool\n3. Client executes the tool locally\n4. Client calls this endpoint with the result\n5. Server delivers the result to the agent and resumes",
+                "description": "After receiving a `tool_call_pending` SSE event from the\nagent execute stream, call this endpoint with the\nmatching `tool_id` and the tool execution result.\n\nThe agent is blocked waiting for this result (up to 5\nminutes). Once submitted, the agent resumes processing\nwith the provided output.\n\nFor **fire-and-forget** tools, this endpoint does not\nneed to be called — the agent continues immediately.\nIf called anyway, the server returns 404 (no pending\ntool call).\n\n## Flow\n\n1. Client sends `POST /agent/execute` with `client_tools`\n2. Server streams SSE events; emits `tool_call_pending`\n   when the LLM calls a client tool\n3. Client executes the tool locally\n4. Client calls this endpoint with the result\n5. Server delivers the result to the agent and resumes",
                 "operationId": "submit_tool_result",
                 "parameters": [
                     {
@@ -3086,7 +3170,7 @@
                                             "models": [
                                                 {
                                                     "context_window": 200000,
-                                                    "description": "Claude Sonnet 4 \u2014 balanced intelligence and speed",
+                                                    "description": "Claude Sonnet 4 — balanced intelligence and speed",
                                                     "id": "anthropic/claude-sonnet-4-20250514",
                                                     "max_output_tokens": 16384,
                                                     "name": "claude-sonnet-4-20250514",
@@ -3104,7 +3188,7 @@
                                                 },
                                                 {
                                                     "context_window": 1047576,
-                                                    "description": "GPT-4.1 \u2014 flagship model for complex tasks",
+                                                    "description": "GPT-4.1 — flagship model for complex tasks",
                                                     "id": "openai/gpt-4.1",
                                                     "max_output_tokens": 32768,
                                                     "name": "gpt-4.1",
@@ -3121,7 +3205,7 @@
                                                 },
                                                 {
                                                     "context_window": 1048576,
-                                                    "description": "Gemini 2.5 Pro \u2014 Google's most capable model",
+                                                    "description": "Gemini 2.5 Pro — Google's most capable model",
                                                     "id": "google_ai/gemini-2.5-pro",
                                                     "max_output_tokens": 65536,
                                                     "name": "gemini-2.5-pro",
@@ -3148,7 +3232,7 @@
                                             "models": [
                                                 {
                                                     "context_window": 200000,
-                                                    "description": "Claude Sonnet 4 \u2014 balanced intelligence and speed",
+                                                    "description": "Claude Sonnet 4 — balanced intelligence and speed",
                                                     "id": "anthropic/claude-sonnet-4-20250514",
                                                     "max_output_tokens": 16384,
                                                     "name": "claude-sonnet-4-20250514",
@@ -3166,7 +3250,7 @@
                                                 },
                                                 {
                                                     "context_window": 200000,
-                                                    "description": "Claude Haiku 4.5 \u2014 fast and cost-effective",
+                                                    "description": "Claude Haiku 4.5 — fast and cost-effective",
                                                     "id": "anthropic/claude-haiku-4-5-20251001",
                                                     "max_output_tokens": 8192,
                                                     "name": "claude-haiku-4-5-20251001",
@@ -3182,7 +3266,7 @@
                                                 },
                                                 {
                                                     "context_window": 1047576,
-                                                    "description": "GPT-4.1 Mini \u2014 fast and affordable",
+                                                    "description": "GPT-4.1 Mini — fast and affordable",
                                                     "id": "openai/gpt-4.1-mini",
                                                     "max_output_tokens": 16384,
                                                     "name": "gpt-4.1-mini",
@@ -3198,7 +3282,7 @@
                                                 },
                                                 {
                                                     "context_window": 1048576,
-                                                    "description": "Gemini 2.5 Flash \u2014 optimized for speed",
+                                                    "description": "Gemini 2.5 Flash — optimized for speed",
                                                     "id": "google_ai/gemini-2.5-flash",
                                                     "max_output_tokens": 65536,
                                                     "name": "gemini-2.5-flash",
@@ -3223,7 +3307,7 @@
                                             "models": [
                                                 {
                                                     "context_window": 200000,
-                                                    "description": "Claude Sonnet 4 \u2014 balanced intelligence and speed",
+                                                    "description": "Claude Sonnet 4 — balanced intelligence and speed",
                                                     "id": "anthropic/claude-sonnet-4-20250514",
                                                     "max_output_tokens": 16384,
                                                     "name": "claude-sonnet-4-20250514",
@@ -3241,7 +3325,7 @@
                                                 },
                                                 {
                                                     "context_window": 1047576,
-                                                    "description": "GPT-4.1 \u2014 flagship model for complex tasks",
+                                                    "description": "GPT-4.1 — flagship model for complex tasks",
                                                     "id": "openai/gpt-4.1",
                                                     "max_output_tokens": 32768,
                                                     "name": "gpt-4.1",
@@ -3265,10 +3349,10 @@
                         }
                     },
                     "401": {
-                        "description": "Unauthorized \u2014 missing or invalid Authorization header"
+                        "description": "Unauthorized — missing or invalid Authorization header"
                     },
                     "403": {
-                        "description": "Forbidden \u2014 operator does not have permission"
+                        "description": "Forbidden — operator does not have permission"
                     }
                 }
             }
@@ -3444,7 +3528,7 @@
                             "examples": {
                                 "SimpleTask": {
                                     "summary": "Simple task execution",
-                                    "description": "Minimal request \u2014 just a task prompt. Uses default model and settings.",
+                                    "description": "Minimal request — just a task prompt. Uses default model and settings.",
                                     "value": {
                                         "auto_approve": true,
                                         "max_requests": 5,
@@ -3475,7 +3559,7 @@
                                                 }
                                             },
                                             {
-                                                "description": "Send a message to a Slack channel. This is fire-and-forget \u2014 the agent will not wait for a result.",
+                                                "description": "Send a message to a Slack channel. This is fire-and-forget — the agent will not wait for a result.",
                                                 "fire_and_forget": true,
                                                 "name": "send_slack_message",
                                                 "parameters": {
@@ -3693,10 +3777,10 @@
                         }
                     },
                     "401": {
-                        "description": "Unauthorized \u2014 missing or invalid Authorization header"
+                        "description": "Unauthorized — missing or invalid Authorization header"
                     },
                     "403": {
-                        "description": "Forbidden \u2014 operator does not have permission"
+                        "description": "Forbidden — operator does not have permission"
                     },
                     "404": {
                         "description": "Session not found"
@@ -5380,6 +5464,43 @@
                     }
                 }
             }
+        },
+        "/v1/auth/policies": {
+            "post": {
+                "tags": [
+                    "Auth - Policies"
+                ],
+                "summary": "Register a custom policy",
+                "operationId": "register_policy",
+                "requestBody": {
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/RegisterPolicyRequest"
+                            }
+                        }
+                    },
+                    "required": true
+                },
+                "responses": {
+                    "201": {
+                        "description": "Policy registered",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/PolicyResponse"
+                                }
+                            }
+                        }
+                    },
+                    "400": {
+                        "description": "Bad request"
+                    },
+                    "403": {
+                        "description": "Forbidden"
+                    }
+                }
+            }
         }
     },
     "components": {
@@ -5919,7 +6040,7 @@
                         "items": {
                             "$ref": "#/components/schemas/ClientToolDefinition"
                         },
-                        "description": "User-defined tools executed on the client side.\n\nEach tool must have a unique `name` that does not\ncollide with server built-in tool names. When the LLM\ncalls one of these tools, the server emits a\n`tool_call_pending` SSE event and blocks until the\nclient submits the result via\n`POST /v1/llms/chatrooms/{chatroom_id}/agent/tool-result`\n(timeout: 5 minutes).\n\nTools with `fire_and_forget: true` do not block \u2014 the\nserver immediately returns a success to the LLM and the\nclient can execute the tool asynchronously.\n\nExample:\n```json\n{\n  \"client_tools\": [\n    {\n      \"name\": \"send_slack_message\",\n      \"description\": \"Send a message to a Slack channel\",\n      \"parameters\": {\n        \"type\": \"object\",\n        \"properties\": {\n          \"channel\": { \"type\": \"string\" },\n          \"text\": { \"type\": \"string\" }\n        },\n        \"required\": [\"channel\", \"text\"]\n      },\n      \"fire_and_forget\": false\n    }\n  ]\n}\n```"
+                        "description": "User-defined tools executed on the client side.\n\nEach tool must have a unique `name` that does not\ncollide with server built-in tool names. When the LLM\ncalls one of these tools, the server emits a\n`tool_call_pending` SSE event and blocks until the\nclient submits the result via\n`POST /v1/llms/chatrooms/{chatroom_id}/agent/tool-result`\n(timeout: 5 minutes).\n\nTools with `fire_and_forget: true` do not block — the\nserver immediately returns a success to the LLM and the\nclient can execute the tool asynchronously.\n\nExample:\n```json\n{\n  \"client_tools\": [\n    {\n      \"name\": \"send_slack_message\",\n      \"description\": \"Send a message to a Slack channel\",\n      \"parameters\": {\n        \"type\": \"object\",\n        \"properties\": {\n          \"channel\": { \"type\": \"string\" },\n          \"text\": { \"type\": \"string\" }\n        },\n        \"required\": [\"channel\", \"text\"]\n      },\n      \"fire_and_forget\": false\n    }\n  ]\n}\n```"
                     },
                     "max_requests": {
                         "type": "integer",
@@ -5938,7 +6059,7 @@
                             "string",
                             "null"
                         ],
-                        "description": "Model identifier. Accepts `provider/model` or just `model` (provider auto-detected).\n\nExamples:\n- `anthropic/claude-3-sonnet-20241022`\n- `openai/gpt-4`\n- `google_ai/gemini-pro`\n\nAuto-detection shortcuts:\n- `gpt-*` \u2192 OpenAI\n- `claude-*` \u2192 Anthropic\n- `gemini*` \u2192 Google AI"
+                        "description": "Model identifier. Accepts `provider/model` or just `model` (provider auto-detected).\n\nExamples:\n- `anthropic/claude-3-sonnet-20241022`\n- `openai/gpt-4`\n- `google_ai/gemini-pro`\n\nAuto-detection shortcuts:\n- `gpt-*` → OpenAI\n- `claude-*` → Anthropic\n- `gemini*` → Google AI"
                     },
                     "task": {
                         "type": "string",
@@ -5966,7 +6087,7 @@
             },
             "AgentMessage": {
                 "type": "object",
-                "description": "\u30a8\u30fc\u30b8\u30a7\u30f3\u30c8\u30e1\u30c3\u30bb\u30fc\u30b8\u30ec\u30b9\u30dd\u30f3\u30b9\u7528\u306e\u30e2\u30c7\u30eb",
+                "description": "エージェントメッセージレスポンス用のモデル",
                 "required": [
                     "message_type",
                     "content",
@@ -6456,7 +6577,7 @@
                         ],
                         "format": "float",
                         "description": "What sampling temperature to use, between 0 and 2",
-                        "default": 1.0,
+                        "default": 1,
                         "maximum": 2,
                         "minimum": 0
                     },
@@ -6488,7 +6609,7 @@
                         ],
                         "format": "float",
                         "description": "An alternative to sampling with temperature",
-                        "default": 1.0,
+                        "default": 1,
                         "maximum": 1,
                         "minimum": 0
                     },
@@ -8403,7 +8524,7 @@
                             "null"
                         ],
                         "description": "Human-readable description of the model.",
-                        "example": "Claude Sonnet 4 \u2014 balanced intelligence and speed"
+                        "example": "Claude Sonnet 4 — balanced intelligence and speed"
                     },
                     "id": {
                         "type": "string",
@@ -8469,7 +8590,7 @@
                     "models": [
                         {
                             "context_window": 200000,
-                            "description": "Claude Sonnet 4 \u2014 balanced intelligence and speed",
+                            "description": "Claude Sonnet 4 — balanced intelligence and speed",
                             "id": "anthropic/claude-sonnet-4-20250514",
                             "max_output_tokens": 16384,
                             "name": "claude-sonnet-4-20250514",
@@ -8484,7 +8605,7 @@
                         },
                         {
                             "context_window": 1047576,
-                            "description": "GPT-4.1 \u2014 flagship model for complex tasks",
+                            "description": "GPT-4.1 — flagship model for complex tasks",
                             "id": "openai/gpt-4.1",
                             "max_output_tokens": 32768,
                             "name": "gpt-4.1",
@@ -8500,7 +8621,7 @@
                         },
                         {
                             "context_window": 1048576,
-                            "description": "Gemini 2.5 Pro \u2014 Google's most capable model",
+                            "description": "Gemini 2.5 Pro — Google's most capable model",
                             "id": "google_ai/gemini-2.5-pro",
                             "max_output_tokens": 65536,
                             "name": "gemini-2.5-pro",
@@ -10091,7 +10212,7 @@
                     },
                     "fire_and_forget": {
                         "type": "boolean",
-                        "description": "When `true`, the server does not wait for the client\nto submit a tool result \u2014 the LLM continues\nimmediately. The client may still execute the tool\nfor its side effects."
+                        "description": "When `true`, the server does not wait for the client\nto submit a tool result — the LLM continues\nimmediately. The client may still execute the tool\nfor its side effects."
                     },
                     "tool_id": {
                         "type": "string",
@@ -10880,6 +11001,457 @@
                     "builtin"
                 ],
                 "type": "string"
+            },
+            "OAuth2CreateClientRequest": {
+                "type": "object",
+                "description": "Request to create an OAuth2 client",
+                "required": [
+                    "name",
+                    "redirectUris",
+                    "allowedScopes",
+                    "grantTypes"
+                ],
+                "properties": {
+                    "allowedScopes": {
+                        "type": "array",
+                        "items": {
+                            "type": "string"
+                        },
+                        "description": "Allowed scopes"
+                    },
+                    "authMode": {
+                        "type": [
+                            "string",
+                            "null"
+                        ],
+                        "description": "Authentication mode: \"direct\" or \"proxied\""
+                    },
+                    "grantTypes": {
+                        "type": "array",
+                        "items": {
+                            "type": "string"
+                        },
+                        "description": "Allowed grant types"
+                    },
+                    "name": {
+                        "type": "string",
+                        "description": "Display name"
+                    },
+                    "redirectUris": {
+                        "type": "array",
+                        "items": {
+                            "type": "string"
+                        },
+                        "description": "Allowed redirect URIs"
+                    },
+                    "useTachyonUserPool": {
+                        "type": "boolean",
+                        "description": "Whether to use Tachyon user pool",
+                        "default": true
+                    },
+                    "userPoolId": {
+                        "type": [
+                            "string",
+                            "null"
+                        ],
+                        "description": "Associated User Pool ID when using a dedicated pool"
+                    }
+                }
+            },
+            "OAuth2ClientResponse": {
+                "type": "object",
+                "description": "Response for an OAuth2 client (no secret)",
+                "required": [
+                    "id",
+                    "clientId",
+                    "name",
+                    "redirectUris",
+                    "allowedScopes",
+                    "grantTypes",
+                    "useTachyonUserPool",
+                    "status",
+                    "createdAt",
+                    "updatedAt"
+                ],
+                "properties": {
+                    "allowedScopes": {
+                        "type": "array",
+                        "items": {
+                            "type": "string"
+                        },
+                        "description": "Allowed scopes"
+                    },
+                    "authMode": {
+                        "type": [
+                            "string",
+                            "null"
+                        ],
+                        "description": "Authentication mode"
+                    },
+                    "clientId": {
+                        "type": "string"
+                    },
+                    "createdAt": {
+                        "type": "string"
+                    },
+                    "grantTypes": {
+                        "type": "array",
+                        "items": {
+                            "type": "string"
+                        },
+                        "description": "Allowed grant types"
+                    },
+                    "id": {
+                        "type": "string"
+                    },
+                    "name": {
+                        "type": "string"
+                    },
+                    "redirectUris": {
+                        "type": "array",
+                        "items": {
+                            "type": "string"
+                        },
+                        "description": "Allowed redirect URIs"
+                    },
+                    "status": {
+                        "type": "string"
+                    },
+                    "updatedAt": {
+                        "type": "string"
+                    },
+                    "useTachyonUserPool": {
+                        "type": "boolean"
+                    },
+                    "userPoolId": {
+                        "type": [
+                            "string",
+                            "null"
+                        ]
+                    }
+                }
+            },
+            "OAuth2ClientListResponse": {
+                "type": "object",
+                "description": "OAuth2 client list response",
+                "required": [
+                    "clients"
+                ],
+                "properties": {
+                    "clients": {
+                        "type": "array",
+                        "items": {
+                            "$ref": "#/components/schemas/OAuth2ClientResponse"
+                        }
+                    }
+                }
+            },
+            "OAuth2CreateClientResponse": {
+                "type": "object",
+                "description": "Response for newly created OAuth2 client (includes plain-text secret)",
+                "required": [
+                    "id",
+                    "clientId",
+                    "clientSecret",
+                    "name",
+                    "redirectUris",
+                    "allowedScopes",
+                    "grantTypes",
+                    "useTachyonUserPool",
+                    "status",
+                    "createdAt"
+                ],
+                "properties": {
+                    "allowedScopes": {
+                        "type": "array",
+                        "items": {
+                            "type": "string"
+                        },
+                        "description": "Allowed scopes"
+                    },
+                    "authMode": {
+                        "type": [
+                            "string",
+                            "null"
+                        ],
+                        "description": "Authentication mode"
+                    },
+                    "clientId": {
+                        "type": "string"
+                    },
+                    "clientSecret": {
+                        "type": "string"
+                    },
+                    "createdAt": {
+                        "type": "string"
+                    },
+                    "grantTypes": {
+                        "type": "array",
+                        "items": {
+                            "type": "string"
+                        },
+                        "description": "Allowed grant types"
+                    },
+                    "id": {
+                        "type": "string"
+                    },
+                    "name": {
+                        "type": "string"
+                    },
+                    "providerUserPoolId": {
+                        "type": [
+                            "string",
+                            "null"
+                        ]
+                    },
+                    "redirectUris": {
+                        "type": "array",
+                        "items": {
+                            "type": "string"
+                        },
+                        "description": "Allowed redirect URIs"
+                    },
+                    "status": {
+                        "type": "string"
+                    },
+                    "useTachyonUserPool": {
+                        "type": "boolean"
+                    },
+                    "userPoolId": {
+                        "type": [
+                            "string",
+                            "null"
+                        ]
+                    }
+                }
+            },
+            "OAuth2UpdateClientRequest": {
+                "type": "object",
+                "description": "Request to update an OAuth2 client",
+                "properties": {
+                    "allowedScopes": {
+                        "type": [
+                            "array",
+                            "null"
+                        ],
+                        "items": {
+                            "type": "string"
+                        },
+                        "description": "Allowed scopes"
+                    },
+                    "name": {
+                        "type": [
+                            "string",
+                            "null"
+                        ],
+                        "description": "Display name"
+                    },
+                    "redirectUris": {
+                        "type": [
+                            "array",
+                            "null"
+                        ],
+                        "items": {
+                            "type": "string"
+                        },
+                        "description": "Allowed redirect URIs"
+                    },
+                    "status": {
+                        "type": [
+                            "string",
+                            "null"
+                        ],
+                        "description": "Status: \"active\" or \"inactive\""
+                    }
+                }
+            },
+            "RegisterActionRequest": {
+                "type": "object",
+                "description": "Request to register a custom action",
+                "required": [
+                    "context",
+                    "name"
+                ],
+                "properties": {
+                    "context": {
+                        "type": "string",
+                        "description": "Action context"
+                    },
+                    "description": {
+                        "type": [
+                            "string",
+                            "null"
+                        ],
+                        "description": "Description"
+                    },
+                    "name": {
+                        "type": "string",
+                        "description": "Action name"
+                    },
+                    "resourcePattern": {
+                        "type": [
+                            "string",
+                            "null"
+                        ],
+                        "description": "Resource pattern"
+                    },
+                    "sandboxRestriction": {
+                        "type": [
+                            "string",
+                            "null"
+                        ],
+                        "description": "Sandbox restriction: \"allow\", \"deny\", or \"audit\""
+                    }
+                }
+            },
+            "PolicyActionRequest": {
+                "type": "object",
+                "description": "Policy action entry",
+                "required": [
+                    "actionFullName",
+                    "effect"
+                ],
+                "properties": {
+                    "actionFullName": {
+                        "type": "string",
+                        "description": "Action full name"
+                    },
+                    "effect": {
+                        "type": "string",
+                        "description": "Policy effect. Supported values are \"allow\" and \"deny\""
+                    }
+                }
+            },
+            "PolicyActionPatternRequest": {
+                "type": "object",
+                "description": "Policy action pattern entry",
+                "required": [
+                    "contextPattern",
+                    "namePattern",
+                    "effect"
+                ],
+                "properties": {
+                    "contextPattern": {
+                        "type": "string",
+                        "description": "Action context pattern"
+                    },
+                    "effect": {
+                        "type": "string",
+                        "description": "Policy effect. Supported values are \"allow\" and \"deny\""
+                    },
+                    "namePattern": {
+                        "type": "string",
+                        "description": "Action name pattern"
+                    }
+                }
+            },
+            "RemovePolicyActionPatternRequest": {
+                "type": "object",
+                "description": "Policy action pattern removal entry",
+                "required": [
+                    "contextPattern",
+                    "namePattern"
+                ],
+                "properties": {
+                    "contextPattern": {
+                        "type": "string",
+                        "description": "Action context pattern"
+                    },
+                    "namePattern": {
+                        "type": "string",
+                        "description": "Action name pattern"
+                    }
+                }
+            },
+            "RegisterPolicyRequest": {
+                "type": "object",
+                "description": "Request to register a custom policy",
+                "required": [
+                    "name"
+                ],
+                "properties": {
+                    "actionPatterns": {
+                        "type": "array",
+                        "items": {
+                            "$ref": "#/components/schemas/PolicyActionPatternRequest"
+                        },
+                        "default": []
+                    },
+                    "actions": {
+                        "type": "array",
+                        "items": {
+                            "$ref": "#/components/schemas/PolicyActionRequest"
+                        },
+                        "default": []
+                    },
+                    "description": {
+                        "type": [
+                            "string",
+                            "null"
+                        ],
+                        "description": "Policy description"
+                    },
+                    "global": {
+                        "type": "boolean",
+                        "default": false
+                    },
+                    "isSystem": {
+                        "type": "boolean",
+                        "default": false
+                    },
+                    "name": {
+                        "type": "string",
+                        "description": "Policy name"
+                    },
+                    "tenantId": {
+                        "type": [
+                            "string",
+                            "null"
+                        ],
+                        "description": "Tenant ID"
+                    }
+                }
+            },
+            "UpdatePolicyRequest": {
+                "type": "object",
+                "description": "Request to update a custom policy",
+                "properties": {
+                    "actionPatternsToAdd": {
+                        "type": "array",
+                        "items": {
+                            "$ref": "#/components/schemas/PolicyActionPatternRequest"
+                        },
+                        "default": []
+                    },
+                    "actionPatternsToRemove": {
+                        "type": "array",
+                        "items": {
+                            "$ref": "#/components/schemas/RemovePolicyActionPatternRequest"
+                        },
+                        "default": []
+                    },
+                    "actionsToAdd": {
+                        "type": "array",
+                        "items": {
+                            "$ref": "#/components/schemas/PolicyActionRequest"
+                        },
+                        "default": []
+                    },
+                    "actionsToRemove": {
+                        "type": "array",
+                        "items": {
+                            "type": "string"
+                        },
+                        "default": []
+                    },
+                    "description": {
+                        "type": [
+                            "string",
+                            "null"
+                        ],
+                        "description": "Policy description"
+                    }
+                }
             }
         }
     },

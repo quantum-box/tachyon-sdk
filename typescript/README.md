@@ -67,12 +67,12 @@ All URIs are relative to *http://localhost*
 *AuthAPIKeysApi* | [**createApiKey**](docs/AuthAPIKeysApi.md#createapikeyoperation) | **POST** /v1/auth/service-accounts/{service_account_id}/api-keys | Create a new API key for a service account
 *AuthAPIKeysApi* | [**listApiKeys**](docs/AuthAPIKeysApi.md#listapikeys) | **GET** /v1/auth/service-accounts/{service_account_id}/api-keys | List API keys for a service account
 *AuthAPIKeysApi* | [**verifyApiKey**](docs/AuthAPIKeysApi.md#verifyapikeyoperation) | **POST** /v1/auth/api-keys/verify | Verify a public API key
-*AuthOAuth2ClientsApi* | [**createClient**](docs/AuthOAuth2ClientsApi.md#createclientoperation) | **POST** /v1/auth/oauth2-clients | Create a new OAuth2 client
-*AuthOAuth2ClientsApi* | [**getClient**](docs/AuthOAuth2ClientsApi.md#getclient) | **GET** /v1/auth/oauth2-clients/{id} | Get an OAuth2 client by ID
-*AuthOAuth2ClientsApi* | [**listClients**](docs/AuthOAuth2ClientsApi.md#listclients) | **GET** /v1/auth/oauth2-clients | List all OAuth2 clients for the current tenant
-*AuthOAuth2ClientsApi* | [**revokeClient**](docs/AuthOAuth2ClientsApi.md#revokeclient) | **POST** /v1/auth/oauth2-clients/{id}/revoke | Revoke an OAuth2 client
-*AuthOAuth2ClientsApi* | [**rotateSecret**](docs/AuthOAuth2ClientsApi.md#rotatesecret) | **POST** /v1/auth/oauth2-clients/{id}/rotate-secret | Rotate an OAuth2 client secret
-*AuthOAuth2ClientsApi* | [**updateClient**](docs/AuthOAuth2ClientsApi.md#updateclientoperation) | **PUT** /v1/auth/oauth2-clients/{id} | Update an OAuth2 client
+*AuthOAuth2ClientsApi* | [**createOauth2Client**](docs/AuthOAuth2ClientsApi.md#createoauth2client) | **POST** /v1/auth/oauth2-clients | Create a new OAuth2 client
+*AuthOAuth2ClientsApi* | [**getOauth2Client**](docs/AuthOAuth2ClientsApi.md#getoauth2client) | **GET** /v1/auth/oauth2-clients/{id} | Get an OAuth2 client by ID
+*AuthOAuth2ClientsApi* | [**listOauth2Clients**](docs/AuthOAuth2ClientsApi.md#listoauth2clients) | **GET** /v1/auth/oauth2-clients | List all OAuth2 clients for the current tenant
+*AuthOAuth2ClientsApi* | [**revokeOauth2Client**](docs/AuthOAuth2ClientsApi.md#revokeoauth2client) | **POST** /v1/auth/oauth2-clients/{id}/revoke | Revoke an OAuth2 client
+*AuthOAuth2ClientsApi* | [**rotateOauth2ClientSecret**](docs/AuthOAuth2ClientsApi.md#rotateoauth2clientsecret) | **POST** /v1/auth/oauth2-clients/{id}/rotate-secret | Rotate an OAuth2 client secret
+*AuthOAuth2ClientsApi* | [**updateOauth2Client**](docs/AuthOAuth2ClientsApi.md#updateoauth2client) | **PUT** /v1/auth/oauth2-clients/{id} | Update an OAuth2 client
 *AuthOAuth2ConsentsApi* | [**listConsents**](docs/AuthOAuth2ConsentsApi.md#listconsents) | **GET** /v1/auth/consents | GET /v1/auth/consents
 *AuthOAuth2ConsentsApi* | [**revokeConsent**](docs/AuthOAuth2ConsentsApi.md#revokeconsent) | **POST** /v1/auth/consents/{id}/revoke | POST /v1/auth/consents/:id/revoke
 *AuthOAuthTokensApi* | [**deleteOauthToken**](docs/AuthOAuthTokensApi.md#deleteoauthtoken) | **DELETE** /v1/auth/oauth-tokens/{provider} | Delete an OAuth token
@@ -87,6 +87,9 @@ All URIs are relative to *http://localhost*
 *AuthPoliciesApi* | [**evaluatePoliciesBatch**](docs/AuthPoliciesApi.md#evaluatepoliciesbatchoperation) | **POST** /v1/auth/policies/check | Evaluate multiple policy actions in batch
 *AuthPoliciesApi* | [**getPolicy**](docs/AuthPoliciesApi.md#getpolicy) | **GET** /v1/auth/policies/{id} | Get a policy by ID
 *AuthPoliciesApi* | [**listActions**](docs/AuthPoliciesApi.md#listactions) | **GET** /v1/auth/actions | List all registered actions
+*AuthPoliciesApi* | [**registerAction**](docs/AuthPoliciesApi.md#registeractionoperation) | **POST** /v1/auth/actions | Register a custom action
+*AuthPoliciesApi* | [**registerPolicy**](docs/AuthPoliciesApi.md#registerpolicyoperation) | **POST** /v1/auth/policies | Register a custom policy
+*AuthPoliciesApi* | [**updatePolicy**](docs/AuthPoliciesApi.md#updatepolicyoperation) | **PATCH** /v1/auth/policies/{id} | Update a custom policy
 *AuthServiceAccountsApi* | [**createServiceAccount**](docs/AuthServiceAccountsApi.md#createserviceaccountoperation) | **POST** /v1/auth/service-accounts | Create a new service account
 *AuthServiceAccountsApi* | [**deleteServiceAccount**](docs/AuthServiceAccountsApi.md#deleteserviceaccount) | **DELETE** /v1/auth/service-accounts/{id} | Delete a service account
 *AuthServiceAccountsApi* | [**getServiceAccount**](docs/AuthServiceAccountsApi.md#getserviceaccount) | **GET** /v1/auth/service-accounts/{id} | Get a service account by ID
@@ -126,6 +129,7 @@ All URIs are relative to *http://localhost*
 *IntegrationsApi* | [**listConnections**](docs/IntegrationsApi.md#listconnections) | **GET** /v1/integrations/connections | List all connections for the current tenant.
 *IntegrationsApi* | [**listIntegrations**](docs/IntegrationsApi.md#listintegrations) | **GET** /v1/integrations | List all integrations in the marketplace.
 *ModelsApi* | [**getModels**](docs/ModelsApi.md#getmodels) | **GET** /v1/llms/models | List available LLM models
+*NotificationsApi* | [**sendSmsNotification**](docs/NotificationsApi.md#sendsmsnotificationoperation) | **POST** /v1/notifications/sms | Send an SMS notification
 *OauthApi* | [**callback**](docs/OauthApi.md#callback) | **GET** /oauth/{provider_name}/callback | OAuth callback handler for specified provider
 *OauthApi* | [**connect**](docs/OauthApi.md#connect) | **GET** /oauth/{provider_name}/connect | Get OAuth authorization URL for specified provider
 *OrderCheckoutApi* | [**processCheckout**](docs/OrderCheckoutApi.md#processcheckout) | **POST** /v1/order/checkout | Process payment checkout for a quote
@@ -260,6 +264,11 @@ All URIs are relative to *http://localhost*
 - [MessageContent](docs/MessageContent.md)
 - [ModelInfo](docs/ModelInfo.md)
 - [ModelsResponse](docs/ModelsResponse.md)
+- [OAuth2ClientListResponse](docs/OAuth2ClientListResponse.md)
+- [OAuth2ClientResponse](docs/OAuth2ClientResponse.md)
+- [OAuth2CreateClientRequest](docs/OAuth2CreateClientRequest.md)
+- [OAuth2CreateClientResponse](docs/OAuth2CreateClientResponse.md)
+- [OAuth2UpdateClientRequest](docs/OAuth2UpdateClientRequest.md)
 - [OAuthCallbackResponse](docs/OAuthCallbackResponse.md)
 - [OAuthTokenDetailResponse](docs/OAuthTokenDetailResponse.md)
 - [OAuthTokenListResponse](docs/OAuthTokenListResponse.md)
@@ -277,6 +286,8 @@ All URIs are relative to *http://localhost*
 - [PartOneOf3](docs/PartOneOf3.md)
 - [PartOneOf4](docs/PartOneOf4.md)
 - [PartOneOf5](docs/PartOneOf5.md)
+- [PolicyActionPatternRequest](docs/PolicyActionPatternRequest.md)
+- [PolicyActionRequest](docs/PolicyActionRequest.md)
 - [PolicyEvaluationOutcome](docs/PolicyEvaluationOutcome.md)
 - [PolicyResponse](docs/PolicyResponse.md)
 - [ProductListResponse](docs/ProductListResponse.md)
@@ -292,11 +303,16 @@ All URIs are relative to *http://localhost*
 - [QuoteResponse](docs/QuoteResponse.md)
 - [RecurringRevenueRequest](docs/RecurringRevenueRequest.md)
 - [RecurringRevenueResponse](docs/RecurringRevenueResponse.md)
+- [RegisterActionRequest](docs/RegisterActionRequest.md)
+- [RegisterPolicyRequest](docs/RegisterPolicyRequest.md)
 - [RegisterShippingDestinationRequest](docs/RegisterShippingDestinationRequest.md)
+- [RemovePolicyActionPatternRequest](docs/RemovePolicyActionPatternRequest.md)
 - [ResponseFormat](docs/ResponseFormat.md)
 - [Role](docs/Role.md)
 - [RotateSecretResponse](docs/RotateSecretResponse.md)
 - [SaveOAuthTokenRequest](docs/SaveOAuthTokenRequest.md)
+- [SendSmsNotificationRequest](docs/SendSmsNotificationRequest.md)
+- [SendSmsNotificationResponse](docs/SendSmsNotificationResponse.md)
 - [ServiceAccountListResponse](docs/ServiceAccountListResponse.md)
 - [ServiceAccountResponse](docs/ServiceAccountResponse.md)
 - [ShippingAvailabilityResponse](docs/ShippingAvailabilityResponse.md)
@@ -322,6 +338,7 @@ All URIs are relative to *http://localhost*
 - [UpdateChatroomRequest](docs/UpdateChatroomRequest.md)
 - [UpdateChatroomResponse](docs/UpdateChatroomResponse.md)
 - [UpdateClientRequest](docs/UpdateClientRequest.md)
+- [UpdatePolicyRequest](docs/UpdatePolicyRequest.md)
 - [UpdateProductRequest](docs/UpdateProductRequest.md)
 - [UpdateProductVariationRequest](docs/UpdateProductVariationRequest.md)
 - [UpdateQuoteRequest](docs/UpdateQuoteRequest.md)
