@@ -8,6 +8,9 @@ Method | HTTP request | Description
 [**evaluate_policies_batch**](AuthPoliciesApi.md#evaluate_policies_batch) | **POST** /v1/auth/policies/check | Evaluate multiple policy actions in batch
 [**get_policy**](AuthPoliciesApi.md#get_policy) | **GET** /v1/auth/policies/{id} | Get a policy by ID
 [**list_actions**](AuthPoliciesApi.md#list_actions) | **GET** /v1/auth/actions | List all registered actions
+[**register_action**](AuthPoliciesApi.md#register_action) | **POST** /v1/auth/actions | Register a custom action
+[**register_policy**](AuthPoliciesApi.md#register_policy) | **POST** /v1/auth/policies | Register a custom policy
+[**update_policy**](AuthPoliciesApi.md#update_policy) | **PATCH** /v1/auth/policies/{id} | Update a custom policy
 
 
 # **check_policy_for_resource**
@@ -36,7 +39,7 @@ configuration = tachyon_sdk.Configuration(
 with tachyon_sdk.ApiClient(configuration) as api_client:
     # Create an instance of the API class
     api_instance = tachyon_sdk.AuthPoliciesApi(api_client)
-    check_policy_for_resource_request = tachyon_sdk.CheckPolicyForResourceRequest() # CheckPolicyForResourceRequest | 
+    check_policy_for_resource_request = tachyon_sdk.CheckPolicyForResourceRequest() # CheckPolicyForResourceRequest |
 
     try:
         # Check permission for a specific resource
@@ -54,7 +57,7 @@ with tachyon_sdk.ApiClient(configuration) as api_client:
 
 Name | Type | Description  | Notes
 ------------- | ------------- | ------------- | -------------
- **check_policy_for_resource_request** | [**CheckPolicyForResourceRequest**](CheckPolicyForResourceRequest.md)|  | 
+ **check_policy_for_resource_request** | [**CheckPolicyForResourceRequest**](CheckPolicyForResourceRequest.md)|  |
 
 ### Return type
 
@@ -105,7 +108,7 @@ configuration = tachyon_sdk.Configuration(
 with tachyon_sdk.ApiClient(configuration) as api_client:
     # Create an instance of the API class
     api_instance = tachyon_sdk.AuthPoliciesApi(api_client)
-    evaluate_policies_batch_request = tachyon_sdk.EvaluatePoliciesBatchRequest() # EvaluatePoliciesBatchRequest | 
+    evaluate_policies_batch_request = tachyon_sdk.EvaluatePoliciesBatchRequest() # EvaluatePoliciesBatchRequest |
 
     try:
         # Evaluate multiple policy actions in batch
@@ -123,7 +126,7 @@ with tachyon_sdk.ApiClient(configuration) as api_client:
 
 Name | Type | Description  | Notes
 ------------- | ------------- | ------------- | -------------
- **evaluate_policies_batch_request** | [**EvaluatePoliciesBatchRequest**](EvaluatePoliciesBatchRequest.md)|  | 
+ **evaluate_policies_batch_request** | [**EvaluatePoliciesBatchRequest**](EvaluatePoliciesBatchRequest.md)|  |
 
 ### Return type
 
@@ -190,7 +193,7 @@ with tachyon_sdk.ApiClient(configuration) as api_client:
 
 Name | Type | Description  | Notes
 ------------- | ------------- | ------------- | -------------
- **id** | **str**| Policy ID | 
+ **id** | **str**| Policy ID |
 
 ### Return type
 
@@ -257,7 +260,7 @@ with tachyon_sdk.ApiClient(configuration) as api_client:
 
 Name | Type | Description  | Notes
 ------------- | ------------- | ------------- | -------------
- **context** | **str**| Filter by context | [optional] 
+ **context** | **str**| Filter by context | [optional]
 
 ### Return type
 
@@ -278,6 +281,216 @@ No authorization required
 |-------------|-------------|------------------|
 **200** | Action list |  -  |
 **403** | Forbidden |  -  |
+
+[[Back to top]](#) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to Model list]](../README.md#documentation-for-models) [[Back to README]](../README.md)
+
+# **register_action**
+> ActionResponse register_action(register_action_request)
+
+Register a custom action
+
+### Example
+
+
+```python
+import tachyon_sdk
+from tachyon_sdk.models.action_response import ActionResponse
+from tachyon_sdk.models.register_action_request import RegisterActionRequest
+from tachyon_sdk.rest import ApiException
+from pprint import pprint
+
+# Defining the host is optional and defaults to http://localhost
+# See configuration.py for a list of all supported configuration parameters.
+configuration = tachyon_sdk.Configuration(
+    host = "http://localhost"
+)
+
+
+# Enter a context with an instance of the API client
+with tachyon_sdk.ApiClient(configuration) as api_client:
+    # Create an instance of the API class
+    api_instance = tachyon_sdk.AuthPoliciesApi(api_client)
+    register_action_request = tachyon_sdk.RegisterActionRequest() # RegisterActionRequest |
+
+    try:
+        # Register a custom action
+        api_response = api_instance.register_action(register_action_request)
+        print("The response of AuthPoliciesApi->register_action:\n")
+        pprint(api_response)
+    except Exception as e:
+        print("Exception when calling AuthPoliciesApi->register_action: %s\n" % e)
+```
+
+
+
+### Parameters
+
+
+Name | Type | Description  | Notes
+------------- | ------------- | ------------- | -------------
+ **register_action_request** | [**RegisterActionRequest**](RegisterActionRequest.md)|  |
+
+### Return type
+
+[**ActionResponse**](ActionResponse.md)
+
+### Authorization
+
+No authorization required
+
+### HTTP request headers
+
+ - **Content-Type**: application/json
+ - **Accept**: application/json
+
+### HTTP response details
+
+| Status code | Description | Response headers |
+|-------------|-------------|------------------|
+**201** | Action registered |  -  |
+**400** | Bad request |  -  |
+**403** | Forbidden |  -  |
+
+[[Back to top]](#) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to Model list]](../README.md#documentation-for-models) [[Back to README]](../README.md)
+
+# **register_policy**
+> PolicyResponse register_policy(register_policy_request)
+
+Register a custom policy
+
+### Example
+
+
+```python
+import tachyon_sdk
+from tachyon_sdk.models.policy_response import PolicyResponse
+from tachyon_sdk.models.register_policy_request import RegisterPolicyRequest
+from tachyon_sdk.rest import ApiException
+from pprint import pprint
+
+# Defining the host is optional and defaults to http://localhost
+# See configuration.py for a list of all supported configuration parameters.
+configuration = tachyon_sdk.Configuration(
+    host = "http://localhost"
+)
+
+
+# Enter a context with an instance of the API client
+with tachyon_sdk.ApiClient(configuration) as api_client:
+    # Create an instance of the API class
+    api_instance = tachyon_sdk.AuthPoliciesApi(api_client)
+    register_policy_request = tachyon_sdk.RegisterPolicyRequest() # RegisterPolicyRequest |
+
+    try:
+        # Register a custom policy
+        api_response = api_instance.register_policy(register_policy_request)
+        print("The response of AuthPoliciesApi->register_policy:\n")
+        pprint(api_response)
+    except Exception as e:
+        print("Exception when calling AuthPoliciesApi->register_policy: %s\n" % e)
+```
+
+
+
+### Parameters
+
+
+Name | Type | Description  | Notes
+------------- | ------------- | ------------- | -------------
+ **register_policy_request** | [**RegisterPolicyRequest**](RegisterPolicyRequest.md)|  |
+
+### Return type
+
+[**PolicyResponse**](PolicyResponse.md)
+
+### Authorization
+
+No authorization required
+
+### HTTP request headers
+
+ - **Content-Type**: application/json
+ - **Accept**: application/json
+
+### HTTP response details
+
+| Status code | Description | Response headers |
+|-------------|-------------|------------------|
+**201** | Policy registered |  -  |
+**400** | Bad request |  -  |
+**403** | Forbidden |  -  |
+
+[[Back to top]](#) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to Model list]](../README.md#documentation-for-models) [[Back to README]](../README.md)
+
+# **update_policy**
+> PolicyResponse update_policy(id, update_policy_request)
+
+Update a custom policy
+
+### Example
+
+
+```python
+import tachyon_sdk
+from tachyon_sdk.models.policy_response import PolicyResponse
+from tachyon_sdk.models.update_policy_request import UpdatePolicyRequest
+from tachyon_sdk.rest import ApiException
+from pprint import pprint
+
+# Defining the host is optional and defaults to http://localhost
+# See configuration.py for a list of all supported configuration parameters.
+configuration = tachyon_sdk.Configuration(
+    host = "http://localhost"
+)
+
+
+# Enter a context with an instance of the API client
+with tachyon_sdk.ApiClient(configuration) as api_client:
+    # Create an instance of the API class
+    api_instance = tachyon_sdk.AuthPoliciesApi(api_client)
+    id = 'id_example' # str | Policy ID
+    update_policy_request = tachyon_sdk.UpdatePolicyRequest() # UpdatePolicyRequest |
+
+    try:
+        # Update a custom policy
+        api_response = api_instance.update_policy(id, update_policy_request)
+        print("The response of AuthPoliciesApi->update_policy:\n")
+        pprint(api_response)
+    except Exception as e:
+        print("Exception when calling AuthPoliciesApi->update_policy: %s\n" % e)
+```
+
+
+
+### Parameters
+
+
+Name | Type | Description  | Notes
+------------- | ------------- | ------------- | -------------
+ **id** | **str**| Policy ID |
+ **update_policy_request** | [**UpdatePolicyRequest**](UpdatePolicyRequest.md)|  |
+
+### Return type
+
+[**PolicyResponse**](PolicyResponse.md)
+
+### Authorization
+
+No authorization required
+
+### HTTP request headers
+
+ - **Content-Type**: application/json
+ - **Accept**: application/json
+
+### HTTP response details
+
+| Status code | Description | Response headers |
+|-------------|-------------|------------------|
+**200** | Policy updated |  -  |
+**400** | Bad request |  -  |
+**403** | Forbidden |  -  |
+**404** | Policy not found |  -  |
 
 [[Back to top]](#) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to Model list]](../README.md#documentation-for-models) [[Back to README]](../README.md)
 

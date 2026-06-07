@@ -127,6 +127,11 @@ docs/ModelInfo.md
 docs/ModelsApi.md
 docs/ModelsResponse.md
 docs/NotificationsApi.md
+docs/OAuth2ClientListResponse.md
+docs/OAuth2ClientResponse.md
+docs/OAuth2CreateClientRequest.md
+docs/OAuth2CreateClientResponse.md
+docs/OAuth2UpdateClientRequest.md
 docs/OAuthCallbackResponse.md
 docs/OAuthTokenDetailResponse.md
 docs/OAuthTokenListResponse.md
@@ -153,6 +158,8 @@ docs/PartOneOf3.md
 docs/PartOneOf4.md
 docs/PartOneOf5.md
 docs/PaymentApi.md
+docs/PolicyActionPatternRequest.md
+docs/PolicyActionRequest.md
 docs/PolicyEvaluationOutcome.md
 docs/PolicyResponse.md
 docs/ProcurementApi.md
@@ -169,7 +176,10 @@ docs/QuoteListResponse.md
 docs/QuoteResponse.md
 docs/RecurringRevenueRequest.md
 docs/RecurringRevenueResponse.md
+docs/RegisterActionRequest.md
+docs/RegisterPolicyRequest.md
 docs/RegisterShippingDestinationRequest.md
+docs/RemovePolicyActionPatternRequest.md
 docs/ResponseFormat.md
 docs/Role.md
 docs/RotateSecretResponse.md
@@ -201,6 +211,7 @@ docs/ToolSchema.md
 docs/UpdateChatroomRequest.md
 docs/UpdateChatroomResponse.md
 docs/UpdateClientRequest.md
+docs/UpdatePolicyRequest.md
 docs/UpdateProductRequest.md
 docs/UpdateProductVariationRequest.md
 docs/UpdateQuoteRequest.md
@@ -359,6 +370,11 @@ src/models/Message.ts
 src/models/MessageContent.ts
 src/models/ModelInfo.ts
 src/models/ModelsResponse.ts
+src/models/OAuth2ClientListResponse.ts
+src/models/OAuth2ClientResponse.ts
+src/models/OAuth2CreateClientRequest.ts
+src/models/OAuth2CreateClientResponse.ts
+src/models/OAuth2UpdateClientRequest.ts
 src/models/OAuthCallbackResponse.ts
 src/models/OAuthTokenDetailResponse.ts
 src/models/OAuthTokenListResponse.ts
@@ -376,6 +392,8 @@ src/models/PartOneOf2.ts
 src/models/PartOneOf3.ts
 src/models/PartOneOf4.ts
 src/models/PartOneOf5.ts
+src/models/PolicyActionPatternRequest.ts
+src/models/PolicyActionRequest.ts
 src/models/PolicyEvaluationOutcome.ts
 src/models/PolicyResponse.ts
 src/models/ProductListResponse.ts
@@ -391,7 +409,10 @@ src/models/QuoteListResponse.ts
 src/models/QuoteResponse.ts
 src/models/RecurringRevenueRequest.ts
 src/models/RecurringRevenueResponse.ts
+src/models/RegisterActionRequest.ts
+src/models/RegisterPolicyRequest.ts
 src/models/RegisterShippingDestinationRequest.ts
+src/models/RemovePolicyActionPatternRequest.ts
 src/models/ResponseFormat.ts
 src/models/Role.ts
 src/models/RotateSecretResponse.ts
@@ -423,6 +444,7 @@ src/models/ToolSchema.ts
 src/models/UpdateChatroomRequest.ts
 src/models/UpdateChatroomResponse.ts
 src/models/UpdateClientRequest.ts
+src/models/UpdatePolicyRequest.ts
 src/models/UpdateProductRequest.ts
 src/models/UpdateProductVariationRequest.ts
 src/models/UpdateQuoteRequest.ts

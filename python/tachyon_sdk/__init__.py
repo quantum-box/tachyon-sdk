@@ -163,6 +163,11 @@ __all__ = [
     "MessageContent",
     "ModelInfo",
     "ModelsResponse",
+    "OAuth2ClientListResponse",
+    "OAuth2ClientResponse",
+    "OAuth2CreateClientRequest",
+    "OAuth2CreateClientResponse",
+    "OAuth2UpdateClientRequest",
     "OAuthCallbackResponse",
     "OAuthTokenDetailResponse",
     "OAuthTokenListResponse",
@@ -180,6 +185,8 @@ __all__ = [
     "PartOneOf3",
     "PartOneOf4",
     "PartOneOf5",
+    "PolicyActionPatternRequest",
+    "PolicyActionRequest",
     "PolicyEvaluationOutcome",
     "PolicyResponse",
     "ProductListResponse",
@@ -195,7 +202,10 @@ __all__ = [
     "QuoteResponse",
     "RecurringRevenueRequest",
     "RecurringRevenueResponse",
+    "RegisterActionRequest",
+    "RegisterPolicyRequest",
     "RegisterShippingDestinationRequest",
+    "RemovePolicyActionPatternRequest",
     "ResponseFormat",
     "Role",
     "RotateSecretResponse",
@@ -227,6 +237,7 @@ __all__ = [
     "UpdateChatroomRequest",
     "UpdateChatroomResponse",
     "UpdateClientRequest",
+    "UpdatePolicyRequest",
     "UpdateProductRequest",
     "UpdateProductVariationRequest",
     "UpdateQuoteRequest",
@@ -398,6 +409,11 @@ from tachyon_sdk.models.message import Message as Message
 from tachyon_sdk.models.message_content import MessageContent as MessageContent
 from tachyon_sdk.models.model_info import ModelInfo as ModelInfo
 from tachyon_sdk.models.models_response import ModelsResponse as ModelsResponse
+from tachyon_sdk.models.o_auth2_client_list_response import OAuth2ClientListResponse as OAuth2ClientListResponse
+from tachyon_sdk.models.o_auth2_client_response import OAuth2ClientResponse as OAuth2ClientResponse
+from tachyon_sdk.models.o_auth2_create_client_request import OAuth2CreateClientRequest as OAuth2CreateClientRequest
+from tachyon_sdk.models.o_auth2_create_client_response import OAuth2CreateClientResponse as OAuth2CreateClientResponse
+from tachyon_sdk.models.o_auth2_update_client_request import OAuth2UpdateClientRequest as OAuth2UpdateClientRequest
 from tachyon_sdk.models.o_auth_callback_response import OAuthCallbackResponse as OAuthCallbackResponse
 from tachyon_sdk.models.o_auth_token_detail_response import OAuthTokenDetailResponse as OAuthTokenDetailResponse
 from tachyon_sdk.models.o_auth_token_list_response import OAuthTokenListResponse as OAuthTokenListResponse
@@ -415,6 +431,8 @@ from tachyon_sdk.models.part_one_of2 import PartOneOf2 as PartOneOf2
 from tachyon_sdk.models.part_one_of3 import PartOneOf3 as PartOneOf3
 from tachyon_sdk.models.part_one_of4 import PartOneOf4 as PartOneOf4
 from tachyon_sdk.models.part_one_of5 import PartOneOf5 as PartOneOf5
+from tachyon_sdk.models.policy_action_pattern_request import PolicyActionPatternRequest as PolicyActionPatternRequest
+from tachyon_sdk.models.policy_action_request import PolicyActionRequest as PolicyActionRequest
 from tachyon_sdk.models.policy_evaluation_outcome import PolicyEvaluationOutcome as PolicyEvaluationOutcome
 from tachyon_sdk.models.policy_response import PolicyResponse as PolicyResponse
 from tachyon_sdk.models.product_list_response import ProductListResponse as ProductListResponse
@@ -430,7 +448,10 @@ from tachyon_sdk.models.quote_list_response import QuoteListResponse as QuoteLis
 from tachyon_sdk.models.quote_response import QuoteResponse as QuoteResponse
 from tachyon_sdk.models.recurring_revenue_request import RecurringRevenueRequest as RecurringRevenueRequest
 from tachyon_sdk.models.recurring_revenue_response import RecurringRevenueResponse as RecurringRevenueResponse
+from tachyon_sdk.models.register_action_request import RegisterActionRequest as RegisterActionRequest
+from tachyon_sdk.models.register_policy_request import RegisterPolicyRequest as RegisterPolicyRequest
 from tachyon_sdk.models.register_shipping_destination_request import RegisterShippingDestinationRequest as RegisterShippingDestinationRequest
+from tachyon_sdk.models.remove_policy_action_pattern_request import RemovePolicyActionPatternRequest as RemovePolicyActionPatternRequest
 from tachyon_sdk.models.response_format import ResponseFormat as ResponseFormat
 from tachyon_sdk.models.role import Role as Role
 from tachyon_sdk.models.rotate_secret_response import RotateSecretResponse as RotateSecretResponse
@@ -462,6 +483,7 @@ from tachyon_sdk.models.tool_schema import ToolSchema as ToolSchema
 from tachyon_sdk.models.update_chatroom_request import UpdateChatroomRequest as UpdateChatroomRequest
 from tachyon_sdk.models.update_chatroom_response import UpdateChatroomResponse as UpdateChatroomResponse
 from tachyon_sdk.models.update_client_request import UpdateClientRequest as UpdateClientRequest
+from tachyon_sdk.models.update_policy_request import UpdatePolicyRequest as UpdatePolicyRequest
 from tachyon_sdk.models.update_product_request import UpdateProductRequest as UpdateProductRequest
 from tachyon_sdk.models.update_product_variation_request import UpdateProductVariationRequest as UpdateProductVariationRequest
 from tachyon_sdk.models.update_quote_request import UpdateQuoteRequest as UpdateQuoteRequest

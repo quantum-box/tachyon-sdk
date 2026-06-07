@@ -8,6 +8,9 @@ Method | HTTP request | Description
 [**evaluate_policies_batch**](AuthPoliciesApi.md#evaluate_policies_batch) | **POST** /v1/auth/policies/check | Evaluate multiple policy actions in batch
 [**get_policy**](AuthPoliciesApi.md#get_policy) | **GET** /v1/auth/policies/{id} | Get a policy by ID
 [**list_actions**](AuthPoliciesApi.md#list_actions) | **GET** /v1/auth/actions | List all registered actions
+[**register_action**](AuthPoliciesApi.md#register_action) | **POST** /v1/auth/actions | Register a custom action
+[**register_policy**](AuthPoliciesApi.md#register_policy) | **POST** /v1/auth/policies | Register a custom policy
+[**update_policy**](AuthPoliciesApi.md#update_policy) | **PATCH** /v1/auth/policies/{id} | Update a custom policy
 
 
 
@@ -118,6 +121,91 @@ No authorization required
 ### HTTP request headers
 
 - **Content-Type**: Not defined
+- **Accept**: application/json
+
+[[Back to top]](#) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to Model list]](../README.md#documentation-for-models) [[Back to README]](../README.md)
+
+
+## register_action
+
+> models::ActionResponse register_action(register_action_request)
+Register a custom action
+
+### Parameters
+
+
+Name | Type | Description  | Required | Notes
+------------- | ------------- | ------------- | ------------- | -------------
+**register_action_request** | [**RegisterActionRequest**](RegisterActionRequest.md) |  | [required] |
+
+### Return type
+
+[**models::ActionResponse**](ActionResponse.md)
+
+### Authorization
+
+No authorization required
+
+### HTTP request headers
+
+- **Content-Type**: application/json
+- **Accept**: application/json
+
+[[Back to top]](#) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to Model list]](../README.md#documentation-for-models) [[Back to README]](../README.md)
+
+
+## register_policy
+
+> models::PolicyResponse register_policy(register_policy_request)
+Register a custom policy
+
+### Parameters
+
+
+Name | Type | Description  | Required | Notes
+------------- | ------------- | ------------- | ------------- | -------------
+**register_policy_request** | [**RegisterPolicyRequest**](RegisterPolicyRequest.md) |  | [required] |
+
+### Return type
+
+[**models::PolicyResponse**](PolicyResponse.md)
+
+### Authorization
+
+No authorization required
+
+### HTTP request headers
+
+- **Content-Type**: application/json
+- **Accept**: application/json
+
+[[Back to top]](#) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to Model list]](../README.md#documentation-for-models) [[Back to README]](../README.md)
+
+
+## update_policy
+
+> models::PolicyResponse update_policy(id, update_policy_request)
+Update a custom policy
+
+### Parameters
+
+
+Name | Type | Description  | Required | Notes
+------------- | ------------- | ------------- | ------------- | -------------
+**id** | **String** | Policy ID | [required] |
+**update_policy_request** | [**UpdatePolicyRequest**](UpdatePolicyRequest.md) |  | [required] |
+
+### Return type
+
+[**models::PolicyResponse**](PolicyResponse.md)
+
+### Authorization
+
+No authorization required
+
+### HTTP request headers
+
+- **Content-Type**: application/json
 - **Accept**: application/json
 
 [[Back to top]](#) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to Model list]](../README.md#documentation-for-models) [[Back to README]](../README.md)

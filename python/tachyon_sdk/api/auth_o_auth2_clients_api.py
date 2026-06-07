@@ -17,12 +17,12 @@ from typing_extensions import Annotated
 
 from pydantic import Field, StrictStr
 from typing_extensions import Annotated
-from tachyon_sdk.models.client_list_response import ClientListResponse
-from tachyon_sdk.models.client_response import ClientResponse
-from tachyon_sdk.models.create_client_request import CreateClientRequest
-from tachyon_sdk.models.create_client_response import CreateClientResponse
+from tachyon_sdk.models.o_auth2_client_list_response import OAuth2ClientListResponse
+from tachyon_sdk.models.o_auth2_client_response import OAuth2ClientResponse
+from tachyon_sdk.models.o_auth2_create_client_request import OAuth2CreateClientRequest
+from tachyon_sdk.models.o_auth2_create_client_response import OAuth2CreateClientResponse
+from tachyon_sdk.models.o_auth2_update_client_request import OAuth2UpdateClientRequest
 from tachyon_sdk.models.rotate_secret_response import RotateSecretResponse
-from tachyon_sdk.models.update_client_request import UpdateClientRequest
 
 from tachyon_sdk.api_client import ApiClient, RequestSerialized
 from tachyon_sdk.api_response import ApiResponse
@@ -43,9 +43,9 @@ class AuthOAuth2ClientsApi:
 
 
     @validate_call
-    def create_client(
+    def create_oauth2_client(
         self,
-        create_client_request: CreateClientRequest,
+        o_auth2_create_client_request: OAuth2CreateClientRequest,
         _request_timeout: Union[
             None,
             Annotated[StrictFloat, Field(gt=0)],
@@ -58,12 +58,12 @@ class AuthOAuth2ClientsApi:
         _content_type: Optional[StrictStr] = None,
         _headers: Optional[Dict[StrictStr, Any]] = None,
         _host_index: Annotated[StrictInt, Field(ge=0, le=0)] = 0,
-    ) -> CreateClientResponse:
+    ) -> OAuth2CreateClientResponse:
         """Create a new OAuth2 client
 
 
-        :param create_client_request: (required)
-        :type create_client_request: CreateClientRequest
+        :param o_auth2_create_client_request: (required)
+        :type o_auth2_create_client_request: OAuth2CreateClientRequest
         :param _request_timeout: timeout setting for this request. If one
                                  number provided, it will be total request
                                  timeout. It can also be a pair (tuple) of
@@ -86,8 +86,8 @@ class AuthOAuth2ClientsApi:
         :return: Returns the result object.
         """ # noqa: E501
 
-        _param = self._create_client_serialize(
-            create_client_request=create_client_request,
+        _param = self._create_oauth2_client_serialize(
+            o_auth2_create_client_request=o_auth2_create_client_request,
             _request_auth=_request_auth,
             _content_type=_content_type,
             _headers=_headers,
@@ -95,7 +95,7 @@ class AuthOAuth2ClientsApi:
         )
 
         _response_types_map: Dict[str, Optional[str]] = {
-            '201': "CreateClientResponse",
+            '201': "OAuth2CreateClientResponse",
             '400': None,
             '403': None,
         }
@@ -111,9 +111,9 @@ class AuthOAuth2ClientsApi:
 
 
     @validate_call
-    def create_client_with_http_info(
+    def create_oauth2_client_with_http_info(
         self,
-        create_client_request: CreateClientRequest,
+        o_auth2_create_client_request: OAuth2CreateClientRequest,
         _request_timeout: Union[
             None,
             Annotated[StrictFloat, Field(gt=0)],
@@ -126,12 +126,12 @@ class AuthOAuth2ClientsApi:
         _content_type: Optional[StrictStr] = None,
         _headers: Optional[Dict[StrictStr, Any]] = None,
         _host_index: Annotated[StrictInt, Field(ge=0, le=0)] = 0,
-    ) -> ApiResponse[CreateClientResponse]:
+    ) -> ApiResponse[OAuth2CreateClientResponse]:
         """Create a new OAuth2 client
 
 
-        :param create_client_request: (required)
-        :type create_client_request: CreateClientRequest
+        :param o_auth2_create_client_request: (required)
+        :type o_auth2_create_client_request: OAuth2CreateClientRequest
         :param _request_timeout: timeout setting for this request. If one
                                  number provided, it will be total request
                                  timeout. It can also be a pair (tuple) of
@@ -154,8 +154,8 @@ class AuthOAuth2ClientsApi:
         :return: Returns the result object.
         """ # noqa: E501
 
-        _param = self._create_client_serialize(
-            create_client_request=create_client_request,
+        _param = self._create_oauth2_client_serialize(
+            o_auth2_create_client_request=o_auth2_create_client_request,
             _request_auth=_request_auth,
             _content_type=_content_type,
             _headers=_headers,
@@ -163,7 +163,7 @@ class AuthOAuth2ClientsApi:
         )
 
         _response_types_map: Dict[str, Optional[str]] = {
-            '201': "CreateClientResponse",
+            '201': "OAuth2CreateClientResponse",
             '400': None,
             '403': None,
         }
@@ -179,9 +179,9 @@ class AuthOAuth2ClientsApi:
 
 
     @validate_call
-    def create_client_without_preload_content(
+    def create_oauth2_client_without_preload_content(
         self,
-        create_client_request: CreateClientRequest,
+        o_auth2_create_client_request: OAuth2CreateClientRequest,
         _request_timeout: Union[
             None,
             Annotated[StrictFloat, Field(gt=0)],
@@ -198,8 +198,8 @@ class AuthOAuth2ClientsApi:
         """Create a new OAuth2 client
 
 
-        :param create_client_request: (required)
-        :type create_client_request: CreateClientRequest
+        :param o_auth2_create_client_request: (required)
+        :type o_auth2_create_client_request: OAuth2CreateClientRequest
         :param _request_timeout: timeout setting for this request. If one
                                  number provided, it will be total request
                                  timeout. It can also be a pair (tuple) of
@@ -222,8 +222,8 @@ class AuthOAuth2ClientsApi:
         :return: Returns the result object.
         """ # noqa: E501
 
-        _param = self._create_client_serialize(
-            create_client_request=create_client_request,
+        _param = self._create_oauth2_client_serialize(
+            o_auth2_create_client_request=o_auth2_create_client_request,
             _request_auth=_request_auth,
             _content_type=_content_type,
             _headers=_headers,
@@ -231,7 +231,7 @@ class AuthOAuth2ClientsApi:
         )
 
         _response_types_map: Dict[str, Optional[str]] = {
-            '201': "CreateClientResponse",
+            '201': "OAuth2CreateClientResponse",
             '400': None,
             '403': None,
         }
@@ -242,9 +242,9 @@ class AuthOAuth2ClientsApi:
         return response_data.response
 
 
-    def _create_client_serialize(
+    def _create_oauth2_client_serialize(
         self,
-        create_client_request,
+        o_auth2_create_client_request,
         _request_auth,
         _content_type,
         _headers,
@@ -270,8 +270,8 @@ class AuthOAuth2ClientsApi:
         # process the header parameters
         # process the form parameters
         # process the body parameter
-        if create_client_request is not None:
-            _body_params = create_client_request
+        if o_auth2_create_client_request is not None:
+            _body_params = o_auth2_create_client_request
 
 
         # set the HTTP header `Accept`
@@ -319,7 +319,7 @@ class AuthOAuth2ClientsApi:
 
 
     @validate_call
-    def get_client(
+    def get_oauth2_client(
         self,
         id: Annotated[StrictStr, Field(description="OAuth2 client ID")],
         _request_timeout: Union[
@@ -334,7 +334,7 @@ class AuthOAuth2ClientsApi:
         _content_type: Optional[StrictStr] = None,
         _headers: Optional[Dict[StrictStr, Any]] = None,
         _host_index: Annotated[StrictInt, Field(ge=0, le=0)] = 0,
-    ) -> ClientResponse:
+    ) -> OAuth2ClientResponse:
         """Get an OAuth2 client by ID
 
 
@@ -362,7 +362,7 @@ class AuthOAuth2ClientsApi:
         :return: Returns the result object.
         """ # noqa: E501
 
-        _param = self._get_client_serialize(
+        _param = self._get_oauth2_client_serialize(
             id=id,
             _request_auth=_request_auth,
             _content_type=_content_type,
@@ -371,7 +371,7 @@ class AuthOAuth2ClientsApi:
         )
 
         _response_types_map: Dict[str, Optional[str]] = {
-            '200': "ClientResponse",
+            '200': "OAuth2ClientResponse",
             '404': None,
         }
         response_data = self.api_client.call_api(
@@ -386,7 +386,7 @@ class AuthOAuth2ClientsApi:
 
 
     @validate_call
-    def get_client_with_http_info(
+    def get_oauth2_client_with_http_info(
         self,
         id: Annotated[StrictStr, Field(description="OAuth2 client ID")],
         _request_timeout: Union[
@@ -401,7 +401,7 @@ class AuthOAuth2ClientsApi:
         _content_type: Optional[StrictStr] = None,
         _headers: Optional[Dict[StrictStr, Any]] = None,
         _host_index: Annotated[StrictInt, Field(ge=0, le=0)] = 0,
-    ) -> ApiResponse[ClientResponse]:
+    ) -> ApiResponse[OAuth2ClientResponse]:
         """Get an OAuth2 client by ID
 
 
@@ -429,7 +429,7 @@ class AuthOAuth2ClientsApi:
         :return: Returns the result object.
         """ # noqa: E501
 
-        _param = self._get_client_serialize(
+        _param = self._get_oauth2_client_serialize(
             id=id,
             _request_auth=_request_auth,
             _content_type=_content_type,
@@ -438,7 +438,7 @@ class AuthOAuth2ClientsApi:
         )
 
         _response_types_map: Dict[str, Optional[str]] = {
-            '200': "ClientResponse",
+            '200': "OAuth2ClientResponse",
             '404': None,
         }
         response_data = self.api_client.call_api(
@@ -453,7 +453,7 @@ class AuthOAuth2ClientsApi:
 
 
     @validate_call
-    def get_client_without_preload_content(
+    def get_oauth2_client_without_preload_content(
         self,
         id: Annotated[StrictStr, Field(description="OAuth2 client ID")],
         _request_timeout: Union[
@@ -496,7 +496,7 @@ class AuthOAuth2ClientsApi:
         :return: Returns the result object.
         """ # noqa: E501
 
-        _param = self._get_client_serialize(
+        _param = self._get_oauth2_client_serialize(
             id=id,
             _request_auth=_request_auth,
             _content_type=_content_type,
@@ -505,7 +505,7 @@ class AuthOAuth2ClientsApi:
         )
 
         _response_types_map: Dict[str, Optional[str]] = {
-            '200': "ClientResponse",
+            '200': "OAuth2ClientResponse",
             '404': None,
         }
         response_data = self.api_client.call_api(
@@ -515,7 +515,7 @@ class AuthOAuth2ClientsApi:
         return response_data.response
 
 
-    def _get_client_serialize(
+    def _get_oauth2_client_serialize(
         self,
         id,
         _request_auth,
@@ -579,7 +579,7 @@ class AuthOAuth2ClientsApi:
 
 
     @validate_call
-    def list_clients(
+    def list_oauth2_clients(
         self,
         _request_timeout: Union[
             None,
@@ -593,7 +593,7 @@ class AuthOAuth2ClientsApi:
         _content_type: Optional[StrictStr] = None,
         _headers: Optional[Dict[StrictStr, Any]] = None,
         _host_index: Annotated[StrictInt, Field(ge=0, le=0)] = 0,
-    ) -> ClientListResponse:
+    ) -> OAuth2ClientListResponse:
         """List all OAuth2 clients for the current tenant
 
 
@@ -619,7 +619,7 @@ class AuthOAuth2ClientsApi:
         :return: Returns the result object.
         """ # noqa: E501
 
-        _param = self._list_clients_serialize(
+        _param = self._list_oauth2_clients_serialize(
             _request_auth=_request_auth,
             _content_type=_content_type,
             _headers=_headers,
@@ -627,7 +627,7 @@ class AuthOAuth2ClientsApi:
         )
 
         _response_types_map: Dict[str, Optional[str]] = {
-            '200': "ClientListResponse",
+            '200': "OAuth2ClientListResponse",
             '403': None,
         }
         response_data = self.api_client.call_api(
@@ -642,7 +642,7 @@ class AuthOAuth2ClientsApi:
 
 
     @validate_call
-    def list_clients_with_http_info(
+    def list_oauth2_clients_with_http_info(
         self,
         _request_timeout: Union[
             None,
@@ -656,7 +656,7 @@ class AuthOAuth2ClientsApi:
         _content_type: Optional[StrictStr] = None,
         _headers: Optional[Dict[StrictStr, Any]] = None,
         _host_index: Annotated[StrictInt, Field(ge=0, le=0)] = 0,
-    ) -> ApiResponse[ClientListResponse]:
+    ) -> ApiResponse[OAuth2ClientListResponse]:
         """List all OAuth2 clients for the current tenant
 
 
@@ -682,7 +682,7 @@ class AuthOAuth2ClientsApi:
         :return: Returns the result object.
         """ # noqa: E501
 
-        _param = self._list_clients_serialize(
+        _param = self._list_oauth2_clients_serialize(
             _request_auth=_request_auth,
             _content_type=_content_type,
             _headers=_headers,
@@ -690,7 +690,7 @@ class AuthOAuth2ClientsApi:
         )
 
         _response_types_map: Dict[str, Optional[str]] = {
-            '200': "ClientListResponse",
+            '200': "OAuth2ClientListResponse",
             '403': None,
         }
         response_data = self.api_client.call_api(
@@ -705,7 +705,7 @@ class AuthOAuth2ClientsApi:
 
 
     @validate_call
-    def list_clients_without_preload_content(
+    def list_oauth2_clients_without_preload_content(
         self,
         _request_timeout: Union[
             None,
@@ -745,7 +745,7 @@ class AuthOAuth2ClientsApi:
         :return: Returns the result object.
         """ # noqa: E501
 
-        _param = self._list_clients_serialize(
+        _param = self._list_oauth2_clients_serialize(
             _request_auth=_request_auth,
             _content_type=_content_type,
             _headers=_headers,
@@ -753,7 +753,7 @@ class AuthOAuth2ClientsApi:
         )
 
         _response_types_map: Dict[str, Optional[str]] = {
-            '200': "ClientListResponse",
+            '200': "OAuth2ClientListResponse",
             '403': None,
         }
         response_data = self.api_client.call_api(
@@ -763,7 +763,7 @@ class AuthOAuth2ClientsApi:
         return response_data.response
 
 
-    def _list_clients_serialize(
+    def _list_oauth2_clients_serialize(
         self,
         _request_auth,
         _content_type,
@@ -824,7 +824,7 @@ class AuthOAuth2ClientsApi:
 
 
     @validate_call
-    def revoke_client(
+    def revoke_oauth2_client(
         self,
         id: Annotated[StrictStr, Field(description="OAuth2 client ID")],
         _request_timeout: Union[
@@ -867,7 +867,7 @@ class AuthOAuth2ClientsApi:
         :return: Returns the result object.
         """ # noqa: E501
 
-        _param = self._revoke_client_serialize(
+        _param = self._revoke_oauth2_client_serialize(
             id=id,
             _request_auth=_request_auth,
             _content_type=_content_type,
@@ -891,7 +891,7 @@ class AuthOAuth2ClientsApi:
 
 
     @validate_call
-    def revoke_client_with_http_info(
+    def revoke_oauth2_client_with_http_info(
         self,
         id: Annotated[StrictStr, Field(description="OAuth2 client ID")],
         _request_timeout: Union[
@@ -934,7 +934,7 @@ class AuthOAuth2ClientsApi:
         :return: Returns the result object.
         """ # noqa: E501
 
-        _param = self._revoke_client_serialize(
+        _param = self._revoke_oauth2_client_serialize(
             id=id,
             _request_auth=_request_auth,
             _content_type=_content_type,
@@ -958,7 +958,7 @@ class AuthOAuth2ClientsApi:
 
 
     @validate_call
-    def revoke_client_without_preload_content(
+    def revoke_oauth2_client_without_preload_content(
         self,
         id: Annotated[StrictStr, Field(description="OAuth2 client ID")],
         _request_timeout: Union[
@@ -1001,7 +1001,7 @@ class AuthOAuth2ClientsApi:
         :return: Returns the result object.
         """ # noqa: E501
 
-        _param = self._revoke_client_serialize(
+        _param = self._revoke_oauth2_client_serialize(
             id=id,
             _request_auth=_request_auth,
             _content_type=_content_type,
@@ -1020,7 +1020,7 @@ class AuthOAuth2ClientsApi:
         return response_data.response
 
 
-    def _revoke_client_serialize(
+    def _revoke_oauth2_client_serialize(
         self,
         id,
         _request_auth,
@@ -1077,7 +1077,7 @@ class AuthOAuth2ClientsApi:
 
 
     @validate_call
-    def rotate_secret(
+    def rotate_oauth2_client_secret(
         self,
         id: Annotated[StrictStr, Field(description="OAuth2 client ID")],
         _request_timeout: Union[
@@ -1120,7 +1120,7 @@ class AuthOAuth2ClientsApi:
         :return: Returns the result object.
         """ # noqa: E501
 
-        _param = self._rotate_secret_serialize(
+        _param = self._rotate_oauth2_client_secret_serialize(
             id=id,
             _request_auth=_request_auth,
             _content_type=_content_type,
@@ -1144,7 +1144,7 @@ class AuthOAuth2ClientsApi:
 
 
     @validate_call
-    def rotate_secret_with_http_info(
+    def rotate_oauth2_client_secret_with_http_info(
         self,
         id: Annotated[StrictStr, Field(description="OAuth2 client ID")],
         _request_timeout: Union[
@@ -1187,7 +1187,7 @@ class AuthOAuth2ClientsApi:
         :return: Returns the result object.
         """ # noqa: E501
 
-        _param = self._rotate_secret_serialize(
+        _param = self._rotate_oauth2_client_secret_serialize(
             id=id,
             _request_auth=_request_auth,
             _content_type=_content_type,
@@ -1211,7 +1211,7 @@ class AuthOAuth2ClientsApi:
 
 
     @validate_call
-    def rotate_secret_without_preload_content(
+    def rotate_oauth2_client_secret_without_preload_content(
         self,
         id: Annotated[StrictStr, Field(description="OAuth2 client ID")],
         _request_timeout: Union[
@@ -1254,7 +1254,7 @@ class AuthOAuth2ClientsApi:
         :return: Returns the result object.
         """ # noqa: E501
 
-        _param = self._rotate_secret_serialize(
+        _param = self._rotate_oauth2_client_secret_serialize(
             id=id,
             _request_auth=_request_auth,
             _content_type=_content_type,
@@ -1273,7 +1273,7 @@ class AuthOAuth2ClientsApi:
         return response_data.response
 
 
-    def _rotate_secret_serialize(
+    def _rotate_oauth2_client_secret_serialize(
         self,
         id,
         _request_auth,
@@ -1337,10 +1337,10 @@ class AuthOAuth2ClientsApi:
 
 
     @validate_call
-    def update_client(
+    def update_oauth2_client(
         self,
         id: Annotated[StrictStr, Field(description="OAuth2 client ID")],
-        update_client_request: UpdateClientRequest,
+        o_auth2_update_client_request: OAuth2UpdateClientRequest,
         _request_timeout: Union[
             None,
             Annotated[StrictFloat, Field(gt=0)],
@@ -1353,14 +1353,14 @@ class AuthOAuth2ClientsApi:
         _content_type: Optional[StrictStr] = None,
         _headers: Optional[Dict[StrictStr, Any]] = None,
         _host_index: Annotated[StrictInt, Field(ge=0, le=0)] = 0,
-    ) -> ClientResponse:
+    ) -> OAuth2ClientResponse:
         """Update an OAuth2 client
 
 
         :param id: OAuth2 client ID (required)
         :type id: str
-        :param update_client_request: (required)
-        :type update_client_request: UpdateClientRequest
+        :param o_auth2_update_client_request: (required)
+        :type o_auth2_update_client_request: OAuth2UpdateClientRequest
         :param _request_timeout: timeout setting for this request. If one
                                  number provided, it will be total request
                                  timeout. It can also be a pair (tuple) of
@@ -1383,9 +1383,9 @@ class AuthOAuth2ClientsApi:
         :return: Returns the result object.
         """ # noqa: E501
 
-        _param = self._update_client_serialize(
+        _param = self._update_oauth2_client_serialize(
             id=id,
-            update_client_request=update_client_request,
+            o_auth2_update_client_request=o_auth2_update_client_request,
             _request_auth=_request_auth,
             _content_type=_content_type,
             _headers=_headers,
@@ -1393,7 +1393,7 @@ class AuthOAuth2ClientsApi:
         )
 
         _response_types_map: Dict[str, Optional[str]] = {
-            '200': "ClientResponse",
+            '200': "OAuth2ClientResponse",
             '404': None,
         }
         response_data = self.api_client.call_api(
@@ -1408,10 +1408,10 @@ class AuthOAuth2ClientsApi:
 
 
     @validate_call
-    def update_client_with_http_info(
+    def update_oauth2_client_with_http_info(
         self,
         id: Annotated[StrictStr, Field(description="OAuth2 client ID")],
-        update_client_request: UpdateClientRequest,
+        o_auth2_update_client_request: OAuth2UpdateClientRequest,
         _request_timeout: Union[
             None,
             Annotated[StrictFloat, Field(gt=0)],
@@ -1424,14 +1424,14 @@ class AuthOAuth2ClientsApi:
         _content_type: Optional[StrictStr] = None,
         _headers: Optional[Dict[StrictStr, Any]] = None,
         _host_index: Annotated[StrictInt, Field(ge=0, le=0)] = 0,
-    ) -> ApiResponse[ClientResponse]:
+    ) -> ApiResponse[OAuth2ClientResponse]:
         """Update an OAuth2 client
 
 
         :param id: OAuth2 client ID (required)
         :type id: str
-        :param update_client_request: (required)
-        :type update_client_request: UpdateClientRequest
+        :param o_auth2_update_client_request: (required)
+        :type o_auth2_update_client_request: OAuth2UpdateClientRequest
         :param _request_timeout: timeout setting for this request. If one
                                  number provided, it will be total request
                                  timeout. It can also be a pair (tuple) of
@@ -1454,9 +1454,9 @@ class AuthOAuth2ClientsApi:
         :return: Returns the result object.
         """ # noqa: E501
 
-        _param = self._update_client_serialize(
+        _param = self._update_oauth2_client_serialize(
             id=id,
-            update_client_request=update_client_request,
+            o_auth2_update_client_request=o_auth2_update_client_request,
             _request_auth=_request_auth,
             _content_type=_content_type,
             _headers=_headers,
@@ -1464,7 +1464,7 @@ class AuthOAuth2ClientsApi:
         )
 
         _response_types_map: Dict[str, Optional[str]] = {
-            '200': "ClientResponse",
+            '200': "OAuth2ClientResponse",
             '404': None,
         }
         response_data = self.api_client.call_api(
@@ -1479,10 +1479,10 @@ class AuthOAuth2ClientsApi:
 
 
     @validate_call
-    def update_client_without_preload_content(
+    def update_oauth2_client_without_preload_content(
         self,
         id: Annotated[StrictStr, Field(description="OAuth2 client ID")],
-        update_client_request: UpdateClientRequest,
+        o_auth2_update_client_request: OAuth2UpdateClientRequest,
         _request_timeout: Union[
             None,
             Annotated[StrictFloat, Field(gt=0)],
@@ -1501,8 +1501,8 @@ class AuthOAuth2ClientsApi:
 
         :param id: OAuth2 client ID (required)
         :type id: str
-        :param update_client_request: (required)
-        :type update_client_request: UpdateClientRequest
+        :param o_auth2_update_client_request: (required)
+        :type o_auth2_update_client_request: OAuth2UpdateClientRequest
         :param _request_timeout: timeout setting for this request. If one
                                  number provided, it will be total request
                                  timeout. It can also be a pair (tuple) of
@@ -1525,9 +1525,9 @@ class AuthOAuth2ClientsApi:
         :return: Returns the result object.
         """ # noqa: E501
 
-        _param = self._update_client_serialize(
+        _param = self._update_oauth2_client_serialize(
             id=id,
-            update_client_request=update_client_request,
+            o_auth2_update_client_request=o_auth2_update_client_request,
             _request_auth=_request_auth,
             _content_type=_content_type,
             _headers=_headers,
@@ -1535,7 +1535,7 @@ class AuthOAuth2ClientsApi:
         )
 
         _response_types_map: Dict[str, Optional[str]] = {
-            '200': "ClientResponse",
+            '200': "OAuth2ClientResponse",
             '404': None,
         }
         response_data = self.api_client.call_api(
@@ -1545,10 +1545,10 @@ class AuthOAuth2ClientsApi:
         return response_data.response
 
 
-    def _update_client_serialize(
+    def _update_oauth2_client_serialize(
         self,
         id,
-        update_client_request,
+        o_auth2_update_client_request,
         _request_auth,
         _content_type,
         _headers,
@@ -1576,8 +1576,8 @@ class AuthOAuth2ClientsApi:
         # process the header parameters
         # process the form parameters
         # process the body parameter
-        if update_client_request is not None:
-            _body_params = update_client_request
+        if o_auth2_update_client_request is not None:
+            _body_params = o_auth2_update_client_request
 
 
         # set the HTTP header `Accept`
