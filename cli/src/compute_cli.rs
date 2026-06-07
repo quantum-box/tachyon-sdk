@@ -1080,7 +1080,7 @@ enum ApplyAction {
 }
 
 #[derive(Debug, Default)]
-struct EnvPlan {
+pub(crate) struct EnvPlan {
     plain: Vec<SetEnvVarEntry>,
     secret_refs: Vec<SecretEnvRef>,
 }
@@ -1091,7 +1091,7 @@ struct SecretEnvRef {
     target: String,
 }
 
-async fn run_apps_apply(
+pub(crate) async fn run_apps_apply(
     api: &ApiClient,
     file: &Path,
     selected_app: Option<&str>,
@@ -1169,7 +1169,7 @@ async fn run_apps_apply(
     Ok(())
 }
 
-fn load_cloud_apps_manifest(path: &Path) -> Result<Value> {
+pub(crate) fn load_cloud_apps_manifest(path: &Path) -> Result<Value> {
     let content = std::fs::read_to_string(path)?;
     let value: Value = serde_yaml::from_str(&content)?;
     match value.get("kind").and_then(Value::as_str) {
@@ -1197,7 +1197,7 @@ fn load_cloud_apps_manifest(path: &Path) -> Result<Value> {
     }
 }
 
-fn select_app_entries(manifest: &Value, app: Option<&str>) -> Result<Vec<Value>> {
+pub(crate) fn select_app_entries(manifest: &Value, app: Option<&str>) -> Result<Vec<Value>> {
     let apps = manifest
         .get("spec")
         .and_then(|s| s.get("apps"))
@@ -1219,7 +1219,7 @@ fn select_app_entries(manifest: &Value, app: Option<&str>) -> Result<Vec<Value>>
     Ok(entries)
 }
 
-fn app_entry_to_api_body(entry: &Value) -> Result<Value> {
+pub(crate) fn app_entry_to_api_body(entry: &Value) -> Result<Value> {
     let name = entry
         .get("name")
         .and_then(Value::as_str)
@@ -1402,7 +1402,7 @@ fn opt_string_value(value: Option<&str>) -> Value {
     }
 }
 
-fn plan_env_vars(entry: &Value, environment: &str) -> Result<EnvPlan> {
+pub(crate) fn plan_env_vars(entry: &Value, environment: &str) -> Result<EnvPlan> {
     let Some(env_vars) = entry.get("envVars") else {
         return Ok(EnvPlan::default());
     };
