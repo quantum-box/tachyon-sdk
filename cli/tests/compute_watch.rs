@@ -25,18 +25,29 @@ fn isolated_command(home: &Path) -> Command {
 fn start_server(
     responses: Vec<&'static str>,
 ) -> (String, mpsc::Receiver<String>, thread::JoinHandle<()>) {
+    start_server_with_responses(responses.into_iter().map(|body| (200, body)).collect())
+}
+
+fn start_server_with_responses(
+    responses: Vec<(u16, &'static str)>,
+) -> (String, mpsc::Receiver<String>, thread::JoinHandle<()>) {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let url = format!("http://{}", listener.local_addr().unwrap());
     let (tx, rx) = mpsc::channel();
     let handle = thread::spawn(move || {
-        for body in responses {
+        for (status, body) in responses {
             let (mut stream, _) = listener.accept().unwrap();
             let mut buf = [0_u8; 8192];
             let n = stream.read(&mut buf).unwrap();
             tx.send(String::from_utf8_lossy(&buf[..n]).to_string())
                 .unwrap();
+            let reason = match status {
+                200 => "OK",
+                404 => "Not Found",
+                _ => "Unknown",
+            };
             let response = format!(
-                "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+                "HTTP/1.1 {status} {reason}\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
                 body.len(),
                 body
             );
@@ -44,6 +55,116 @@ fn start_server(
         }
     });
     (url, rx, handle)
+}
+
+#[test]
+fn compute_builds_watch_retries_log_404_while_build_is_running() {
+    let tmp = TempDir::new().unwrap();
+    let (api_url, rx, handle) = start_server_with_responses(vec![
+        (
+            200,
+            r#"{"id":"bld_test1234567890","app_id":"app_test1234567890","status":"running","error_message":null}"#,
+        ),
+        (404, r#"{"message":"log group not found"}"#),
+        (
+            200,
+            r#"{"id":"bld_test1234567890","app_id":"app_test1234567890","status":"succeeded","error_message":null}"#,
+        ),
+        (
+            200,
+            r#"{"lines":[{"timestamp":1767225600000,"message":"build finished"}],"next_token":null,"is_complete":true}"#,
+        ),
+    ]);
+
+    let output = isolated_command(tmp.path())
+        .env("TACHYON_API_URL", api_url)
+        .args([
+            "compute",
+            "builds",
+            "watch",
+            "--build-id",
+            "bld_test1234567890",
+            "--interval-secs",
+            "1",
+            "--timeout-secs",
+            "5",
+            "--agent",
+        ])
+        .output()
+        .expect("run tachyon compute builds watch");
+
+    assert!(
+        output.status.success(),
+        "watch failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+
+    let first_req = rx.recv().unwrap();
+    let second_req = rx.recv().unwrap();
+    let third_req = rx.recv().unwrap();
+    let fourth_req = rx.recv().unwrap();
+    handle.join().unwrap();
+    assert!(first_req.starts_with("GET /v1/compute/builds/bld_test1234567890 "));
+    assert!(second_req.starts_with("GET /v1/compute/builds/bld_test1234567890/logs "));
+    assert!(third_req.starts_with("GET /v1/compute/builds/bld_test1234567890 "));
+    assert!(fourth_req.starts_with("GET /v1/compute/builds/bld_test1234567890/logs "));
+
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let lines: Vec<serde_json::Value> = stdout
+        .lines()
+        .map(|line| serde_json::from_str(line).expect("json line"))
+        .collect();
+    assert_eq!(lines.len(), 4, "stdout:\n{stdout}");
+    assert_eq!(lines[0]["type"], "build");
+    assert_eq!(lines[0]["status"], "running");
+    assert_eq!(lines[1]["type"], "build");
+    assert_eq!(lines[1]["status"], "succeeded");
+    assert_eq!(lines[2]["type"], "log");
+    assert_eq!(lines[2]["message"], "build finished");
+    assert_eq!(lines[3]["type"], "result");
+    assert_eq!(lines[3]["exit_code"], 0);
+}
+
+#[test]
+fn compute_builds_watch_keeps_terminal_log_404_as_error() {
+    let tmp = TempDir::new().unwrap();
+    let (api_url, rx, handle) = start_server_with_responses(vec![
+        (
+            200,
+            r#"{"id":"bld_test1234567890","app_id":"app_test1234567890","status":"succeeded","error_message":null}"#,
+        ),
+        (404, r#"{"message":"log group not found"}"#),
+    ]);
+
+    let output = isolated_command(tmp.path())
+        .env("TACHYON_API_URL", api_url)
+        .args([
+            "compute",
+            "builds",
+            "watch",
+            "--build-id",
+            "bld_test1234567890",
+            "--agent",
+        ])
+        .output()
+        .expect("run tachyon compute builds watch");
+
+    assert!(
+        !output.status.success(),
+        "watch unexpectedly succeeded\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+
+    let first_req = rx.recv().unwrap();
+    let second_req = rx.recv().unwrap();
+    handle.join().unwrap();
+    assert!(first_req.starts_with("GET /v1/compute/builds/bld_test1234567890 "));
+    assert!(second_req.starts_with("GET /v1/compute/builds/bld_test1234567890/logs "));
+
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(stderr.contains("status=404 Not Found"), "stderr:\n{stderr}");
 }
 
 #[test]

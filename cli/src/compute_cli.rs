@@ -978,6 +978,10 @@ fn is_success_build_status(status: &str) -> bool {
     matches!(status.to_ascii_lowercase().as_str(), "succeeded")
 }
 
+fn is_http_not_found_error(err: &anyhow::Error) -> bool {
+    err.to_string().contains("status=404 Not Found")
+}
+
 fn print_agent_event(event: &AgentBuildEvent<'_>) -> Result<()> {
     println!("{}", serde_json::to_string(event)?);
     Ok(())
@@ -1894,11 +1898,22 @@ async fn run_builds_watch(
 
         if !no_logs {
             let path = format!("/v1/compute/builds/{resolved_build_id}/logs");
-            let logs: BuildLogsResponse = if let Some(token) = &next_token {
+            let logs_result: Result<BuildLogsResponse> = if let Some(token) = &next_token {
                 api.get_query(&path, &[("next_token", token.as_str())])
-                    .await?
+                    .await
             } else {
-                api.get(&path).await?
+                api.get(&path).await
+            };
+            let logs = match logs_result {
+                Ok(logs) => logs,
+                Err(err)
+                    if !is_terminal_build_status(&build.status)
+                        && is_http_not_found_error(&err) =>
+                {
+                    sleep(interval).await;
+                    continue;
+                }
+                Err(err) => return Err(err),
             };
             for line in &logs.lines {
                 if agent {
