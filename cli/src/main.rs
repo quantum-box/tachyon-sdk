@@ -3,6 +3,7 @@ mod api_key_cli;
 mod auth;
 mod build_reproduce;
 mod client;
+mod cloud_app_build_job;
 mod commands;
 mod compute_cli;
 mod config;
