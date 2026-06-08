@@ -17,6 +17,8 @@ use std::{
 use tokio::process::Command;
 
 const OUTPUT_CAPTURE_LIMIT: usize = 128 * 1024;
+const DOCKER_CONFIG_ENV: &str = "TACHYON_DOCKER_CONFIG_JSON";
+const KANIKO_EXECUTOR: &str = "/kaniko/executor";
 
 #[derive(Debug, Deserialize)]
 pub struct BuildWorkloadSpec {
@@ -183,6 +185,14 @@ async fn run_build(workload: &BuildWorkloadSpec) -> Result<CommandResult> {
         run_shell("build", &build_command, &app_dir, &env).await?,
     );
 
+    if is_cloud_run(workload) {
+        prepare_docker_config(&env).await?;
+        append_result(
+            &mut combined,
+            run_kaniko(workload, &checkout_dir, &app_dir, &env).await?,
+        );
+    }
+
     Ok(combined)
 }
 
@@ -261,7 +271,138 @@ fn workload_env(workload: &BuildWorkloadSpec) -> BTreeMap<String, String> {
         "TACHYON_BUILD_IMAGE_TAG".to_string(),
         workload.artifact.image_tag.clone(),
     );
+    if let Some(registry) = workload
+        .artifact
+        .container_registry
+        .as_ref()
+        .filter(|value| !value.trim().is_empty())
+    {
+        env.insert(
+            "TACHYON_BUILD_CONTAINER_REGISTRY".to_string(),
+            registry.clone(),
+        );
+    }
     env
+}
+
+fn is_cloud_run(workload: &BuildWorkloadSpec) -> bool {
+    workload
+        .deployment_target
+        .as_deref()
+        .is_some_and(|target| target == "cloud_run")
+}
+
+fn image_uri(workload: &BuildWorkloadSpec) -> String {
+    match workload
+        .artifact
+        .container_registry
+        .as_ref()
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty())
+    {
+        Some(registry) => format!(
+            "{}/{}:{}",
+            registry.trim_end_matches('/'),
+            workload.artifact.image_name,
+            workload.artifact.image_tag
+        ),
+        None => format!(
+            "{}:{}",
+            workload.artifact.image_name, workload.artifact.image_tag
+        ),
+    }
+}
+
+async fn prepare_docker_config(env: &BTreeMap<String, String>) -> Result<()> {
+    let Some(config_json) = env.get(DOCKER_CONFIG_ENV) else {
+        return Ok(());
+    };
+    let docker_dir = Path::new("/workspace/.docker");
+    tokio::fs::create_dir_all(docker_dir)
+        .await
+        .context("failed to create Docker config directory")?;
+    tokio::fs::write(docker_dir.join("config.json"), config_json)
+        .await
+        .context("failed to write Docker registry config")?;
+    Ok(())
+}
+
+async fn run_kaniko(
+    workload: &BuildWorkloadSpec,
+    checkout_dir: &Path,
+    app_dir: &Path,
+    env: &BTreeMap<String, String>,
+) -> Result<CommandResult> {
+    let dockerfile = dockerfile_path(workload, app_dir);
+    if !dockerfile.exists() {
+        return Err(anyhow!(
+            "Dockerfile is required for Cloud Run JobRun builds: {}",
+            dockerfile.display()
+        ));
+    }
+
+    let context = docker_context_path(workload, checkout_dir, app_dir);
+    if !context.exists() {
+        return Err(anyhow!(
+            "Docker build context does not exist: {}",
+            context.display()
+        ));
+    }
+
+    let destination = image_uri(workload);
+    tracing::info!(
+        dockerfile = %dockerfile.display(),
+        context = %context.display(),
+        destination = %destination,
+        "building and pushing Cloud Run image with kaniko"
+    );
+
+    let mut command = Command::new(KANIKO_EXECUTOR);
+    command
+        .arg("--dockerfile")
+        .arg(&dockerfile)
+        .arg("--context")
+        .arg(format!("dir://{}", context.display()))
+        .arg("--destination")
+        .arg(&destination)
+        .arg("--cache=true")
+        .arg("--cache-copy-layers")
+        .arg("--single-snapshot")
+        .arg("--verbosity=info")
+        .current_dir(app_dir)
+        .envs(env)
+        .env("DOCKER_CONFIG", "/workspace/.docker");
+    run_command("kaniko", command).await
+}
+
+fn dockerfile_path(workload: &BuildWorkloadSpec, app_dir: &Path) -> PathBuf {
+    workload
+        .workspace
+        .root_directory
+        .as_ref()
+        .filter(|value| !value.trim().is_empty())
+        .map(|_| app_dir.join("Dockerfile"))
+        .unwrap_or_else(|| app_dir.join("Dockerfile"))
+}
+
+fn docker_context_path(
+    workload: &BuildWorkloadSpec,
+    checkout_dir: &Path,
+    app_dir: &Path,
+) -> PathBuf {
+    workload
+        .workspace
+        .docker_context
+        .as_ref()
+        .filter(|value| !value.trim().is_empty())
+        .map(|value| {
+            if value == "." {
+                checkout_dir.to_path_buf()
+            } else {
+                checkout_dir.join(value)
+            }
+        })
+        .unwrap_or_else(|| app_dir.to_path_buf())
 }
 
 fn install_command(workload: &BuildWorkloadSpec, app_dir: &Path) -> Option<String> {
@@ -406,10 +547,7 @@ async fn send_callback(
     let payload = CloudBuildWebhookPayload {
         build_id: build_id.clone(),
         status: status.to_string(),
-        image_uri: Some(format!(
-            "{}:{}",
-            workload.artifact.image_name, workload.artifact.image_tag
-        )),
+        image_uri: Some(image_uri(workload)),
         artifact_path: workload.artifact.output_directory.clone(),
         duration_secs: Some(duration_secs),
         codebuild_instance_type: Some("hetzner-k3s-tachyon-cli".to_string()),
@@ -483,5 +621,115 @@ mod tests {
             infer_build_command(&app).as_deref(),
             Some("corepack enable && pnpm build")
         );
+    }
+
+    #[test]
+    fn image_uri_uses_container_registry_when_present() {
+        let workload = BuildWorkloadSpec {
+            project_id: "app_123".to_string(),
+            source: BuildWorkloadSource {
+                repository_url: "https://github.com/example/app".to_string(),
+                branch: "main".to_string(),
+                commit_sha: "abc".to_string(),
+            },
+            workspace: BuildWorkloadWorkspace {
+                root_directory: None,
+                docker_context: None,
+            },
+            commands: BuildWorkloadCommands {
+                install: None,
+                build: Some("true".to_string()),
+                node_version: None,
+            },
+            env: vec![],
+            artifact: BuildWorkloadArtifact {
+                image_name: "demo".to_string(),
+                image_tag: "bld_123".to_string(),
+                output_directory: None,
+                container_registry: Some(
+                    "418272779906.dkr.ecr.ap-northeast-1.amazonaws.com/compute-apps".to_string(),
+                ),
+            },
+            callback: None,
+            deployment_target: Some("cloud_run".to_string()),
+            framework: Some("docker".to_string()),
+        };
+
+        assert_eq!(
+            image_uri(&workload),
+            "418272779906.dkr.ecr.ap-northeast-1.amazonaws.com/compute-apps/demo:bld_123"
+        );
+    }
+
+    #[test]
+    fn docker_context_defaults_to_app_dir() {
+        let temp = tempfile::tempdir().unwrap();
+        let checkout = temp.path().join("source");
+        let app = checkout.join("apps").join("demo");
+        let workload = BuildWorkloadSpec {
+            project_id: "app_123".to_string(),
+            source: BuildWorkloadSource {
+                repository_url: "https://github.com/example/app".to_string(),
+                branch: "main".to_string(),
+                commit_sha: "abc".to_string(),
+            },
+            workspace: BuildWorkloadWorkspace {
+                root_directory: Some("apps/demo".to_string()),
+                docker_context: None,
+            },
+            commands: BuildWorkloadCommands {
+                install: None,
+                build: Some("true".to_string()),
+                node_version: None,
+            },
+            env: vec![],
+            artifact: BuildWorkloadArtifact {
+                image_name: "demo".to_string(),
+                image_tag: "bld_123".to_string(),
+                output_directory: None,
+                container_registry: None,
+            },
+            callback: None,
+            deployment_target: Some("cloud_run".to_string()),
+            framework: Some("docker".to_string()),
+        };
+
+        assert_eq!(docker_context_path(&workload, &checkout, &app), app);
+    }
+
+    #[test]
+    fn explicit_dot_docker_context_uses_checkout_root() {
+        let temp = tempfile::tempdir().unwrap();
+        let checkout = temp.path().join("source");
+        let app = checkout.join("apps").join("demo");
+        let workload = BuildWorkloadSpec {
+            project_id: "app_123".to_string(),
+            source: BuildWorkloadSource {
+                repository_url: "https://github.com/example/app".to_string(),
+                branch: "main".to_string(),
+                commit_sha: "abc".to_string(),
+            },
+            workspace: BuildWorkloadWorkspace {
+                root_directory: Some("apps/demo".to_string()),
+                docker_context: Some(".".to_string()),
+            },
+            commands: BuildWorkloadCommands {
+                install: None,
+                build: Some("true".to_string()),
+                node_version: None,
+            },
+            env: vec![],
+            artifact: BuildWorkloadArtifact {
+                image_name: "demo".to_string(),
+                image_tag: "bld_123".to_string(),
+                output_directory: None,
+                container_registry: None,
+            },
+            callback: None,
+            deployment_target: Some("cloud_run".to_string()),
+            framework: Some("docker".to_string()),
+        };
+
+        assert_eq!(docker_context_path(&workload, &checkout, &app), checkout);
     }
 }
