@@ -19,6 +19,7 @@ use tokio::process::Command;
 const OUTPUT_CAPTURE_LIMIT: usize = 128 * 1024;
 const DOCKER_CONFIG_ENV: &str = "TACHYON_DOCKER_CONFIG_JSON";
 const KANIKO_EXECUTOR: &str = "/kaniko/executor";
+const KANIKO_DOCKER_CONFIG_DIR: &str = "/kaniko/.docker";
 
 #[derive(Debug, Deserialize)]
 pub struct BuildWorkloadSpec {
@@ -347,13 +348,27 @@ async fn prepare_docker_config(env: &BTreeMap<String, String>) -> Result<()> {
     let Some(config_json) = env.get(DOCKER_CONFIG_ENV) else {
         return Ok(());
     };
-    let docker_dir = Path::new("/workspace/.docker");
-    tokio::fs::create_dir_all(docker_dir)
-        .await
-        .context("failed to create Docker config directory")?;
-    tokio::fs::write(docker_dir.join("config.json"), config_json)
-        .await
-        .context("failed to write Docker registry config")?;
+    for docker_dir in [
+        Path::new("/workspace/.docker"),
+        Path::new(KANIKO_DOCKER_CONFIG_DIR),
+    ] {
+        tokio::fs::create_dir_all(docker_dir)
+            .await
+            .with_context(|| {
+                format!(
+                    "failed to create Docker config directory: {}",
+                    docker_dir.display()
+                )
+            })?;
+        tokio::fs::write(docker_dir.join("config.json"), config_json)
+            .await
+            .with_context(|| {
+                format!(
+                    "failed to write Docker registry config: {}",
+                    docker_dir.display()
+                )
+            })?;
+    }
     Ok(())
 }
 
@@ -401,7 +416,7 @@ async fn run_kaniko(
         .arg("--verbosity=info")
         .current_dir(app_dir)
         .envs(env)
-        .env("DOCKER_CONFIG", "/workspace/.docker");
+        .env("DOCKER_CONFIG", KANIKO_DOCKER_CONFIG_DIR);
     run_command("kaniko", command).await
 }
 
