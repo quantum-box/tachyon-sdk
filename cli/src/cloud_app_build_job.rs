@@ -416,6 +416,7 @@ async fn run_kaniko(
         .arg("--verbosity=info")
         .current_dir(app_dir)
         .envs(env)
+        .env("HOME", "/kaniko")
         .env("DOCKER_CONFIG", KANIKO_DOCKER_CONFIG_DIR);
     run_command("kaniko", command).await
 }
