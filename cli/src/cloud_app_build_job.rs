@@ -300,17 +300,47 @@ fn image_uri(workload: &BuildWorkloadSpec) -> String {
         .map(|value| value.trim())
         .filter(|value| !value.is_empty())
     {
-        Some(registry) => format!(
-            "{}/{}:{}",
+        Some(registry) if is_ecr_repository_url(registry) => format!(
+            "{}:{}-{}",
             registry.trim_end_matches('/'),
-            workload.artifact.image_name,
+            docker_tag_component(&workload.artifact.image_name),
             workload.artifact.image_tag
         ),
+        Some(registry) => {
+            format!(
+                "{}/{}:{}",
+                registry.trim_end_matches('/'),
+                workload.artifact.image_name,
+                workload.artifact.image_tag
+            )
+        }
         None => format!(
             "{}:{}",
             workload.artifact.image_name, workload.artifact.image_tag
         ),
     }
+}
+
+fn is_ecr_repository_url(registry: &str) -> bool {
+    registry
+        .split('/')
+        .next()
+        .is_some_and(|host| host.contains(".dkr.ecr."))
+}
+
+fn docker_tag_component(value: &str) -> String {
+    let tag = value
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || matches!(ch, '_' | '.' | '-') {
+                ch
+            } else {
+                '-'
+            }
+        })
+        .collect::<String>();
+
+    tag.trim_matches(['.', '-']).to_string()
 }
 
 async fn prepare_docker_config(env: &BTreeMap<String, String>) -> Result<()> {
@@ -657,7 +687,43 @@ mod tests {
 
         assert_eq!(
             image_uri(&workload),
-            "418272779906.dkr.ecr.ap-northeast-1.amazonaws.com/compute-apps/demo:bld_123"
+            "418272779906.dkr.ecr.ap-northeast-1.amazonaws.com/compute-apps:demo-bld_123"
+        );
+    }
+
+    #[test]
+    fn image_uri_keeps_nested_repository_for_non_ecr_registry() {
+        let workload = BuildWorkloadSpec {
+            project_id: "app_123".to_string(),
+            source: BuildWorkloadSource {
+                repository_url: "https://github.com/example/app".to_string(),
+                branch: "main".to_string(),
+                commit_sha: "abc".to_string(),
+            },
+            workspace: BuildWorkloadWorkspace {
+                root_directory: None,
+                docker_context: None,
+            },
+            commands: BuildWorkloadCommands {
+                install: None,
+                build: Some("true".to_string()),
+                node_version: None,
+            },
+            env: vec![],
+            artifact: BuildWorkloadArtifact {
+                image_name: "demo".to_string(),
+                image_tag: "bld_123".to_string(),
+                output_directory: None,
+                container_registry: Some("ghcr.io/example/compute-apps".to_string()),
+            },
+            callback: None,
+            deployment_target: Some("cloud_run".to_string()),
+            framework: Some("docker".to_string()),
+        };
+
+        assert_eq!(
+            image_uri(&workload),
+            "ghcr.io/example/compute-apps/demo:bld_123"
         );
     }
 
