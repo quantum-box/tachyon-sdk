@@ -525,6 +525,13 @@ pub enum BuildsCommand {
         #[arg(long)]
         dry_run: bool,
     },
+    /// Run a Cloud App build workload from a JobRun spec.
+    #[command(hide = true)]
+    RunJob {
+        /// Environment variable that contains the BuildWorkloadSpec JSON.
+        #[arg(long, default_value = "TACHYON_BUILD_WORKLOAD_SPEC_JSON")]
+        spec_env: String,
+    },
 }
 
 // --- Deployments subcommands ---
@@ -3092,6 +3099,9 @@ pub async fn run(
                 image.as_deref(),
                 *dry_run,
             ),
+            BuildsCommand::RunJob { spec_env } => {
+                crate::cloud_app_build_job::run_from_env(spec_env).await
+            }
         },
         ComputeCommand::Deployments { command } => match command {
             DeploymentsCommand::List { app_id, json } => {
