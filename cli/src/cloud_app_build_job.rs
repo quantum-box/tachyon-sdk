@@ -20,7 +20,7 @@ const OUTPUT_CAPTURE_LIMIT: usize = 128 * 1024;
 const DOCKER_CONFIG_ENV: &str = "TACHYON_DOCKER_CONFIG_JSON";
 const KANIKO_EXECUTOR: &str = "/kaniko/executor";
 const KANIKO_DOCKER_CONFIG_DIR: &str = "/kaniko/.docker";
-const KANIKO_RUNNER_IGNORE_PATHS: &[&str] = &["/workspace", "/etc/ssl/certs"];
+const KANIKO_RUNNER_IGNORE_PATHS: &[&str] = &["/workspace", "/kaniko/.docker", "/etc/ssl/certs"];
 
 #[derive(Debug, Deserialize)]
 pub struct BuildWorkloadSpec {
@@ -773,6 +773,7 @@ mod tests {
     fn kaniko_runner_ignore_paths_keep_runner_files_available() {
         assert!(KANIKO_RUNNER_IGNORE_PATHS.contains(&"/workspace"));
         assert!(!KANIKO_RUNNER_IGNORE_PATHS.contains(&"/kaniko"));
+        assert!(KANIKO_RUNNER_IGNORE_PATHS.contains(&"/kaniko/.docker"));
         assert!(KANIKO_RUNNER_IGNORE_PATHS.contains(&"/etc/ssl/certs"));
         assert!(!KANIKO_RUNNER_IGNORE_PATHS.contains(&"/usr/local/bin"));
     }
