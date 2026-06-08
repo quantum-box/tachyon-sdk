@@ -418,7 +418,24 @@ async fn run_kaniko(
         .envs(env)
         .env("HOME", "/kaniko")
         .env("DOCKER_CONFIG", KANIKO_DOCKER_CONFIG_DIR);
+    if let Some(cache_repo) = ecr_cache_repository(workload) {
+        command
+            .arg("--cache-repo")
+            .arg(cache_repo)
+            .arg("--skip-push-permission-check");
+    }
     run_command("kaniko", command).await
+}
+
+fn ecr_cache_repository(workload: &BuildWorkloadSpec) -> Option<String> {
+    workload
+        .artifact
+        .container_registry
+        .as_ref()
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty())
+        .filter(|value| is_ecr_repository_url(value))
+        .map(|value| value.trim_end_matches('/').to_string())
 }
 
 fn dockerfile_path(workload: &BuildWorkloadSpec, app_dir: &Path) -> PathBuf {
@@ -705,6 +722,47 @@ mod tests {
             image_uri(&workload),
             "418272779906.dkr.ecr.ap-northeast-1.amazonaws.com/compute-apps:demo-bld_123"
         );
+    }
+
+    #[test]
+    fn ecr_cache_repository_reuses_single_ecr_repository() {
+        let mut workload = BuildWorkloadSpec {
+            project_id: "app_123".to_string(),
+            source: BuildWorkloadSource {
+                repository_url: "https://github.com/example/app".to_string(),
+                branch: "main".to_string(),
+                commit_sha: "abc".to_string(),
+            },
+            workspace: BuildWorkloadWorkspace {
+                root_directory: None,
+                docker_context: None,
+            },
+            commands: BuildWorkloadCommands {
+                install: None,
+                build: Some("true".to_string()),
+                node_version: None,
+            },
+            env: vec![],
+            artifact: BuildWorkloadArtifact {
+                image_name: "demo".to_string(),
+                image_tag: "bld_123".to_string(),
+                output_directory: None,
+                container_registry: Some(
+                    "418272779906.dkr.ecr.ap-northeast-1.amazonaws.com/compute-apps/".to_string(),
+                ),
+            },
+            callback: None,
+            deployment_target: Some("cloud_run".to_string()),
+            framework: Some("docker".to_string()),
+        };
+
+        assert_eq!(
+            ecr_cache_repository(&workload).as_deref(),
+            Some("418272779906.dkr.ecr.ap-northeast-1.amazonaws.com/compute-apps")
+        );
+
+        workload.artifact.container_registry = Some("ghcr.io/example/compute-apps".to_string());
+        assert!(ecr_cache_repository(&workload).is_none());
     }
 
     #[test]
