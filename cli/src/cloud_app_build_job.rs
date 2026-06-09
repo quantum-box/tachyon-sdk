@@ -18,9 +18,8 @@ use tokio::process::Command;
 
 const OUTPUT_CAPTURE_LIMIT: usize = 128 * 1024;
 const DOCKER_CONFIG_ENV: &str = "TACHYON_DOCKER_CONFIG_JSON";
-const KANIKO_EXECUTOR: &str = "/kaniko/executor";
-const KANIKO_DOCKER_CONFIG_DIR: &str = "/kaniko/.docker";
-const KANIKO_RUNNER_IGNORE_PATHS: &[&str] = &["/workspace", "/kaniko/.docker", "/etc/ssl/certs"];
+const BUILDKIT_DAEMONLESS: &str = "/usr/local/bin/buildctl-daemonless.sh";
+const BUILDKIT_DOCKER_CONFIG_DIR: &str = "/workspace/.docker";
 
 #[derive(Debug, Deserialize)]
 pub struct BuildWorkloadSpec {
@@ -191,7 +190,7 @@ async fn run_build(workload: &BuildWorkloadSpec) -> Result<CommandResult> {
         prepare_docker_config(&env).await?;
         append_result(
             &mut combined,
-            run_kaniko(workload, &checkout_dir, &app_dir, &env).await?,
+            run_buildkit(workload, &checkout_dir, &app_dir, &env).await?,
         );
     }
 
@@ -349,31 +348,27 @@ async fn prepare_docker_config(env: &BTreeMap<String, String>) -> Result<()> {
     let Some(config_json) = env.get(DOCKER_CONFIG_ENV) else {
         return Ok(());
     };
-    for docker_dir in [
-        Path::new("/workspace/.docker"),
-        Path::new(KANIKO_DOCKER_CONFIG_DIR),
-    ] {
-        tokio::fs::create_dir_all(docker_dir)
-            .await
-            .with_context(|| {
-                format!(
-                    "failed to create Docker config directory: {}",
-                    docker_dir.display()
-                )
-            })?;
-        tokio::fs::write(docker_dir.join("config.json"), config_json)
-            .await
-            .with_context(|| {
-                format!(
-                    "failed to write Docker registry config: {}",
-                    docker_dir.display()
-                )
-            })?;
-    }
+    let docker_dir = Path::new(BUILDKIT_DOCKER_CONFIG_DIR);
+    tokio::fs::create_dir_all(docker_dir)
+        .await
+        .with_context(|| {
+            format!(
+                "failed to create Docker config directory: {}",
+                docker_dir.display()
+            )
+        })?;
+    tokio::fs::write(docker_dir.join("config.json"), config_json)
+        .await
+        .with_context(|| {
+            format!(
+                "failed to write Docker registry config: {}",
+                docker_dir.display()
+            )
+        })?;
     Ok(())
 }
 
-async fn run_kaniko(
+async fn run_buildkit(
     workload: &BuildWorkloadSpec,
     checkout_dir: &Path,
     app_dir: &Path,
@@ -400,46 +395,62 @@ async fn run_kaniko(
         dockerfile = %dockerfile.display(),
         context = %context.display(),
         destination = %destination,
-        "building and pushing Cloud Run image with kaniko"
+        "building and pushing Cloud Run image with BuildKit"
     );
 
-    let mut command = Command::new(KANIKO_EXECUTOR);
+    let dockerfile_dir = dockerfile
+        .parent()
+        .ok_or_else(|| anyhow!("Dockerfile has no parent directory"))?;
+
+    let mut command = Command::new(BUILDKIT_DAEMONLESS);
     command
-        .arg("--dockerfile")
-        .arg(&dockerfile)
-        .arg("--context")
-        .arg(format!("dir://{}", context.display()))
-        .arg("--destination")
-        .arg(&destination)
-        .arg("--cache=true")
-        .arg("--cache-copy-layers")
-        .arg("--single-snapshot")
-        .arg("--verbosity=info")
+        .arg("build")
+        .arg("--progress=plain")
+        .arg("--frontend")
+        .arg("dockerfile.v0")
+        .arg("--local")
+        .arg(format!("context={}", context.display()))
+        .arg("--local")
+        .arg(format!("dockerfile={}", dockerfile_dir.display()))
+        .arg("--opt")
+        .arg(format!(
+            "filename={}",
+            dockerfile
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or("Dockerfile")
+        ))
+        .arg("--output")
+        .arg(format!("type=image,name={destination},push=true"))
         .current_dir(app_dir)
         .envs(env)
-        .env("HOME", "/kaniko")
-        .env("DOCKER_CONFIG", KANIKO_DOCKER_CONFIG_DIR);
-    for path in KANIKO_RUNNER_IGNORE_PATHS {
-        command.arg("--ignore-path").arg(path);
-    }
-    if let Some(cache_repo) = ecr_cache_repository(workload) {
+        .env("HOME", "/workspace")
+        .env("DOCKER_CONFIG", BUILDKIT_DOCKER_CONFIG_DIR)
+        .env("BUILDKITD_FLAGS", "--oci-worker-no-process-sandbox");
+    if let Some(cache_repo) = buildkit_cache_repository(workload) {
         command
-            .arg("--cache-repo")
-            .arg(cache_repo)
-            .arg("--skip-push-permission-check");
+            .arg("--import-cache")
+            .arg(format!("type=registry,ref={cache_repo}"))
+            .arg("--export-cache")
+            .arg(format!("type=registry,ref={cache_repo},mode=max"));
     }
-    run_command("kaniko", command).await
+    run_command("buildkit", command).await
 }
 
-fn ecr_cache_repository(workload: &BuildWorkloadSpec) -> Option<String> {
+fn buildkit_cache_repository(workload: &BuildWorkloadSpec) -> Option<String> {
     workload
         .artifact
         .container_registry
         .as_ref()
         .map(|value| value.trim())
         .filter(|value| !value.is_empty())
-        .filter(|value| is_ecr_repository_url(value))
-        .map(|value| value.trim_end_matches('/').to_string())
+        .map(|registry| {
+            format!(
+                "{}/{}/cache:buildkit",
+                registry.trim_end_matches('/'),
+                workload.artifact.image_name
+            )
+        })
 }
 
 fn dockerfile_path(workload: &BuildWorkloadSpec, app_dir: &Path) -> PathBuf {
@@ -729,8 +740,8 @@ mod tests {
     }
 
     #[test]
-    fn ecr_cache_repository_reuses_single_ecr_repository() {
-        let mut workload = BuildWorkloadSpec {
+    fn buildkit_cache_repository_uses_app_cache_ref() {
+        let workload = BuildWorkloadSpec {
             project_id: "app_123".to_string(),
             source: BuildWorkloadSource {
                 repository_url: "https://github.com/example/app".to_string(),
@@ -761,21 +772,16 @@ mod tests {
         };
 
         assert_eq!(
-            ecr_cache_repository(&workload).as_deref(),
-            Some("418272779906.dkr.ecr.ap-northeast-1.amazonaws.com/compute-apps")
+            buildkit_cache_repository(&workload).as_deref(),
+            Some(
+                "418272779906.dkr.ecr.ap-northeast-1.amazonaws.com/compute-apps/demo/cache:buildkit"
+            )
         );
-
-        workload.artifact.container_registry = Some("ghcr.io/example/compute-apps".to_string());
-        assert!(ecr_cache_repository(&workload).is_none());
     }
 
     #[test]
-    fn kaniko_runner_ignore_paths_keep_runner_files_available() {
-        assert!(KANIKO_RUNNER_IGNORE_PATHS.contains(&"/workspace"));
-        assert!(!KANIKO_RUNNER_IGNORE_PATHS.contains(&"/kaniko"));
-        assert!(KANIKO_RUNNER_IGNORE_PATHS.contains(&"/kaniko/.docker"));
-        assert!(KANIKO_RUNNER_IGNORE_PATHS.contains(&"/etc/ssl/certs"));
-        assert!(!KANIKO_RUNNER_IGNORE_PATHS.contains(&"/usr/local/bin"));
+    fn buildkit_docker_config_uses_workspace_path() {
+        assert_eq!(BUILDKIT_DOCKER_CONFIG_DIR, "/workspace/.docker");
     }
 
     #[test]
