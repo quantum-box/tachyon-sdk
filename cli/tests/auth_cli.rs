@@ -36,20 +36,30 @@ fn start_auth_server() -> (String, mpsc::Receiver<String>, thread::JoinHandle<()
     let url = format!("http://{}", listener.local_addr().unwrap());
     let (tx, rx) = mpsc::channel();
     let handle = thread::spawn(move || {
-        for _ in 0..1 {
+        // Serve until the credentials POST: the CLI first resolves the
+        // app name via GET /v1/compute/apps, then issues credentials.
+        loop {
             let (mut stream, _) = listener.accept().unwrap();
             let mut buf = [0_u8; 8192];
             let n = stream.read(&mut buf).unwrap();
             let req = String::from_utf8_lossy(&buf[..n]).to_string();
-            tx.send(req).unwrap();
+            let is_issue = req.starts_with("POST ");
+            tx.send(req.clone()).unwrap();
 
-            let body = r#"{"client_id":"dummy-client","client_secret":"dummy-secret","user_pool_id":"ap-northeast-1_8Ga4bK5M4","secret_arn":"arn:aws:secretsmanager:ap-northeast-1:123:secret:test","expires_at":"2026-06-01T00:00:00Z"}"#;
+            let body = if req.starts_with("GET /v1/compute/apps") {
+                r#"{"apps":[{"id":"app_01km2dr0f6hvgj0qvcteyydfbe","name":"test-app"}]}"#
+            } else {
+                r#"{"client_id":"dummy-client","client_secret":"dummy-secret","user_pool_id":"ap-northeast-1_8Ga4bK5M4","secret_arn":"arn:aws:secretsmanager:ap-northeast-1:123:secret:test","expires_at":"2026-06-01T00:00:00Z"}"#
+            };
             let response = format!(
                 "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
                 body.len(),
                 body
             );
             stream.write_all(response.as_bytes()).unwrap();
+            if is_issue {
+                break;
+            }
         }
     });
     (url, rx, handle)
@@ -133,9 +143,11 @@ fn auth_issue_dev_writes_local_credentials() {
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
+    let resolve_req = rx.recv().unwrap();
+    assert!(resolve_req.starts_with("GET /v1/compute/apps "));
     let req = rx.recv().unwrap();
     handle.join().unwrap();
-    assert!(req.starts_with("POST /v1/cloud-apps/test-app/auth/credentials "));
+    assert!(req.starts_with("POST /v1/cloud-apps/app_01km2dr0f6hvgj0qvcteyydfbe/auth/credentials "));
     assert!(req.contains("authorization: Bearer test-token"));
     assert!(req.contains(r#""user_pool":"shared""#));
     assert!(tmp.path().join(".tachyon/credentials.json").is_file());
@@ -179,6 +191,7 @@ fn auth_issue_staging_updates_secret_ref_without_local_file() {
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
+    let _resolve_req = rx.recv().unwrap();
     let _req = rx.recv().unwrap();
     handle.join().unwrap();
     assert!(!tmp.path().join(".tachyon/credentials.json").exists());

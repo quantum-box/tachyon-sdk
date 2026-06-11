@@ -8,8 +8,11 @@ use serde_yaml::Value as YamlValue;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use crate::client::ApiClient;
 use crate::config::auth::{AuthProvider, AuthUserPool};
 use crate::config::loader;
+use crate::resolve;
+use tachyon_sdk::apis::configuration::Configuration;
 
 #[derive(Debug, Clone, Args)]
 pub struct IssueAuthArgs {
@@ -86,7 +89,7 @@ pub async fn run(
     let loaded = loader::load_with_path(config_flag)?
         .ok_or_else(|| anyhow!("tachyon.yml not found. Run `tachyon init` first."))?;
     let provider = find_provider(&loaded.config, &args.provider)?;
-    let app_id = loaded
+    let app_name = loaded
         .config
         .metadata
         .name
@@ -95,9 +98,17 @@ pub async fn run(
     let env = TachyonEnv::detect()?;
     let user_pool = resolve_user_pool(loaded.config.auth.as_ref(), args.shared_pool);
 
+    // The credentials endpoint requires the `app_` ID, while
+    // tachyon.yml carries the app name — resolve before calling.
+    let mut sdk_config = Configuration::new();
+    sdk_config.base_path = api_url.to_string();
+    sdk_config.bearer_access_token = bearer_token.clone();
+    let api = ApiClient::new(&sdk_config, tenant_id)?;
+    let app_id = resolve::resolve_app_id(&api, app_name).await?;
+
     let response = issue_from_backend(
         api_url,
-        app_id,
+        &app_id,
         provider,
         args.rotate,
         user_pool,
