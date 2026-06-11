@@ -46,6 +46,11 @@ pub enum ComputeCommand {
         #[command(subcommand)]
         command: DeploymentsCommand,
     },
+    /// Manage preview environments
+    Preview {
+        #[command(subcommand)]
+        command: PreviewCommand,
+    },
     /// Manage environment variables
     Env {
         #[command(subcommand)]
@@ -534,6 +539,22 @@ pub enum BuildsCommand {
     },
 }
 
+#[derive(Debug, Clone, Subcommand)]
+pub enum PreviewCommand {
+    /// Trigger a preview build from a branch
+    Create {
+        /// App ID or name
+        #[arg(long = "app")]
+        app_id: String,
+        /// Branch to build as a preview
+        #[arg(long)]
+        branch: String,
+        /// Wait until the build reaches a terminal status
+        #[arg(long)]
+        wait: bool,
+    },
+}
+
 // --- Deployments subcommands ---
 
 #[derive(Debug, Clone, Subcommand)]
@@ -935,7 +956,7 @@ struct RollbackRequest {
 #[derive(Debug, Serialize)]
 struct TriggerBuildRequest {
     #[serde(skip_serializing_if = "Option::is_none")]
-    branch: Option<String>,
+    source_branch: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -1772,7 +1793,7 @@ async fn run_builds_get(api: &ApiClient, build_id: &str, json: bool) -> Result<(
 
 async fn run_builds_trigger(api: &ApiClient, app_id: &str, branch: Option<&str>) -> Result<()> {
     let req = TriggerBuildRequest {
-        branch: branch.map(String::from),
+        source_branch: branch.map(String::from),
     };
     let build: BuildResponse = api
         .post(&format!("/v1/compute/apps/{app_id}/builds"), &req)
@@ -1780,6 +1801,94 @@ async fn run_builds_trigger(api: &ApiClient, app_id: &str, branch: Option<&str>)
     println!("Build triggered: {}", build.id);
     println!("Status: {}", build.status);
     Ok(())
+}
+
+async fn run_preview_create(api: &ApiClient, app_id: &str, branch: &str, wait: bool) -> Result<()> {
+    let req = TriggerBuildRequest {
+        source_branch: Some(branch.to_string()),
+    };
+    let build: BuildResponse = api
+        .post(&format!("/v1/compute/apps/{app_id}/builds"), &req)
+        .await?;
+    println!("Preview build triggered: {}", build.id);
+    println!("Status: {}", build.status);
+    println!("Branch: {branch}");
+
+    if !wait {
+        println!(
+            "Run `tachyon compute builds watch --build-id {}` to wait for completion.",
+            build.id
+        );
+        return Ok(());
+    }
+
+    let build = wait_for_build_completion(api, &build.id, Duration::from_secs(5), None).await?;
+    if !is_success_build_status(&build.status) {
+        if let Some(error) = build.error_message.as_deref() {
+            eprintln!("Build {} failed: {}", build.id, error);
+        } else {
+            eprintln!("Build {} finished with status {}", build.id, build.status);
+        }
+        return Err(anyhow!(
+            "preview build {} finished with status {}",
+            build.id,
+            build.status
+        ));
+    }
+
+    println!("Build {} completed successfully.", build.id);
+    match find_preview_deployment_for_build(api, app_id, &build).await? {
+        Some(deployment) => {
+            let pr_number = deployment.pr_number.or(build.pr_number);
+            println!("Preview URL: {}", deployment.display_url_with_pr(pr_number));
+        }
+        None => {
+            println!("Preview URL: -");
+            eprintln!("No preview deployment found for build {}", build.id);
+        }
+    }
+    Ok(())
+}
+
+async fn wait_for_build_completion(
+    api: &ApiClient,
+    build_id: &str,
+    interval: Duration,
+    timeout: Option<Duration>,
+) -> Result<BuildResponse> {
+    let started = Instant::now();
+    let mut last_status: Option<String> = None;
+
+    loop {
+        if let Some(timeout) = timeout {
+            if started.elapsed() >= timeout {
+                return Err(anyhow!("build {build_id} watch timed out"));
+            }
+        }
+
+        let build: BuildResponse = api.get(&format!("/v1/compute/builds/{build_id}")).await?;
+        if last_status.as_deref() != Some(build.status.as_str()) {
+            println!("Build {}: {}", build.id, build.status);
+            last_status = Some(build.status.clone());
+        }
+        if is_terminal_build_status(&build.status) {
+            return Ok(build);
+        }
+        sleep(interval).await;
+    }
+}
+
+async fn find_preview_deployment_for_build(
+    api: &ApiClient,
+    app_id: &str,
+    build: &BuildResponse,
+) -> Result<Option<DeploymentResponse>> {
+    let path = format!("/v1/compute/apps/{app_id}/deployments");
+    let resp: ListDeploymentsResponse = api.get_query(&path, &[("environment", "preview")]).await?;
+    Ok(resp
+        .deployments
+        .into_iter()
+        .find(|d| d.build_id.as_deref() == Some(build.id.as_str())))
 }
 
 async fn run_builds_cancel(api: &ApiClient, build_id: &str) -> Result<()> {
@@ -3101,6 +3210,16 @@ pub async fn run(
             ),
             BuildsCommand::RunJob { spec_env } => {
                 crate::cloud_app_build_job::run_from_env(spec_env).await
+            }
+        },
+        ComputeCommand::Preview { command } => match command {
+            PreviewCommand::Create {
+                app_id,
+                branch,
+                wait,
+            } => {
+                let id = resolve::resolve_app_id(&api, app_id).await?;
+                run_preview_create(&api, &id, branch, *wait).await
             }
         },
         ComputeCommand::Deployments { command } => match command {
