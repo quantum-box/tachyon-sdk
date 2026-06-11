@@ -1,0 +1,4 @@
+interface:
+  display_name: "Cloud App Deploy"
+  short_description: "Configure, deploy, and troubleshoot Tachyon Cloud Apps."
+  default_prompt: "Prepare or inspect a Tachyon Cloud App by checking the manifest, env vars or secrets, CLI apply/deploy flow, build logs, and any routing or tenant blockers without exposing secret values."

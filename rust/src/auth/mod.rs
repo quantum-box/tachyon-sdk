@@ -10,6 +10,7 @@ pub mod domain;
 pub mod error;
 pub mod executor;
 pub mod inputs;
+pub mod sdk_auth_app;
 pub mod traits;
 pub mod types;
 
@@ -56,6 +57,7 @@ pub use inputs::{
 };
 
 // Main trait
+pub use sdk_auth_app::SdkAuthApp;
 pub use traits::AuthApp;
 
 // Mock (test only)

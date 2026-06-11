@@ -10,9 +10,9 @@ use crate::compute_cli;
 
 #[derive(Debug, Clone, Args)]
 pub struct ReconcileArgs {
-    /// Cloud Apps manifest file (defaults to tachyon.yml; skipped if absent or non-CloudApps)
-    #[arg(short = 'f', long, default_value = "tachyon.yml")]
-    pub file: PathBuf,
+    /// Manifest file path. When omitted, tachyon.yml and .tachyon/manifests are discovered.
+    #[arg(short = 'f', long)]
+    pub file: Option<PathBuf>,
 
     /// Preview changes without making API calls (plan mode)
     #[arg(long)]
@@ -36,19 +36,24 @@ pub struct ReconcileArgs {
     pub json: bool,
 }
 
+#[allow(dead_code)]
 pub async fn run(args: &ReconcileArgs, config: &Configuration, tenant_id: &str) -> Result<()> {
     let api = ApiClient::new(config, tenant_id)?;
 
     // --- 1. Cloud Apps reconcile ---
     // Only run if the file exists and contains a CloudApps / CloudApp manifest.
-    if is_cloud_apps_manifest(&args.file) {
+    let cloud_apps_file = args
+        .file
+        .clone()
+        .unwrap_or_else(|| PathBuf::from("tachyon.yml"));
+    if is_cloud_apps_manifest(&cloud_apps_file) {
         if !args.json {
             println!("=== Cloud Apps Reconcile ===");
         }
         let apps_args = compute_cli::ComputeArgs {
             command: compute_cli::ComputeCommand::Apps {
                 command: compute_cli::AppsCommand::Apply {
-                    file: args.file.clone(),
+                    file: cloud_apps_file.clone(),
                     app: args.app.clone(),
                     environment: args.environment.clone(),
                     dry_run: args.dry_run,
@@ -62,7 +67,7 @@ pub async fn run(args: &ReconcileArgs, config: &Configuration, tenant_id: &str) 
     } else if !args.json {
         println!(
             "Cloud Apps: {} not found or not a CloudApps manifest, skipped.",
-            args.file.display()
+            cloud_apps_file.display()
         );
     }
 
@@ -89,6 +94,7 @@ pub async fn run(args: &ReconcileArgs, config: &Configuration, tenant_id: &str) 
 /// Returns true when `path` is a YAML file whose top-level `kind` is
 /// `CloudApps` or `CloudApp`.  Never panics – any I/O or parse failure
 /// returns false so the reconcile step is silently skipped.
+#[allow(dead_code)]
 fn is_cloud_apps_manifest(path: &std::path::Path) -> bool {
     let Ok(content) = std::fs::read_to_string(path) else {
         return false;

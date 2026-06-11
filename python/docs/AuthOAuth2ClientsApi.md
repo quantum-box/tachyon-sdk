@@ -4,16 +4,16 @@ All URIs are relative to *http://localhost*
 
 Method | HTTP request | Description
 ------------- | ------------- | -------------
-[**create_client**](AuthOAuth2ClientsApi.md#create_client) | **POST** /v1/auth/oauth2-clients | Create a new OAuth2 client
-[**get_client**](AuthOAuth2ClientsApi.md#get_client) | **GET** /v1/auth/oauth2-clients/{id} | Get an OAuth2 client by ID
-[**list_clients**](AuthOAuth2ClientsApi.md#list_clients) | **GET** /v1/auth/oauth2-clients | List all OAuth2 clients for the current tenant
-[**revoke_client**](AuthOAuth2ClientsApi.md#revoke_client) | **POST** /v1/auth/oauth2-clients/{id}/revoke | Revoke an OAuth2 client
-[**rotate_secret**](AuthOAuth2ClientsApi.md#rotate_secret) | **POST** /v1/auth/oauth2-clients/{id}/rotate-secret | Rotate an OAuth2 client secret
-[**update_client**](AuthOAuth2ClientsApi.md#update_client) | **PUT** /v1/auth/oauth2-clients/{id} | Update an OAuth2 client
+[**create_oauth2_client**](AuthOAuth2ClientsApi.md#create_oauth2_client) | **POST** /v1/auth/oauth2-clients | Create a new OAuth2 client
+[**get_oauth2_client**](AuthOAuth2ClientsApi.md#get_oauth2_client) | **GET** /v1/auth/oauth2-clients/{id} | Get an OAuth2 client by ID
+[**list_oauth2_clients**](AuthOAuth2ClientsApi.md#list_oauth2_clients) | **GET** /v1/auth/oauth2-clients | List all OAuth2 clients for the current tenant
+[**revoke_oauth2_client**](AuthOAuth2ClientsApi.md#revoke_oauth2_client) | **POST** /v1/auth/oauth2-clients/{id}/revoke | Revoke an OAuth2 client
+[**rotate_oauth2_client_secret**](AuthOAuth2ClientsApi.md#rotate_oauth2_client_secret) | **POST** /v1/auth/oauth2-clients/{id}/rotate-secret | Rotate an OAuth2 client secret
+[**update_oauth2_client**](AuthOAuth2ClientsApi.md#update_oauth2_client) | **PUT** /v1/auth/oauth2-clients/{id} | Update an OAuth2 client
 
 
-# **create_client**
-> CreateClientResponse create_client(create_client_request)
+# **create_oauth2_client**
+> OAuth2CreateClientResponse create_oauth2_client(o_auth2_create_client_request)
 
 Create a new OAuth2 client
 
@@ -22,8 +22,8 @@ Create a new OAuth2 client
 
 ```python
 import tachyon_sdk
-from tachyon_sdk.models.create_client_request import CreateClientRequest
-from tachyon_sdk.models.create_client_response import CreateClientResponse
+from tachyon_sdk.models.o_auth2_create_client_request import OAuth2CreateClientRequest
+from tachyon_sdk.models.o_auth2_create_client_response import OAuth2CreateClientResponse
 from tachyon_sdk.rest import ApiException
 from pprint import pprint
 
@@ -38,15 +38,15 @@ configuration = tachyon_sdk.Configuration(
 with tachyon_sdk.ApiClient(configuration) as api_client:
     # Create an instance of the API class
     api_instance = tachyon_sdk.AuthOAuth2ClientsApi(api_client)
-    create_client_request = tachyon_sdk.CreateClientRequest() # CreateClientRequest | 
+    o_auth2_create_client_request = tachyon_sdk.OAuth2CreateClientRequest() # OAuth2CreateClientRequest |
 
     try:
         # Create a new OAuth2 client
-        api_response = api_instance.create_client(create_client_request)
-        print("The response of AuthOAuth2ClientsApi->create_client:\n")
+        api_response = api_instance.create_oauth2_client(o_auth2_create_client_request)
+        print("The response of AuthOAuth2ClientsApi->create_oauth2_client:\n")
         pprint(api_response)
     except Exception as e:
-        print("Exception when calling AuthOAuth2ClientsApi->create_client: %s\n" % e)
+        print("Exception when calling AuthOAuth2ClientsApi->create_oauth2_client: %s\n" % e)
 ```
 
 
@@ -56,11 +56,11 @@ with tachyon_sdk.ApiClient(configuration) as api_client:
 
 Name | Type | Description  | Notes
 ------------- | ------------- | ------------- | -------------
- **create_client_request** | [**CreateClientRequest**](CreateClientRequest.md)|  | 
+ **o_auth2_create_client_request** | [**OAuth2CreateClientRequest**](OAuth2CreateClientRequest.md)|  |
 
 ### Return type
 
-[**CreateClientResponse**](CreateClientResponse.md)
+[**OAuth2CreateClientResponse**](OAuth2CreateClientResponse.md)
 
 ### Authorization
 
@@ -81,8 +81,8 @@ No authorization required
 
 [[Back to top]](#) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to Model list]](../README.md#documentation-for-models) [[Back to README]](../README.md)
 
-# **get_client**
-> ClientResponse get_client(id)
+# **get_oauth2_client**
+> OAuth2ClientResponse get_oauth2_client(id)
 
 Get an OAuth2 client by ID
 
@@ -91,7 +91,7 @@ Get an OAuth2 client by ID
 
 ```python
 import tachyon_sdk
-from tachyon_sdk.models.client_response import ClientResponse
+from tachyon_sdk.models.o_auth2_client_response import OAuth2ClientResponse
 from tachyon_sdk.rest import ApiException
 from pprint import pprint
 
@@ -110,11 +110,11 @@ with tachyon_sdk.ApiClient(configuration) as api_client:
 
     try:
         # Get an OAuth2 client by ID
-        api_response = api_instance.get_client(id)
-        print("The response of AuthOAuth2ClientsApi->get_client:\n")
+        api_response = api_instance.get_oauth2_client(id)
+        print("The response of AuthOAuth2ClientsApi->get_oauth2_client:\n")
         pprint(api_response)
     except Exception as e:
-        print("Exception when calling AuthOAuth2ClientsApi->get_client: %s\n" % e)
+        print("Exception when calling AuthOAuth2ClientsApi->get_oauth2_client: %s\n" % e)
 ```
 
 
@@ -124,11 +124,11 @@ with tachyon_sdk.ApiClient(configuration) as api_client:
 
 Name | Type | Description  | Notes
 ------------- | ------------- | ------------- | -------------
- **id** | **str**| OAuth2 client ID | 
+ **id** | **str**| OAuth2 client ID |
 
 ### Return type
 
-[**ClientResponse**](ClientResponse.md)
+[**OAuth2ClientResponse**](OAuth2ClientResponse.md)
 
 ### Authorization
 
@@ -148,8 +148,8 @@ No authorization required
 
 [[Back to top]](#) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to Model list]](../README.md#documentation-for-models) [[Back to README]](../README.md)
 
-# **list_clients**
-> ClientListResponse list_clients()
+# **list_oauth2_clients**
+> OAuth2ClientListResponse list_oauth2_clients()
 
 List all OAuth2 clients for the current tenant
 
@@ -158,7 +158,7 @@ List all OAuth2 clients for the current tenant
 
 ```python
 import tachyon_sdk
-from tachyon_sdk.models.client_list_response import ClientListResponse
+from tachyon_sdk.models.o_auth2_client_list_response import OAuth2ClientListResponse
 from tachyon_sdk.rest import ApiException
 from pprint import pprint
 
@@ -176,11 +176,11 @@ with tachyon_sdk.ApiClient(configuration) as api_client:
 
     try:
         # List all OAuth2 clients for the current tenant
-        api_response = api_instance.list_clients()
-        print("The response of AuthOAuth2ClientsApi->list_clients:\n")
+        api_response = api_instance.list_oauth2_clients()
+        print("The response of AuthOAuth2ClientsApi->list_oauth2_clients:\n")
         pprint(api_response)
     except Exception as e:
-        print("Exception when calling AuthOAuth2ClientsApi->list_clients: %s\n" % e)
+        print("Exception when calling AuthOAuth2ClientsApi->list_oauth2_clients: %s\n" % e)
 ```
 
 
@@ -191,7 +191,7 @@ This endpoint does not need any parameter.
 
 ### Return type
 
-[**ClientListResponse**](ClientListResponse.md)
+[**OAuth2ClientListResponse**](OAuth2ClientListResponse.md)
 
 ### Authorization
 
@@ -211,8 +211,8 @@ No authorization required
 
 [[Back to top]](#) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to Model list]](../README.md#documentation-for-models) [[Back to README]](../README.md)
 
-# **revoke_client**
-> revoke_client(id)
+# **revoke_oauth2_client**
+> revoke_oauth2_client(id)
 
 Revoke an OAuth2 client
 
@@ -239,9 +239,9 @@ with tachyon_sdk.ApiClient(configuration) as api_client:
 
     try:
         # Revoke an OAuth2 client
-        api_instance.revoke_client(id)
+        api_instance.revoke_oauth2_client(id)
     except Exception as e:
-        print("Exception when calling AuthOAuth2ClientsApi->revoke_client: %s\n" % e)
+        print("Exception when calling AuthOAuth2ClientsApi->revoke_oauth2_client: %s\n" % e)
 ```
 
 
@@ -251,7 +251,7 @@ with tachyon_sdk.ApiClient(configuration) as api_client:
 
 Name | Type | Description  | Notes
 ------------- | ------------- | ------------- | -------------
- **id** | **str**| OAuth2 client ID | 
+ **id** | **str**| OAuth2 client ID |
 
 ### Return type
 
@@ -275,8 +275,8 @@ No authorization required
 
 [[Back to top]](#) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to Model list]](../README.md#documentation-for-models) [[Back to README]](../README.md)
 
-# **rotate_secret**
-> RotateSecretResponse rotate_secret(id)
+# **rotate_oauth2_client_secret**
+> RotateSecretResponse rotate_oauth2_client_secret(id)
 
 Rotate an OAuth2 client secret
 
@@ -304,11 +304,11 @@ with tachyon_sdk.ApiClient(configuration) as api_client:
 
     try:
         # Rotate an OAuth2 client secret
-        api_response = api_instance.rotate_secret(id)
-        print("The response of AuthOAuth2ClientsApi->rotate_secret:\n")
+        api_response = api_instance.rotate_oauth2_client_secret(id)
+        print("The response of AuthOAuth2ClientsApi->rotate_oauth2_client_secret:\n")
         pprint(api_response)
     except Exception as e:
-        print("Exception when calling AuthOAuth2ClientsApi->rotate_secret: %s\n" % e)
+        print("Exception when calling AuthOAuth2ClientsApi->rotate_oauth2_client_secret: %s\n" % e)
 ```
 
 
@@ -318,7 +318,7 @@ with tachyon_sdk.ApiClient(configuration) as api_client:
 
 Name | Type | Description  | Notes
 ------------- | ------------- | ------------- | -------------
- **id** | **str**| OAuth2 client ID | 
+ **id** | **str**| OAuth2 client ID |
 
 ### Return type
 
@@ -342,8 +342,8 @@ No authorization required
 
 [[Back to top]](#) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to Model list]](../README.md#documentation-for-models) [[Back to README]](../README.md)
 
-# **update_client**
-> ClientResponse update_client(id, update_client_request)
+# **update_oauth2_client**
+> OAuth2ClientResponse update_oauth2_client(id, o_auth2_update_client_request)
 
 Update an OAuth2 client
 
@@ -352,8 +352,8 @@ Update an OAuth2 client
 
 ```python
 import tachyon_sdk
-from tachyon_sdk.models.client_response import ClientResponse
-from tachyon_sdk.models.update_client_request import UpdateClientRequest
+from tachyon_sdk.models.o_auth2_client_response import OAuth2ClientResponse
+from tachyon_sdk.models.o_auth2_update_client_request import OAuth2UpdateClientRequest
 from tachyon_sdk.rest import ApiException
 from pprint import pprint
 
@@ -369,15 +369,15 @@ with tachyon_sdk.ApiClient(configuration) as api_client:
     # Create an instance of the API class
     api_instance = tachyon_sdk.AuthOAuth2ClientsApi(api_client)
     id = 'id_example' # str | OAuth2 client ID
-    update_client_request = tachyon_sdk.UpdateClientRequest() # UpdateClientRequest | 
+    o_auth2_update_client_request = tachyon_sdk.OAuth2UpdateClientRequest() # OAuth2UpdateClientRequest |
 
     try:
         # Update an OAuth2 client
-        api_response = api_instance.update_client(id, update_client_request)
-        print("The response of AuthOAuth2ClientsApi->update_client:\n")
+        api_response = api_instance.update_oauth2_client(id, o_auth2_update_client_request)
+        print("The response of AuthOAuth2ClientsApi->update_oauth2_client:\n")
         pprint(api_response)
     except Exception as e:
-        print("Exception when calling AuthOAuth2ClientsApi->update_client: %s\n" % e)
+        print("Exception when calling AuthOAuth2ClientsApi->update_oauth2_client: %s\n" % e)
 ```
 
 
@@ -387,12 +387,12 @@ with tachyon_sdk.ApiClient(configuration) as api_client:
 
 Name | Type | Description  | Notes
 ------------- | ------------- | ------------- | -------------
- **id** | **str**| OAuth2 client ID | 
- **update_client_request** | [**UpdateClientRequest**](UpdateClientRequest.md)|  | 
+ **id** | **str**| OAuth2 client ID |
+ **o_auth2_update_client_request** | [**OAuth2UpdateClientRequest**](OAuth2UpdateClientRequest.md)|  |
 
 ### Return type
 
-[**ClientResponse**](ClientResponse.md)
+[**OAuth2ClientResponse**](OAuth2ClientResponse.md)
 
 ### Authorization
 

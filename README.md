@@ -4,7 +4,7 @@ Auto-generated multi-language API clients for the [Tachyon Platform](https://git
 
 ## CLI
 
-Latest release: **v0.2.1**
+Latest release: **v0.6.9**
 
 ### Install
 
@@ -100,6 +100,13 @@ tachyon compute builds watch --build-id <build-id>
 tachyon compute builds watch --build-id <build-id> --agent
 tachyon compute logs --build-id <build-id> --follow --agent
 
+# Generate a Cloud App feedback report
+tachyon compute apps feedback <app-id> \
+  --kind bug \
+  --severity high \
+  --url https://example.txcloud.app \
+  "Production page returns 500."
+
 # Reproduce a cloud build locally in Docker (Phase 1: mock fixture)
 # See cli/tests/fixtures/mock-build-config.yaml for the expected shape.
 tachyon compute builds reproduce <build-id> --mock <path/to/build-config.yaml> --dry-run
@@ -114,6 +121,49 @@ cancelled, and timed-out builds return non-zero so automation can stop early.
 > a cloud build and replays it locally in a CodeBuild-compatible Docker
 > container. Phase 1 requires `--mock <path>`; the live build-config endpoint
 > (PLT-913) lands in Phase 2.
+
+### Worker runtime
+
+`tachyon worker` replaces the separately distributed `tachyond` binary for
+local Tool Job workers.
+
+```sh
+# Install or refresh the tachyon CLI first
+curl -fsSL https://raw.githubusercontent.com/quantum-box/tachyon-sdk/main/scripts/install.sh | sh
+
+# Authenticate and select the operator that owns the worker
+tachyon auth login --profile work
+tachyon auth use work
+
+# Run while this shell is open
+tachyon --profile work --tenant-id tn_xxxx worker run
+
+# Install as tachyon-worker.service on a Linux systemd host
+sudo tachyon --profile work --tenant-id tn_xxxx worker start --dry-run
+sudo tachyon --profile work --tenant-id tn_xxxx worker start
+
+# Operate the local systemd service
+sudo tachyon worker status
+sudo tachyon worker logs --follow
+sudo tachyon worker restart
+```
+
+The worker advertises the `containerized_codex` provider by default and uses
+Docker to execute claimed Tool Jobs. Runtime knobs are available through CLI
+flags or environment variables:
+
+| Variable | Purpose |
+| --- | --- |
+| `TACHYON_WORKER_ID` | Stable worker identifier. Defaults to `worker-<hostname>`. |
+| `TACHYON_WORKER_PROVIDER` | Provider capability. Currently `containerized_codex`. |
+| `TACHYON_WORKER_MAX_CONCURRENT_JOBS` | Maximum concurrent jobs advertised to Tachyon Cloud. |
+| `TACHYON_WORKER_POLL_INTERVAL_MS` | Poll interval used by `worker run`. |
+| `CODEX_CONTAINER_IMAGE` | Docker image used for containerized Codex jobs. |
+| `CODEX_CONTAINER_NETWORK` | Docker network used for job containers. |
+| `CODEX_CONTAINER_MEMORY` | Docker memory limit, for example `2g`. |
+
+See [docs/worker-runtime.md](docs/worker-runtime.md) for foreground and
+systemd operation, installed files, and the E2E checklist.
 
 ## Languages
 
@@ -194,11 +244,41 @@ npm install @tachyon-sdk/storekit
 
 ## Agent Skills
 
-Pre-built skill definitions for AI agents are in the `skills/` directory.
+Pre-built skill definitions for AI agents are in the `skills/` and
+`.agents/skills/` directories.
 
 | Skill | File | Description |
 |-------|------|-------------|
 | image-gen | [`skills/image-gen.json`](skills/image-gen.json) | Generate AI images via `tachyon image generate` |
+| tachyon-cloud | [`.agents/skills/tachyon-cloud/`](.agents/skills/tachyon-cloud/) | Operate Tachyon Cloud Apps with `tachyon compute`, `tachyon.yml`, env vars, build logs, deployments, and user feedback reports |
+
+### Installing Agent Skills
+
+Install agent skills interactively:
+
+```bash
+tachyon skills install
+```
+
+Install non-interactively into Codex user scope:
+
+```bash
+tachyon skills install tachyon-cloud --codex --scope user --non-interactive
+```
+
+Install non-interactively into this workspace:
+
+```bash
+tachyon skills install tachyon-cloud --codex --scope workspace --non-interactive
+```
+
+The Tachyon Cloud skill expects the released Tachyon CLI to be available on `PATH`:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/quantum-box/tachyon-sdk/main/scripts/install.sh | sh
+tachyon login
+tachyon compute apps list
+```
 
 ### Using image-gen with Claude Code
 

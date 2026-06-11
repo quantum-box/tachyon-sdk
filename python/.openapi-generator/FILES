@@ -129,6 +129,11 @@ docs/ModelInfo.md
 docs/ModelsApi.md
 docs/ModelsResponse.md
 docs/NotificationsApi.md
+docs/OAuth2ClientListResponse.md
+docs/OAuth2ClientResponse.md
+docs/OAuth2CreateClientRequest.md
+docs/OAuth2CreateClientResponse.md
+docs/OAuth2UpdateClientRequest.md
 docs/OAuthCallbackResponse.md
 docs/OAuthTokenDetailResponse.md
 docs/OAuthTokenListResponse.md
@@ -155,6 +160,8 @@ docs/PartOneOf3.md
 docs/PartOneOf4.md
 docs/PartOneOf5.md
 docs/PaymentApi.md
+docs/PolicyActionPatternRequest.md
+docs/PolicyActionRequest.md
 docs/PolicyEvaluationOutcome.md
 docs/PolicyResponse.md
 docs/ProcurementApi.md
@@ -171,7 +178,10 @@ docs/QuoteListResponse.md
 docs/QuoteResponse.md
 docs/RecurringRevenueRequest.md
 docs/RecurringRevenueResponse.md
+docs/RegisterActionRequest.md
+docs/RegisterPolicyRequest.md
 docs/RegisterShippingDestinationRequest.md
+docs/RemovePolicyActionPatternRequest.md
 docs/ResponseFormat.md
 docs/Role.md
 docs/RotateSecretResponse.md
@@ -203,6 +213,7 @@ docs/ToolSchema.md
 docs/UpdateChatroomRequest.md
 docs/UpdateChatroomResponse.md
 docs/UpdateClientRequest.md
+docs/UpdatePolicyRequest.md
 docs/UpdateProductRequest.md
 docs/UpdateProductVariationRequest.md
 docs/UpdateQuoteRequest.md
@@ -370,6 +381,11 @@ tachyon_sdk/models/message.py
 tachyon_sdk/models/message_content.py
 tachyon_sdk/models/model_info.py
 tachyon_sdk/models/models_response.py
+tachyon_sdk/models/o_auth2_client_list_response.py
+tachyon_sdk/models/o_auth2_client_response.py
+tachyon_sdk/models/o_auth2_create_client_request.py
+tachyon_sdk/models/o_auth2_create_client_response.py
+tachyon_sdk/models/o_auth2_update_client_request.py
 tachyon_sdk/models/o_auth_callback_response.py
 tachyon_sdk/models/o_auth_token_detail_response.py
 tachyon_sdk/models/o_auth_token_list_response.py
@@ -387,6 +403,8 @@ tachyon_sdk/models/part_one_of2.py
 tachyon_sdk/models/part_one_of3.py
 tachyon_sdk/models/part_one_of4.py
 tachyon_sdk/models/part_one_of5.py
+tachyon_sdk/models/policy_action_pattern_request.py
+tachyon_sdk/models/policy_action_request.py
 tachyon_sdk/models/policy_evaluation_outcome.py
 tachyon_sdk/models/policy_response.py
 tachyon_sdk/models/product_list_response.py
@@ -402,7 +420,10 @@ tachyon_sdk/models/quote_list_response.py
 tachyon_sdk/models/quote_response.py
 tachyon_sdk/models/recurring_revenue_request.py
 tachyon_sdk/models/recurring_revenue_response.py
+tachyon_sdk/models/register_action_request.py
+tachyon_sdk/models/register_policy_request.py
 tachyon_sdk/models/register_shipping_destination_request.py
+tachyon_sdk/models/remove_policy_action_pattern_request.py
 tachyon_sdk/models/response_format.py
 tachyon_sdk/models/role.py
 tachyon_sdk/models/rotate_secret_response.py
@@ -434,6 +455,7 @@ tachyon_sdk/models/tool_schema.py
 tachyon_sdk/models/update_chatroom_request.py
 tachyon_sdk/models/update_chatroom_response.py
 tachyon_sdk/models/update_client_request.py
+tachyon_sdk/models/update_policy_request.py
 tachyon_sdk/models/update_product_request.py
 tachyon_sdk/models/update_product_variation_request.py
 tachyon_sdk/models/update_quote_request.py
@@ -457,9 +479,4 @@ tachyon_sdk/py.typed
 tachyon_sdk/rest.py
 test-requirements.txt
 test/__init__.py
-test/test_agent_builtin_tool_request.py
-test/test_agent_builtin_tool_type.py
-test/test_notifications_api.py
-test/test_send_sms_notification_request.py
-test/test_send_sms_notification_response.py
 tox.ini

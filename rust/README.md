@@ -39,12 +39,12 @@ Class | Method | HTTP request | Description
 *AuthApiKeysApi* | [**create_api_key**](docs/AuthApiKeysApi.md#create_api_key) | **POST** /v1/auth/service-accounts/{service_account_id}/api-keys | Create a new API key for a service account
 *AuthApiKeysApi* | [**list_api_keys**](docs/AuthApiKeysApi.md#list_api_keys) | **GET** /v1/auth/service-accounts/{service_account_id}/api-keys | List API keys for a service account
 *AuthApiKeysApi* | [**verify_api_key**](docs/AuthApiKeysApi.md#verify_api_key) | **POST** /v1/auth/api-keys/verify | Verify a public API key
-*AuthOAuth2ClientsApi* | [**create_client**](docs/AuthOAuth2ClientsApi.md#create_client) | **POST** /v1/auth/oauth2-clients | Create a new OAuth2 client
-*AuthOAuth2ClientsApi* | [**get_client**](docs/AuthOAuth2ClientsApi.md#get_client) | **GET** /v1/auth/oauth2-clients/{id} | Get an OAuth2 client by ID
-*AuthOAuth2ClientsApi* | [**list_clients**](docs/AuthOAuth2ClientsApi.md#list_clients) | **GET** /v1/auth/oauth2-clients | List all OAuth2 clients for the current tenant
-*AuthOAuth2ClientsApi* | [**revoke_client**](docs/AuthOAuth2ClientsApi.md#revoke_client) | **POST** /v1/auth/oauth2-clients/{id}/revoke | Revoke an OAuth2 client
-*AuthOAuth2ClientsApi* | [**rotate_secret**](docs/AuthOAuth2ClientsApi.md#rotate_secret) | **POST** /v1/auth/oauth2-clients/{id}/rotate-secret | Rotate an OAuth2 client secret
-*AuthOAuth2ClientsApi* | [**update_client**](docs/AuthOAuth2ClientsApi.md#update_client) | **PUT** /v1/auth/oauth2-clients/{id} | Update an OAuth2 client
+*AuthOAuth2ClientsApi* | [**create_oauth2_client**](docs/AuthOAuth2ClientsApi.md#create_oauth2_client) | **POST** /v1/auth/oauth2-clients | Create a new OAuth2 client
+*AuthOAuth2ClientsApi* | [**get_oauth2_client**](docs/AuthOAuth2ClientsApi.md#get_oauth2_client) | **GET** /v1/auth/oauth2-clients/{id} | Get an OAuth2 client by ID
+*AuthOAuth2ClientsApi* | [**list_oauth2_clients**](docs/AuthOAuth2ClientsApi.md#list_oauth2_clients) | **GET** /v1/auth/oauth2-clients | List all OAuth2 clients for the current tenant
+*AuthOAuth2ClientsApi* | [**revoke_oauth2_client**](docs/AuthOAuth2ClientsApi.md#revoke_oauth2_client) | **POST** /v1/auth/oauth2-clients/{id}/revoke | Revoke an OAuth2 client
+*AuthOAuth2ClientsApi* | [**rotate_oauth2_client_secret**](docs/AuthOAuth2ClientsApi.md#rotate_oauth2_client_secret) | **POST** /v1/auth/oauth2-clients/{id}/rotate-secret | Rotate an OAuth2 client secret
+*AuthOAuth2ClientsApi* | [**update_oauth2_client**](docs/AuthOAuth2ClientsApi.md#update_oauth2_client) | **PUT** /v1/auth/oauth2-clients/{id} | Update an OAuth2 client
 *AuthOAuth2ConsentsApi* | [**list_consents**](docs/AuthOAuth2ConsentsApi.md#list_consents) | **GET** /v1/auth/consents | GET /v1/auth/consents
 *AuthOAuth2ConsentsApi* | [**revoke_consent**](docs/AuthOAuth2ConsentsApi.md#revoke_consent) | **POST** /v1/auth/consents/{id}/revoke | POST /v1/auth/consents/:id/revoke
 *AuthOAuthTokensApi* | [**delete_oauth_token**](docs/AuthOAuthTokensApi.md#delete_oauth_token) | **DELETE** /v1/auth/oauth-tokens/{provider} | Delete an OAuth token
@@ -59,6 +59,9 @@ Class | Method | HTTP request | Description
 *AuthPoliciesApi* | [**evaluate_policies_batch**](docs/AuthPoliciesApi.md#evaluate_policies_batch) | **POST** /v1/auth/policies/check | Evaluate multiple policy actions in batch
 *AuthPoliciesApi* | [**get_policy**](docs/AuthPoliciesApi.md#get_policy) | **GET** /v1/auth/policies/{id} | Get a policy by ID
 *AuthPoliciesApi* | [**list_actions**](docs/AuthPoliciesApi.md#list_actions) | **GET** /v1/auth/actions | List all registered actions
+*AuthPoliciesApi* | [**register_action**](docs/AuthPoliciesApi.md#register_action) | **POST** /v1/auth/actions | Register a custom action
+*AuthPoliciesApi* | [**register_policy**](docs/AuthPoliciesApi.md#register_policy) | **POST** /v1/auth/policies | Register a custom policy
+*AuthPoliciesApi* | [**update_policy**](docs/AuthPoliciesApi.md#update_policy) | **PATCH** /v1/auth/policies/{id} | Update a custom policy
 *AuthServiceAccountsApi* | [**create_service_account**](docs/AuthServiceAccountsApi.md#create_service_account) | **POST** /v1/auth/service-accounts | Create a new service account
 *AuthServiceAccountsApi* | [**delete_service_account**](docs/AuthServiceAccountsApi.md#delete_service_account) | **DELETE** /v1/auth/service-accounts/{id} | Delete a service account
 *AuthServiceAccountsApi* | [**get_service_account**](docs/AuthServiceAccountsApi.md#get_service_account) | **GET** /v1/auth/service-accounts/{id} | Get a service account by ID
@@ -98,6 +101,7 @@ Class | Method | HTTP request | Description
 *IntegrationsApi* | [**list_connections**](docs/IntegrationsApi.md#list_connections) | **GET** /v1/integrations/connections | List all connections for the current tenant.
 *IntegrationsApi* | [**list_integrations**](docs/IntegrationsApi.md#list_integrations) | **GET** /v1/integrations | List all integrations in the marketplace.
 *ModelsApi* | [**get_models**](docs/ModelsApi.md#get_models) | **GET** /v1/llms/models | List available LLM models
+*NotificationsApi* | [**send_sms_notification**](docs/NotificationsApi.md#send_sms_notification) | **POST** /v1/notifications/sms | Send an SMS notification
 *OauthApi* | [**callback**](docs/OauthApi.md#callback) | **GET** /oauth/{provider_name}/callback | OAuth callback handler for specified provider
 *OauthApi* | [**connect**](docs/OauthApi.md#connect) | **GET** /oauth/{provider_name}/connect | Get OAuth authorization URL for specified provider
 *OrderCheckoutApi* | [**process_checkout**](docs/OrderCheckoutApi.md#process_checkout) | **POST** /v1/order/checkout | Process payment checkout for a quote
@@ -232,6 +236,11 @@ Class | Method | HTTP request | Description
  - [MessageContent](docs/MessageContent.md)
  - [ModelInfo](docs/ModelInfo.md)
  - [ModelsResponse](docs/ModelsResponse.md)
+ - [OAuth2ClientListResponse](docs/OAuth2ClientListResponse.md)
+ - [OAuth2ClientResponse](docs/OAuth2ClientResponse.md)
+ - [OAuth2CreateClientRequest](docs/OAuth2CreateClientRequest.md)
+ - [OAuth2CreateClientResponse](docs/OAuth2CreateClientResponse.md)
+ - [OAuth2UpdateClientRequest](docs/OAuth2UpdateClientRequest.md)
  - [OAuthCallbackResponse](docs/OAuthCallbackResponse.md)
  - [OAuthTokenDetailResponse](docs/OAuthTokenDetailResponse.md)
  - [OAuthTokenListResponse](docs/OAuthTokenListResponse.md)
@@ -249,6 +258,8 @@ Class | Method | HTTP request | Description
  - [PartOneOf3](docs/PartOneOf3.md)
  - [PartOneOf4](docs/PartOneOf4.md)
  - [PartOneOf5](docs/PartOneOf5.md)
+ - [PolicyActionPatternRequest](docs/PolicyActionPatternRequest.md)
+ - [PolicyActionRequest](docs/PolicyActionRequest.md)
  - [PolicyEvaluationOutcome](docs/PolicyEvaluationOutcome.md)
  - [PolicyResponse](docs/PolicyResponse.md)
  - [ProductListResponse](docs/ProductListResponse.md)
@@ -264,11 +275,16 @@ Class | Method | HTTP request | Description
  - [QuoteResponse](docs/QuoteResponse.md)
  - [RecurringRevenueRequest](docs/RecurringRevenueRequest.md)
  - [RecurringRevenueResponse](docs/RecurringRevenueResponse.md)
+ - [RegisterActionRequest](docs/RegisterActionRequest.md)
+ - [RegisterPolicyRequest](docs/RegisterPolicyRequest.md)
  - [RegisterShippingDestinationRequest](docs/RegisterShippingDestinationRequest.md)
+ - [RemovePolicyActionPatternRequest](docs/RemovePolicyActionPatternRequest.md)
  - [ResponseFormat](docs/ResponseFormat.md)
  - [Role](docs/Role.md)
  - [RotateSecretResponse](docs/RotateSecretResponse.md)
  - [SaveOAuthTokenRequest](docs/SaveOAuthTokenRequest.md)
+ - [SendSmsNotificationRequest](docs/SendSmsNotificationRequest.md)
+ - [SendSmsNotificationResponse](docs/SendSmsNotificationResponse.md)
  - [ServiceAccountListResponse](docs/ServiceAccountListResponse.md)
  - [ServiceAccountResponse](docs/ServiceAccountResponse.md)
  - [ShippingAvailabilityResponse](docs/ShippingAvailabilityResponse.md)
@@ -294,6 +310,7 @@ Class | Method | HTTP request | Description
  - [UpdateChatroomRequest](docs/UpdateChatroomRequest.md)
  - [UpdateChatroomResponse](docs/UpdateChatroomResponse.md)
  - [UpdateClientRequest](docs/UpdateClientRequest.md)
+ - [UpdatePolicyRequest](docs/UpdatePolicyRequest.md)
  - [UpdateProductRequest](docs/UpdateProductRequest.md)
  - [UpdateProductVariationRequest](docs/UpdateProductVariationRequest.md)
  - [UpdateQuoteRequest](docs/UpdateQuoteRequest.md)

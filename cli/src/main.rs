@@ -3,21 +3,27 @@ mod api_key_cli;
 mod auth;
 mod build_reproduce;
 mod client;
+mod cloud_app_build_job;
 mod commands;
 mod compute_cli;
 mod config;
 mod iac_cli;
 mod image_cli;
 mod install_cli;
+mod linear_cli;
+mod manifest;
 mod mcp;
 mod mcp_cli;
 mod ops_cli;
 mod org_cli;
 mod reconcile_cli;
 mod resolve;
+mod secret_cli;
+mod skills_cli;
 mod slack_cli;
 mod switch_cli;
 mod tts_cli;
+mod worker_cli;
 
 use anyhow::{anyhow, Result};
 use clap::{Args, Parser, Subcommand};
@@ -202,16 +208,26 @@ enum Commands {
     /// Manage service-account API keys
     #[command(name = "api-key")]
     ApiKey(api_key_cli::ApiKeyArgs),
+    /// Manage Cloudflare Pages secrets
+    Secret(secret_cli::SecretArgs),
     /// Manage agent sessions, protocols, workers, and memory
     Agent(agent_cli::AgentArgs),
+    /// Install and run the local Tachyon worker daemon
+    Worker(worker_cli::WorkerArgs),
     /// Infrastructure-as-Code: integrations, OAuth providers, connections
     Iac(iac_cli::IacArgs),
+    /// Validate, plan, apply, and reconcile manifests
+    Manifest(manifest::ManifestArgs),
     /// Operations: deployment events, scenario reports, and tool jobs
     Ops(ops_cli::OpsArgs),
     /// Generate AI images from text prompts
     Image(image_cli::ImageArgs),
     /// Send Slack messages through connected integrations
     Slack(slack_cli::SlackArgs),
+    /// Manage Linear issues through connected integrations
+    Linear(linear_cli::LinearArgs),
+    /// Install bundled agent skills
+    Skills(skills_cli::SkillsArgs),
     /// Convert text to speech using AI TTS models
     Tts(tts_cli::TtsArgs),
     /// Run as an MCP (Model Context Protocol) server (stdio or HTTP)
@@ -330,7 +346,10 @@ fn build_oauth_config(cli: &Cli) -> auth::OAuthConfig {
         client_id: cli.cognito_client_id.clone(),
         client_secret: cli.cognito_client_secret.clone(),
         redirect_uri,
-        scopes: vec!["openid".into(), "profile".into(), "email".into()],
+        scopes: auth::DEFAULT_OAUTH_SCOPES
+            .iter()
+            .map(|scope| (*scope).to_string())
+            .collect(),
     }
 }
 
@@ -500,6 +519,11 @@ async fn run() -> Result<()> {
             let tenant_id = resolve::resolve_tenant_id(&config, tenant_arg, &active).await?;
             api_key_cli::run(args, &config, &tenant_id).await
         }
+        Commands::Secret(args) => {
+            let project_config = config::loader::load(cli.config.as_deref())?;
+            let config = build_config(&cli, &active).await;
+            secret_cli::run(args, &config, project_config.as_ref()).await
+        }
         Commands::Agent(args) => {
             let project_config = config::loader::load(cli.config.as_deref())?;
             let tenant_arg = tenant_arg(&cli, project_config.as_ref());
@@ -507,12 +531,30 @@ async fn run() -> Result<()> {
             let tenant_id = resolve::resolve_tenant_id(&config, tenant_arg, &active).await?;
             agent_cli::run(args, &config, &tenant_id).await
         }
+        Commands::Worker(args) => {
+            let config = build_config(&cli, &active).await;
+            let tenant_id = resolve::resolve_tenant_id(&config, &cli.tenant_id, &active).await?;
+            worker_cli::run(args, &config, &tenant_id, &active).await
+        }
         Commands::Iac(args) => {
             let project_config = config::loader::load(cli.config.as_deref())?;
             let tenant_arg = tenant_arg(&cli, project_config.as_ref());
             let config = build_config(&cli, &active).await;
             let tenant_id = resolve::resolve_tenant_id(&config, tenant_arg, &active).await?;
             iac_cli::run(args, &config, &tenant_id).await
+        }
+        Commands::Manifest(args) => {
+            if manifest::needs_tenant(args) {
+                let (project_config, searched_paths) =
+                    load_project_config_for_context(&cli, manifest::context_file(args))?;
+                let tenant_arg =
+                    strict_tenant_arg(&cli, project_config.as_ref(), &searched_paths, "manifest")?;
+                let config = build_config(&cli, &active).await;
+                let tenant_id = resolve::resolve_tenant_id(&config, tenant_arg, &active).await?;
+                manifest::run(args, Some(&config), Some(&tenant_id)).await
+            } else {
+                manifest::run(args, None, None).await
+            }
         }
         Commands::Ops(args) => {
             let project_config = config::loader::load(cli.config.as_deref())?;
@@ -535,6 +577,14 @@ async fn run() -> Result<()> {
             let tenant_id = resolve::resolve_tenant_id(&config, tenant_arg, &active).await?;
             slack_cli::run(args, &config, &tenant_id).await
         }
+        Commands::Linear(args) => {
+            let project_config = config::loader::load(cli.config.as_deref())?;
+            let tenant_arg = tenant_arg(&cli, project_config.as_ref());
+            let config = build_config(&cli, &active).await;
+            let tenant_id = resolve::resolve_tenant_id(&config, tenant_arg, &active).await?;
+            linear_cli::run(args, &config, &tenant_id).await
+        }
+        Commands::Skills(args) => skills_cli::run(args),
         Commands::Tts(args) => {
             let project_config = config::loader::load(cli.config.as_deref())?;
             let tenant_arg = tenant_arg(&cli, project_config.as_ref());
@@ -551,12 +601,12 @@ async fn run() -> Result<()> {
         }
         Commands::Reconcile(args) => {
             let (project_config, searched_paths) =
-                load_project_config_for_context(&cli, Some(args.file.as_path()))?;
+                load_project_config_for_context(&cli, args.file.as_deref())?;
             let tenant_arg =
                 strict_tenant_arg(&cli, project_config.as_ref(), &searched_paths, "reconcile")?;
             let config = build_config(&cli, &active).await;
             let tenant_id = resolve::resolve_tenant_id(&config, tenant_arg, &active).await?;
-            reconcile_cli::run(args, &config, &tenant_id).await
+            manifest::reconcile_alias(args, &config, &tenant_id).await
         }
     }
 }

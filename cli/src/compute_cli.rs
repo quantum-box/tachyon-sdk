@@ -4,8 +4,8 @@ use clap::{Args, Subcommand, ValueEnum};
 use dialoguer::{theme::ColorfulTheme, Password};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::collections::{BTreeSet, HashMap};
-use std::io::Write;
+use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::io::{self, IsTerminal, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Instant;
@@ -108,6 +108,9 @@ pub enum ComputeCommand {
         /// Emit compact JSON Lines for coding agents
         #[arg(long)]
         agent: bool,
+        /// Emit raw runtime log JSON Lines when used with --tail
+        #[arg(long)]
+        json: bool,
     },
 }
 
@@ -132,7 +135,7 @@ impl PagesApp {
         }
     }
 
-    fn cf_project_name(&self) -> &str {
+    pub(crate) fn cf_project_name(&self) -> &str {
         match self {
             PagesApp::Tachyon => "tachyon-app",
             PagesApp::Cms => "tachyon-apps-cms-app",
@@ -335,6 +338,98 @@ pub enum AppsCommand {
         #[arg(long)]
         dry_run: bool,
     },
+    /// Generate a user feedback report for a compute app
+    Feedback(FeedbackArgs),
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct FeedbackArgs {
+    /// App ID or name the feedback is about.
+    pub app_id: String,
+    /// Feedback body from the user.
+    #[arg(long, short = 'm')]
+    pub message: String,
+    /// Feedback kind.
+    #[arg(long, value_enum, default_value_t = FeedbackKind::Other)]
+    pub kind: FeedbackKind,
+    /// Feedback severity.
+    #[arg(long, value_enum, default_value_t = FeedbackSeverity::Medium)]
+    pub severity: FeedbackSeverity,
+    /// URL where the user observed the issue or request.
+    #[arg(long)]
+    pub url: Option<String>,
+    /// Build ID related to the feedback.
+    #[arg(long)]
+    pub build_id: Option<String>,
+    /// Deployment ID related to the feedback.
+    #[arg(long)]
+    pub deployment_id: Option<String>,
+    /// Optional contact information for follow-up.
+    #[arg(long)]
+    pub contact: Option<String>,
+    /// Additional KEY=VALUE metadata. Secret-like keys are rejected.
+    #[arg(long = "metadata")]
+    pub metadata: Vec<String>,
+    /// Emit a JSON payload instead of Markdown.
+    #[arg(long)]
+    pub json: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ValueEnum)]
+#[serde(rename_all = "snake_case")]
+pub enum FeedbackKind {
+    Bug,
+    Feature,
+    Question,
+    Other,
+}
+
+impl std::fmt::Display for FeedbackKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let value = match self {
+            Self::Bug => "bug",
+            Self::Feature => "feature",
+            Self::Question => "question",
+            Self::Other => "other",
+        };
+        f.write_str(value)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ValueEnum)]
+#[serde(rename_all = "snake_case")]
+pub enum FeedbackSeverity {
+    Low,
+    Medium,
+    High,
+    Critical,
+}
+
+impl std::fmt::Display for FeedbackSeverity {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let value = match self {
+            Self::Low => "low",
+            Self::Medium => "medium",
+            Self::High => "high",
+            Self::Critical => "critical",
+        };
+        f.write_str(value)
+    }
+}
+
+#[derive(Debug, Serialize, PartialEq, Eq)]
+struct FeedbackPayload {
+    app_id: String,
+    operator_id: String,
+    kind: FeedbackKind,
+    severity: FeedbackSeverity,
+    message: String,
+    url: Option<String>,
+    build_id: Option<String>,
+    deployment_id: Option<String>,
+    contact: Option<String>,
+    metadata: BTreeMap<String, String>,
+    created_at: String,
 }
 
 // --- Builds subcommands ---
@@ -430,6 +525,13 @@ pub enum BuildsCommand {
         #[arg(long)]
         dry_run: bool,
     },
+    /// Run a Cloud App build workload from a JobRun spec.
+    #[command(hide = true)]
+    RunJob {
+        /// Environment variable that contains the BuildWorkloadSpec JSON.
+        #[arg(long, default_value = "TACHYON_BUILD_WORKLOAD_SPEC_JSON")]
+        spec_env: String,
+    },
 }
 
 // --- Deployments subcommands ---
@@ -484,6 +586,14 @@ pub enum EnvCommand {
         /// Register this key as a Cloudflare Pages secret
         #[arg(long)]
         secret: Option<String>,
+        /// Secret value (non-interactive). Use `-` to read from stdin.
+        #[arg(
+            long,
+            value_name = "VALUE",
+            requires = "secret",
+            conflicts_with = "vars"
+        )]
+        value: Option<String>,
         /// Target environment
         #[arg(long, default_value = "all")]
         target: String,
@@ -612,6 +722,8 @@ struct AppResponse {
     buildspec_strategy: Option<String>,
     #[serde(default)]
     watch_paths: Option<Vec<String>>,
+    #[serde(default)]
+    paths_ignore: Option<Vec<String>>,
     #[serde(default)]
     status: Option<String>,
     #[serde(default)]
@@ -877,6 +989,10 @@ fn is_success_build_status(status: &str) -> bool {
     matches!(status.to_ascii_lowercase().as_str(), "succeeded")
 }
 
+fn is_http_not_found_error(err: &anyhow::Error) -> bool {
+    err.to_string().contains("status=404 Not Found")
+}
+
 fn print_agent_event(event: &AgentBuildEvent<'_>) -> Result<()> {
     println!("{}", serde_json::to_string(event)?);
     Ok(())
@@ -971,7 +1087,7 @@ enum ApplyAction {
 }
 
 #[derive(Debug, Default)]
-struct EnvPlan {
+pub(crate) struct EnvPlan {
     plain: Vec<SetEnvVarEntry>,
     secret_refs: Vec<SecretEnvRef>,
     sentry_integrations: Vec<SentryIntegrationPlan>,
@@ -1014,7 +1130,7 @@ struct IntegrationConnection {
     status: String,
 }
 
-async fn run_apps_apply(
+pub(crate) async fn run_apps_apply(
     api: &ApiClient,
     file: &Path,
     selected_app: Option<&str>,
@@ -1026,7 +1142,7 @@ async fn run_apps_apply(
     let live: ListAppsResponse = api.get("/v1/compute/apps").await?;
     let sentry_plans = entries
         .iter()
-        .map(|entry| plan_sentry_integration(entry))
+        .map(plan_sentry_integration)
         .collect::<Result<Vec<_>>>()?
         .into_iter()
         .flatten()
@@ -1112,7 +1228,7 @@ async fn run_apps_apply(
     Ok(())
 }
 
-fn load_cloud_apps_manifest(path: &Path) -> Result<Value> {
+pub(crate) fn load_cloud_apps_manifest(path: &Path) -> Result<Value> {
     let content = std::fs::read_to_string(path)?;
     let value: Value = serde_yaml::from_str(&content)?;
     match value.get("kind").and_then(Value::as_str) {
@@ -1140,7 +1256,7 @@ fn load_cloud_apps_manifest(path: &Path) -> Result<Value> {
     }
 }
 
-fn select_app_entries(manifest: &Value, app: Option<&str>) -> Result<Vec<Value>> {
+pub(crate) fn select_app_entries(manifest: &Value, app: Option<&str>) -> Result<Vec<Value>> {
     let apps = manifest
         .get("spec")
         .and_then(|s| s.get("apps"))
@@ -1162,7 +1278,7 @@ fn select_app_entries(manifest: &Value, app: Option<&str>) -> Result<Vec<Value>>
     Ok(entries)
 }
 
-fn app_entry_to_api_body(entry: &Value) -> Result<Value> {
+pub(crate) fn app_entry_to_api_body(entry: &Value) -> Result<Value> {
     let name = entry
         .get("name")
         .and_then(Value::as_str)
@@ -1219,6 +1335,13 @@ fn app_entry_to_api_body(entry: &Value) -> Result<Value> {
             .filter_map(|p| p.as_str().map(|s| Value::String(s.to_string())))
             .collect();
         obj.insert("watch_paths".to_string(), Value::Array(paths));
+    }
+    if let Some(paths) = entry.get("pathsIgnore").and_then(Value::as_array) {
+        let paths: Vec<Value> = paths
+            .iter()
+            .filter_map(|p| p.as_str().map(|s| Value::String(s.to_string())))
+            .collect();
+        obj.insert("paths_ignore".to_string(), Value::Array(paths));
     }
     Ok(body)
 }
@@ -1321,6 +1444,12 @@ fn app_field_value(app: &AppResponse, field: &str) -> Value {
             }
             _ => Value::Null,
         },
+        "paths_ignore" => match &app.paths_ignore {
+            Some(paths) if !paths.is_empty() => {
+                Value::Array(paths.iter().map(|p| Value::String(p.clone())).collect())
+            }
+            _ => Value::Null,
+        },
         _ => Value::Null,
     }
 }
@@ -1332,7 +1461,7 @@ fn opt_string_value(value: Option<&str>) -> Value {
     }
 }
 
-fn plan_env_vars(entry: &Value, environment: &str) -> Result<EnvPlan> {
+pub(crate) fn plan_env_vars(entry: &Value, environment: &str) -> Result<EnvPlan> {
     let mut plan = EnvPlan::default();
 
     if let Some(env_vars) = entry.get("envVars") {
@@ -1503,7 +1632,7 @@ fn extract_secret_ref(key: &str, value_from: &Value) -> Result<String> {
             "env var {key} valueFrom.secret must be a key string or object with path"
         ));
     };
-    if path.is_empty() || path.contains('/') {
+    if path.is_empty() {
         return Err(anyhow!(
             "env var {key} valueFrom.secret must reference a single env key"
         ));
@@ -1564,6 +1693,114 @@ async fn apply_env_plan(
         );
     }
     Ok((changed, missing))
+}
+
+fn run_apps_feedback(tenant_id: &str, app_id: &str, args: &FeedbackArgs) -> Result<()> {
+    let payload = build_feedback_payload(tenant_id, app_id, args)?;
+    if args.json {
+        print_json(&payload)?;
+    } else {
+        println!("{}", render_feedback_markdown(&payload));
+    }
+    Ok(())
+}
+
+fn build_feedback_payload(
+    tenant_id: &str,
+    app_id: &str,
+    args: &FeedbackArgs,
+) -> Result<FeedbackPayload> {
+    let metadata = parse_feedback_metadata(&args.metadata)?;
+    Ok(FeedbackPayload {
+        app_id: app_id.to_string(),
+        operator_id: tenant_id.to_string(),
+        kind: args.kind,
+        severity: args.severity,
+        message: args.message.clone(),
+        url: args.url.clone(),
+        build_id: args.build_id.clone(),
+        deployment_id: args.deployment_id.clone(),
+        contact: args.contact.clone(),
+        metadata,
+        created_at: Utc::now().to_rfc3339(),
+    })
+}
+
+fn parse_feedback_metadata(entries: &[String]) -> Result<BTreeMap<String, String>> {
+    let mut metadata = BTreeMap::new();
+    for entry in entries {
+        let (key, value) = entry
+            .split_once('=')
+            .ok_or_else(|| anyhow!("metadata must be KEY=VALUE, got `{entry}`"))?;
+        let key = key.trim();
+        if key.is_empty() {
+            return Err(anyhow!("metadata key must not be empty"));
+        }
+        if is_secret_like_key(key) {
+            return Err(anyhow!(
+                "metadata key `{key}` looks secret-like; do not pass secret values to feedback"
+            ));
+        }
+        metadata.insert(key.to_string(), value.trim().to_string());
+    }
+    Ok(metadata)
+}
+
+fn is_secret_like_key(key: &str) -> bool {
+    let normalized = key.to_ascii_lowercase().replace(['-', '.'], "_");
+    [
+        "secret",
+        "token",
+        "password",
+        "passwd",
+        "api_key",
+        "apikey",
+        "private_key",
+        "credential",
+        "authorization",
+    ]
+    .iter()
+    .any(|needle| normalized.contains(needle))
+}
+
+fn render_feedback_markdown(payload: &FeedbackPayload) -> String {
+    let mut lines = vec![
+        "# Cloud App Feedback".to_string(),
+        String::new(),
+        format!("- App ID: {}", payload.app_id),
+        format!("- Operator ID: {}", payload.operator_id),
+        format!("- Kind: {}", payload.kind),
+        format!("- Severity: {}", payload.severity),
+        format!("- Created At: {}", payload.created_at),
+    ];
+
+    if let Some(url) = &payload.url {
+        lines.push(format!("- URL: {url}"));
+    }
+    if let Some(build_id) = &payload.build_id {
+        lines.push(format!("- Build ID: {build_id}"));
+    }
+    if let Some(deployment_id) = &payload.deployment_id {
+        lines.push(format!("- Deployment ID: {deployment_id}"));
+    }
+    if let Some(contact) = &payload.contact {
+        lines.push(format!("- Contact: {contact}"));
+    }
+    if !payload.metadata.is_empty() {
+        lines.push("- Metadata:".to_string());
+        for (key, value) in &payload.metadata {
+            lines.push(format!("  - {key}: {value}"));
+        }
+    }
+
+    lines.extend([
+        String::new(),
+        "## Message".to_string(),
+        String::new(),
+        payload.message.clone(),
+    ]);
+
+    lines.join("\n")
 }
 
 async fn run_builds_list(api: &ApiClient, app_id: &str, limit: usize, json: bool) -> Result<()> {
@@ -1846,11 +2083,22 @@ async fn run_builds_watch(
 
         if !no_logs {
             let path = format!("/v1/compute/builds/{resolved_build_id}/logs");
-            let logs: BuildLogsResponse = if let Some(token) = &next_token {
+            let logs_result: Result<BuildLogsResponse> = if let Some(token) = &next_token {
                 api.get_query(&path, &[("next_token", token.as_str())])
-                    .await?
+                    .await
             } else {
-                api.get(&path).await?
+                api.get(&path).await
+            };
+            let logs = match logs_result {
+                Ok(logs) => logs,
+                Err(err)
+                    if !is_terminal_build_status(&build.status)
+                        && is_http_not_found_error(&err) =>
+                {
+                    sleep(interval).await;
+                    continue;
+                }
+                Err(err) => return Err(err),
             };
             for line in &logs.lines {
                 if agent {
@@ -1896,11 +2144,66 @@ async fn run_builds_watch(
     }
 }
 
-async fn run_runtime_log_tail(api: &ApiClient, app_id: &str) -> Result<()> {
+#[derive(Debug, Clone, Copy)]
+struct RuntimeLogTailOptions {
+    raw_json: bool,
+}
+
+#[derive(Debug, Default)]
+struct SseEvent {
+    event: Option<String>,
+    data: Vec<String>,
+}
+
+async fn run_runtime_log_tail(
+    api: &ApiClient,
+    app_id: &str,
+    options: RuntimeLogTailOptions,
+) -> Result<()> {
     let url = format!("{}/v1/compute/apps/{app_id}/logs/tail", api.base_url);
+    let mut backoff = Duration::from_secs(1);
+    let max_backoff = Duration::from_secs(30);
+
+    loop {
+        let result = tokio::select! {
+            biased;
+            signal = tokio::signal::ctrl_c() => {
+                signal?;
+                eprintln!("runtime log tail stopped.");
+                return Ok(());
+            }
+            result = run_runtime_log_tail_once(api, &url, options) => result,
+        };
+
+        if let Err(error) = result {
+            eprintln!("runtime log tail error: {error}");
+        } else {
+            eprintln!("runtime log tail disconnected.");
+        }
+
+        eprintln!("reconnecting in {}s...", backoff.as_secs());
+        tokio::select! {
+            biased;
+            signal = tokio::signal::ctrl_c() => {
+                signal?;
+                eprintln!("runtime log tail stopped.");
+                return Ok(());
+            }
+            _ = sleep(backoff) => {}
+        }
+        backoff = std::cmp::min(backoff * 2, max_backoff);
+    }
+}
+
+async fn run_runtime_log_tail_once(
+    api: &ApiClient,
+    url: &str,
+    options: RuntimeLogTailOptions,
+) -> Result<()> {
     let mut resp = api
         .client
-        .get(&url)
+        .get(url)
+        .header(reqwest::header::ACCEPT, "text/event-stream")
         .send()
         .await
         .map_err(|e| anyhow!("GET {url} failed: {e}"))?;
@@ -1915,22 +2218,306 @@ async fn run_runtime_log_tail(api: &ApiClient, app_id: &str) -> Result<()> {
     let mut pending = String::new();
     while let Some(chunk) = resp.chunk().await? {
         pending.push_str(&String::from_utf8_lossy(&chunk));
-        while let Some(pos) = pending.find('\n') {
-            let line = pending[..pos].trim_end_matches('\r').to_string();
-            pending.drain(..=pos);
-            if let Some(data) = line.strip_prefix("data:") {
-                println!("{}", data.trim_start());
-            } else if let Some(event) = line.strip_prefix("event:") {
-                if event.trim() == "error" {
-                    eprint!("runtime log tail error: ");
-                    std::io::stderr().flush().ok();
-                }
+        for event in drain_sse_events(&mut pending) {
+            if print_runtime_log_tail_event(&event, options.raw_json)? {
+                return Err(anyhow!("runtime log tail stream error"));
             }
+        }
+        std::io::stdout().flush().ok();
+    }
+    if let Some(event) = parse_sse_event(&pending) {
+        if print_runtime_log_tail_event(&event, options.raw_json)? {
+            return Err(anyhow!("runtime log tail stream error"));
         }
         std::io::stdout().flush().ok();
     }
 
     Ok(())
+}
+
+fn drain_sse_events(pending: &mut String) -> Vec<SseEvent> {
+    let mut events = Vec::new();
+    while let Some((pos, delimiter_len)) = find_sse_event_boundary(pending) {
+        let raw = pending[..pos].to_string();
+        pending.drain(..pos + delimiter_len);
+        if let Some(event) = parse_sse_event(&raw) {
+            events.push(event);
+        }
+    }
+    events
+}
+
+fn find_sse_event_boundary(input: &str) -> Option<(usize, usize)> {
+    match (input.find("\r\n\r\n"), input.find("\n\n")) {
+        (Some(crlf), Some(lf)) if crlf <= lf => Some((crlf, 4)),
+        (Some(_), Some(lf)) => Some((lf, 2)),
+        (Some(crlf), None) => Some((crlf, 4)),
+        (None, Some(lf)) => Some((lf, 2)),
+        (None, None) => None,
+    }
+}
+
+fn parse_sse_event(raw: &str) -> Option<SseEvent> {
+    let mut event = SseEvent::default();
+    for line in raw.lines() {
+        let line = line.trim_end_matches('\r');
+        if line.is_empty() || line.starts_with(':') {
+            continue;
+        }
+        if let Some(value) = line.strip_prefix("event:") {
+            event.event = Some(value.trim().to_string());
+        } else if let Some(value) = line.strip_prefix("data:") {
+            event.data.push(value.trim_start().to_string());
+        }
+    }
+    (!event.data.is_empty()).then_some(event)
+}
+
+fn print_runtime_log_tail_event(event: &SseEvent, raw_json: bool) -> Result<bool> {
+    let data = event.data.join("\n");
+    if event.event.as_deref() == Some("error") {
+        eprintln!(
+            "runtime log tail stream error: {}",
+            format_runtime_log_line(&data)
+        );
+        return Ok(true);
+    }
+
+    if raw_json {
+        println!("{data}");
+    } else {
+        for line in format_runtime_log_lines(&data) {
+            println!("{line}");
+        }
+    }
+    Ok(false)
+}
+
+fn format_runtime_log_lines(data: &str) -> Vec<String> {
+    let Ok(value) = serde_json::from_str::<Value>(data) else {
+        return vec![data.to_string()];
+    };
+    let Some(object) = value.as_object() else {
+        return vec![format_runtime_log_value(&value)];
+    };
+
+    let timestamp = runtime_log_timestamp(object);
+    let mut lines = Vec::new();
+
+    if let Some(summary) = runtime_log_request_summary(object) {
+        lines.push(format!("{timestamp} {summary}"));
+    }
+
+    if let Some(exceptions) = object.get("exceptions").and_then(Value::as_array) {
+        for exception in exceptions {
+            lines.push(format!(
+                "{timestamp} ERROR {}",
+                format_runtime_log_exception(exception)
+            ));
+        }
+    }
+
+    if let Some(logs) = object.get("logs").and_then(Value::as_array) {
+        for log in logs {
+            lines.push(format!("{timestamp} {}", format_runtime_log_console(log)));
+        }
+    }
+
+    if lines.is_empty() {
+        lines.push(format!(
+            "{timestamp} {}",
+            runtime_log_generic_summary(object, &value)
+        ));
+    }
+
+    lines
+}
+
+fn format_runtime_log_line(data: &str) -> String {
+    format_runtime_log_lines(data).join(" | ")
+}
+
+fn runtime_log_timestamp(object: &serde_json::Map<String, Value>) -> String {
+    let millis = object
+        .get("eventTimestamp")
+        .or_else(|| object.get("timestamp"))
+        .and_then(value_to_i64);
+    if let Some(millis) = millis {
+        return match Utc.timestamp_millis_opt(millis) {
+            chrono::LocalResult::Single(dt) => format!("[{}]", dt.format("%H:%M:%S")),
+            _ => format!("[{millis}]"),
+        };
+    }
+
+    let timestamp = object
+        .get("timestamp")
+        .or_else(|| object.get("eventTimestamp"))
+        .and_then(Value::as_str);
+    if let Some(timestamp) = timestamp {
+        if let Ok(parsed) = DateTime::parse_from_rfc3339(timestamp) {
+            return format!("[{}]", parsed.with_timezone(&Utc).format("%H:%M:%S"));
+        }
+    }
+
+    format!("[{}]", Utc::now().format("%H:%M:%S"))
+}
+
+fn runtime_log_request_summary(object: &serde_json::Map<String, Value>) -> Option<String> {
+    let request = object.get("request")?.as_object()?;
+    let method = request
+        .get("method")
+        .or_else(|| request.get("requestMethod"))
+        .and_then(Value::as_str)
+        .unwrap_or("REQUEST");
+    let url = request
+        .get("url")
+        .or_else(|| request.get("path"))
+        .and_then(Value::as_str)
+        .unwrap_or("-");
+    let path = runtime_log_url_path(url);
+    let status = object
+        .get("response")
+        .and_then(Value::as_object)
+        .and_then(|response| {
+            response
+                .get("status")
+                .or_else(|| response.get("statusCode"))
+                .and_then(value_to_i64)
+        })
+        .map(|status| status.to_string())
+        .unwrap_or_else(|| "-".to_string());
+    let cpu = object
+        .get("cpuTime")
+        .or_else(|| object.get("cpu_time"))
+        .and_then(value_to_i64);
+    let source = object
+        .get("scriptName")
+        .or_else(|| object.get("source"))
+        .and_then(Value::as_str);
+
+    let mut line = format!("{method} {path} {status}");
+    if let Some(cpu) = cpu {
+        line.push_str(&format!("  (cpu: {cpu}ms)"));
+    }
+    if let Some(source) = source {
+        line.push_str(&format!("  source={source}"));
+    }
+    Some(line)
+}
+
+fn runtime_log_generic_summary(object: &serde_json::Map<String, Value>, value: &Value) -> String {
+    let level = object
+        .get("level")
+        .or_else(|| object.get("severity"))
+        .and_then(Value::as_str)
+        .map(|level| level.to_ascii_uppercase());
+    let source = object
+        .get("source")
+        .or_else(|| object.get("scriptName"))
+        .and_then(Value::as_str);
+    let message = runtime_log_message(object).unwrap_or_else(|| format_runtime_log_value(value));
+
+    let mut parts = Vec::new();
+    if let Some(level) = level {
+        parts.push(level);
+    }
+    parts.push(message);
+    if let Some(source) = source {
+        parts.push(format!("source={source}"));
+    }
+    parts.join(" ")
+}
+
+fn runtime_log_message(object: &serde_json::Map<String, Value>) -> Option<String> {
+    for key in ["message", "outcome", "event"] {
+        if let Some(value) = object.get(key) {
+            let text = format_runtime_log_value(value);
+            if !text.is_empty() {
+                return Some(text);
+            }
+        }
+    }
+    None
+}
+
+fn runtime_log_url_path(url: &str) -> String {
+    if let Ok(parsed) = reqwest::Url::parse(url) {
+        let mut path = parsed.path().to_string();
+        if let Some(query) = parsed.query() {
+            path.push('?');
+            path.push_str(query);
+        }
+        if path.is_empty() {
+            "/".to_string()
+        } else {
+            path
+        }
+    } else {
+        url.to_string()
+    }
+}
+
+fn format_runtime_log_console(value: &Value) -> String {
+    if let Some(object) = value.as_object() {
+        let level = object
+            .get("level")
+            .or_else(|| object.get("severity"))
+            .and_then(Value::as_str)
+            .map(|level| level.to_ascii_uppercase());
+        let message = object
+            .get("message")
+            .or_else(|| object.get("text"))
+            .or_else(|| object.get("args"))
+            .map(format_runtime_log_value)
+            .unwrap_or_else(|| format_runtime_log_value(value));
+        if let Some(level) = level {
+            return format!("{level} {message}");
+        }
+        return message;
+    }
+    format_runtime_log_value(value)
+}
+
+fn format_runtime_log_exception(value: &Value) -> String {
+    if let Some(object) = value.as_object() {
+        let name = object
+            .get("name")
+            .and_then(Value::as_str)
+            .unwrap_or("Exception");
+        let message = object
+            .get("message")
+            .or_else(|| object.get("text"))
+            .map(format_runtime_log_value)
+            .unwrap_or_else(|| format_runtime_log_value(value));
+        if message.starts_with(name) {
+            message
+        } else {
+            format!("{name}: {message}")
+        }
+    } else {
+        format_runtime_log_value(value)
+    }
+}
+
+fn format_runtime_log_value(value: &Value) -> String {
+    match value {
+        Value::Null => String::new(),
+        Value::String(s) => s.clone(),
+        Value::Array(items) => items
+            .iter()
+            .map(format_runtime_log_value)
+            .filter(|item| !item.is_empty())
+            .collect::<Vec<_>>()
+            .join(" "),
+        _ => serde_json::to_string(value).unwrap_or_else(|_| value.to_string()),
+    }
+}
+
+fn value_to_i64(value: &Value) -> Option<i64> {
+    value
+        .as_i64()
+        .or_else(|| value.as_u64().and_then(|value| i64::try_from(value).ok()))
+        .or_else(|| value.as_f64().map(|value| value as i64))
 }
 
 /// Reproduce a Cloud Apps build locally in Docker. See `build_reproduce` for
@@ -2158,11 +2745,12 @@ async fn run_env_set_secret(
     app_id: &str,
     key: &str,
     target: &str,
+    value_flag: Option<&str>,
     config_flag: Option<&Path>,
 ) -> Result<()> {
     validate_secret_key(key)?;
     validate_secret_target(target)?;
-    let value = read_secret_value(key)?;
+    let value = read_secret_value(key, value_flag)?;
     let req = SetAppSecretRequest {
         key: key.to_string(),
         value,
@@ -2178,7 +2766,7 @@ async fn run_env_set_secret(
     Ok(())
 }
 
-fn validate_secret_key(key: &str) -> Result<()> {
+pub(crate) fn validate_secret_key(key: &str) -> Result<()> {
     if key.is_empty() {
         return Err(anyhow!("secret key must not be empty"));
     }
@@ -2202,7 +2790,21 @@ fn validate_secret_target(target: &str) -> Result<()> {
     }
 }
 
-fn read_secret_value(key: &str) -> Result<String> {
+/// Resolve a secret value for `env set --secret`.
+///
+/// Priority: `--value` / `--value -` (stdin) → `TACHYON_SECRET_VALUE` → piped
+/// stdin when non-interactive → interactive prompt.
+fn read_secret_value(key: &str, value_flag: Option<&str>) -> Result<String> {
+    if let Some(flag) = value_flag {
+        if flag == "-" {
+            return read_secret_value_from_stdin();
+        }
+        if flag.is_empty() {
+            return Err(anyhow!("--value must not be empty"));
+        }
+        return Ok(flag.to_string());
+    }
+
     if let Ok(value) = std::env::var("TACHYON_SECRET_VALUE") {
         if value.is_empty() {
             return Err(anyhow!("TACHYON_SECRET_VALUE must not be empty"));
@@ -2210,10 +2812,26 @@ fn read_secret_value(key: &str) -> Result<String> {
         return Ok(value);
     }
 
+    if !io::stdin().is_terminal() {
+        return read_secret_value_from_stdin();
+    }
+
     let value = Password::with_theme(&ColorfulTheme::default())
         .with_prompt(format!("Enter value for {key}"))
         .allow_empty_password(false)
         .interact()?;
+    Ok(value)
+}
+
+fn read_secret_value_from_stdin() -> Result<String> {
+    let mut buf = String::new();
+    io::stdin()
+        .read_to_string(&mut buf)
+        .map_err(|error| anyhow!("failed to read secret value from stdin: {error}"))?;
+    let value = buf.trim_end_matches(['\r', '\n']).to_string();
+    if value.is_empty() {
+        return Err(anyhow!("secret value from stdin must not be empty"));
+    }
     Ok(value)
 }
 
@@ -2544,6 +3162,10 @@ pub async fn run(
                 environment,
                 dry_run,
             } => run_apps_apply(&api, file, app.as_deref(), environment, *dry_run).await,
+            AppsCommand::Feedback(feedback_args) => {
+                let id = resolve::resolve_app_id(&api, &feedback_args.app_id).await?;
+                run_apps_feedback(tenant_id, &id, feedback_args)
+            }
         },
         ComputeCommand::Builds { command } => match command {
             BuildsCommand::List {
@@ -2625,6 +3247,9 @@ pub async fn run(
                 image.as_deref(),
                 *dry_run,
             ),
+            BuildsCommand::RunJob { spec_env } => {
+                crate::cloud_app_build_job::run_from_env(spec_env).await
+            }
         },
         ComputeCommand::Deployments { command } => match command {
             DeploymentsCommand::List { app_id, json } => {
@@ -2655,6 +3280,7 @@ pub async fn run(
                 app_id,
                 app,
                 secret,
+                value,
                 target,
                 branch,
                 vars,
@@ -2676,7 +3302,7 @@ pub async fn run(
                     if !vars.is_empty() {
                         return Err(anyhow!("KEY=VALUE arguments cannot be used with --secret"));
                     }
-                    run_env_set_secret(&api, &id, key, target, config_flag).await
+                    run_env_set_secret(&api, &id, key, target, value.as_deref(), config_flag).await
                 } else {
                     run_env_set(&api, &id, &vars, target, branch.as_deref()).await
                 }
@@ -2740,10 +3366,15 @@ pub async fn run(
             build_id,
             follow,
             agent,
+            json,
         } => {
             if let Some(app_id) = tail {
                 let id = resolve::resolve_app_id(&api, app_id).await?;
-                return run_runtime_log_tail(&api, &id).await;
+                return run_runtime_log_tail(&api, &id, RuntimeLogTailOptions { raw_json: *json })
+                    .await;
+            }
+            if *json {
+                return Err(anyhow!("--json is only supported with compute logs --tail"));
             }
             let resolved_app_id = match app_id {
                 Some(id) => Some(resolve::resolve_app_id(&api, id).await?),
@@ -2829,11 +3460,143 @@ mod tests {
     }
 
     #[test]
+    fn runtime_tail_formatter_summarizes_cloudflare_request_logs_and_exceptions() {
+        let raw = r#"{
+            "eventTimestamp": 1767273332000,
+            "scriptName": "tachyon-console",
+            "cpuTime": 86,
+            "request": {
+                "method": "GET",
+                "url": "https://example.com/api/reservations?limit=1"
+            },
+            "response": { "status": 200 },
+            "logs": [
+                { "level": "log", "message": ["reservation", 42] }
+            ],
+            "exceptions": [
+                { "name": "TypeError", "message": "Cannot read property 'id' of undefined" }
+            ]
+        }"#;
+
+        let lines = format_runtime_log_lines(raw);
+
+        assert_eq!(
+            lines,
+            vec![
+                "[13:15:32] GET /api/reservations?limit=1 200  (cpu: 86ms)  source=tachyon-console",
+                "[13:15:32] ERROR TypeError: Cannot read property 'id' of undefined",
+                "[13:15:32] LOG reservation 42",
+            ]
+        );
+    }
+
+    #[test]
     fn sentry_provider_name_is_stable() {
         assert_eq!(sentry_provider_name("nextjs"), "sentry_nextjs");
         assert_eq!(
             sentry_provider_name("Field Admin UI"),
             "sentry_field_admin_ui"
         );
+    }
+
+    #[test]
+    fn runtime_tail_formatter_falls_back_for_unknown_payloads() {
+        let json_lines = format_runtime_log_lines(r#"{"unexpected":{"nested":true}}"#);
+        assert_eq!(json_lines.len(), 1);
+        assert!(json_lines[0].starts_with('['));
+        assert!(json_lines[0].contains(r#""unexpected":{"nested":true}"#));
+
+        assert_eq!(
+            format_runtime_log_lines("not json"),
+            vec!["not json".to_string()]
+        );
+    }
+
+    #[test]
+    fn runtime_tail_formatter_includes_top_level_level_message_and_source() {
+        let lines = format_runtime_log_lines(
+            r#"{"timestamp":"2026-01-01T20:15:40Z","level":"error","message":"boom","source":"worker"}"#,
+        );
+
+        assert_eq!(lines, vec!["[20:15:40] ERROR boom source=worker"]);
+    }
+
+    #[test]
+    fn runtime_tail_sse_parser_handles_multiline_data_and_crlf() {
+        let mut pending =
+            "event: log\r\ndata: {\"message\":\"a\"}\r\ndata: {\"message\":\"b\"}\r\n\r\n"
+                .to_string();
+
+        let events = drain_sse_events(&mut pending);
+
+        assert!(pending.is_empty());
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].event.as_deref(), Some("log"));
+        assert_eq!(
+            events[0].data,
+            vec![
+                "{\"message\":\"a\"}".to_string(),
+                "{\"message\":\"b\"}".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn feedback_payload_includes_cloud_app_context() {
+        let args = FeedbackArgs {
+            app_id: "app_01test".to_string(),
+            message: "The production page returns 500.".to_string(),
+            kind: FeedbackKind::Bug,
+            severity: FeedbackSeverity::High,
+            url: Some("https://example.txcloud.app".to_string()),
+            build_id: Some("bld_01test".to_string()),
+            deployment_id: Some("dep_01test".to_string()),
+            contact: Some("user@example.com".to_string()),
+            metadata: vec!["browser=Chrome".to_string()],
+            json: false,
+        };
+
+        let payload = build_feedback_payload("tn_01test", "app_01resolved", &args).unwrap();
+
+        assert_eq!(payload.app_id, "app_01resolved");
+        assert_eq!(payload.operator_id, "tn_01test");
+        assert_eq!(payload.kind, FeedbackKind::Bug);
+        assert_eq!(payload.severity, FeedbackSeverity::High);
+        assert_eq!(
+            payload.metadata.get("browser").map(String::as_str),
+            Some("Chrome")
+        );
+    }
+
+    #[test]
+    fn feedback_metadata_rejects_secret_like_keys() {
+        let err = parse_feedback_metadata(&["api_key=secret".to_string()]).unwrap_err();
+
+        assert!(err.to_string().contains("secret-like"), "{err}");
+    }
+
+    #[test]
+    fn feedback_markdown_formats_context() {
+        let payload = FeedbackPayload {
+            app_id: "app_01test".to_string(),
+            operator_id: "tn_01test".to_string(),
+            kind: FeedbackKind::Feature,
+            severity: FeedbackSeverity::Medium,
+            message: "Please add CSV export.".to_string(),
+            url: None,
+            build_id: None,
+            deployment_id: None,
+            contact: None,
+            metadata: BTreeMap::from([("browser".to_string(), "Safari".to_string())]),
+            created_at: "2026-05-29T00:00:00+00:00".to_string(),
+        };
+
+        let markdown = render_feedback_markdown(&payload);
+
+        assert!(markdown.contains("# Cloud App Feedback"));
+        assert!(markdown.contains("- App ID: app_01test"));
+        assert!(markdown.contains("- Kind: feature"));
+        assert!(markdown.contains("Please add CSV export."));
+        assert!(markdown.contains("  - browser: Safari"));
     }
 }

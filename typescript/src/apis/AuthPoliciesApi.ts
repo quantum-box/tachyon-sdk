@@ -16,15 +16,21 @@
 import * as runtime from '../runtime';
 import type {
   ActionListResponse,
+  ActionResponse,
   CheckPolicyForResourceRequest,
   CheckPolicyForResourceResponse,
   EvaluatePoliciesBatchRequest,
   EvaluatePoliciesBatchResponse,
   PolicyResponse,
+  RegisterActionRequest,
+  RegisterPolicyRequest,
+  UpdatePolicyRequest,
 } from '../models/index';
 import {
     ActionListResponseFromJSON,
     ActionListResponseToJSON,
+    ActionResponseFromJSON,
+    ActionResponseToJSON,
     CheckPolicyForResourceRequestFromJSON,
     CheckPolicyForResourceRequestToJSON,
     CheckPolicyForResourceResponseFromJSON,
@@ -35,6 +41,12 @@ import {
     EvaluatePoliciesBatchResponseToJSON,
     PolicyResponseFromJSON,
     PolicyResponseToJSON,
+    RegisterActionRequestFromJSON,
+    RegisterActionRequestToJSON,
+    RegisterPolicyRequestFromJSON,
+    RegisterPolicyRequestToJSON,
+    UpdatePolicyRequestFromJSON,
+    UpdatePolicyRequestToJSON,
 } from '../models/index';
 
 export interface CheckPolicyForResourceOperationRequest {
@@ -51,6 +63,19 @@ export interface GetPolicyRequest {
 
 export interface ListActionsRequest {
     context?: string | null;
+}
+
+export interface RegisterActionOperationRequest {
+    registerActionRequest: RegisterActionRequest;
+}
+
+export interface RegisterPolicyOperationRequest {
+    registerPolicyRequest: RegisterPolicyRequest;
+}
+
+export interface UpdatePolicyOperationRequest {
+    id: string;
+    updatePolicyRequest: UpdatePolicyRequest;
 }
 
 /**
@@ -235,6 +260,155 @@ export class AuthPoliciesApi extends runtime.BaseAPI {
      */
     async listActions(requestParameters: ListActionsRequest = {}, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<ActionListResponse> {
         const response = await this.listActionsRaw(requestParameters, initOverrides);
+        return await response.value();
+    }
+
+    /**
+     * Creates request options for registerAction without sending the request
+     */
+    async registerActionRequestOpts(requestParameters: RegisterActionOperationRequest): Promise<runtime.RequestOpts> {
+        if (requestParameters['registerActionRequest'] == null) {
+            throw new runtime.RequiredError(
+                'registerActionRequest',
+                'Required parameter "registerActionRequest" was null or undefined when calling registerAction().'
+            );
+        }
+
+        const queryParameters: any = {};
+
+        const headerParameters: runtime.HTTPHeaders = {};
+
+        headerParameters['Content-Type'] = 'application/json';
+
+
+        let urlPath = `/v1/auth/actions`;
+
+        return {
+            path: urlPath,
+            method: 'POST',
+            headers: headerParameters,
+            query: queryParameters,
+            body: RegisterActionRequestToJSON(requestParameters['registerActionRequest']),
+        };
+    }
+
+    /**
+     * Register a custom action
+     */
+    async registerActionRaw(requestParameters: RegisterActionOperationRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<ActionResponse>> {
+        const requestOptions = await this.registerActionRequestOpts(requestParameters);
+        const response = await this.request(requestOptions, initOverrides);
+
+        return new runtime.JSONApiResponse(response, (jsonValue) => ActionResponseFromJSON(jsonValue));
+    }
+
+    /**
+     * Register a custom action
+     */
+    async registerAction(requestParameters: RegisterActionOperationRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<ActionResponse> {
+        const response = await this.registerActionRaw(requestParameters, initOverrides);
+        return await response.value();
+    }
+
+    /**
+     * Creates request options for registerPolicy without sending the request
+     */
+    async registerPolicyRequestOpts(requestParameters: RegisterPolicyOperationRequest): Promise<runtime.RequestOpts> {
+        if (requestParameters['registerPolicyRequest'] == null) {
+            throw new runtime.RequiredError(
+                'registerPolicyRequest',
+                'Required parameter "registerPolicyRequest" was null or undefined when calling registerPolicy().'
+            );
+        }
+
+        const queryParameters: any = {};
+
+        const headerParameters: runtime.HTTPHeaders = {};
+
+        headerParameters['Content-Type'] = 'application/json';
+
+
+        let urlPath = `/v1/auth/policies`;
+
+        return {
+            path: urlPath,
+            method: 'POST',
+            headers: headerParameters,
+            query: queryParameters,
+            body: RegisterPolicyRequestToJSON(requestParameters['registerPolicyRequest']),
+        };
+    }
+
+    /**
+     * Register a custom policy
+     */
+    async registerPolicyRaw(requestParameters: RegisterPolicyOperationRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<PolicyResponse>> {
+        const requestOptions = await this.registerPolicyRequestOpts(requestParameters);
+        const response = await this.request(requestOptions, initOverrides);
+
+        return new runtime.JSONApiResponse(response, (jsonValue) => PolicyResponseFromJSON(jsonValue));
+    }
+
+    /**
+     * Register a custom policy
+     */
+    async registerPolicy(requestParameters: RegisterPolicyOperationRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<PolicyResponse> {
+        const response = await this.registerPolicyRaw(requestParameters, initOverrides);
+        return await response.value();
+    }
+
+    /**
+     * Creates request options for updatePolicy without sending the request
+     */
+    async updatePolicyRequestOpts(requestParameters: UpdatePolicyOperationRequest): Promise<runtime.RequestOpts> {
+        if (requestParameters['id'] == null) {
+            throw new runtime.RequiredError(
+                'id',
+                'Required parameter "id" was null or undefined when calling updatePolicy().'
+            );
+        }
+
+        if (requestParameters['updatePolicyRequest'] == null) {
+            throw new runtime.RequiredError(
+                'updatePolicyRequest',
+                'Required parameter "updatePolicyRequest" was null or undefined when calling updatePolicy().'
+            );
+        }
+
+        const queryParameters: any = {};
+
+        const headerParameters: runtime.HTTPHeaders = {};
+
+        headerParameters['Content-Type'] = 'application/json';
+
+
+        let urlPath = `/v1/auth/policies/{id}`;
+        urlPath = urlPath.replace(`{${"id"}}`, encodeURIComponent(String(requestParameters['id'])));
+
+        return {
+            path: urlPath,
+            method: 'PATCH',
+            headers: headerParameters,
+            query: queryParameters,
+            body: UpdatePolicyRequestToJSON(requestParameters['updatePolicyRequest']),
+        };
+    }
+
+    /**
+     * Update a custom policy
+     */
+    async updatePolicyRaw(requestParameters: UpdatePolicyOperationRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<PolicyResponse>> {
+        const requestOptions = await this.updatePolicyRequestOpts(requestParameters);
+        const response = await this.request(requestOptions, initOverrides);
+
+        return new runtime.JSONApiResponse(response, (jsonValue) => PolicyResponseFromJSON(jsonValue));
+    }
+
+    /**
+     * Update a custom policy
+     */
+    async updatePolicy(requestParameters: UpdatePolicyOperationRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<PolicyResponse> {
+        const response = await this.updatePolicyRaw(requestParameters, initOverrides);
         return await response.value();
     }
 

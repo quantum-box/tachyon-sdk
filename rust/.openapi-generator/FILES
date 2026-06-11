@@ -128,6 +128,11 @@ docs/ModelInfo.md
 docs/ModelsApi.md
 docs/ModelsResponse.md
 docs/NotificationsApi.md
+docs/OAuth2ClientListResponse.md
+docs/OAuth2ClientResponse.md
+docs/OAuth2CreateClientRequest.md
+docs/OAuth2CreateClientResponse.md
+docs/OAuth2UpdateClientRequest.md
 docs/OAuthCallbackResponse.md
 docs/OAuthTokenDetailResponse.md
 docs/OAuthTokenListResponse.md
@@ -154,6 +159,8 @@ docs/PartOneOf3.md
 docs/PartOneOf4.md
 docs/PartOneOf5.md
 docs/PaymentApi.md
+docs/PolicyActionPatternRequest.md
+docs/PolicyActionRequest.md
 docs/PolicyEvaluationOutcome.md
 docs/PolicyResponse.md
 docs/ProcurementApi.md
@@ -170,7 +177,10 @@ docs/QuoteListResponse.md
 docs/QuoteResponse.md
 docs/RecurringRevenueRequest.md
 docs/RecurringRevenueResponse.md
+docs/RegisterActionRequest.md
+docs/RegisterPolicyRequest.md
 docs/RegisterShippingDestinationRequest.md
+docs/RemovePolicyActionPatternRequest.md
 docs/ResponseFormat.md
 docs/Role.md
 docs/RotateSecretResponse.md
@@ -202,6 +212,7 @@ docs/ToolSchema.md
 docs/UpdateChatroomRequest.md
 docs/UpdateChatroomResponse.md
 docs/UpdateClientRequest.md
+docs/UpdatePolicyRequest.md
 docs/UpdateProductRequest.md
 docs/UpdateProductVariationRequest.md
 docs/UpdateQuoteRequest.md
@@ -362,6 +373,11 @@ src/models/message_content.rs
 src/models/mod.rs
 src/models/model_info.rs
 src/models/models_response.rs
+src/models/o_auth2_client_list_response.rs
+src/models/o_auth2_client_response.rs
+src/models/o_auth2_create_client_request.rs
+src/models/o_auth2_create_client_response.rs
+src/models/o_auth2_update_client_request.rs
 src/models/o_auth_callback_response.rs
 src/models/o_auth_token_detail_response.rs
 src/models/o_auth_token_list_response.rs
@@ -379,6 +395,8 @@ src/models/part_one_of_2.rs
 src/models/part_one_of_3.rs
 src/models/part_one_of_4.rs
 src/models/part_one_of_5.rs
+src/models/policy_action_pattern_request.rs
+src/models/policy_action_request.rs
 src/models/policy_evaluation_outcome.rs
 src/models/policy_response.rs
 src/models/product_list_response.rs
@@ -394,7 +412,10 @@ src/models/quote_list_response.rs
 src/models/quote_response.rs
 src/models/recurring_revenue_request.rs
 src/models/recurring_revenue_response.rs
+src/models/register_action_request.rs
+src/models/register_policy_request.rs
 src/models/register_shipping_destination_request.rs
+src/models/remove_policy_action_pattern_request.rs
 src/models/response_format.rs
 src/models/role.rs
 src/models/rotate_secret_response.rs
@@ -426,6 +447,7 @@ src/models/tool_schema.rs
 src/models/update_chatroom_request.rs
 src/models/update_chatroom_response.rs
 src/models/update_client_request.rs
+src/models/update_policy_request.rs
 src/models/update_product_request.rs
 src/models/update_product_variation_request.rs
 src/models/update_quote_request.rs

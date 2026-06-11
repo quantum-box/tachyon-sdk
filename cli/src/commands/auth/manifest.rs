@@ -609,7 +609,7 @@ pub async fn build_plan(
     })
 }
 
-fn print_plan(report: &PlanReport) {
+pub(crate) fn print_plan(report: &PlanReport) {
     println!("Actions:");
     if report.actions.is_empty() {
         println!("  (none)");
@@ -781,7 +781,7 @@ pub async fn apply_manifest(
     })
 }
 
-fn print_apply_result(result: &ApplyResult) {
+pub(crate) fn print_apply_result(result: &ApplyResult) {
     println!("Actions:");
     for item in &result.actions {
         let (symbol, note) = match &item.outcome {
@@ -975,6 +975,7 @@ pub async fn run(
 
 /// Run plan (or apply) as part of a broader reconcile flow.
 /// Returns None if no manifests found (skip gracefully).
+#[allow(dead_code)]
 pub async fn reconcile(
     api: &ApiClient,
     default_tenant_id: &str,
@@ -987,6 +988,7 @@ pub async fn reconcile(
     reconcile_in(api, default_tenant_id, dry_run, file, prune, json, &cwd).await
 }
 
+#[allow(dead_code)]
 pub async fn reconcile_in(
     api: &ApiClient,
     default_tenant_id: &str,

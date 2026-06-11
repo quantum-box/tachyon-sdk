@@ -2,7 +2,7 @@ use std::fs;
 use std::io::{Read, Write};
 use std::net::TcpListener;
 use std::path::Path;
-use std::process::Command;
+use std::process::{Command, Stdio};
 use std::sync::mpsc;
 use std::thread;
 
@@ -385,6 +385,82 @@ spec:
 }
 
 #[test]
+fn manifest_apply_delegates_cloud_apps_manifest() {
+    let tmp = TempDir::new().unwrap();
+    let manifest = tmp.path().join("bakuure.tachyon.yml");
+    fs::write(
+        &manifest,
+        r#"
+apiVersion: apps.tachy.one/v1alpha
+kind: CloudApps
+metadata:
+  name: bakuure-api
+spec:
+  apps:
+    - name: bakuure-api
+      repository:
+        url: https://github.com/quantum-box/erp
+        owner: quantum-box
+        name: erp
+        defaultBranch: main
+      rootDirectory: apps/bakuure-api
+      dockerContext: "."
+      framework: cargo_lambda
+      deploymentTarget: lambda
+      build:
+        package: bakuure-api
+        binary: lambda-bakuure-api
+      envVars:
+        - name: ENVIRONMENT
+          value: sandbox
+        - name: DATABASE_URL
+          type: credential
+          valueFrom:
+            secret: DATABASE_URL
+"#,
+    )
+    .unwrap();
+    let (api_url, rx, handle) = start_apply_server();
+
+    let mut cmd = isolated_command(tmp.path());
+    let output = cmd
+        .current_dir(tmp.path())
+        .env("TACHYON_API_URL", api_url)
+        .env("TACHYON_API_KEY", "test-token")
+        .env("TACHYON_TENANT_ID", "tn_01hjryxysgey07h5jz5wagqj0m")
+        .args([
+            "manifest",
+            "apply",
+            "-f",
+            manifest.to_str().unwrap(),
+            "--environment",
+            "sandbox",
+        ])
+        .output()
+        .expect("run manifest apply");
+    assert!(
+        output.status.success(),
+        "manifest apply failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let first = rx.recv().unwrap();
+    let second = rx.recv().unwrap();
+    let third = rx.recv().unwrap();
+    let fourth = rx.recv().unwrap();
+    handle.join().unwrap();
+
+    assert!(first.starts_with("GET /v1/compute/apps "));
+    assert!(second.starts_with("POST /v1/compute/apps "));
+    assert!(third.starts_with("PUT /v1/compute/apps/app_created/env "));
+    assert!(fourth.starts_with("GET /v1/compute/apps/app_created/env "));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("=== Cloud Apps Manifest Apply ==="));
+    assert!(stdout.contains("CREATED bakuure-api (app_created)"));
+}
+
+#[test]
 fn env_set_secret_posts_value_and_updates_manifest_reference_only() {
     let tmp = TempDir::new().unwrap();
     write_project_config(
@@ -399,12 +475,13 @@ fn env_set_secret_posts_value_and_updates_manifest_reference_only() {
         .current_dir(tmp.path())
         .env("TACHYON_API_URL", api_url)
         .env("TACHYON_API_KEY", "x")
-        .env("TACHYON_SECRET_VALUE", "x")
         .args([
             "env",
             "set",
             "--secret",
             "RESEND_API_KEY",
+            "--value",
+            "from-flag",
             "--target",
             "production",
         ])
@@ -423,7 +500,7 @@ fn env_set_secret_posts_value_and_updates_manifest_reference_only() {
 
     assert!(post_req.starts_with("POST /v1/apps/app_configured/secrets "));
     assert!(post_req.contains(r#""key":"RESEND_API_KEY""#));
-    assert!(post_req.contains(r#""value":"x""#));
+    assert!(post_req.contains(r#""value":"from-flag""#));
     assert!(post_req.contains(r#""target":"production""#));
 
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -435,6 +512,88 @@ fn env_set_secret_posts_value_and_updates_manifest_reference_only() {
     assert!(yaml.contains("target: production"));
     assert!(yaml.contains("secret: RESEND_API_KEY"));
     assert!(!yaml.contains("\n  value:"));
+}
+
+#[test]
+fn env_set_secret_reads_value_from_stdin_when_piped() {
+    let tmp = TempDir::new().unwrap();
+    write_project_config(
+        tmp.path(),
+        "configured-app",
+        "tn_01hjryxysgey07h5jz5wagqj0m",
+    );
+    let (api_url, rx, handle) = start_secret_server();
+
+    let mut child = isolated_command(tmp.path())
+        .current_dir(tmp.path())
+        .env("TACHYON_API_URL", api_url)
+        .env("TACHYON_API_KEY", "x")
+        .args([
+            "env",
+            "set",
+            "--secret",
+            "RESEND_API_KEY",
+            "--target",
+            "production",
+        ])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn env set secret");
+
+    child
+        .stdin
+        .take()
+        .expect("stdin")
+        .write_all(b"from-stdin\n")
+        .expect("write stdin");
+    let output = child.wait_with_output().expect("wait env set secret");
+    assert!(
+        output.status.success(),
+        "env set secret (stdin) failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let _list_req = rx.recv().unwrap();
+    let post_req = rx.recv().unwrap();
+    handle.join().unwrap();
+
+    assert!(post_req.contains(r#""value":"from-stdin""#));
+}
+
+#[test]
+fn env_set_secret_honors_tachyon_secret_value_env_when_no_flag() {
+    let tmp = TempDir::new().unwrap();
+    write_project_config(
+        tmp.path(),
+        "configured-app",
+        "tn_01hjryxysgey07h5jz5wagqj0m",
+    );
+    let (api_url, rx, handle) = start_secret_server();
+
+    let output = isolated_command(tmp.path())
+        .current_dir(tmp.path())
+        .env("TACHYON_API_URL", api_url)
+        .env("TACHYON_API_KEY", "x")
+        .env("TACHYON_SECRET_VALUE", "from-env")
+        .args([
+            "env",
+            "set",
+            "--secret",
+            "RESEND_API_KEY",
+            "--target",
+            "production",
+        ])
+        .output()
+        .expect("run env set secret");
+
+    assert!(output.status.success());
+    let _list_req = rx.recv().unwrap();
+    let post_req = rx.recv().unwrap();
+    handle.join().unwrap();
+    assert!(post_req.contains(r#""value":"from-env""#));
 }
 
 #[test]
