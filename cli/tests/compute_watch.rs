@@ -339,3 +339,110 @@ fn compute_builds_list_converts_pages_dev_preview_url_using_build_pr_number() {
         "stdout:\n{stdout}"
     );
 }
+
+#[test]
+fn compute_preview_create_wait_prints_preview_url() {
+    let tmp = TempDir::new().unwrap();
+    let app_id = "app_01kp4vm07tr3d4375597d15gkp";
+    let build_id = "bld_01kp4vm07tr3d4375597d15gka";
+    let (api_url, rx, handle) = start_server(vec![
+        r#"{"id":"bld_01kp4vm07tr3d4375597d15gka","app_id":"app_01kp4vm07tr3d4375597d15gkp","status":"queued","source_branch":"feature/plt-1883","created_at":"2026-06-11T00:00:00Z"}"#,
+        r#"{"id":"bld_01kp4vm07tr3d4375597d15gka","app_id":"app_01kp4vm07tr3d4375597d15gkp","status":"succeeded","source_branch":"feature/plt-1883","created_at":"2026-06-11T00:00:00Z"}"#,
+        r#"{"deployments":[{"id":"dep_01kp4vm07tr3d4375597d15gkb","app_id":"app_01kp4vm07tr3d4375597d15gkp","build_id":"bld_01kp4vm07tr3d4375597d15gka","status":"active","source_branch":"feature/plt-1883","url":"https://8383df2f.moverent.pages.dev","public_url":"https://preview-plt-1883--moverent.txcloud.app","created_at":"2026-06-11T00:00:00Z"}]}"#,
+    ]);
+
+    let output = isolated_command(tmp.path())
+        .env("TACHYON_API_URL", api_url)
+        .args([
+            "compute",
+            "preview",
+            "create",
+            "--app",
+            app_id,
+            "--branch",
+            "feature/plt-1883",
+            "--wait",
+        ])
+        .output()
+        .expect("run tachyon compute preview create");
+
+    assert!(
+        output.status.success(),
+        "preview create failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+
+    let trigger_req = rx.recv().unwrap();
+    let status_req = rx.recv().unwrap();
+    let deployments_req = rx.recv().unwrap();
+    handle.join().unwrap();
+    assert!(trigger_req.starts_with(&format!("POST /v1/compute/apps/{app_id}/builds ")));
+    assert!(
+        trigger_req.contains(r#""source_branch":"feature/plt-1883""#),
+        "request:\n{trigger_req}"
+    );
+    assert!(
+        !trigger_req.contains(r#""branch":"feature/plt-1883""#),
+        "request:\n{trigger_req}"
+    );
+    assert!(status_req.starts_with(&format!("GET /v1/compute/builds/{build_id} ")));
+    assert!(deployments_req.starts_with(&format!(
+        "GET /v1/compute/apps/{app_id}/deployments?environment=preview "
+    )));
+
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(
+        stdout.contains("Preview build triggered: bld_01kp4vm07tr3d4375597d15gka"),
+        "stdout:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("Preview URL: https://preview-plt-1883--moverent.txcloud.app"),
+        "stdout:\n{stdout}"
+    );
+}
+
+#[test]
+fn compute_preview_create_wait_reports_failed_build() {
+    let tmp = TempDir::new().unwrap();
+    let app_id = "app_01kp4vm07tr3d4375597d15gkp";
+    let build_id = "bld_01kp4vm07tr3d4375597d15gka";
+    let (api_url, rx, handle) = start_server(vec![
+        r#"{"id":"bld_01kp4vm07tr3d4375597d15gka","app_id":"app_01kp4vm07tr3d4375597d15gkp","status":"queued","source_branch":"feature/plt-1883","created_at":"2026-06-11T00:00:00Z"}"#,
+        r#"{"id":"bld_01kp4vm07tr3d4375597d15gka","app_id":"app_01kp4vm07tr3d4375597d15gkp","status":"failed","source_branch":"feature/plt-1883","error_message":"buildspec failed","created_at":"2026-06-11T00:00:00Z"}"#,
+    ]);
+
+    let output = isolated_command(tmp.path())
+        .env("TACHYON_API_URL", api_url)
+        .args([
+            "compute",
+            "preview",
+            "create",
+            "--app",
+            app_id,
+            "--branch",
+            "feature/plt-1883",
+            "--wait",
+        ])
+        .output()
+        .expect("run tachyon compute preview create");
+
+    assert!(
+        !output.status.success(),
+        "preview create unexpectedly succeeded\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+
+    let trigger_req = rx.recv().unwrap();
+    let status_req = rx.recv().unwrap();
+    handle.join().unwrap();
+    assert!(trigger_req.starts_with(&format!("POST /v1/compute/apps/{app_id}/builds ")));
+    assert!(status_req.starts_with(&format!("GET /v1/compute/builds/{build_id} ")));
+
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(
+        stderr.contains("Build bld_01kp4vm07tr3d4375597d15gka failed: buildspec failed"),
+        "stderr:\n{stderr}"
+    );
+}
