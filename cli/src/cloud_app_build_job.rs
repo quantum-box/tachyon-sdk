@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
     collections::BTreeMap,
+    ffi::OsString,
     path::{Path, PathBuf},
     process::Stdio,
     time::Instant,
@@ -194,6 +195,13 @@ async fn run_build(workload: &BuildWorkloadSpec) -> Result<CommandResult> {
         );
     }
 
+    if is_cloudflare_pages(workload, &env) {
+        append_result(
+            &mut combined,
+            run_cloudflare_pages_deploy(workload, &checkout_dir, &app_dir, &env).await?,
+        );
+    }
+
     Ok(combined)
 }
 
@@ -291,6 +299,148 @@ fn is_cloud_run(workload: &BuildWorkloadSpec) -> bool {
         .deployment_target
         .as_deref()
         .is_some_and(|target| target == "cloud_run")
+}
+
+fn is_cloudflare_pages(workload: &BuildWorkloadSpec, env: &BTreeMap<String, String>) -> bool {
+    workload
+        .deployment_target
+        .as_deref()
+        .is_some_and(|target| target == "cloudflare_pages")
+        || env_value(env, "PAGES_PROJECT_NAME").is_some()
+}
+
+async fn run_cloudflare_pages_deploy(
+    workload: &BuildWorkloadSpec,
+    checkout_dir: &Path,
+    app_dir: &Path,
+    env: &BTreeMap<String, String>,
+) -> Result<CommandResult> {
+    let account_id = required_env(env, "CLOUDFLARE_ACCOUNT_ID")?;
+    required_env(env, "CLOUDFLARE_API_TOKEN")?;
+    let project_name = required_env(env, "PAGES_PROJECT_NAME")?;
+    let output_dir = pages_output_dir(workload, checkout_dir, app_dir, env)?;
+    let commit_message = ascii_commit_message(env);
+    let bindings = pages_binding_args(env)?;
+
+    tracing::info!(
+        project_name = %project_name,
+        account_id = %account_id,
+        branch = %workload.source.branch,
+        output_dir = %output_dir.display(),
+        binding_count = bindings.len() / 2,
+        "deploying Cloudflare Pages output"
+    );
+
+    let mut command = Command::new("npx");
+    command
+        .arg("wrangler")
+        .arg("pages")
+        .arg("deploy")
+        .arg(&output_dir)
+        .arg("--project-name")
+        .arg(project_name)
+        .arg("--branch")
+        .arg(&workload.source.branch)
+        .arg("--commit-message")
+        .arg(commit_message)
+        .envs(env)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    for arg in bindings {
+        command.arg(arg);
+    }
+
+    run_command("wrangler pages deploy", command).await
+}
+
+fn env_value<'a>(env: &'a BTreeMap<String, String>, key: &str) -> Option<&'a str> {
+    env.get(key)
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty())
+}
+
+fn required_env<'a>(env: &'a BTreeMap<String, String>, key: &str) -> Result<&'a str> {
+    env_value(env, key).ok_or_else(|| anyhow!("{key} is required for Cloudflare Pages deploy"))
+}
+
+fn pages_output_dir(
+    workload: &BuildWorkloadSpec,
+    checkout_dir: &Path,
+    app_dir: &Path,
+    env: &BTreeMap<String, String>,
+) -> Result<PathBuf> {
+    let raw = workload
+        .artifact
+        .output_directory
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .or_else(|| env_value(env, "OUTPUT_DIR"))
+        .ok_or_else(|| {
+            anyhow!("output_directory or OUTPUT_DIR is required for Cloudflare Pages deploy")
+        })?;
+
+    let raw_path = Path::new(raw);
+    if raw_path.is_absolute() {
+        return Ok(raw_path.to_path_buf());
+    }
+
+    let checkout_relative = checkout_dir.join(raw_path);
+    if checkout_relative.exists() {
+        return Ok(checkout_relative);
+    }
+
+    Ok(app_dir.join(raw_path))
+}
+
+fn ascii_commit_message(env: &BTreeMap<String, String>) -> String {
+    let message = env_value(env, "COMMIT_MESSAGE")
+        .or_else(|| env_value(env, "GIT_COMMIT_MESSAGE"))
+        .unwrap_or("Tachyon Cloud App build");
+    let ascii = message
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii() && !ch.is_control() {
+                ch
+            } else {
+                ' '
+            }
+        })
+        .collect::<String>();
+    let normalized = ascii.split_whitespace().collect::<Vec<_>>().join(" ");
+    if normalized.is_empty() {
+        "Tachyon Cloud App build".to_string()
+    } else {
+        normalized
+    }
+}
+
+fn pages_binding_args(env: &BTreeMap<String, String>) -> Result<Vec<OsString>> {
+    let Some(keys) = env_value(env, "CF_PAGES_BINDING_KEYS") else {
+        return Ok(vec![]);
+    };
+
+    let mut args = Vec::new();
+    for key in keys.split(',').map(str::trim).filter(|key| !key.is_empty()) {
+        if !is_valid_env_key(key) {
+            return Err(anyhow!("invalid Cloudflare Pages binding key: {key}"));
+        }
+        let value = env
+            .get(key)
+            .ok_or_else(|| anyhow!("Cloudflare Pages binding env var is missing: {key}"))?;
+        args.push(OsString::from("--binding"));
+        args.push(OsString::from(format!("{key}={value}")));
+    }
+    Ok(args)
+}
+
+fn is_valid_env_key(key: &str) -> bool {
+    let mut chars = key.chars();
+    let Some(first) = chars.next() else {
+        return false;
+    };
+    (first == '_' || first.is_ascii_alphabetic())
+        && chars.all(|ch| ch == '_' || ch.is_ascii_alphanumeric())
 }
 
 fn image_uri(workload: &BuildWorkloadSpec) -> String {
@@ -675,6 +825,36 @@ fn cache_key(source_dir: &Path) -> Option<String> {
 mod tests {
     use super::*;
 
+    fn test_workload(deployment_target: Option<&str>) -> BuildWorkloadSpec {
+        BuildWorkloadSpec {
+            project_id: "app_123".to_string(),
+            source: BuildWorkloadSource {
+                repository_url: "https://github.com/example/app".to_string(),
+                branch: "feature/demo".to_string(),
+                commit_sha: "abc".to_string(),
+            },
+            workspace: BuildWorkloadWorkspace {
+                root_directory: Some("apps/demo".to_string()),
+                docker_context: None,
+            },
+            commands: BuildWorkloadCommands {
+                install: None,
+                build: Some("true".to_string()),
+                node_version: None,
+            },
+            env: vec![],
+            artifact: BuildWorkloadArtifact {
+                image_name: "demo".to_string(),
+                image_tag: "bld_123".to_string(),
+                output_directory: None,
+                container_registry: None,
+            },
+            callback: None,
+            deployment_target: deployment_target.map(str::to_string),
+            framework: Some("next_js".to_string()),
+        }
+    }
+
     #[test]
     fn package_manager_root_walks_to_checkout_root() {
         let temp = tempfile::tempdir().unwrap();
@@ -782,6 +962,103 @@ mod tests {
     #[test]
     fn buildkit_docker_config_uses_workspace_path() {
         assert_eq!(BUILDKIT_DOCKER_CONFIG_DIR, "/workspace/.docker");
+    }
+
+    #[test]
+    fn cloudflare_pages_runs_for_target_or_project_name() {
+        let mut env = BTreeMap::new();
+        assert!(is_cloudflare_pages(
+            &test_workload(Some("cloudflare_pages")),
+            &env
+        ));
+        assert!(!is_cloudflare_pages(
+            &test_workload(Some("cloud_run")),
+            &env
+        ));
+
+        env.insert("PAGES_PROJECT_NAME".to_string(), "field".to_string());
+        assert!(is_cloudflare_pages(&test_workload(Some("cloud_run")), &env));
+    }
+
+    #[test]
+    fn pages_output_dir_prefers_artifact_output_directory() {
+        let temp = tempfile::tempdir().unwrap();
+        let checkout = temp.path().join("source");
+        let app = checkout.join("apps").join("demo");
+        let output = checkout.join("apps").join("demo").join("dist");
+        std::fs::create_dir_all(&output).unwrap();
+        let mut workload = test_workload(Some("cloudflare_pages"));
+        workload.artifact.output_directory = Some("apps/demo/dist".to_string());
+        let mut env = BTreeMap::new();
+        env.insert("OUTPUT_DIR".to_string(), "ignored".to_string());
+
+        assert_eq!(
+            pages_output_dir(&workload, &checkout, &app, &env).unwrap(),
+            output
+        );
+    }
+
+    #[test]
+    fn pages_output_dir_uses_env_output_dir_when_artifact_missing() {
+        let temp = tempfile::tempdir().unwrap();
+        let checkout = temp.path().join("source");
+        let app = checkout.join("apps").join("demo");
+        let output = app.join(".vercel").join("output").join("static");
+        std::fs::create_dir_all(&output).unwrap();
+        let workload = test_workload(Some("cloudflare_pages"));
+        let mut env = BTreeMap::new();
+        env.insert(
+            "OUTPUT_DIR".to_string(),
+            ".vercel/output/static".to_string(),
+        );
+
+        assert_eq!(
+            pages_output_dir(&workload, &checkout, &app, &env).unwrap(),
+            output
+        );
+    }
+
+    #[test]
+    fn ascii_commit_message_strips_non_ascii_and_controls() {
+        let mut env = BTreeMap::new();
+        env.insert(
+            "COMMIT_MESSAGE".to_string(),
+            "fix: deploy 日本語\nmessage".to_string(),
+        );
+
+        assert_eq!(ascii_commit_message(&env), "fix: deploy message");
+    }
+
+    #[test]
+    fn pages_binding_args_uses_allowed_keys_without_logging_values() {
+        let mut env = BTreeMap::new();
+        env.insert(
+            "CF_PAGES_BINDING_KEYS".to_string(),
+            "API_URL, SECRET_TOKEN".to_string(),
+        );
+        env.insert("API_URL".to_string(), "https://example.com".to_string());
+        env.insert("SECRET_TOKEN".to_string(), "secret-value".to_string());
+
+        let args = pages_binding_args(&env).unwrap();
+        assert_eq!(
+            args,
+            vec![
+                OsString::from("--binding"),
+                OsString::from("API_URL=https://example.com"),
+                OsString::from("--binding"),
+                OsString::from("SECRET_TOKEN=secret-value"),
+            ]
+        );
+    }
+
+    #[test]
+    fn pages_binding_args_rejects_invalid_keys() {
+        let mut env = BTreeMap::new();
+        env.insert("CF_PAGES_BINDING_KEYS".to_string(), "BAD-KEY".to_string());
+        env.insert("BAD-KEY".to_string(), "value".to_string());
+
+        let error = pages_binding_args(&env).unwrap_err().to_string();
+        assert!(error.contains("invalid Cloudflare Pages binding key"));
     }
 
     #[test]
