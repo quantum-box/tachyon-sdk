@@ -575,8 +575,7 @@ async fn run_buildkit(
         .current_dir(app_dir)
         .envs(env)
         .env("HOME", "/workspace")
-        .env("DOCKER_CONFIG", BUILDKIT_DOCKER_CONFIG_DIR)
-        .env("BUILDKITD_FLAGS", "--oci-worker-no-process-sandbox");
+        .env("DOCKER_CONFIG", BUILDKIT_DOCKER_CONFIG_DIR);
     if let Some(cache_repo) = buildkit_cache_repository(workload) {
         command
             .arg("--import-cache")
