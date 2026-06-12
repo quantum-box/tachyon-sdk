@@ -41,6 +41,20 @@ pub enum ComputeCommand {
         #[command(subcommand)]
         command: BuildsCommand,
     },
+    /// Trigger a preview build for the current branch
+    /// (auto-detects app, branch, and open PR)
+    Preview {
+        /// App ID or name (optional; falls back to tachyon.yml,
+        /// then to cloud apps matching the git remote)
+        app_id: Option<String>,
+        /// Branch to build (defaults to the current git branch)
+        #[arg(long)]
+        branch: Option<String>,
+        /// Pull request number (optional; the server auto-detects
+        /// the open PR for the branch)
+        #[arg(long)]
+        pr: Option<i32>,
+    },
     /// Manage deployments
     Deployments {
         #[command(subcommand)]
@@ -462,6 +476,10 @@ pub enum BuildsCommand {
         /// Branch to build (optional)
         #[arg(long)]
         branch: Option<String>,
+        /// Pull request number to (re-)fire a preview build for.
+        /// The PR's head branch and commit are resolved server-side.
+        #[arg(long)]
+        pr: Option<i32>,
     },
     /// Cancel a running build
     Cancel {
@@ -936,6 +954,8 @@ struct RollbackRequest {
 struct TriggerBuildRequest {
     #[serde(skip_serializing_if = "Option::is_none")]
     branch: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pr_number: Option<i32>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -1918,15 +1938,132 @@ async fn run_builds_get(api: &ApiClient, build_id: &str, json: bool) -> Result<(
     Ok(())
 }
 
-async fn run_builds_trigger(api: &ApiClient, app_id: &str, branch: Option<&str>) -> Result<()> {
+fn git_output(args: &[&str]) -> Result<String> {
+    let output = Command::new("git")
+        .args(args)
+        .output()
+        .map_err(|e| anyhow!("failed to run git: {e}"))?;
+    if !output.status.success() {
+        return Err(anyhow!("`git {}` failed", args.join(" ")));
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
+fn detect_current_git_branch() -> Result<String> {
+    let branch = git_output(&["rev-parse", "--abbrev-ref", "HEAD"])
+        .map_err(|e| anyhow!("{e}; not inside a git repository? Pass --branch explicitly."))?;
+    if branch.is_empty() || branch == "HEAD" {
+        return Err(anyhow!("detached HEAD state; pass --branch explicitly"));
+    }
+    Ok(branch)
+}
+
+/// Extract `(owner, repo)` from a GitHub remote URL
+/// (`git@github.com:owner/repo.git` or `https://github.com/owner/repo`).
+fn parse_github_remote(url: &str) -> Option<(String, String)> {
+    let rest = url
+        .strip_prefix("git@github.com:")
+        .or_else(|| url.strip_prefix("ssh://git@github.com/"))
+        .or_else(|| url.strip_prefix("https://github.com/"))
+        .or_else(|| url.strip_prefix("http://github.com/"))?;
+    let rest = rest.strip_suffix(".git").unwrap_or(rest);
+    let mut parts = rest.splitn(2, '/');
+    let owner = parts.next()?.trim();
+    let repo = parts.next()?.trim().trim_end_matches('/');
+    if owner.is_empty() || repo.is_empty() {
+        return None;
+    }
+    Some((owner.to_string(), repo.to_string()))
+}
+
+/// Find cloud apps whose connected repository matches the
+/// `origin` remote of the current git repository. A repo can
+/// back multiple apps (e.g. two frontends), so all matches are
+/// returned.
+async fn resolve_apps_by_git_remote(api: &ApiClient) -> Result<Vec<AppResponse>> {
+    let remote_url = git_output(&["remote", "get-url", "origin"]).map_err(|e| {
+        anyhow!(
+            "{e}; could not auto-detect the app. Pass an app name, \
+             set metadata.name in tachyon.yml, or run inside a git \
+             repository with an `origin` remote."
+        )
+    })?;
+    let (owner, repo) = parse_github_remote(&remote_url)
+        .ok_or_else(|| anyhow!("unsupported git remote URL: {remote_url}"))?;
+
+    let resp: ListAppsResponse = api.get("/v1/compute/apps").await?;
+    let apps: Vec<AppResponse> = resp
+        .apps
+        .into_iter()
+        .filter(|app| {
+            app.repository_owner.as_deref() == Some(owner.as_str())
+                && app.repository_name.as_deref() == Some(repo.as_str())
+        })
+        .collect();
+
+    if apps.is_empty() {
+        return Err(anyhow!(
+            "no cloud apps found for repository {owner}/{repo} in the \
+             current tenant (check `tachyon switch` / `tachyon compute apps list`)"
+        ));
+    }
+    Ok(apps)
+}
+
+async fn run_preview(
+    api: &ApiClient,
+    app_id: &Option<String>,
+    project_config: Option<&ProjectConfig>,
+    branch: Option<&str>,
+    pr: Option<i32>,
+) -> Result<()> {
+    let branch_name = match branch {
+        Some(b) => b.to_string(),
+        None => detect_current_git_branch()?,
+    };
+    println!("Branch: {branch_name}");
+
+    // App resolution: explicit arg > tachyon.yml > git remote match.
+    let targets: Vec<(String, String)> = match app_id_or_default(app_id, project_config) {
+        Ok(app) => {
+            let id = resolve::resolve_app_id(api, app).await?;
+            vec![(id, app.to_string())]
+        }
+        Err(_) => resolve_apps_by_git_remote(api)
+            .await?
+            .into_iter()
+            .map(|app| (app.id, app.name))
+            .collect(),
+    };
+
+    for (id, name) in &targets {
+        println!("App: {name}");
+        run_builds_trigger(api, id, Some(&branch_name), pr).await?;
+    }
+    Ok(())
+}
+
+async fn run_builds_trigger(
+    api: &ApiClient,
+    app_id: &str,
+    branch: Option<&str>,
+    pr: Option<i32>,
+) -> Result<()> {
     let req = TriggerBuildRequest {
         branch: branch.map(String::from),
+        pr_number: pr,
     };
     let build: BuildResponse = api
         .post(&format!("/v1/compute/apps/{app_id}/builds"), &req)
         .await?;
     println!("Build triggered: {}", build.id);
     println!("Status: {}", build.status);
+    if let Some(branch) = build.source_branch.as_deref() {
+        println!("Branch: {branch}");
+    }
+    if let Some(pr_number) = build.pr_number {
+        println!("PR: #{pr_number} (preview build)");
+    }
     Ok(())
 }
 
@@ -3167,6 +3304,9 @@ pub async fn run(
                 run_apps_feedback(tenant_id, &id, feedback_args)
             }
         },
+        ComputeCommand::Preview { app_id, branch, pr } => {
+            run_preview(&api, app_id, project_config, branch.as_deref(), *pr).await
+        }
         ComputeCommand::Builds { command } => match command {
             BuildsCommand::List {
                 app_id,
@@ -3178,10 +3318,10 @@ pub async fn run(
                 run_builds_list(&api, &id, *limit, *json).await
             }
             BuildsCommand::Get { build_id, json } => run_builds_get(&api, build_id, *json).await,
-            BuildsCommand::Trigger { app_id, branch } => {
+            BuildsCommand::Trigger { app_id, branch, pr } => {
                 let app_id = app_id_or_default(app_id, project_config)?;
                 let id = resolve::resolve_app_id(&api, app_id).await?;
-                run_builds_trigger(&api, &id, branch.as_deref()).await
+                run_builds_trigger(&api, &id, branch.as_deref(), *pr).await
             }
             BuildsCommand::Cancel { build_id } => run_builds_cancel(&api, build_id).await,
             BuildsCommand::Logs {
@@ -3569,6 +3709,22 @@ mod tests {
     }
 
     #[test]
+    fn parse_github_remote_supports_ssh_and_https() {
+        assert_eq!(
+            parse_github_remote("git@github.com:quantum-box/moverent.git"),
+            Some(("quantum-box".to_string(), "moverent".to_string()))
+        );
+        assert_eq!(
+            parse_github_remote("https://github.com/quantum-box/moverent"),
+            Some(("quantum-box".to_string(), "moverent".to_string()))
+        );
+        assert_eq!(
+            parse_github_remote("ssh://git@github.com/quantum-box/moverent.git"),
+            Some(("quantum-box".to_string(), "moverent".to_string()))
+        );
+    }
+
+    #[test]
     fn feedback_metadata_rejects_secret_like_keys() {
         let err = parse_feedback_metadata(&["api_key=secret".to_string()]).unwrap_err();
 
@@ -3598,5 +3754,11 @@ mod tests {
         assert!(markdown.contains("- Kind: feature"));
         assert!(markdown.contains("Please add CSV export."));
         assert!(markdown.contains("  - browser: Safari"));
+    }
+
+    #[test]
+    fn parse_github_remote_rejects_non_github_urls() {
+        assert_eq!(parse_github_remote("https://gitlab.com/a/b.git"), None);
+        assert_eq!(parse_github_remote("git@github.com:invalid"), None);
     }
 }
