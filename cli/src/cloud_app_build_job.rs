@@ -167,7 +167,12 @@ async fn run_build(workload: &BuildWorkloadSpec) -> Result<CommandResult> {
         ));
     }
 
-    let is_pages = is_cloudflare_pages(workload, &env);
+    // Workers detection wins over Pages: an opennextjs build
+    // (output under `.open-next`) produces a Worker module even
+    // when the app is registered as a Pages target. Mirrors the
+    // CodeBuild buildspec branching.
+    let is_workers = is_cloudflare_workers(workload);
+    let is_pages = !is_workers && is_cloudflare_pages(workload, &env);
     if is_pages {
         validate_pages_binding_keys(&env)?;
     }
@@ -199,10 +204,22 @@ async fn run_build(workload: &BuildWorkloadSpec) -> Result<CommandResult> {
         );
     }
 
-    if is_pages {
+    if is_workers {
+        append_result(
+            &mut combined,
+            run_cloudflare_workers_deploy(workload, &app_dir, &env).await?,
+        );
+    } else if is_pages {
         append_result(
             &mut combined,
             run_cloudflare_pages_deploy(workload, &checkout_dir, &app_dir, &env).await?,
+        );
+    }
+
+    if is_lambda(workload) {
+        append_result(
+            &mut combined,
+            run_lambda_package_and_upload(workload, &app_dir, &env).await?,
         );
     }
 
@@ -313,6 +330,25 @@ fn is_cloudflare_pages(workload: &BuildWorkloadSpec, env: &BTreeMap<String, Stri
         || env_value(env, "PAGES_PROJECT_NAME").is_some()
 }
 
+fn is_cloudflare_workers(workload: &BuildWorkloadSpec) -> bool {
+    workload
+        .deployment_target
+        .as_deref()
+        .is_some_and(|target| target == "cloudflare_workers")
+        || workload
+            .artifact
+            .output_directory
+            .as_deref()
+            .is_some_and(|dir| dir.trim().starts_with(".open-next"))
+}
+
+fn is_lambda(workload: &BuildWorkloadSpec) -> bool {
+    workload
+        .deployment_target
+        .as_deref()
+        .is_some_and(|target| target == "lambda")
+}
+
 /// Pinned wrangler version for Pages deploys.
 ///
 /// `npx wrangler` resolves the latest release when the app does
@@ -374,6 +410,176 @@ async fn run_cloudflare_pages_deploy(
     run_command("wrangler pages deploy", command).await
 }
 
+/// Deploy a Worker module with `wrangler deploy`.
+///
+/// Unlike Pages, `wrangler deploy` reads `wrangler.toml` /
+/// `wrangler.json` for the entry module and bindings, so it must
+/// run from the app directory. `WORKERS_SCRIPT_NAME` (set by the
+/// control plane to the Cloud App name) overrides the script
+/// name from the wrangler config when present.
+async fn run_cloudflare_workers_deploy(
+    workload: &BuildWorkloadSpec,
+    app_dir: &Path,
+    env: &BTreeMap<String, String>,
+) -> Result<CommandResult> {
+    required_env(env, "CLOUDFLARE_ACCOUNT_ID")?;
+    required_env(env, "CLOUDFLARE_API_TOKEN")?;
+
+    let has_wrangler_config = ["wrangler.toml", "wrangler.json", "wrangler.jsonc"]
+        .iter()
+        .any(|name| app_dir.join(name).exists());
+    if !has_wrangler_config {
+        return Err(anyhow!(
+            "wrangler configuration file not found: Workers deployments \
+             require wrangler.toml or wrangler.json"
+        ));
+    }
+
+    tracing::info!(
+        branch = %workload.source.branch,
+        app_dir = %app_dir.display(),
+        script_name = env_value(env, "WORKERS_SCRIPT_NAME").unwrap_or("<from wrangler config>"),
+        "deploying Cloudflare Workers script"
+    );
+
+    let mut command = Command::new("npx");
+    command.arg("--yes").arg(WRANGLER_NPM_SPEC).arg("deploy");
+    if let Some(name) = env_value(env, "WORKERS_SCRIPT_NAME") {
+        command.arg("--name").arg(name);
+    }
+    command
+        .current_dir(app_dir)
+        .envs(env)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+
+    run_command("wrangler deploy", command).await
+}
+
+/// Presigned S3 PUT URL for the Lambda artifact. Injected by the
+/// control plane so the builder needs no AWS credentials.
+const LAMBDA_UPLOAD_URL_ENV: &str = "TACHYON_LAMBDA_ARTIFACT_UPLOAD_URL";
+/// `s3://bucket/key` path reported back in the completion
+/// callback so `CreateDeployment` can locate the artifact.
+const LAMBDA_ARTIFACT_PATH_ENV: &str = "TACHYON_LAMBDA_ARTIFACT_PATH";
+
+fn is_rust_lambda(workload: &BuildWorkloadSpec) -> bool {
+    let framework = workload.framework.as_deref();
+    matches!(framework, Some("rust_server") | Some("cargo_lambda"))
+        || workload
+            .commands
+            .build
+            .as_deref()
+            .is_some_and(|command| command.contains("cargo"))
+        || workload
+            .commands
+            .install
+            .as_deref()
+            .is_some_and(|command| command.contains("cargo"))
+}
+
+/// Package the Lambda artifact and upload it through the
+/// presigned URL.
+///
+/// Node Lambda only: the builder image carries no Rust
+/// toolchain, so cargo / cargo-lambda / rust_server apps must
+/// keep using the CodeBuild backend until the image gains one.
+async fn run_lambda_package_and_upload(
+    workload: &BuildWorkloadSpec,
+    app_dir: &Path,
+    env: &BTreeMap<String, String>,
+) -> Result<CommandResult> {
+    if is_rust_lambda(workload) {
+        return Err(anyhow!(
+            "Rust Lambda builds are not supported by the JobRun builder \
+             yet; use the CodeBuild backend for cargo / cargo-lambda / \
+             rust_server apps"
+        ));
+    }
+
+    let upload_url = env_value(env, LAMBDA_UPLOAD_URL_ENV)
+        .ok_or_else(|| anyhow!("{LAMBDA_UPLOAD_URL_ENV} is required for Lambda artifact upload"))?;
+
+    let (archive, source) = package_lambda_archive(app_dir)?;
+    let size = archive.len();
+    tracing::info!(%source, size_bytes = size, "uploading Lambda artifact");
+
+    reqwest::Client::new()
+        .put(upload_url)
+        .body(archive)
+        .send()
+        .await
+        .context("failed to upload Lambda artifact")?
+        .error_for_status()
+        .context("Lambda artifact upload returned error")?;
+
+    Ok(CommandResult {
+        stdout: format!("uploaded lambda.zip ({size} bytes) from {source}\n"),
+        stderr: String::new(),
+    })
+}
+
+fn package_lambda_archive(app_dir: &Path) -> Result<(Vec<u8>, String)> {
+    let prebuilt = app_dir.join("lambda.zip");
+    if prebuilt.is_file() {
+        let bytes = std::fs::read(&prebuilt).context("failed to read pre-built lambda.zip")?;
+        return Ok((bytes, "pre-built lambda.zip".to_string()));
+    }
+    let dist = app_dir.join("dist");
+    if dist.is_dir() {
+        return Ok((zip_directory(&dist)?, "dist/".to_string()));
+    }
+    Err(anyhow!(
+        "no lambda.zip or dist/ found after build; Lambda apps must \
+         produce either a pre-built lambda.zip or a dist/ directory"
+    ))
+}
+
+/// Zip a directory recursively with the entries rooted at the
+/// directory itself (so `dist/index.js` becomes `index.js`).
+fn zip_directory(dir: &Path) -> Result<Vec<u8>> {
+    let mut writer = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    add_zip_entries(&mut writer, dir, dir)?;
+    let cursor = writer.finish().context("failed to finalize zip archive")?;
+    Ok(cursor.into_inner())
+}
+
+fn add_zip_entries(
+    writer: &mut zip::ZipWriter<std::io::Cursor<Vec<u8>>>,
+    root: &Path,
+    dir: &Path,
+) -> Result<()> {
+    use std::io::Write;
+
+    let options = zip::write::SimpleFileOptions::default()
+        .compression_method(zip::CompressionMethod::Deflated)
+        .unix_permissions(0o755);
+
+    let mut entries: Vec<_> = std::fs::read_dir(dir)
+        .with_context(|| format!("failed to read directory: {}", dir.display()))?
+        .collect::<std::io::Result<_>>()?;
+    entries.sort_by_key(|entry| entry.file_name());
+
+    for entry in entries {
+        let path = entry.path();
+        let relative = path
+            .strip_prefix(root)
+            .context("zip entry escapes archive root")?
+            .to_string_lossy()
+            .replace('\\', "/");
+        if path.is_dir() {
+            writer.add_directory(format!("{relative}/"), options)?;
+            add_zip_entries(writer, root, &path)?;
+        } else {
+            writer.start_file(relative, options)?;
+            let bytes = std::fs::read(&path)
+                .with_context(|| format!("failed to read file: {}", path.display()))?;
+            writer.write_all(&bytes)?;
+        }
+    }
+    Ok(())
+}
+
 fn env_value<'a>(env: &'a BTreeMap<String, String>, key: &str) -> Option<&'a str> {
     env.get(key)
         .map(|value| value.trim())
@@ -381,7 +587,7 @@ fn env_value<'a>(env: &'a BTreeMap<String, String>, key: &str) -> Option<&'a str
 }
 
 fn required_env<'a>(env: &'a BTreeMap<String, String>, key: &str) -> Result<&'a str> {
-    env_value(env, key).ok_or_else(|| anyhow!("{key} is required for Cloudflare Pages deploy"))
+    env_value(env, key).ok_or_else(|| anyhow!("{key} is required for Cloudflare deploy"))
 }
 
 fn pages_output_dir(
@@ -784,6 +990,22 @@ fn truncate_output(value: &str) -> String {
     format!("... truncated {} bytes ...\n{}", start, &value[start..])
 }
 
+/// Artifact path reported in the completion callback.
+///
+/// Lambda builds report the `s3://bucket/key` location the
+/// artifact was uploaded to (consumed by `deploy_to_lambda` on
+/// the control plane); other targets keep reporting the build
+/// output directory.
+fn callback_artifact_path(workload: &BuildWorkloadSpec) -> Option<String> {
+    if is_lambda(workload) {
+        let env = workload_env(workload);
+        if let Some(path) = env_value(&env, LAMBDA_ARTIFACT_PATH_ENV) {
+            return Some(path.to_string());
+        }
+    }
+    workload.artifact.output_directory.clone()
+}
+
 async fn send_callback(
     workload: &BuildWorkloadSpec,
     status: &str,
@@ -804,7 +1026,7 @@ async fn send_callback(
         build_id: build_id.clone(),
         status: status.to_string(),
         image_uri: Some(image_uri(workload)),
-        artifact_path: workload.artifact.output_directory.clone(),
+        artifact_path: callback_artifact_path(workload),
         duration_secs: Some(duration_secs),
         codebuild_instance_type: Some("hetzner-k3s-tachyon-cli".to_string()),
         error_message,
@@ -881,6 +1103,93 @@ mod tests {
             deployment_target: deployment_target.map(str::to_string),
             framework: Some("next_js".to_string()),
         }
+    }
+
+    #[test]
+    fn workers_detection_uses_target_or_open_next_output() {
+        assert!(is_cloudflare_workers(&test_workload(Some(
+            "cloudflare_workers"
+        ))));
+
+        let mut open_next = test_workload(Some("cloudflare_pages"));
+        open_next.artifact.output_directory = Some(".open-next/assets".to_string());
+        assert!(is_cloudflare_workers(&open_next));
+
+        assert!(!is_cloudflare_workers(&test_workload(Some(
+            "cloudflare_pages"
+        ))));
+        assert!(!is_cloudflare_workers(&test_workload(None)));
+    }
+
+    #[test]
+    fn lambda_rejects_rust_builds() {
+        let mut workload = test_workload(Some("lambda"));
+        workload.framework = Some("rust_server".to_string());
+        assert!(is_rust_lambda(&workload));
+
+        workload.framework = Some("cargo_lambda".to_string());
+        assert!(is_rust_lambda(&workload));
+
+        workload.framework = Some("hono".to_string());
+        workload.commands.build = Some("cargo lambda build --release".to_string());
+        assert!(is_rust_lambda(&workload));
+
+        workload.commands.build = Some("yarn build".to_string());
+        assert!(!is_rust_lambda(&workload));
+    }
+
+    #[test]
+    fn package_lambda_archive_prefers_prebuilt_zip() {
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::write(temp.path().join("lambda.zip"), b"prebuilt").unwrap();
+        std::fs::create_dir_all(temp.path().join("dist")).unwrap();
+
+        let (bytes, source) = package_lambda_archive(temp.path()).unwrap();
+        assert_eq!(bytes, b"prebuilt");
+        assert_eq!(source, "pre-built lambda.zip");
+    }
+
+    #[test]
+    fn package_lambda_archive_zips_dist_directory() {
+        let temp = tempfile::tempdir().unwrap();
+        let dist = temp.path().join("dist");
+        std::fs::create_dir_all(dist.join("lib")).unwrap();
+        std::fs::write(dist.join("index.js"), "exports.handler = 1").unwrap();
+        std::fs::write(dist.join("lib/util.js"), "module.exports = {}").unwrap();
+
+        let (bytes, source) = package_lambda_archive(temp.path()).unwrap();
+        assert_eq!(source, "dist/");
+
+        let mut archive = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
+        let names: Vec<String> = (0..archive.len())
+            .map(|i| archive.by_index(i).unwrap().name().to_string())
+            .collect();
+        assert!(names.contains(&"index.js".to_string()));
+        assert!(names.contains(&"lib/util.js".to_string()));
+    }
+
+    #[test]
+    fn package_lambda_archive_requires_artifact() {
+        let temp = tempfile::tempdir().unwrap();
+        let error = package_lambda_archive(temp.path()).unwrap_err();
+        assert!(error.to_string().contains("no lambda.zip or dist/"));
+    }
+
+    #[test]
+    fn callback_artifact_path_uses_lambda_s3_path() {
+        let mut workload = test_workload(Some("lambda"));
+        workload.env.push(BuildWorkloadEnvVar {
+            name: LAMBDA_ARTIFACT_PATH_ENV.to_string(),
+            value: "s3://bucket/builds/app_123/abc/lambda.zip".to_string(),
+        });
+        assert_eq!(
+            callback_artifact_path(&workload).as_deref(),
+            Some("s3://bucket/builds/app_123/abc/lambda.zip")
+        );
+
+        let mut pages = test_workload(Some("cloudflare_pages"));
+        pages.artifact.output_directory = Some("out".to_string());
+        assert_eq!(callback_artifact_path(&pages).as_deref(), Some("out"));
     }
 
     #[test]
