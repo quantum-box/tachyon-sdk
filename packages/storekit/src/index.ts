@@ -113,3 +113,17 @@ export {
   StoreKitPaymentStateTransitionError,
   transitionStoreKitPaymentStatus,
 } from "./payment-registry.js";
+
+export {
+  StoreKitSquareAdapter,
+  StoreKitSquareAdapterError,
+  StoreKitSquarePaymentNotFoundError,
+  StoreKitSquareTenantMismatchError,
+  StoreKitSquareWebhookSignatureError,
+  verifySquareSignature,
+} from "./adapters/index.js";
+export type {
+  StoreKitSquareAdapterConfig,
+  StoreKitSquareClient,
+  StoreKitSquarePaymentStore,
+} from "./adapters/index.js";
