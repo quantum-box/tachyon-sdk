@@ -120,10 +120,19 @@ export {
   StoreKitSquarePaymentNotFoundError,
   StoreKitSquareTenantMismatchError,
   StoreKitSquareWebhookSignatureError,
+  StoreKitStripeAdapter,
+  StoreKitStripeAdapterError,
+  StoreKitStripePaymentNotFoundError,
+  StoreKitStripeTenantMismatchError,
+  StoreKitStripeWebhookSignatureError,
   verifySquareSignature,
+  verifyStripeSignature,
 } from "./adapters/index.js";
 export type {
   StoreKitSquareAdapterConfig,
   StoreKitSquareClient,
   StoreKitSquarePaymentStore,
+  StoreKitStripeAdapterConfig,
+  StoreKitStripeClient,
+  StoreKitStripePaymentStore,
 } from "./adapters/index.js";
