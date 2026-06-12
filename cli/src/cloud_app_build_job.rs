@@ -986,7 +986,12 @@ fn truncate_output(value: &str) -> String {
         return value.to_string();
     }
 
-    let start = value.len().saturating_sub(OUTPUT_CAPTURE_LIMIT);
+    let mut start = value.len().saturating_sub(OUTPUT_CAPTURE_LIMIT);
+    // Slicing at an arbitrary byte offset panics when it lands inside a
+    // multi-byte character (e.g. box-drawing lines in wrangler output).
+    while !value.is_char_boundary(start) {
+        start += 1;
+    }
     format!("... truncated {} bytes ...\n{}", start, &value[start..])
 }
 
@@ -1103,6 +1108,27 @@ mod tests {
             deployment_target: deployment_target.map(str::to_string),
             framework: Some("next_js".to_string()),
         }
+    }
+
+    #[test]
+    fn truncate_output_keeps_short_values_unchanged() {
+        let value = "short output";
+        assert_eq!(truncate_output(value), value);
+    }
+
+    #[test]
+    fn truncate_output_does_not_split_multibyte_characters() {
+        // Build a value whose truncation offset lands inside a
+        // multi-byte character, like wrangler's box-drawing lines.
+        // "─" is 3 bytes; the ascii tail length makes the raw
+        // truncation offset land one byte inside the last "─".
+        let mut value = "─".repeat(OUTPUT_CAPTURE_LIMIT / 3);
+        value.push_str(&"x".repeat(OUTPUT_CAPTURE_LIMIT - 1));
+
+        let truncated = truncate_output(&value);
+        assert!(truncated.starts_with("... truncated "));
+        assert!(truncated.len() <= OUTPUT_CAPTURE_LIMIT + 64);
+        assert!(truncated.ends_with('x'));
     }
 
     #[test]
