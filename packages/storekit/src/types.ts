@@ -350,7 +350,8 @@ export interface StoreKitVerifiedWebhook {
   eventId: string;
   rawEventType: string;
   receivedAt: string;
-  payment: StoreKitPayment;
+  payment?: StoreKitPayment;
+  rawEvent?: unknown;
 }
 
 export type StoreKitPaymentEventType =
@@ -368,7 +369,7 @@ export interface StoreKitPaymentEvent {
   provider: StoreKitPaymentProvider;
   eventId: string;
   eventType: StoreKitPaymentEventType;
-  payment: StoreKitPayment;
+  payment?: StoreKitPayment;
   receivedAt: string;
   rawEventType?: string;
 }
