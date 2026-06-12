@@ -10,7 +10,6 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
     collections::BTreeMap,
-    ffi::OsString,
     path::{Path, PathBuf},
     process::Stdio,
     time::Instant,
@@ -168,6 +167,11 @@ async fn run_build(workload: &BuildWorkloadSpec) -> Result<CommandResult> {
         ));
     }
 
+    let is_pages = is_cloudflare_pages(workload, &env);
+    if is_pages {
+        validate_pages_binding_keys(&env)?;
+    }
+
     let mut combined = CommandResult {
         stdout: String::new(),
         stderr: String::new(),
@@ -195,7 +199,7 @@ async fn run_build(workload: &BuildWorkloadSpec) -> Result<CommandResult> {
         );
     }
 
-    if is_cloudflare_pages(workload, &env) {
+    if is_pages {
         append_result(
             &mut combined,
             run_cloudflare_pages_deploy(workload, &checkout_dir, &app_dir, &env).await?,
@@ -309,6 +313,13 @@ fn is_cloudflare_pages(workload: &BuildWorkloadSpec, env: &BTreeMap<String, Stri
         || env_value(env, "PAGES_PROJECT_NAME").is_some()
 }
 
+/// Pinned wrangler version for Pages deploys.
+///
+/// `npx wrangler` resolves the latest release when the app does
+/// not depend on wrangler itself, so an upstream release can
+/// change CLI behavior mid-pipeline. Bump deliberately.
+const WRANGLER_NPM_SPEC: &str = "wrangler@4.100.0";
+
 async fn run_cloudflare_pages_deploy(
     workload: &BuildWorkloadSpec,
     checkout_dir: &Path,
@@ -320,20 +331,33 @@ async fn run_cloudflare_pages_deploy(
     let project_name = required_env(env, "PAGES_PROJECT_NAME")?;
     let output_dir = pages_output_dir(workload, checkout_dir, app_dir, env)?;
     let commit_message = ascii_commit_message(env);
-    let bindings = pages_binding_args(env)?;
+
+    // `wrangler pages deploy` has no `--binding` flag: runtime
+    // bindings live in the Pages project settings (dashboard or
+    // wrangler.toml). Older wrangler releases silently ignored
+    // unknown arguments; 4.9x+ rejects them, so the keys are
+    // validated before build and surfaced for observability here.
+    let binding_keys = pages_binding_keys(env);
+    if !binding_keys.is_empty() {
+        tracing::warn!(
+            keys = %binding_keys.join(","),
+            "CF_PAGES_BINDING_KEYS are not applied by `wrangler pages deploy`; \
+             configure runtime bindings on the Pages project instead"
+        );
+    }
 
     tracing::info!(
         project_name = %project_name,
         account_id = %account_id,
         branch = %workload.source.branch,
         output_dir = %output_dir.display(),
-        binding_count = bindings.len() / 2,
         "deploying Cloudflare Pages output"
     );
 
     let mut command = Command::new("npx");
     command
-        .arg("wrangler")
+        .arg("--yes")
+        .arg(WRANGLER_NPM_SPEC)
         .arg("pages")
         .arg("deploy")
         .arg(&output_dir)
@@ -346,9 +370,6 @@ async fn run_cloudflare_pages_deploy(
         .envs(env)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    for arg in bindings {
-        command.arg(arg);
-    }
 
     run_command("wrangler pages deploy", command).await
 }
@@ -415,23 +436,31 @@ fn ascii_commit_message(env: &BTreeMap<String, String>) -> String {
     }
 }
 
-fn pages_binding_args(env: &BTreeMap<String, String>) -> Result<Vec<OsString>> {
-    let Some(keys) = env_value(env, "CF_PAGES_BINDING_KEYS") else {
-        return Ok(vec![]);
-    };
+fn pages_binding_keys(env: &BTreeMap<String, String>) -> Vec<String> {
+    env_value(env, "CF_PAGES_BINDING_KEYS")
+        .map(|keys| {
+            keys.split(',')
+                .map(str::trim)
+                .filter(|key| !key.is_empty())
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default()
+}
 
-    let mut args = Vec::new();
-    for key in keys.split(',').map(str::trim).filter(|key| !key.is_empty()) {
+fn validate_pages_binding_keys(env: &BTreeMap<String, String>) -> Result<Vec<String>> {
+    let keys = pages_binding_keys(env);
+    for key in &keys {
         if !is_valid_env_key(key) {
             return Err(anyhow!("invalid Cloudflare Pages binding key: {key}"));
         }
-        let value = env
-            .get(key)
-            .ok_or_else(|| anyhow!("Cloudflare Pages binding env var is missing: {key}"))?;
-        args.push(OsString::from("--binding"));
-        args.push(OsString::from(format!("{key}={value}")));
+        if !env.contains_key(key) {
+            return Err(anyhow!(
+                "Cloudflare Pages binding env var is missing: {key}"
+            ));
+        }
     }
-    Ok(args)
+    Ok(keys)
 }
 
 fn is_valid_env_key(key: &str) -> bool {
@@ -1029,7 +1058,21 @@ mod tests {
     }
 
     #[test]
-    fn pages_binding_args_uses_allowed_keys_without_logging_values() {
+    fn pages_binding_keys_parses_and_trims_keys() {
+        let mut env = BTreeMap::new();
+        env.insert(
+            "CF_PAGES_BINDING_KEYS".to_string(),
+            "API_URL, SECRET_TOKEN,,".to_string(),
+        );
+
+        assert_eq!(
+            pages_binding_keys(&env),
+            vec!["API_URL".to_string(), "SECRET_TOKEN".to_string()]
+        );
+    }
+
+    #[test]
+    fn validate_pages_binding_keys_requires_valid_present_env_keys() {
         let mut env = BTreeMap::new();
         env.insert(
             "CF_PAGES_BINDING_KEYS".to_string(),
@@ -1038,26 +1081,38 @@ mod tests {
         env.insert("API_URL".to_string(), "https://example.com".to_string());
         env.insert("SECRET_TOKEN".to_string(), "secret-value".to_string());
 
-        let args = pages_binding_args(&env).unwrap();
         assert_eq!(
-            args,
-            vec![
-                OsString::from("--binding"),
-                OsString::from("API_URL=https://example.com"),
-                OsString::from("--binding"),
-                OsString::from("SECRET_TOKEN=secret-value"),
-            ]
+            validate_pages_binding_keys(&env).unwrap(),
+            vec!["API_URL".to_string(), "SECRET_TOKEN".to_string()]
         );
     }
 
     #[test]
-    fn pages_binding_args_rejects_invalid_keys() {
+    fn validate_pages_binding_keys_rejects_invalid_keys() {
         let mut env = BTreeMap::new();
         env.insert("CF_PAGES_BINDING_KEYS".to_string(), "BAD-KEY".to_string());
         env.insert("BAD-KEY".to_string(), "value".to_string());
 
-        let error = pages_binding_args(&env).unwrap_err().to_string();
+        let error = validate_pages_binding_keys(&env).unwrap_err().to_string();
         assert!(error.contains("invalid Cloudflare Pages binding key"));
+    }
+
+    #[test]
+    fn validate_pages_binding_keys_rejects_missing_env_values() {
+        let mut env = BTreeMap::new();
+        env.insert(
+            "CF_PAGES_BINDING_KEYS".to_string(),
+            "SECRET_TOKEN".to_string(),
+        );
+
+        let error = validate_pages_binding_keys(&env).unwrap_err().to_string();
+        assert!(error.contains("Cloudflare Pages binding env var is missing"));
+    }
+
+    #[test]
+    fn pages_binding_keys_is_empty_without_env() {
+        let env = BTreeMap::new();
+        assert!(pages_binding_keys(&env).is_empty());
     }
 
     #[test]
