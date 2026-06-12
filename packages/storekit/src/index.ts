@@ -46,6 +46,27 @@ export type {
   OrderStatus,
   RefundResult,
 
+  // Payment types
+  StoreKitPaymentProvider,
+  StoreKitPaymentKind,
+  StoreKitPaymentStatus,
+  StoreKitPaymentReference,
+  StoreKitPaymentCustomer,
+  StoreKitPaymentCreateInput,
+  StoreKitPayment,
+  StoreKitRefund,
+  StoreKitRefundInput,
+  StoreKitPaymentGetInput,
+  StoreKitPaymentCancelInput,
+  StoreKitWebhookVerifyInput,
+  StoreKitVerifiedWebhook,
+  StoreKitPaymentEventType,
+  StoreKitPaymentEvent,
+  StoreKitPaymentProviderAdapter,
+  StoreKitPaymentProviderRegistration,
+  StoreKitPaymentLogger,
+  StoreKitPaymentsConfig,
+
   // Checkout types
   CheckoutInput,
 
@@ -83,3 +104,12 @@ export { AuthOperations } from "./operations/auth.js";
 export { InventoryOperations } from "./operations/inventory.js";
 export { OrdersOperations } from "./operations/orders.js";
 export { StorefrontOperations } from "./operations/storefront.js";
+
+// Payments
+export {
+  STOREKIT_PAYMENT_STATE_MACHINE,
+  StoreKitPaymentProviderRegistry,
+  StoreKitPaymentProviderSelectionError,
+  StoreKitPaymentStateTransitionError,
+  transitionStoreKitPaymentStatus,
+} from "./payment-registry.js";

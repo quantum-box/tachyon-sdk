@@ -245,6 +245,162 @@ export interface RefundResult {
 }
 
 // ============================================================================
+// Payment Types
+// ============================================================================
+
+export type StoreKitPaymentProvider = "square" | "stripe";
+
+export type StoreKitPaymentKind =
+  | "reservation_cancellation_fee"
+  | "invoice_payment"
+  | "order_checkout";
+
+export type StoreKitPaymentStatus =
+  | "pending"
+  | "requires_action"
+  | "paid"
+  | "cancelled"
+  | "refunded"
+  | "failed";
+
+export interface StoreKitPaymentReference {
+  invoiceId?: string;
+  reservationId?: string;
+  fieldPaymentIntentId?: string;
+  orderId?: string;
+}
+
+export interface StoreKitPaymentCustomer {
+  email?: string;
+  name?: string;
+}
+
+export interface StoreKitPaymentCreateInput {
+  tenantId: string;
+  kind: StoreKitPaymentKind;
+  amountMinor: number;
+  currency: string;
+  reference: StoreKitPaymentReference;
+  customer?: StoreKitPaymentCustomer;
+  successUrl?: string;
+  cancelUrl?: string;
+  idempotencyKey: string;
+  preferredProviders?: StoreKitPaymentProvider[];
+}
+
+export interface StoreKitPayment {
+  id: string;
+  tenantId: string;
+  provider: StoreKitPaymentProvider;
+  kind: StoreKitPaymentKind;
+  status: StoreKitPaymentStatus;
+  amountMinor: number;
+  currency: string;
+  checkoutUrl?: string;
+  providerPaymentId: string;
+  providerReference?: string;
+  idempotencyKey: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface StoreKitRefund {
+  id: string;
+  tenantId: string;
+  paymentId: string;
+  provider: StoreKitPaymentProvider;
+  amountMinor: number;
+  currency: string;
+  status: "pending" | "succeeded" | "failed";
+  reason?: string;
+  idempotencyKey: string;
+  providerRefundId?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface StoreKitRefundInput {
+  tenantId: string;
+  paymentId: string;
+  amountMinor?: number;
+  reason?: string;
+  idempotencyKey: string;
+}
+
+export interface StoreKitPaymentGetInput {
+  tenantId: string;
+  paymentId: string;
+}
+
+export interface StoreKitPaymentCancelInput {
+  tenantId: string;
+  paymentId: string;
+  idempotencyKey: string;
+}
+
+export interface StoreKitWebhookVerifyInput {
+  tenantId: string;
+  rawBody: string;
+  headers: Record<string, string>;
+}
+
+export interface StoreKitVerifiedWebhook {
+  provider: StoreKitPaymentProvider;
+  tenantId: string;
+  eventId: string;
+  rawEventType: string;
+  receivedAt: string;
+  payment: StoreKitPayment;
+}
+
+export type StoreKitPaymentEventType =
+  | "payment_paid"
+  | "payment_cancelled"
+  | "payment_refunded"
+  | "payment_partially_refunded"
+  | "payment_failed"
+  | "payment_dispute_opened"
+  | "payment_dispute_closed"
+  | "payment_expired"
+  | "payment_unknown";
+
+export interface StoreKitPaymentEvent {
+  provider: StoreKitPaymentProvider;
+  eventId: string;
+  eventType: StoreKitPaymentEventType;
+  payment: StoreKitPayment;
+  receivedAt: string;
+  rawEventType?: string;
+}
+
+export interface StoreKitPaymentProviderAdapter {
+  readonly provider: StoreKitPaymentProvider;
+
+  createPayment(input: StoreKitPaymentCreateInput): Promise<StoreKitPayment>;
+  getPayment(input: StoreKitPaymentGetInput): Promise<StoreKitPayment>;
+  cancelPayment(input: StoreKitPaymentCancelInput): Promise<StoreKitPayment>;
+  refundPayment(input: StoreKitRefundInput): Promise<StoreKitPayment>;
+  verifyWebhook(input: StoreKitWebhookVerifyInput): Promise<StoreKitVerifiedWebhook>;
+  normalizeWebhook(input: StoreKitVerifiedWebhook): Promise<StoreKitPaymentEvent>;
+}
+
+export interface StoreKitPaymentProviderRegistration {
+  adapter: StoreKitPaymentProviderAdapter;
+  isConfigured?: boolean;
+  unavailableReason?: string;
+}
+
+export interface StoreKitPaymentLogger {
+  warn(message: string, context?: Record<string, unknown>): void;
+}
+
+export interface StoreKitPaymentsConfig {
+  providerPriority: StoreKitPaymentProvider[];
+  providers?: StoreKitPaymentProviderRegistration[];
+  logger?: StoreKitPaymentLogger;
+}
+
+// ============================================================================
 // Checkout Types
 // ============================================================================
 
@@ -370,4 +526,5 @@ export interface StorekitClientConfig {
   apiKey?: string;
   bearerToken?: string;
   headers?: Record<string, string>;
+  payments?: StoreKitPaymentsConfig;
 }
