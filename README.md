@@ -96,6 +96,13 @@ tachyon compute logs <app-id> --follow
 tachyon compute builds watch <app-id>
 tachyon compute builds watch --build-id <build-id>
 
+# Manually create a txcloud preview environment for a branch
+tachyon compute preview <app-id> --branch feature/my-change
+
+# Re-fire a pull-request preview build
+tachyon compute preview <app-id> --pr 123
+tachyon compute builds trigger <app-id> --pr 123
+
 # Compact JSON Lines for coding agents
 tachyon compute builds watch --build-id <build-id> --agent
 tachyon compute logs --build-id <build-id> --follow --agent

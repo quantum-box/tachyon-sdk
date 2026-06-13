@@ -339,3 +339,50 @@ fn compute_builds_list_converts_pages_dev_preview_url_using_build_pr_number() {
         "stdout:\n{stdout}"
     );
 }
+
+#[test]
+fn compute_preview_posts_manual_branch_build() {
+    let tmp = TempDir::new().unwrap();
+    let app_id = "app_01kp4vm07tr3d4375597d15gkp";
+    let (api_url, rx, handle) = start_server(vec![
+        r#"{"id":"bld_01kp4vm07tr3d4375597d15gka","app_id":"app_01kp4vm07tr3d4375597d15gkp","status":"queued","source_branch":"feature/manual-preview","created_at":"2026-05-07T00:00:00Z"}"#,
+    ]);
+
+    let output = isolated_command(tmp.path())
+        .env("TACHYON_API_URL", api_url)
+        .args([
+            "compute",
+            "preview",
+            app_id,
+            "--branch",
+            "feature/manual-preview",
+        ])
+        .output()
+        .expect("run tachyon compute preview");
+
+    assert!(
+        output.status.success(),
+        "preview failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+
+    let request = rx.recv().unwrap();
+    handle.join().unwrap();
+    assert!(request.starts_with(&format!("POST /v1/compute/apps/{app_id}/builds ")));
+    assert!(
+        request.contains(r#""branch":"feature/manual-preview""#),
+        "request:\n{request}"
+    );
+    assert!(!request.contains("pr_number"), "request:\n{request}");
+
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(
+        stdout.contains("Branch: feature/manual-preview"),
+        "stdout:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("Build triggered: bld_01kp4vm07tr3d4375597d15gka"),
+        "stdout:\n{stdout}"
+    );
+}
