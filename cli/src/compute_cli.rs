@@ -2918,6 +2918,13 @@ pub(crate) fn validate_secret_key(key: &str) -> Result<()> {
     Ok(())
 }
 
+fn looks_like_secret_key(key: &str) -> bool {
+    !key.is_empty()
+        && key
+            .chars()
+            .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_')
+}
+
 fn validate_secret_target(target: &str) -> Result<()> {
     match target {
         "production" | "preview" | "all" => Ok(()),
@@ -3434,16 +3441,40 @@ pub async fn run(
                         Some(value)
                     }
                 });
-                let selected_app = app.as_ref().or(positional_app);
-                let app_id =
-                    app_id_or_default_value(selected_app.map(String::as_str), project_config)?;
-                let id = resolve::resolve_app_id(&api, app_id).await?;
                 if let Some(key) = secret {
-                    if !vars.is_empty() {
+                    let mut selected_app = app.as_ref().or(positional_app);
+                    let mut key = key.as_str();
+                    let extra_vars = if app.is_none()
+                        && vars.is_empty()
+                        && positional_app.is_some_and(|value| {
+                            !looks_like_secret_key(key) && looks_like_secret_key(value)
+                        }) {
+                        selected_app = secret.as_ref();
+                        key = positional_app.expect("checked above").as_str();
+                        &[] as &[String]
+                    } else if app.is_none()
+                        && positional_app.is_none()
+                        && vars.len() == 1
+                        && !vars[0].contains('=')
+                    {
+                        selected_app = secret.as_ref();
+                        key = vars[0].as_str();
+                        &[] as &[String]
+                    } else {
+                        vars.as_slice()
+                    };
+                    if !extra_vars.is_empty() {
                         return Err(anyhow!("KEY=VALUE arguments cannot be used with --secret"));
                     }
+                    let app_id =
+                        app_id_or_default_value(selected_app.map(String::as_str), project_config)?;
+                    let id = resolve::resolve_app_id(&api, app_id).await?;
                     run_env_set_secret(&api, &id, key, target, value.as_deref(), config_flag).await
                 } else {
+                    let selected_app = app.as_ref().or(positional_app);
+                    let app_id =
+                        app_id_or_default_value(selected_app.map(String::as_str), project_config)?;
+                    let id = resolve::resolve_app_id(&api, app_id).await?;
                     run_env_set(&api, &id, &vars, target, branch.as_deref()).await
                 }
             }
