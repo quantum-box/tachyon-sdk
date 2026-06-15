@@ -18,6 +18,7 @@ chrono = { version = "0.4", features = ["serde"] }
 clap = { version = "4", features = ["derive", "env"] }
 dialoguer = { version = "0.12.0", features = ["fuzzy-select"] }
 dirs = "6"
+futures-util = "0.3"
 http = "1"
 rand = "0.8"
 reqwest = { version = "0.13", default-features = false, features = ["json", "form", "query", "rustls"] }
@@ -36,6 +37,7 @@ serde_yaml = "0.9"
 sha2 = "0.10"
 tachyon-sdk = { path = "../rust", default-features = false, features = ["rustls"] }
 tokio = { version = "1", features = ["full"] }
+tokio-tungstenite = "0.28"
 tokio-util = { version = "0.7", features = ["rt"] }
 tower = "0.5"
 tracing = "0.1"
