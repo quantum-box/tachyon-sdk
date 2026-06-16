@@ -361,6 +361,54 @@ async fn build_config(cli: &Cli, profile: &str) -> Configuration {
     config
 }
 
+fn profile_operator_id(profile: &str) -> Result<Option<String>> {
+    Ok(auth::load_profile(profile)?.and_then(|creds| creds.operator_id))
+}
+
+fn profile_for_tenant(cli: &Cli, active: &str, tenant_id: &str) -> Result<String> {
+    if cli.profile.is_some() || cli.api_key.is_some() || tenant_id.trim().is_empty() {
+        return Ok(active.to_string());
+    }
+
+    if profile_operator_id(active)?.as_deref() == Some(tenant_id) {
+        return Ok(active.to_string());
+    }
+
+    let mut matches = Vec::new();
+    for profile in auth::list_profiles()? {
+        if profile == active {
+            continue;
+        }
+        if profile_operator_id(&profile)?.as_deref() == Some(tenant_id) {
+            matches.push(profile);
+        }
+    }
+
+    if matches.len() == 1 {
+        let selected = matches.remove(0);
+        eprintln!("Using auth profile '{selected}' for tenant '{tenant_id}'.");
+        return Ok(selected);
+    }
+
+    Ok(active.to_string())
+}
+
+async fn build_tenant_config(
+    cli: &Cli,
+    active: &str,
+    tenant_arg: &str,
+) -> Result<(Configuration, String)> {
+    let initial_config = build_config(cli, active).await;
+    let tenant_id = resolve::resolve_tenant_id(&initial_config, tenant_arg, active).await?;
+    let profile = profile_for_tenant(cli, active, &tenant_id)?;
+    if profile == active {
+        return Ok((initial_config, tenant_id));
+    }
+
+    auth::set_runtime_auth_context(profile.clone(), build_oauth_config(cli));
+    Ok((build_config(cli, &profile).await, tenant_id))
+}
+
 async fn build_config_with_auth(
     cli: &Cli,
     profile: &str,
@@ -480,8 +528,7 @@ async fn run() -> Result<()> {
         Commands::Compute(args) => {
             let project_config = config::loader::load(cli.config.as_deref())?;
             let tenant_arg = tenant_arg(&cli, project_config.as_ref());
-            let config = build_config(&cli, &active).await;
-            let tenant_id = resolve::resolve_tenant_id(&config, tenant_arg, &active).await?;
+            let (config, tenant_id) = build_tenant_config(&cli, &active, tenant_arg).await?;
             compute_cli::run(
                 args,
                 &config,
@@ -494,8 +541,7 @@ async fn run() -> Result<()> {
         Commands::Env(args) => {
             let project_config = config::loader::load(cli.config.as_deref())?;
             let tenant_arg = tenant_arg(&cli, project_config.as_ref());
-            let config = build_config(&cli, &active).await;
-            let tenant_id = resolve::resolve_tenant_id(&config, tenant_arg, &active).await?;
+            let (config, tenant_id) = build_tenant_config(&cli, &active, tenant_arg).await?;
             compute_cli::run_env(
                 args,
                 &config,
