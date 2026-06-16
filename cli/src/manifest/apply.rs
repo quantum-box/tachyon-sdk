@@ -81,6 +81,7 @@ pub(crate) async fn run(
         }
         compute_cli::run_apps_apply(
             &api,
+            tenant_id,
             &source.path,
             args.app.as_deref(),
             &args.environment,
