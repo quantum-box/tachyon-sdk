@@ -1110,6 +1110,7 @@ enum ApplyAction {
 pub(crate) struct EnvPlan {
     plain: Vec<SetEnvVarEntry>,
     secret_refs: Vec<SecretEnvRef>,
+    server_managed_credentials: Vec<ServerManagedCredentialRef>,
     sentry_integrations: Vec<SentryIntegrationPlan>,
 }
 
@@ -1117,6 +1118,47 @@ pub(crate) struct EnvPlan {
 struct SecretEnvRef {
     key: String,
     target: String,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct ServerManagedCredentialRef {
+    key: String,
+    target: String,
+    source: ServerManagedCredentialSource,
+}
+
+/// Server-managed credential source accepted by `tachyon compute apps apply`.
+///
+/// The CLI does not resolve these references locally. It preserves the
+/// selected `CloudApp` manifest and asks the server-side IaC apply path to
+/// materialize the final app-env secret. Keeping this as an enum avoids
+/// carrying `"databaseRef"` / `"oauth2ClientRef"` / `"storageRef"` string
+/// literals through planner logic.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ServerManagedCredentialSource {
+    /// `valueFrom.databaseRef`
+    Database,
+    /// `valueFrom.oauth2ClientRef`
+    OAuth2Client,
+    /// `valueFrom.storageRef`
+    Storage,
+}
+
+impl ServerManagedCredentialSource {
+    /// Returns the manifest field name used for display and diagnostics.
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Database => "databaseRef",
+            Self::OAuth2Client => "oauth2ClientRef",
+            Self::Storage => "storageRef",
+        }
+    }
+}
+
+impl std::fmt::Display for ServerManagedCredentialSource {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -1152,6 +1194,7 @@ struct IntegrationConnection {
 
 pub(crate) async fn run_apps_apply(
     api: &ApiClient,
+    tenant_id: &str,
     file: &Path,
     selected_app: Option<&str>,
     environment: &str,
@@ -1226,6 +1269,26 @@ pub(crate) async fn run_apps_apply(
         }
         if !env_changed.is_empty() {
             println!("  env:         {}", env_changed.join(", "));
+        }
+        if !env_plan.server_managed_credentials.is_empty() {
+            let refs = env_plan
+                .server_managed_credentials
+                .iter()
+                .map(|credential| {
+                    format!(
+                        "{}({}; {})",
+                        credential.key, credential.target, credential.source
+                    )
+                })
+                .collect::<Vec<_>>();
+            println!("  managed env: {}", refs.join(", "));
+            if dry_run {
+                println!("  next:        run without --dry-run to save/apply the CloudApp manifest server-side");
+            } else {
+                let manifest = cloud_app_manifest_for_iac(&entry, tenant_id)?;
+                apply_compute_cloud_app_manifest(api, &manifest).await?;
+                println!("  iac:         applied server-managed credential refs");
+            }
         }
         if !env_plan.sentry_integrations.is_empty() {
             for sentry in &env_plan.sentry_integrations {
@@ -1503,17 +1566,29 @@ pub(crate) fn plan_env_vars(entry: &Value, environment: &str) -> Result<EnvPlan>
             let value_from = env.get("valueFrom");
             if env_type == "credential" || value_from.is_some() {
                 if value.is_some() {
-                    return Err(anyhow!("credential env var {key} must use valueFrom.secret; literal values are not allowed"));
+                    return Err(anyhow!("credential env var {key} must use valueFrom; literal values are not allowed"));
                 }
-                let secret = extract_secret_ref(
-                    key,
-                    value_from
-                        .ok_or_else(|| anyhow!("credential env var {key} is missing valueFrom"))?,
-                )?;
-                plan.secret_refs.push(SecretEnvRef {
-                    key: secret,
-                    target,
-                });
+                let value_from = value_from
+                    .ok_or_else(|| anyhow!("credential env var {key} is missing valueFrom"))?;
+                if let Some(secret) = extract_secret_ref(value_from)? {
+                    plan.secret_refs.push(SecretEnvRef {
+                        key: secret,
+                        target,
+                    });
+                    continue;
+                }
+                if let Some(source) = server_managed_credential_source(value_from) {
+                    plan.server_managed_credentials
+                        .push(ServerManagedCredentialRef {
+                            key: key.to_string(),
+                            target,
+                            source,
+                        });
+                    continue;
+                }
+                return Err(anyhow!(
+                    "credential env var {key} supports valueFrom.secret, valueFrom.databaseRef, valueFrom.oauth2ClientRef, or valueFrom.storageRef"
+                ));
             } else {
                 plan.plain.push(SetEnvVarEntry {
                     key: key.to_string(),
@@ -1634,30 +1709,126 @@ fn default_env_target(environment: &str) -> &'static str {
     }
 }
 
-fn extract_secret_ref(key: &str, value_from: &Value) -> Result<String> {
-    let secret = value_from
-        .get("secret")
-        .ok_or_else(|| anyhow!("env var {key} only supports valueFrom.secret"))?;
+fn extract_secret_ref(value_from: &Value) -> Result<Option<String>> {
+    let Some(secret) = value_from.get("secret") else {
+        return Ok(None);
+    };
     let path = if let Some(path) = secret.as_str() {
         path
     } else if let Some(path) = secret.get("path").and_then(Value::as_str) {
         if secret.get("field").is_some() {
-            return Err(anyhow!(
-                "env var {key} valueFrom.secret.field is not supported"
-            ));
+            return Err(anyhow!("valueFrom.secret.field is not supported"));
         }
         path
     } else {
         return Err(anyhow!(
-            "env var {key} valueFrom.secret must be a key string or object with path"
+            "valueFrom.secret must be a key string or object with path"
         ));
     };
     if path.is_empty() {
+        return Err(anyhow!("valueFrom.secret must reference a single env key"));
+    }
+    Ok(Some(path.to_string()))
+}
+
+fn server_managed_credential_source(value_from: &Value) -> Option<ServerManagedCredentialSource> {
+    if value_from.get("databaseRef").is_some() {
+        return Some(ServerManagedCredentialSource::Database);
+    }
+    if value_from.get("oauth2ClientRef").is_some() {
+        return Some(ServerManagedCredentialSource::OAuth2Client);
+    }
+    if value_from.get("storageRef").is_some() {
+        return Some(ServerManagedCredentialSource::Storage);
+    }
+    None
+}
+
+fn cloud_app_manifest_for_iac(entry: &Value, tenant_id: &str) -> Result<Value> {
+    let name = entry
+        .get("name")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow!("app entry is missing name"))?;
+    let mut spec = entry.clone();
+    spec.as_object_mut()
+        .ok_or_else(|| anyhow!("CloudApps app entry must be an object"))?
+        .remove("name");
+    Ok(json!({
+        "apiVersion": "apps.tachy.one/v1alpha",
+        "kind": "CloudApp",
+        "metadata": {
+            "tenantId": tenant_id,
+            "name": name,
+        },
+        "spec": spec,
+    }))
+}
+
+async fn graphql_request(api: &ApiClient, body: Value) -> Result<Value> {
+    let url = format!("{}/v1/graphql", api.base_url);
+    let response = api.client.post(url).json(&body).send().await?;
+    let status = response.status();
+    let payload: Value = response.json().await?;
+    if !status.is_success() {
         return Err(anyhow!(
-            "env var {key} valueFrom.secret must reference a single env key"
+            "graphql request failed: status={status}, body={payload}"
         ));
     }
-    Ok(path.to_string())
+    if let Some(errors) = payload.get("errors") {
+        return Err(anyhow!("graphql error: {errors}"));
+    }
+    payload
+        .get("data")
+        .cloned()
+        .ok_or_else(|| anyhow!("missing data in graphql response"))
+}
+
+async fn save_compute_cloud_app_manifest(api: &ApiClient, manifest: &Value) -> Result<()> {
+    let tenant_id = manifest
+        .get("metadata")
+        .and_then(|metadata| metadata.get("tenantId"))
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow!("CloudApp manifest is missing metadata.tenantId"))?;
+    let body = json!({
+        "query": r#"
+          mutation SaveManifest($input: SaveManifestInput!) {
+            saveManifest(input: $input) { kind }
+          }
+        "#,
+        "variables": {
+            "input": {
+                "tenantId": tenant_id,
+                "manifest": serde_json::to_string(manifest)?,
+            }
+        }
+    });
+    graphql_request(api, body).await?;
+    Ok(())
+}
+
+async fn apply_compute_cloud_app_manifest(api: &ApiClient, manifest: &Value) -> Result<()> {
+    save_compute_cloud_app_manifest(api, manifest).await?;
+    let name = manifest
+        .get("metadata")
+        .and_then(|metadata| metadata.get("name"))
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow!("CloudApp manifest is missing metadata.name"))?;
+    let body = json!({
+        "query": r#"
+          mutation ApplyManifest($input: ApplyManifestInput!) {
+            applyManifest(input: $input) { success }
+          }
+        "#,
+        "variables": {
+            "input": {
+                "kind": "CloudApp",
+                "name": name,
+                "dryRun": false,
+            }
+        }
+    });
+    graphql_request(api, body).await?;
+    Ok(())
 }
 
 async fn apply_env_plan(
@@ -3305,7 +3476,7 @@ pub async fn run(
                 app,
                 environment,
                 dry_run,
-            } => run_apps_apply(&api, file, app.as_deref(), environment, *dry_run).await,
+            } => run_apps_apply(&api, tenant_id, file, app.as_deref(), environment, *dry_run).await,
             AppsCommand::Feedback(feedback_args) => {
                 let id = resolve::resolve_app_id(&api, &feedback_args.app_id).await?;
                 run_apps_feedback(tenant_id, &id, feedback_args)
@@ -3591,6 +3762,7 @@ pub async fn run_env(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rstest::rstest;
 
     #[test]
     fn sentry_integration_adds_cli_plan_metadata() {
@@ -3628,6 +3800,108 @@ mod tests {
                 env_vars: vec!["NEXT_PUBLIC_SENTRY_DSN".to_string()],
             }]
         );
+    }
+
+    #[rstest]
+    #[case(
+        "DATABASE_URL",
+        Some("production"),
+        json!({
+            "databaseRef": {
+                "name": "tachyonfield",
+                "field": "url"
+            }
+        }),
+        "production",
+        ServerManagedCredentialSource::Database
+    )]
+    #[case(
+        "COGNITO_CLIENT_ID",
+        None,
+        json!({
+            "oauth2ClientRef": {
+                "name": "fieldadmin-web",
+                "field": "clientId"
+            }
+        }),
+        "production",
+        ServerManagedCredentialSource::OAuth2Client
+    )]
+    #[case(
+        "BLOB_BUCKET_NAME",
+        Some("preview"),
+        json!({
+            "storageRef": {
+                "name": "field-assets",
+                "field": "bucketName"
+            }
+        }),
+        "preview",
+        ServerManagedCredentialSource::Storage
+    )]
+    fn server_managed_credential_ref_is_planned_without_secret_sync(
+        #[case] key: &str,
+        #[case] target: Option<&str>,
+        #[case] value_from: Value,
+        #[case] expected_target: &str,
+        #[case] expected_source: ServerManagedCredentialSource,
+    ) {
+        let mut env_var = json!({
+            "name": key,
+            "type": "credential",
+            "valueFrom": value_from
+        });
+        if let Some(target) = target {
+            env_var["target"] = json!(target);
+        }
+        let entry = json!({
+            "name": "tachyon-field-api",
+            "envVars": [env_var]
+        });
+
+        let plan = plan_env_vars(&entry, "production").unwrap();
+
+        assert!(plan.plain.is_empty());
+        assert!(plan.secret_refs.is_empty());
+        assert_eq!(
+            plan.server_managed_credentials,
+            vec![ServerManagedCredentialRef {
+                key: key.to_string(),
+                target: expected_target.to_string(),
+                source: expected_source,
+            }]
+        );
+    }
+
+    #[test]
+    fn cloud_app_manifest_for_iac_injects_tenant_and_removes_name() {
+        let entry = json!({
+            "name": "tachyon-field-api",
+            "deploymentTarget": "lambda",
+            "envVars": [
+                {
+                    "name": "DATABASE_URL",
+                    "type": "credential",
+                    "valueFrom": {
+                        "databaseRef": {
+                            "name": "tachyonfield",
+                            "field": "url"
+                        }
+                    }
+                }
+            ]
+        });
+
+        let manifest = cloud_app_manifest_for_iac(&entry, "tn_01ks18jhh1xvggktfzjx5jqsen").unwrap();
+
+        assert_eq!(manifest["kind"], "CloudApp");
+        assert_eq!(manifest["metadata"]["name"], "tachyon-field-api");
+        assert_eq!(
+            manifest["metadata"]["tenantId"],
+            "tn_01ks18jhh1xvggktfzjx5jqsen"
+        );
+        assert!(manifest["spec"].get("name").is_none());
+        assert_eq!(manifest["spec"]["deploymentTarget"], "lambda");
     }
 
     #[test]

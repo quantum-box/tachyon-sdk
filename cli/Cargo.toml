@@ -44,6 +44,7 @@ urlencoding = "2"
 zip = { version = "2", default-features = false, features = ["deflate"] }
 
 [dev-dependencies]
+rstest = "0.21"
 tempfile = "3"
 
 [workspace]
