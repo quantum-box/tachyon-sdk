@@ -108,7 +108,11 @@ fn resolve_path(cwd: &Path, path: &Path) -> PathBuf {
 fn load_path(path: &Path) -> Result<ProjectConfig> {
     let raw = std::fs::read_to_string(path)
         .with_context(|| format!("read Tachyon config: {}", path.display()))?;
-    serde_yaml::from_str(&raw).with_context(|| format!("parse Tachyon config: {}", path.display()))
+    let first_doc = serde_yaml::Deserializer::from_str(&raw)
+        .next()
+        .with_context(|| format!("empty Tachyon config: {}", path.display()))?;
+    ProjectConfig::deserialize(first_doc)
+        .with_context(|| format!("parse Tachyon config: {}", path.display()))
 }
 
 fn discover(cwd: &Path) -> Option<PathBuf> {
@@ -205,6 +209,37 @@ mod tests {
         let loaded = load_from(tmp.path(), None).unwrap().unwrap();
         assert_eq!(loaded.metadata.name.as_deref(), Some("camel"));
         assert_eq!(loaded.metadata.tenant_id.as_deref(), Some("tn_camel"));
+    }
+
+    #[test]
+    fn parses_project_config_from_first_yaml_document() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        let _guard = EnvGuard::remove(CONFIG_ENV);
+        let tmp = TempDir::new().unwrap();
+        std::fs::write(
+            tmp.path().join(CONFIG_FILE),
+            r#"apiVersion: apps.tachy.one/v1alpha
+kind: CloudApps
+metadata:
+  name: fieldadmin
+  tenantId: tn_field
+spec:
+  apps:
+    - name: fieldadmin
+---
+apiVersion: apps.tachy.one/v1alpha
+kind: OAuth2Client
+metadata:
+  name: fieldadmin-web
+"#,
+        )
+        .unwrap();
+
+        let loaded = load_from(tmp.path(), None).unwrap().unwrap();
+
+        assert_eq!(loaded.metadata.name.as_deref(), Some("fieldadmin"));
+        assert_eq!(loaded.metadata.tenant_id.as_deref(), Some("tn_field"));
+        assert_eq!(loaded.spec.apps[0].name.as_deref(), Some("fieldadmin"));
     }
 
     #[test]

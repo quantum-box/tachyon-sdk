@@ -295,8 +295,7 @@ pub fn discover_manifests(explicit_file: Option<&Path>, cwd: &Path) -> Result<Ve
     if let Some(yml_path) = tachyon_yml {
         let raw = std::fs::read_to_string(&yml_path)
             .with_context(|| format!("read {}", yml_path.display()))?;
-        let root: TachyonYmlRoot =
-            serde_yaml::from_str(&raw).with_context(|| format!("parse {}", yml_path.display()))?;
+        let root = parse_tachyon_yml_root(&raw, &yml_path)?;
         if let Some(auth) = root.auth {
             if let Some(manifest_value) = auth.manifest {
                 let manifest = parse_manifest_value(manifest_value)
@@ -360,7 +359,7 @@ fn load_single_manifest(path: &Path) -> Result<LoadedManifest> {
 
     // If the file has an `auth.manifest` key (tachyon.yml style), use that section.
     // Otherwise fall back to parsing the whole file as a flat AuthManifest.
-    if let Ok(root) = serde_yaml::from_str::<TachyonYmlRoot>(&raw) {
+    if let Ok(root) = parse_tachyon_yml_root(&raw, path) {
         if let Some(auth) = root.auth {
             if let Some(manifest) = auth.manifest {
                 return Ok(LoadedManifest {
@@ -380,6 +379,13 @@ fn load_single_manifest(path: &Path) -> Result<LoadedManifest> {
         path: path.to_path_buf(),
         manifest,
     })
+}
+
+fn parse_tachyon_yml_root(raw: &str, path: &Path) -> Result<TachyonYmlRoot> {
+    let first_doc = serde_yaml::Deserializer::from_str(raw)
+        .next()
+        .with_context(|| format!("empty {}", path.display()))?;
+    TachyonYmlRoot::deserialize(first_doc).with_context(|| format!("parse {}", path.display()))
 }
 
 fn parse_manifest_value(value: serde_yaml::Value) -> Result<AuthManifest> {
