@@ -1,19 +1,21 @@
 use chrono::{DateTime, Utc};
 
 use super::domain::{
-    DefaultRole, EvaluatePoliciesBatchOutcome, NewOperatorOwnerMethod, OAuth2ClientCreated,
-    OAuthToken, OAuthTokenDetail, Operator, Policy, PublicApiKey, ServiceAccount, TenantHierarchy,
-    User,
+    DefaultRole, EvaluatePoliciesBatchOutcome, NewOperatorOwnerMethod,
+    OAuth2ClientCreated, OAuthToken, OAuthTokenDetail, Operator, Policy,
+    PublicApiKey, ServiceAccount, TenantHierarchy, User,
 };
 use super::error::{AuthError, AuthResult};
 use super::inputs::*;
 use super::traits::AuthApp;
 use super::types::{
-    Identifier, PlatformId, PublicApiKeyId, PublicApiKeyValue, ServiceAccountId, TenantId, UserId,
+    Identifier, PlatformId, PublicApiKeyId, PublicApiKeyValue,
+    ServiceAccountId, TenantId, UserId,
 };
 use crate::apis::{
-    self, auth_api_keys_api, auth_o_auth2_clients_api, auth_o_auth_tokens_api, auth_operators_api,
-    auth_policies_api, auth_service_accounts_api, auth_user_policies_api, auth_users_api,
+    self, auth_api_keys_api, auth_o_auth2_clients_api,
+    auth_o_auth_tokens_api, auth_operators_api, auth_policies_api,
+    auth_service_accounts_api, auth_user_policies_api, auth_users_api,
     configuration::Configuration,
 };
 use crate::models;
@@ -43,8 +45,12 @@ fn not_supported(operation: &str, classification: &str) -> AuthError {
 fn map_api_error<T>(operation: &str, error: apis::Error<T>) -> AuthError {
     match error {
         apis::Error::Reqwest(error) => AuthError::Http(error),
-        apis::Error::Serde(error) => AuthError::Internal(format!("{operation}: {error}")),
-        apis::Error::Io(error) => AuthError::Internal(format!("{operation}: {error}")),
+        apis::Error::Serde(error) => {
+            AuthError::Internal(format!("{operation}: {error}"))
+        }
+        apis::Error::Io(error) => {
+            AuthError::Internal(format!("{operation}: {error}"))
+        }
         apis::Error::ResponseError(response) => {
             let message = if response.content.is_empty() {
                 format!("{operation}: status {}", response.status)
@@ -100,7 +106,10 @@ fn service_account_from_response(
         id: ServiceAccountId::new(response.id),
         tenant_id: TenantId::new(response.tenant_id),
         name: response.name,
-        created_at: parse_datetime(&response.created_at, "service_account.created_at")?,
+        created_at: parse_datetime(
+            &response.created_at,
+            "service_account.created_at",
+        )?,
     })
 }
 
@@ -111,10 +120,15 @@ fn public_api_key_from_response(
     Ok(PublicApiKey {
         id: PublicApiKeyId::new(response.id),
         tenant_id: tenant_id.clone(),
-        service_account_id: ServiceAccountId::new(response.service_account_id),
+        service_account_id: ServiceAccountId::new(
+            response.service_account_id,
+        ),
         name: response.name,
         value: PublicApiKeyValue::new(response.value),
-        created_at: parse_datetime(&response.created_at, "api_key.created_at")?,
+        created_at: parse_datetime(
+            &response.created_at,
+            "api_key.created_at",
+        )?,
     })
 }
 
@@ -135,15 +149,23 @@ fn user_from_response(response: models::UserResponse) -> User {
     }
 }
 
-fn policy_from_response(response: models::PolicyResponse) -> AuthResult<Policy> {
+fn policy_from_response(
+    response: models::PolicyResponse,
+) -> AuthResult<Policy> {
     Ok(Policy {
         id: response.id.into(),
         name: response.name,
         description: response.description.flatten(),
         is_system: response.is_system,
         tenant_id: response.tenant_id.flatten().map(TenantId::new),
-        created_at: parse_datetime(&response.created_at, "policy.created_at")?,
-        updated_at: parse_datetime(&response.updated_at, "policy.updated_at")?,
+        created_at: parse_datetime(
+            &response.created_at,
+            "policy.created_at",
+        )?,
+        updated_at: parse_datetime(
+            &response.updated_at,
+            "policy.updated_at",
+        )?,
     })
 }
 
@@ -155,16 +177,24 @@ fn oauth_token_detail_from_response(
         provider_user_id: response.provider_user_id,
         access_token: response.access_token,
         refresh_token: response.refresh_token.flatten(),
-        expires_at: parse_datetime(&response.expires_at, "oauth.expires_at")?,
+        expires_at: parse_datetime(
+            &response.expires_at,
+            "oauth.expires_at",
+        )?,
     })
 }
 
 #[async_trait::async_trait]
 impl AuthApp for SdkAuthApp {
-    async fn check_policy<'a>(&self, input: &CheckPolicyInput<'a>) -> AuthResult<()> {
+    async fn check_policy<'a>(
+        &self,
+        input: &CheckPolicyInput<'a>,
+    ) -> AuthResult<()> {
         let response = auth_policies_api::evaluate_policies_batch(
             &self.configuration,
-            models::EvaluatePoliciesBatchRequest::new(vec![input.action.to_string()]),
+            models::EvaluatePoliciesBatchRequest::new(vec![input
+                .action
+                .to_string()]),
         )
         .await
         .map_err(|error| map_api_error("evaluate_policies_batch", error))?;
@@ -172,11 +202,9 @@ impl AuthApp for SdkAuthApp {
         match response.results.first() {
             Some(outcome) if outcome.allowed => Ok(()),
             Some(outcome) => Err(AuthError::Forbidden(
-                outcome
-                    .error
-                    .clone()
-                    .flatten()
-                    .unwrap_or_else(|| format!("Policy denied {}", input.action)),
+                outcome.error.clone().flatten().unwrap_or_else(|| {
+                    format!("Policy denied {}", input.action)
+                }),
             )),
             None => Err(AuthError::Internal(format!(
                 "No policy evaluation result for {}",
@@ -233,7 +261,10 @@ impl AuthApp for SdkAuthApp {
         ))
     }
 
-    async fn delete_operator<'a>(&self, _input: &DeleteOperatorInput<'a>) -> AuthResult<()> {
+    async fn delete_operator<'a>(
+        &self,
+        _input: &DeleteOperatorInput<'a>,
+    ) -> AuthResult<()> {
         Err(not_supported(
             "delete_operator",
             "B server endpoint addition",
@@ -259,15 +290,20 @@ impl AuthApp for SdkAuthApp {
         &self,
         input: &GetOperatorByIdInput<'a>,
     ) -> AuthResult<Option<Operator>> {
-        let response =
-            auth_operators_api::get_operator_by_id(&self.configuration, input.operator_id.as_str())
-                .await
-                .map_err(|error| map_api_error("get_operator_by_id", error))?;
+        let response = auth_operators_api::get_operator_by_id(
+            &self.configuration,
+            input.operator_id.as_str(),
+        )
+        .await
+        .map_err(|error| map_api_error("get_operator_by_id", error))?;
 
         Ok(Some(operator_from_response(response)))
     }
 
-    async fn create_operator<'a>(&self, input: &CreateOperatorInput<'a>) -> AuthResult<Operator> {
+    async fn create_operator<'a>(
+        &self,
+        input: &CreateOperatorInput<'a>,
+    ) -> AuthResult<Operator> {
         let owner_method = match input.new_operator_owner_method {
             NewOperatorOwnerMethod::Inherit => "inherit",
             NewOperatorOwnerMethod::Create => "create",
@@ -278,21 +314,31 @@ impl AuthApp for SdkAuthApp {
             input.operator_name.to_string(),
             input.platform_id.to_string(),
         );
-        request.operator_alias = Some(Some(input.operator_alias.to_string()));
+        request.operator_alias =
+            Some(Some(input.operator_alias.to_string()));
         request.new_operator_owner_password =
             Some(input.new_operator_owner_password.map(str::to_string));
 
-        let response = auth_operators_api::create_operator(&self.configuration, request)
-            .await
-            .map_err(|error| map_api_error("create_operator", error))?;
+        let response = auth_operators_api::create_operator(
+            &self.configuration,
+            request,
+        )
+        .await
+        .map_err(|error| map_api_error("create_operator", error))?;
 
         Ok(operator_from_response(*response.operator))
     }
 
-    async fn oauth_tokens<'a>(&self, _input: &OAuthTokenInput<'a>) -> AuthResult<Vec<OAuthToken>> {
-        let response = auth_o_auth_tokens_api::list_oauth_tokens(&self.configuration)
-            .await
-            .map_err(|error| map_api_error("list_oauth_tokens", error))?;
+    async fn oauth_tokens<'a>(
+        &self,
+        _input: &OAuthTokenInput<'a>,
+    ) -> AuthResult<Vec<OAuthToken>> {
+        let response =
+            auth_o_auth_tokens_api::list_oauth_tokens(&self.configuration)
+                .await
+                .map_err(|error| {
+                    map_api_error("list_oauth_tokens", error)
+                })?;
 
         Ok(response
             .tokens
@@ -313,31 +359,46 @@ impl AuthApp for SdkAuthApp {
             input.provider,
         )
         .await
-        .map_err(|error| map_api_error("get_oauth_token_by_provider", error))?;
+        .map_err(|error| {
+            map_api_error("get_oauth_token_by_provider", error)
+        })?;
 
         oauth_token_detail_from_response(response).map(Some)
     }
 
-    async fn save_oauth_token<'a>(&self, input: &SaveOAuthTokenInput<'a>) -> AuthResult<()> {
+    async fn save_oauth_token<'a>(
+        &self,
+        input: &SaveOAuthTokenInput<'a>,
+    ) -> AuthResult<()> {
         let mut request = models::SaveOAuthTokenRequest::new(
             input.access_token.to_string(),
             input.expires_in,
             input.provider.to_string(),
             input.provider_user_id.to_string(),
         );
-        request.refresh_token = Some(input.refresh_token.map(str::to_string));
+        request.refresh_token =
+            Some(input.refresh_token.map(str::to_string));
 
-        auth_o_auth_tokens_api::save_oauth_token(&self.configuration, request)
-            .await
-            .map_err(|error| map_api_error("save_oauth_token", error))?;
+        auth_o_auth_tokens_api::save_oauth_token(
+            &self.configuration,
+            request,
+        )
+        .await
+        .map_err(|error| map_api_error("save_oauth_token", error))?;
 
         Ok(())
     }
 
-    async fn delete_oauth_token<'a>(&self, input: &DeleteOAuthTokenInput<'a>) -> AuthResult<()> {
-        auth_o_auth_tokens_api::delete_oauth_token(&self.configuration, input.provider)
-            .await
-            .map_err(|error| map_api_error("delete_oauth_token", error))?;
+    async fn delete_oauth_token<'a>(
+        &self,
+        input: &DeleteOAuthTokenInput<'a>,
+    ) -> AuthResult<()> {
+        auth_o_auth_tokens_api::delete_oauth_token(
+            &self.configuration,
+            input.provider,
+        )
+        .await
+        .map_err(|error| map_api_error("delete_oauth_token", error))?;
 
         Ok(())
     }
@@ -417,7 +478,10 @@ impl AuthApp for SdkAuthApp {
         let response = auth_api_keys_api::create_api_key(
             &self.configuration,
             input.service_account_id.as_str(),
-            models::CreateApiKeyRequest::new(input.name.to_string(), input.operator_id.to_string()),
+            models::CreateApiKeyRequest::new(
+                input.name.to_string(),
+                input.operator_id.to_string(),
+            ),
         )
         .await
         .map_err(|error| map_api_error("create_api_key", error))?;
@@ -440,11 +504,16 @@ impl AuthApp for SdkAuthApp {
         response
             .api_keys
             .into_iter()
-            .map(|api_key| public_api_key_from_response(api_key, input.operator_id))
+            .map(|api_key| {
+                public_api_key_from_response(api_key, input.operator_id)
+            })
             .collect()
     }
 
-    async fn attach_user_policy<'a>(&self, input: &AttachUserPolicyInput<'a>) -> AuthResult<()> {
+    async fn attach_user_policy<'a>(
+        &self,
+        input: &AttachUserPolicyInput<'a>,
+    ) -> AuthResult<()> {
         auth_user_policies_api::attach_user_policy(
             &self.configuration,
             models::AttachUserPolicyRequest::new(
@@ -459,7 +528,10 @@ impl AuthApp for SdkAuthApp {
         Ok(())
     }
 
-    async fn detach_user_policy<'a>(&self, input: &DetachUserPolicyInput<'a>) -> AuthResult<()> {
+    async fn detach_user_policy<'a>(
+        &self,
+        input: &DetachUserPolicyInput<'a>,
+    ) -> AuthResult<()> {
         auth_user_policies_api::detach_user_policy(
             &self.configuration,
             models::DetachUserPolicyRequest::new(
@@ -486,7 +558,9 @@ impl AuthApp for SdkAuthApp {
             ),
         )
         .await
-        .map_err(|error| map_api_error("check_policy_for_resource", error))?;
+        .map_err(|error| {
+            map_api_error("check_policy_for_resource", error)
+        })?;
 
         if response.allowed {
             Ok(())
@@ -512,7 +586,9 @@ impl AuthApp for SdkAuthApp {
             ),
         )
         .await
-        .map_err(|error| map_api_error("attach_user_policy_with_scope", error))?;
+        .map_err(|error| {
+            map_api_error("attach_user_policy_with_scope", error)
+        })?;
 
         Ok(())
     }
@@ -531,16 +607,23 @@ impl AuthApp for SdkAuthApp {
             ),
         )
         .await
-        .map_err(|error| map_api_error("detach_user_policy_with_scope", error))?;
+        .map_err(|error| {
+            map_api_error("detach_user_policy_with_scope", error)
+        })?;
 
         Ok(())
     }
 
-    async fn add_user_to_tenant<'a>(&self, input: &AddUserToTenantInput<'a>) -> AuthResult<()> {
+    async fn add_user_to_tenant<'a>(
+        &self,
+        input: &AddUserToTenantInput<'a>,
+    ) -> AuthResult<()> {
         auth_users_api::add_user_to_tenant(
             &self.configuration,
             input.user_id.as_str(),
-            models::AddUserToTenantRequest::new(input.tenant_id.to_string()),
+            models::AddUserToTenantRequest::new(
+                input.tenant_id.to_string(),
+            ),
         )
         .await
         .map_err(|error| map_api_error("add_user_to_tenant", error))?;
@@ -548,10 +631,16 @@ impl AuthApp for SdkAuthApp {
         Ok(())
     }
 
-    async fn get_user_by_id<'a>(&self, input: &GetUserByIdInput<'a>) -> AuthResult<Option<User>> {
-        let response = auth_users_api::get_user(&self.configuration, input.user_id.as_str())
-            .await
-            .map_err(|error| map_api_error("get_user", error))?;
+    async fn get_user_by_id<'a>(
+        &self,
+        input: &GetUserByIdInput<'a>,
+    ) -> AuthResult<Option<User>> {
+        let response = auth_users_api::get_user(
+            &self.configuration,
+            input.user_id.as_str(),
+        )
+        .await
+        .map_err(|error| map_api_error("get_user", error))?;
 
         Ok(Some(user_from_response(response)))
     }
@@ -560,9 +649,12 @@ impl AuthApp for SdkAuthApp {
         &self,
         input: &FindUsersByTenantInput<'a>,
     ) -> AuthResult<Vec<User>> {
-        let response = auth_users_api::list_users(&self.configuration, input.tenant_id.as_str())
-            .await
-            .map_err(|error| map_api_error("list_users", error))?;
+        let response = auth_users_api::list_users(
+            &self.configuration,
+            input.tenant_id.as_str(),
+        )
+        .await
+        .map_err(|error| map_api_error("list_users", error))?;
 
         Ok(response.users.into_iter().map(user_from_response).collect())
     }
@@ -571,15 +663,22 @@ impl AuthApp for SdkAuthApp {
         &self,
         input: &GetPolicyByIdInput<'a>,
     ) -> AuthResult<Option<Policy>> {
-        let response = auth_policies_api::get_policy(&self.configuration, input.policy_id.as_str())
-            .await
-            .map_err(|error| map_api_error("get_policy", error))?;
+        let response = auth_policies_api::get_policy(
+            &self.configuration,
+            input.policy_id.as_str(),
+        )
+        .await
+        .map_err(|error| map_api_error("get_policy", error))?;
 
         policy_from_response(response).map(Some)
     }
 
-    async fn register_policy<'a>(&self, input: &RegisterPolicyInput<'a>) -> AuthResult<Policy> {
-        let mut request = models::RegisterPolicyRequest::new(input.name.to_string());
+    async fn register_policy<'a>(
+        &self,
+        input: &RegisterPolicyInput<'a>,
+    ) -> AuthResult<Policy> {
+        let mut request =
+            models::RegisterPolicyRequest::new(input.name.to_string());
         request.description = Some(input.description.map(str::to_string));
         request.is_system = Some(false);
         request.global = Some(false);
@@ -597,9 +696,12 @@ impl AuthApp for SdkAuthApp {
                 .collect(),
         );
 
-        let response = auth_policies_api::register_policy(&self.configuration, request)
-            .await
-            .map_err(|error| map_api_error("register_policy", error))?;
+        let response = auth_policies_api::register_policy(
+            &self.configuration,
+            request,
+        )
+        .await
+        .map_err(|error| map_api_error("register_policy", error))?;
 
         policy_from_response(response)
     }
@@ -614,7 +716,10 @@ impl AuthApp for SdkAuthApp {
         ))
     }
 
-    async fn attach_sa_policy<'a>(&self, _input: &AttachSaPolicyInput<'a>) -> AuthResult<()> {
+    async fn attach_sa_policy<'a>(
+        &self,
+        _input: &AttachSaPolicyInput<'a>,
+    ) -> AuthResult<()> {
         Err(not_supported(
             "attach_sa_policy",
             "B server endpoint addition; no REST route is exposed yet",
@@ -633,9 +738,12 @@ impl AuthApp for SdkAuthApp {
         );
         request.use_tachyon_user_pool = Some(input.use_tachyon_user_pool);
 
-        let response = auth_o_auth2_clients_api::create_oauth2_client(&self.configuration, request)
-            .await
-            .map_err(|error| map_api_error("create_oauth2_client", error))?;
+        let response = auth_o_auth2_clients_api::create_oauth2_client(
+            &self.configuration,
+            request,
+        )
+        .await
+        .map_err(|error| map_api_error("create_oauth2_client", error))?;
 
         Ok(OAuth2ClientCreated {
             client_id: response.client_id,
@@ -648,9 +756,11 @@ impl AuthApp for SdkAuthApp {
         &self,
         input: &FindOAuth2ClientByNameInput<'a>,
     ) -> AuthResult<Option<String>> {
-        let response = auth_o_auth2_clients_api::list_oauth2_clients(&self.configuration)
-            .await
-            .map_err(|error| map_api_error("list_oauth2_clients", error))?;
+        let response = auth_o_auth2_clients_api::list_oauth2_clients(
+            &self.configuration,
+        )
+        .await
+        .map_err(|error| map_api_error("list_oauth2_clients", error))?;
 
         Ok(response
             .clients
