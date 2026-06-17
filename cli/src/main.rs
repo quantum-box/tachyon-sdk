@@ -16,6 +16,7 @@ mod mcp;
 mod mcp_cli;
 mod ops_cli;
 mod org_cli;
+mod pm_cli;
 mod reconcile_cli;
 mod resolve;
 mod secret_cli;
@@ -260,6 +261,92 @@ mod tests {
             _ => panic!("expected api-key create command"),
         }
     }
+
+    #[test]
+    fn parses_pm_issue_and_top_level_issue_to_same_command() {
+        let pm_cli = Cli::try_parse_from([
+            "tachyon",
+            "pm",
+            "issue",
+            "create",
+            "--title",
+            "Implement PM issue CLI",
+            "--provider",
+            "linear",
+            "--team",
+            "PLT",
+            "--priority",
+            "high",
+            "--json",
+        ])
+        .unwrap();
+        let issue_cli = Cli::try_parse_from([
+            "tachyon",
+            "issue",
+            "create",
+            "--title",
+            "Implement PM issue CLI",
+            "--provider",
+            "linear",
+            "--team",
+            "PLT",
+            "--priority",
+            "high",
+            "--json",
+        ])
+        .unwrap();
+
+        let pm_command = match pm_cli.command {
+            Commands::Pm(pm_cli::PmArgs {
+                command: pm_cli::PmCommand::Issue { command },
+            }) => command,
+            _ => panic!("expected pm issue command"),
+        };
+        let issue_command = match issue_cli.command {
+            Commands::Issue(pm_cli::IssueArgs { command }) => command,
+            _ => panic!("expected top-level issue command"),
+        };
+        assert_eq!(pm_command, issue_command);
+    }
+
+    #[test]
+    fn parses_linear_issue_as_compatibility_alias() {
+        let cli = Cli::try_parse_from([
+            "tachyon",
+            "linear",
+            "issue",
+            "create",
+            "--team-id",
+            "team_1",
+            "--title",
+            "Compat issue",
+            "--priority",
+            "2",
+        ])
+        .unwrap();
+
+        match cli.command {
+            Commands::Linear(linear_cli::LinearArgs {
+                command:
+                    linear_cli::LinearCommand::Issue {
+                        command:
+                            pm_cli::IssueCommand::Create {
+                                provider,
+                                team_id,
+                                title,
+                                priority,
+                                ..
+                            },
+                    },
+            }) => {
+                assert_eq!(provider, None);
+                assert_eq!(team_id.as_deref(), Some("team_1"));
+                assert_eq!(title, "Compat issue");
+                assert_eq!(priority.as_deref(), Some("2"));
+            }
+            _ => panic!("expected linear issue create command"),
+        }
+    }
 }
 
 #[derive(Subcommand)]
@@ -297,6 +384,10 @@ enum Commands {
     Image(image_cli::ImageArgs),
     /// Send Slack messages through connected integrations
     Slack(slack_cli::SlackArgs),
+    /// Manage project-management providers and issues
+    Pm(pm_cli::PmArgs),
+    /// Manage issues in the default project-management provider
+    Issue(pm_cli::IssueArgs),
     /// Manage Linear issues through connected integrations
     Linear(linear_cli::LinearArgs),
     /// Install bundled agent skills
@@ -695,6 +786,20 @@ async fn run() -> Result<()> {
             let config = build_config(&cli, &active).await;
             let tenant_id = resolve::resolve_tenant_id(&config, tenant_arg, &active).await?;
             slack_cli::run(args, &config, &tenant_id).await
+        }
+        Commands::Pm(args) => {
+            let project_config = config::loader::load(cli.config.as_deref())?;
+            let tenant_arg = tenant_arg(&cli, project_config.as_ref());
+            let config = build_config(&cli, &active).await;
+            let tenant_id = resolve::resolve_tenant_id(&config, tenant_arg, &active).await?;
+            pm_cli::run(args, &config, &tenant_id).await
+        }
+        Commands::Issue(args) => {
+            let project_config = config::loader::load(cli.config.as_deref())?;
+            let tenant_arg = tenant_arg(&cli, project_config.as_ref());
+            let config = build_config(&cli, &active).await;
+            let tenant_id = resolve::resolve_tenant_id(&config, tenant_arg, &active).await?;
+            pm_cli::run_top_level_issue(args, &config, &tenant_id).await
         }
         Commands::Linear(args) => {
             let project_config = config::loader::load(cli.config.as_deref())?;
