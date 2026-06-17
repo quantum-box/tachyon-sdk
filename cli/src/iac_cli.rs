@@ -4,6 +4,7 @@ use clap::{Args, Subcommand};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
+use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 use tachyon_sdk::apis::configuration::Configuration;
@@ -480,22 +481,31 @@ fn compute_change(state: &IacState, identity: &ManifestIdentity, manifest: &Valu
 fn load_manifest_files(path: &str, app: Option<&str>) -> Result<Vec<Value>> {
     let content = fs::read_to_string(path).with_context(|| format!("read {path}"))?;
     let path_lower = path.to_lowercase();
-    if path_lower.ends_with(".yaml") || path_lower.ends_with(".yml") {
+    let docs = if path_lower.ends_with(".yaml") || path_lower.ends_with(".yml") {
         let mut docs = Vec::new();
         for doc in serde_yaml::Deserializer::from_str(&content) {
             let value = Value::deserialize(doc)
                 .with_context(|| format!("manifest must be valid YAML: {path}"))?;
+            if value.is_null() {
+                continue;
+            }
             docs.extend(normalize_manifest_value(value, app)?);
         }
-        if docs.is_empty() {
-            return Err(anyhow!("no YAML documents found in {path}"));
-        }
-        Ok(docs)
+        docs
     } else {
         let value: Value = serde_json::from_str(&content)
             .with_context(|| format!("manifest must be valid JSON: {path}"))?;
-        normalize_manifest_value(value, app)
+        normalize_manifest_value(value, app)?
+    };
+
+    let docs = filter_manifests_for_selected_app(docs, app);
+    if docs.is_empty() {
+        if let Some(app) = app {
+            return Err(anyhow!("no manifest documents matched app {app} in {path}"));
+        }
+        return Err(anyhow!("no manifest documents found in {path}"));
     }
+    Ok(docs)
 }
 
 fn normalize_manifest_value(value: Value, app: Option<&str>) -> Result<Vec<Value>> {
@@ -536,13 +546,68 @@ fn normalize_manifest_value(value: Value, app: Option<&str>) -> Result<Vec<Value
             "spec": spec,
         }));
     }
-    if out.is_empty() {
+    if out.is_empty() && app.is_none() {
         return Err(anyhow!(
             "CloudApps manifest has no app entry matching {}",
             app.unwrap_or("<all apps>")
         ));
     }
     Ok(out)
+}
+
+fn filter_manifests_for_selected_app(manifests: Vec<Value>, app: Option<&str>) -> Vec<Value> {
+    if app.is_none() {
+        return manifests;
+    }
+
+    let oauth2_client_refs = collect_oauth2_client_refs(&manifests);
+    manifests
+        .into_iter()
+        .filter(|manifest| {
+            if manifest.get("kind").and_then(Value::as_str) != Some("OAuth2Client") {
+                return true;
+            }
+            manifest
+                .get("metadata")
+                .and_then(|metadata| metadata.get("name"))
+                .and_then(Value::as_str)
+                .is_some_and(|name| oauth2_client_refs.contains(name))
+        })
+        .collect()
+}
+
+fn collect_oauth2_client_refs(manifests: &[Value]) -> HashSet<String> {
+    manifests
+        .iter()
+        .filter(|manifest| manifest.get("kind").and_then(Value::as_str) == Some("CloudApp"))
+        .flat_map(|manifest| {
+            manifest
+                .get("spec")
+                .and_then(|spec| spec.get("envVars"))
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+        })
+        .filter_map(|env_var| {
+            env_var
+                .get("valueFrom")
+                .and_then(|value_from| value_from.get("oauth2ClientRef"))
+                .and_then(|ref_value| ref_value.get("name"))
+                .and_then(Value::as_str)
+        })
+        .map(ToString::to_string)
+        .collect()
+}
+
+fn manifest_apply_order(manifest: &Value) -> u8 {
+    match manifest.get("kind").and_then(Value::as_str) {
+        Some("CloudApp") | Some("CloudApps") => 10,
+        _ => 0,
+    }
+}
+
+fn sort_manifests_for_apply(manifests: &mut [Value]) {
+    manifests.sort_by_key(manifest_apply_order);
 }
 
 fn infer_identity(
@@ -784,7 +849,9 @@ async fn run_plan(
     let state_path = state_path(state);
     let state = load_state(&state_path)?;
     println!("State: {}", state_path.display());
-    for manifest in load_manifest_files(file, app)? {
+    let mut manifests = load_manifest_files(file, app)?;
+    sort_manifests_for_apply(&mut manifests);
+    for manifest in manifests {
         let manifest = inject_tenant_id(&manifest, tenant_id);
         let identity = infer_identity(&manifest, kind, name)?;
         let action = compute_change(&state, &identity, &manifest);
@@ -802,7 +869,9 @@ async fn run_apply(
 ) -> Result<()> {
     let state_path = state_path(state);
     let mut iac_state = load_state(&state_path)?;
-    for manifest in load_manifest_files(file, app)? {
+    let mut manifests = load_manifest_files(file, app)?;
+    sort_manifests_for_apply(&mut manifests);
+    for manifest in manifests {
         let manifest = inject_tenant_id(&manifest, tenant_id);
         let identity = infer_identity(&manifest, None, None)?;
         let action = compute_change(&iac_state, &identity, &manifest);
@@ -982,5 +1051,182 @@ pub async fn run(args: &IacArgs, config: &Configuration, tenant_id: &str) -> Res
             ConnectionsCommand::Get { id, json } => run_connections_get(&api, id, *json).await,
             ConnectionsCommand::Disconnect { id } => run_connections_disconnect(&api, id).await,
         },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    #[test]
+    fn load_manifest_files_selects_app_across_multi_document_cloudapps() {
+        let temp = TempDir::new().unwrap();
+        let manifest_path = temp.path().join("tachyon.yml");
+        fs::write(
+            &manifest_path,
+            r#"
+apiVersion: apps.tachy.one/v1alpha
+kind: CloudApps
+metadata:
+  name: fieldadmin
+  tenantId: tn_fieldadmin
+spec:
+  apps:
+    - name: fieldadmin
+      framework: next_js
+---
+apiVersion: apps.tachy.one/v1alpha
+kind: OAuth2Client
+metadata:
+  name: fieldadmin-web
+  tenantId: tn_fieldadmin
+spec:
+  redirectUris:
+    - https://fieldadmin.txcloud.app/api/auth/callback/cognito
+---
+apiVersion: apps.tachy.one/v1alpha
+kind: CloudApps
+metadata:
+  name: tachyonfield-storefront
+  tenantId: tn_storefront
+spec:
+  apps:
+    - name: tachyonfield
+      framework: next_js
+"#,
+        )
+        .unwrap();
+
+        let manifests =
+            load_manifest_files(manifest_path.to_str().unwrap(), Some("tachyonfield")).unwrap();
+
+        let names = manifests
+            .iter()
+            .map(|manifest| {
+                manifest
+                    .get("metadata")
+                    .and_then(|metadata| metadata.get("name"))
+                    .and_then(Value::as_str)
+                    .unwrap()
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(names, vec!["tachyonfield"]);
+        assert_eq!(
+            manifests[0]
+                .get("metadata")
+                .and_then(|metadata| metadata.get("tenantId"))
+                .and_then(Value::as_str),
+            Some("tn_storefront")
+        );
+    }
+
+    #[test]
+    fn load_manifest_files_keeps_referenced_oauth2_client_for_selected_app() {
+        let temp = TempDir::new().unwrap();
+        let manifest_path = temp.path().join("tachyon.yml");
+        fs::write(
+            &manifest_path,
+            r#"
+apiVersion: apps.tachy.one/v1alpha
+kind: CloudApps
+metadata:
+  name: fieldadmin
+  tenantId: tn_fieldadmin
+spec:
+  apps:
+    - name: fieldadmin
+      framework: next_js
+      envVars:
+        - name: COGNITO_CLIENT_ID
+          valueFrom:
+            oauth2ClientRef:
+              name: fieldadmin-web
+              field: clientId
+---
+apiVersion: apps.tachy.one/v1alpha
+kind: OAuth2Client
+metadata:
+  name: fieldadmin-web
+  tenantId: tn_fieldadmin
+spec:
+  redirectUris:
+    - https://fieldadmin.txcloud.app/api/auth/callback/cognito
+---
+apiVersion: apps.tachy.one/v1alpha
+kind: OAuth2Client
+metadata:
+  name: unrelated-web
+  tenantId: tn_fieldadmin
+spec:
+  redirectUris:
+    - https://unrelated.txcloud.app/api/auth/callback/cognito
+"#,
+        )
+        .unwrap();
+
+        let manifests =
+            load_manifest_files(manifest_path.to_str().unwrap(), Some("fieldadmin")).unwrap();
+
+        let names = manifests
+            .iter()
+            .map(|manifest| {
+                manifest
+                    .get("metadata")
+                    .and_then(|metadata| metadata.get("name"))
+                    .and_then(Value::as_str)
+                    .unwrap()
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(names, vec!["fieldadmin", "fieldadmin-web"]);
+    }
+
+    #[test]
+    fn load_manifest_files_errors_when_selected_app_does_not_exist() {
+        let temp = TempDir::new().unwrap();
+        let manifest_path = temp.path().join("tachyon.yml");
+        fs::write(
+            &manifest_path,
+            r#"
+apiVersion: apps.tachy.one/v1alpha
+kind: CloudApps
+metadata:
+  name: fieldadmin
+spec:
+  apps:
+    - name: fieldadmin
+      framework: next_js
+"#,
+        )
+        .unwrap();
+
+        let error = load_manifest_files(manifest_path.to_str().unwrap(), Some("missing"))
+            .expect_err("missing app should fail after all documents are inspected");
+
+        assert!(error
+            .to_string()
+            .contains("no manifest documents matched app missing"));
+    }
+
+    #[test]
+    fn sort_manifests_for_apply_keeps_prerequisites_before_cloud_apps() {
+        let mut manifests = vec![
+            json!({
+                "kind": "CloudApp",
+                "metadata": { "name": "fieldadmin" },
+            }),
+            json!({
+                "kind": "OAuth2Client",
+                "metadata": { "name": "fieldadmin-web" },
+            }),
+        ];
+
+        sort_manifests_for_apply(&mut manifests);
+
+        let kinds = manifests
+            .iter()
+            .map(|manifest| manifest.get("kind").and_then(Value::as_str).unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(kinds, vec!["OAuth2Client", "CloudApp"]);
     }
 }

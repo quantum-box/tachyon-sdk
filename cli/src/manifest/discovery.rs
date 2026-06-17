@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -55,10 +55,28 @@ pub(crate) fn discover(explicit_file: Option<&Path>, cwd: &Path) -> Result<Vec<M
 
 fn classify_file(path: &Path) -> Result<Vec<ManifestSource>> {
     let raw = fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;
-    let value: Value =
-        serde_yaml::from_str(&raw).with_context(|| format!("parse {}", path.display()))?;
     let mut sources = Vec::new();
 
+    for doc in serde_yaml::Deserializer::from_str(&raw) {
+        let value = Value::deserialize(doc).with_context(|| format!("parse {}", path.display()))?;
+        if value.is_null() {
+            continue;
+        }
+        classify_value(path, &value, &mut sources);
+    }
+
+    if sources.is_empty() {
+        sources.push(ManifestSource {
+            path: path.to_path_buf(),
+            kind: ManifestKind::Unsupported,
+            detail: "empty".to_string(),
+        });
+    }
+
+    Ok(sources)
+}
+
+fn classify_value(path: &Path, value: &Value, sources: &mut Vec<ManifestSource>) {
     let is_cloud_apps = matches!(
         value.get("kind").and_then(Value::as_str),
         Some("CloudApps") | Some("CloudApp")
@@ -69,22 +87,21 @@ fn classify_file(path: &Path) -> Result<Vec<ManifestSource>> {
             kind: ManifestKind::CloudApps,
             detail: "Cloud Apps".to_string(),
         });
+        return;
     }
 
     if value
         .get("auth")
         .and_then(|auth| auth.get("manifest"))
         .is_some()
-        || looks_like_auth(&value)
+        || looks_like_auth(value)
     {
         sources.push(ManifestSource {
             path: path.to_path_buf(),
             kind: ManifestKind::Auth,
             detail: "auth manifest".to_string(),
         });
-    } else if !is_cloud_apps
-        && value.get("apiVersion").and_then(Value::as_str) == Some("apps.tachy.one/v1alpha")
-    {
+    } else if value.get("apiVersion").and_then(Value::as_str) == Some("apps.tachy.one/v1alpha") {
         sources.push(ManifestSource {
             path: path.to_path_buf(),
             kind: ManifestKind::Iac,
@@ -94,7 +111,7 @@ fn classify_file(path: &Path) -> Result<Vec<ManifestSource>> {
                 .unwrap_or("unknown")
                 .to_string(),
         });
-    } else if sources.is_empty() {
+    } else {
         sources.push(ManifestSource {
             path: path.to_path_buf(),
             kind: ManifestKind::Unsupported,
@@ -105,8 +122,6 @@ fn classify_file(path: &Path) -> Result<Vec<ManifestSource>> {
                 .to_string(),
         });
     }
-
-    Ok(sources)
 }
 
 fn looks_like_auth(value: &Value) -> bool {
@@ -250,6 +265,34 @@ mod tests {
                 ManifestKind::CloudApps
             ]
         );
+    }
+
+    #[test]
+    fn discover_classifies_multi_document_tachyon_yml() {
+        let tmp = TempDir::new().unwrap();
+        fs::create_dir(tmp.path().join(".git")).unwrap();
+        write(
+            &tmp.path().join("tachyon.yml"),
+            r#"apiVersion: apps.tachy.one/v1alpha
+kind: CloudApps
+spec:
+  apps:
+    - name: fieldadmin
+---
+apiVersion: apps.tachy.one/v1alpha
+kind: OAuth2Client
+metadata:
+  name: fieldadmin-web
+"#,
+        );
+
+        let sources = discover(None, tmp.path()).unwrap();
+        let kinds = sources
+            .iter()
+            .map(|source| source.kind.clone())
+            .collect::<Vec<_>>();
+
+        assert_eq!(kinds, vec![ManifestKind::Iac, ManifestKind::CloudApps]);
     }
 
     #[test]
