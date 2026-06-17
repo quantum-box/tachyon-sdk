@@ -875,20 +875,22 @@ async fn run_apply(
         let manifest = inject_tenant_id(&manifest, tenant_id);
         let identity = infer_identity(&manifest, None, None)?;
         let action = compute_change(&iac_state, &identity, &manifest);
-        if action == ChangeAction::NoChange {
-            println!(
-                "Skipped: {} / {} (no changes)",
-                identity.kind, identity.name
-            );
-            continue;
+        if action != ChangeAction::NoChange {
+            save_manifest(api, tenant_id, &manifest).await?;
         }
-        save_manifest(api, tenant_id, &manifest).await?;
         let result = apply_manifest_resource(api, &identity.kind, &identity.name).await?;
         iac_state.upsert_resource(&identity, manifest);
-        println!(
-            "Applied: {} / {} ({action:?})",
-            identity.kind, identity.name
-        );
+        if action == ChangeAction::NoChange {
+            println!(
+                "Reconciled: {} / {} (no manifest changes)",
+                identity.kind, identity.name
+            );
+        } else {
+            println!(
+                "Applied: {} / {} ({action:?})",
+                identity.kind, identity.name
+            );
+        }
         println!("{}", serde_json::to_string_pretty(&result)?);
     }
     save_state(&state_path, &iac_state)?;
