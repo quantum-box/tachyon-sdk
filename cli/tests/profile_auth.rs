@@ -103,6 +103,36 @@ fn start_login_server() -> (String, mpsc::Receiver<String>, thread::JoinHandle<(
     (url, rx, handle)
 }
 
+fn start_compute_env_server() -> (String, mpsc::Receiver<String>, thread::JoinHandle<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    let (tx, rx) = mpsc::channel();
+    let handle = thread::spawn(move || {
+        for _ in 0..2 {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut buf = [0_u8; 8192];
+            let n = stream.read(&mut buf).unwrap();
+            let req = String::from_utf8_lossy(&buf[..n]).to_string();
+            tx.send(req.clone()).unwrap();
+
+            let body = if req.starts_with("GET /v1/compute/apps") {
+                r#"{"apps":[{"id":"app_profiletest123456","name":"web"}]}"#.to_string()
+            } else if req.starts_with("GET /v1/apps/app_profiletest123456/env") {
+                r#"{"env_vars":[]}"#.to_string()
+            } else {
+                r#"{"error":"unexpected request"}"#.to_string()
+            };
+            let response = format!(
+                "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            stream.write_all(response.as_bytes()).unwrap();
+        }
+    });
+    (url, rx, handle)
+}
+
 #[test]
 fn auth_list_empty_reports_no_profiles() {
     let tmp = TempDir::new().unwrap();
@@ -312,6 +342,49 @@ fn global_profile_flag_does_not_mutate_active_pointer() {
 
     let active = fs::read_to_string(config_root(tmp.path()).join("active_profile")).unwrap();
     assert_eq!(active.trim(), "work");
+}
+
+#[test]
+fn compute_env_list_selects_profile_matching_tenant_id() {
+    let tmp = TempDir::new().unwrap();
+    let active_tenant = "tn_active1234567890";
+    let target_tenant = "tn_target1234567890";
+    write_profile(tmp.path(), "active", &fixture_creds(active_tenant));
+    write_profile(tmp.path(), "target", &fixture_creds(target_tenant));
+    fs::write(config_root(tmp.path()).join("active_profile"), "active\n").unwrap();
+    let (server_url, rx, handle) = start_compute_env_server();
+
+    let out = isolated_command(tmp.path())
+        .env("TACHYON_API_URL", &server_url)
+        .args([
+            "--tenant-id",
+            target_tenant,
+            "compute",
+            "env",
+            "list",
+            "web",
+        ])
+        .output()
+        .expect("run compute env list");
+
+    assert_ok(&out, "compute env list --tenant-id");
+    handle.join().unwrap();
+    let requests: Vec<String> = rx.try_iter().collect();
+    assert_eq!(requests.len(), 2, "requests: {requests:#?}");
+    for request in &requests {
+        assert!(
+            request.contains(&format!("x-operator-id: {target_tenant}")),
+            "request should target tenant {target_tenant}:\n{request}"
+        );
+        assert!(
+            request.contains(&format!("authorization: Bearer fake-token-{target_tenant}")),
+            "request should use token from matching profile:\n{request}"
+        );
+        assert!(
+            !request.contains(&format!("authorization: Bearer fake-token-{active_tenant}")),
+            "request should not use active profile token:\n{request}"
+        );
+    }
 }
 
 #[test]

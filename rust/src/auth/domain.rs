@@ -139,6 +139,7 @@ impl OAuthTokenDetail {
 pub struct OAuth2ClientCreated {
     pub client_id: String,
     pub client_secret: String,
+    pub provider_user_pool_id: Option<String>,
 }
 
 // ─────────────────── NewOperatorOwnerMethod ────────────

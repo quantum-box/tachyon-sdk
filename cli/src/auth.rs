@@ -5,7 +5,7 @@ use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::path::PathBuf;
-use std::sync::OnceLock;
+use std::sync::{OnceLock, RwLock};
 use std::time::Duration;
 
 /// Polling interval when waiting for the callback relay.
@@ -39,17 +39,22 @@ pub struct RuntimeAuthContext {
     pub oauth_config: OAuthConfig,
 }
 
-static RUNTIME_AUTH_CONTEXT: OnceLock<RuntimeAuthContext> = OnceLock::new();
+static RUNTIME_AUTH_CONTEXT: OnceLock<RwLock<Option<RuntimeAuthContext>>> = OnceLock::new();
 
 pub fn set_runtime_auth_context(profile: String, oauth_config: OAuthConfig) {
-    let _ = RUNTIME_AUTH_CONTEXT.set(RuntimeAuthContext {
-        profile,
-        oauth_config,
-    });
+    let lock = RUNTIME_AUTH_CONTEXT.get_or_init(|| RwLock::new(None));
+    if let Ok(mut context) = lock.write() {
+        *context = Some(RuntimeAuthContext {
+            profile,
+            oauth_config,
+        });
+    }
 }
 
-pub fn runtime_auth_context() -> Option<&'static RuntimeAuthContext> {
-    RUNTIME_AUTH_CONTEXT.get()
+pub fn runtime_auth_context() -> Option<RuntimeAuthContext> {
+    RUNTIME_AUTH_CONTEXT
+        .get()
+        .and_then(|context| context.read().ok().and_then(|context| context.clone()))
 }
 
 impl OAuthConfig {
