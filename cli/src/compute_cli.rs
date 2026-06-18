@@ -41,20 +41,8 @@ pub enum ComputeCommand {
         #[command(subcommand)]
         command: BuildsCommand,
     },
-    /// Trigger a preview build for the current branch
-    /// (auto-detects app, branch, and open PR)
-    Preview {
-        /// App ID or name (optional; falls back to tachyon.yml,
-        /// then to cloud apps matching the git remote)
-        app_id: Option<String>,
-        /// Branch to build (defaults to the current git branch)
-        #[arg(long)]
-        branch: Option<String>,
-        /// Pull request number (optional; the server auto-detects
-        /// the open PR for the branch)
-        #[arg(long)]
-        pr: Option<i32>,
-    },
+    /// Manage preview builds
+    Preview(PreviewArgs),
     /// Manage deployments
     Deployments {
         #[command(subcommand)]
@@ -447,6 +435,34 @@ struct FeedbackPayload {
 }
 
 // --- Builds subcommands ---
+
+#[derive(Debug, Clone, Args)]
+pub struct PreviewArgs {
+    #[command(subcommand)]
+    pub command: Option<PreviewCommand>,
+    /// App ID or name (legacy shortcut; use `preview create --app`)
+    #[arg(hide = true)]
+    pub app_id: Option<String>,
+    /// Branch to build (legacy shortcut; use `preview create --branch`)
+    #[arg(long, hide = true)]
+    pub branch: Option<String>,
+    /// Pull request number (legacy shortcut)
+    #[arg(long, hide = true)]
+    pub pr: Option<i32>,
+}
+
+#[derive(Debug, Clone, Subcommand)]
+pub enum PreviewCommand {
+    /// Create a preview build for a branch
+    Create {
+        /// App ID or name
+        #[arg(long)]
+        app: String,
+        /// Branch to build
+        #[arg(long)]
+        branch: String,
+    },
+}
 
 #[derive(Debug, Clone, Subcommand)]
 pub enum BuildsCommand {
@@ -956,6 +972,11 @@ struct TriggerBuildRequest {
     branch: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pr_number: Option<i32>,
+}
+
+#[derive(Debug, Serialize)]
+struct CreatePreviewBuildRequest {
+    source_branch: String,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -2210,6 +2231,24 @@ async fn run_preview(
     for (id, name) in &targets {
         println!("App: {name}");
         run_builds_trigger(api, id, Some(&branch_name), pr).await?;
+    }
+    Ok(())
+}
+
+async fn run_preview_create(api: &ApiClient, app: &str, branch: &str) -> Result<()> {
+    let app_id = resolve::resolve_app_id(api, app).await?;
+    let req = CreatePreviewBuildRequest {
+        source_branch: branch.to_string(),
+    };
+    let build: BuildResponse = api.post(&format!("/v1/apps/{app_id}/builds"), &req).await?;
+
+    println!("Preview build created: {}", build.id);
+    println!("Status: {}", build.status);
+    if let Some(branch) = build.source_branch.as_deref() {
+        println!("Branch: {branch}");
+    }
+    if let Some(pr_number) = build.pr_number {
+        println!("PR: #{pr_number}");
     }
     Ok(())
 }
@@ -3482,9 +3521,21 @@ pub async fn run(
                 run_apps_feedback(tenant_id, &id, feedback_args)
             }
         },
-        ComputeCommand::Preview { app_id, branch, pr } => {
-            run_preview(&api, app_id, project_config, branch.as_deref(), *pr).await
-        }
+        ComputeCommand::Preview(preview_args) => match &preview_args.command {
+            Some(PreviewCommand::Create { app, branch }) => {
+                run_preview_create(&api, app, branch).await
+            }
+            None => {
+                run_preview(
+                    &api,
+                    &preview_args.app_id,
+                    project_config,
+                    preview_args.branch.as_deref(),
+                    preview_args.pr,
+                )
+                .await
+            }
+        },
         ComputeCommand::Builds { command } => match command {
             BuildsCommand::List {
                 app_id,
