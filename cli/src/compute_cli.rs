@@ -340,6 +340,21 @@ pub enum AppsCommand {
         #[arg(long)]
         dry_run: bool,
     },
+    /// Re-sync manifest secret references from server-side sources of truth
+    SyncSecrets {
+        /// Manifest file path
+        #[arg(short = 'f', long, default_value = "tachyon.yml")]
+        file: PathBuf,
+        /// App name to select from a multi-app CloudApps manifest
+        #[arg(long)]
+        app: Option<String>,
+        /// Target environment label for this sync operation
+        #[arg(long)]
+        environment: String,
+        /// Preview the sync request without mutating Cloud Apps
+        #[arg(long)]
+        dry_run: bool,
+    },
     /// Generate a user feedback report for a compute app
     Feedback(FeedbackArgs),
 }
@@ -1189,6 +1204,31 @@ struct SentryIntegrationPlan {
     env_vars: Vec<String>,
 }
 
+#[derive(Debug, PartialEq, Eq, Serialize)]
+struct SyncSecretsRequest {
+    app_name: String,
+    environment: String,
+    manifest_kind: String,
+    refs: Vec<SyncSecretRef>,
+}
+
+#[derive(Debug, PartialEq, Eq, Serialize)]
+struct SyncSecretRef {
+    key: String,
+    target: String,
+    source: String,
+    #[serde(rename = "sourceRef")]
+    source_ref: Value,
+}
+
+#[derive(Debug, Deserialize)]
+struct SyncSecretsResponse {
+    #[serde(default)]
+    synced: usize,
+    #[serde(default)]
+    skipped: Vec<String>,
+}
+
 #[derive(Debug, Deserialize)]
 struct ListIntegrationsResponse {
     integrations: Vec<IntegrationInfo>,
@@ -1380,6 +1420,27 @@ pub(crate) fn select_app_entries(manifest: &Value, app: Option<&str>) -> Result<
         ));
     }
     Ok(entries)
+}
+
+fn select_single_app_entry(manifest: &Value, app: Option<&str>) -> Result<Value> {
+    let apps = manifest
+        .get("spec")
+        .and_then(|s| s.get("apps"))
+        .and_then(Value::as_array)
+        .ok_or_else(|| anyhow!("CloudApps manifest must contain spec.apps[]"))?;
+    if app.is_none() && apps.len() != 1 {
+        return Err(anyhow!(
+            "sync-secrets requires --app when the CloudApps manifest contains {} apps",
+            apps.len()
+        ));
+    }
+    let entries = select_app_entries(manifest, app)?;
+    match entries.as_slice() {
+        [entry] => Ok(entry.clone()),
+        _ => Err(anyhow!(
+            "sync-secrets requires exactly one selected app; pass --app to disambiguate"
+        )),
+    }
 }
 
 pub(crate) fn app_entry_to_api_body(entry: &Value) -> Result<Value> {
@@ -1850,6 +1911,149 @@ async fn apply_compute_cloud_app_manifest(api: &ApiClient, manifest: &Value) -> 
     });
     graphql_request(api, body).await?;
     Ok(())
+}
+
+pub(crate) async fn run_apps_sync_secrets(
+    api: &ApiClient,
+    file: &Path,
+    selected_app: Option<&str>,
+    environment: &str,
+    dry_run: bool,
+) -> Result<()> {
+    if environment.trim().is_empty() {
+        return Err(anyhow!("--environment must not be empty"));
+    }
+
+    let manifest = load_cloud_apps_manifest(file)?;
+    let entry = select_single_app_entry(&manifest, selected_app)?;
+    let app_name = entry
+        .get("name")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow!("app entry is missing name"))?;
+    let request = build_sync_secrets_request(&entry, environment)?;
+
+    println!("Manifest:    {}", file.display());
+    println!("App:         {app_name}");
+    println!("Environment: {environment}");
+    println!("Mode:        {}", if dry_run { "dry-run" } else { "sync" });
+
+    if request.refs.is_empty() {
+        println!("Secret refs: <none>");
+        println!("No secret references found; nothing to sync.");
+        return Ok(());
+    }
+
+    println!(
+        "Secret refs: {}",
+        render_sync_secret_refs(&request.refs).join(", ")
+    );
+    if dry_run {
+        println!("No API request sent.");
+        return Ok(());
+    }
+
+    let live: ListAppsResponse = api.get("/v1/compute/apps").await?;
+    let app = live
+        .apps
+        .iter()
+        .find(|app| app.name == app_name)
+        .ok_or_else(|| {
+            anyhow!(
+                "Cloud App {app_name} was not found in the current tenant; run `tachyon compute apps apply` first"
+            )
+        })?;
+    // Server dependency: Cloud Apps API owns SSoT reads and platform writes for
+    // this endpoint. The CLI sends only manifest refs; it never resolves values.
+    let response: SyncSecretsResponse = api
+        .post(
+            &format!("/v1/compute/apps/{}/secrets/sync", app.id),
+            &request,
+        )
+        .await?;
+
+    println!("Synced {} secret reference(s).", response.synced);
+    if !response.skipped.is_empty() {
+        println!("Skipped: {}", response.skipped.join(", "));
+    }
+    Ok(())
+}
+
+fn build_sync_secrets_request(entry: &Value, environment: &str) -> Result<SyncSecretsRequest> {
+    let app_name = entry
+        .get("name")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow!("app entry is missing name"))?
+        .to_string();
+    let _ = plan_env_vars(entry, environment)?;
+    let refs = collect_sync_secret_refs(entry, environment)?;
+    Ok(SyncSecretsRequest {
+        app_name,
+        environment: environment.to_string(),
+        manifest_kind: "CloudApp".to_string(),
+        refs,
+    })
+}
+
+fn collect_sync_secret_refs(entry: &Value, environment: &str) -> Result<Vec<SyncSecretRef>> {
+    let Some(env_vars) = entry.get("envVars") else {
+        return Ok(Vec::new());
+    };
+    let env_vars = env_vars
+        .as_array()
+        .ok_or_else(|| anyhow!("envVars must be an array"))?;
+    let mut refs = Vec::new();
+    for env in env_vars {
+        let key = env
+            .get("name")
+            .and_then(Value::as_str)
+            .ok_or_else(|| anyhow!("env var entry is missing name"))?;
+        let target = env
+            .get("target")
+            .and_then(Value::as_str)
+            .unwrap_or_else(|| default_env_target(environment))
+            .to_string();
+        let Some(value_from) = env.get("valueFrom") else {
+            continue;
+        };
+        if let Some(source_ref) = value_from.get("secret") {
+            refs.push(SyncSecretRef {
+                key: key.to_string(),
+                target,
+                source: "secretRef".to_string(),
+                source_ref: source_ref.clone(),
+            });
+            continue;
+        }
+        for source in ["oauth2ClientRef", "databaseRef", "storageRef"] {
+            if let Some(source_ref) = value_from.get(source) {
+                refs.push(SyncSecretRef {
+                    key: key.to_string(),
+                    target,
+                    source: source.to_string(),
+                    source_ref: source_ref.clone(),
+                });
+                break;
+            }
+        }
+    }
+    refs.sort_by(|a, b| {
+        a.key
+            .cmp(&b.key)
+            .then_with(|| a.target.cmp(&b.target))
+            .then_with(|| a.source.cmp(&b.source))
+    });
+    Ok(refs)
+}
+
+fn render_sync_secret_refs(refs: &[SyncSecretRef]) -> Vec<String> {
+    refs.iter()
+        .map(|reference| {
+            format!(
+                "{}({}; {})",
+                reference.key, reference.target, reference.source
+            )
+        })
+        .collect()
 }
 
 async fn apply_env_plan(
@@ -3516,6 +3720,12 @@ pub async fn run(
                 environment,
                 dry_run,
             } => run_apps_apply(&api, tenant_id, file, app.as_deref(), environment, *dry_run).await,
+            AppsCommand::SyncSecrets {
+                file,
+                app,
+                environment,
+                dry_run,
+            } => run_apps_sync_secrets(&api, file, app.as_deref(), environment, *dry_run).await,
             AppsCommand::Feedback(feedback_args) => {
                 let id = resolve::resolve_app_id(&api, &feedback_args.app_id).await?;
                 run_apps_feedback(tenant_id, &id, feedback_args)
@@ -3953,6 +4163,119 @@ mod tests {
         );
         assert!(manifest["spec"].get("name").is_none());
         assert_eq!(manifest["spec"]["deploymentTarget"], "lambda");
+    }
+
+    #[test]
+    fn sync_secrets_request_enumerates_refs_in_stable_order() {
+        let entry = json!({
+            "name": "fieldadmin",
+            "envVars": [
+                {
+                    "name": "COGNITO_CLIENT_SECRET",
+                    "type": "credential",
+                    "target": "production",
+                    "valueFrom": {
+                        "oauth2ClientRef": {
+                            "name": "fieldadmin-login",
+                            "field": "clientSecret"
+                        }
+                    }
+                },
+                {
+                    "name": "RESEND_API_KEY",
+                    "type": "credential",
+                    "valueFrom": {
+                        "secret": "prod/resend/api-key"
+                    }
+                },
+                {
+                    "name": "DATABASE_URL",
+                    "type": "credential",
+                    "target": "preview",
+                    "valueFrom": {
+                        "databaseRef": {
+                            "name": "fieldadmin",
+                            "field": "url"
+                        }
+                    }
+                },
+                {
+                    "name": "PUBLIC_BASE_URL",
+                    "value": "https://fieldadmin.example"
+                }
+            ]
+        });
+
+        let request = build_sync_secrets_request(&entry, "production").unwrap();
+
+        assert_eq!(request.app_name, "fieldadmin");
+        assert_eq!(request.environment, "production");
+        assert_eq!(request.refs.len(), 3);
+        assert_eq!(
+            request
+                .refs
+                .iter()
+                .map(|reference| (
+                    reference.key.as_str(),
+                    reference.target.as_str(),
+                    reference.source.as_str()
+                ))
+                .collect::<Vec<_>>(),
+            vec![
+                ("COGNITO_CLIENT_SECRET", "production", "oauth2ClientRef"),
+                ("DATABASE_URL", "preview", "databaseRef"),
+                ("RESEND_API_KEY", "production", "secretRef"),
+            ]
+        );
+    }
+
+    #[test]
+    fn sync_secrets_rendering_omits_source_ref_details() {
+        let refs = vec![
+            SyncSecretRef {
+                key: "COGNITO_CLIENT_SECRET".to_string(),
+                target: "production".to_string(),
+                source: "oauth2ClientRef".to_string(),
+                source_ref: json!({
+                    "name": "fieldadmin-login",
+                    "field": "clientSecret"
+                }),
+            },
+            SyncSecretRef {
+                key: "RESEND_API_KEY".to_string(),
+                target: "production".to_string(),
+                source: "secretRef".to_string(),
+                source_ref: json!("prod/resend/api-key"),
+            },
+        ];
+
+        let rendered = render_sync_secret_refs(&refs).join(", ");
+
+        assert_eq!(
+            rendered,
+            "COGNITO_CLIENT_SECRET(production; oauth2ClientRef), RESEND_API_KEY(production; secretRef)"
+        );
+        assert!(!rendered.contains("fieldadmin-login"));
+        assert!(!rendered.contains("prod/resend/api-key"));
+    }
+
+    #[test]
+    fn sync_secrets_requires_disambiguated_multi_app_manifest() {
+        let manifest = json!({
+            "kind": "CloudApps",
+            "spec": {
+                "apps": [
+                    {"name": "fieldadmin"},
+                    {"name": "fieldadmin-api"}
+                ]
+            }
+        });
+
+        let error = select_single_app_entry(&manifest, None)
+            .unwrap_err()
+            .to_string();
+
+        assert!(error.contains("requires --app"));
     }
 
     #[test]

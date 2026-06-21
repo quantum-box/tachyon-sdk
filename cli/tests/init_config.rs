@@ -176,6 +176,43 @@ fn start_env_mutation_server() -> (String, mpsc::Receiver<String>, thread::JoinH
     (url, rx, handle)
 }
 
+fn start_sync_secrets_server() -> (String, mpsc::Receiver<String>, thread::JoinHandle<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    let (tx, rx) = mpsc::channel();
+    let handle = thread::spawn(move || {
+        for idx in 0..2 {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut buf = [0_u8; 8192];
+            let n = stream.read(&mut buf).unwrap();
+            let req = String::from_utf8_lossy(&buf[..n]).to_string();
+            tx.send(req.clone()).unwrap();
+
+            let body = if idx == 0 && req.starts_with("GET /v1/compute/apps ") {
+                r#"{"apps":[{"id":"app_fieldadmin","name":"fieldadmin"}]}"#
+            } else if idx == 1
+                && req.starts_with("POST /v1/compute/apps/app_fieldadmin/secrets/sync ")
+            {
+                r#"{"synced":3,"skipped":[]}"#
+            } else {
+                r#"{"error":"unexpected request"}"#
+            };
+            let status = if body.contains("unexpected request") {
+                "HTTP/1.1 500 Internal Server Error"
+            } else {
+                "HTTP/1.1 200 OK"
+            };
+            let response = format!(
+                "{status}\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            stream.write_all(response.as_bytes()).unwrap();
+        }
+    });
+    (url, rx, handle)
+}
+
 #[test]
 fn init_non_interactive_creates_and_force_overwrites_tachyon_yml() {
     let tmp = TempDir::new().unwrap();
@@ -458,6 +495,96 @@ spec:
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("=== Cloud Apps Manifest Apply ==="));
     assert!(stdout.contains("CREATED bakuure-api (app_created)"));
+}
+
+#[test]
+fn compute_apps_sync_secrets_posts_manifest_refs_without_secret_values() {
+    let tmp = TempDir::new().unwrap();
+    let manifest = tmp.path().join("tachyon.yml");
+    fs::write(
+        &manifest,
+        r#"
+apiVersion: apps.tachy.one/v1alpha
+kind: CloudApps
+metadata:
+  name: fieldadmin
+spec:
+  apps:
+    - name: fieldadmin
+      repository:
+        url: https://github.com/quantum-box/fieldadmin
+        owner: quantum-box
+        name: fieldadmin
+      framework: next_js
+      deploymentTarget: cloudflare_pages
+      envVars:
+        - name: COGNITO_CLIENT_ID
+          type: credential
+          target: production
+          valueFrom:
+            oauth2ClientRef:
+              name: fieldadmin-login
+              field: clientId
+        - name: COGNITO_CLIENT_SECRET
+          type: credential
+          target: production
+          valueFrom:
+            oauth2ClientRef:
+              name: fieldadmin-login
+              field: clientSecret
+        - name: RESEND_API_KEY
+          type: credential
+          target: production
+          valueFrom:
+            secret: prod/resend/api-key
+"#,
+    )
+    .unwrap();
+    let (api_url, rx, handle) = start_sync_secrets_server();
+
+    let mut cmd = isolated_command(tmp.path());
+    let output = cmd
+        .current_dir(tmp.path())
+        .env("TACHYON_API_URL", api_url)
+        .env("TACHYON_API_KEY", "placeholder")
+        .env("TACHYON_TENANT_ID", "tn_01hjryxysgey07h5jz5wagqj0m")
+        .args([
+            "compute",
+            "apps",
+            "sync-secrets",
+            "-f",
+            manifest.to_str().unwrap(),
+            "--environment",
+            "production",
+        ])
+        .output()
+        .expect("run compute apps sync-secrets");
+    assert!(
+        output.status.success(),
+        "sync-secrets failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let first = rx.recv().unwrap();
+    let second = rx.recv().unwrap();
+    handle.join().unwrap();
+
+    assert!(first.starts_with("GET /v1/compute/apps "));
+    assert!(second.starts_with("POST /v1/compute/apps/app_fieldadmin/secrets/sync "));
+    assert!(second.contains(r#""app_name":"fieldadmin""#));
+    assert!(second.contains(r#""environment":"production""#));
+    assert!(second.contains(r#""key":"COGNITO_CLIENT_ID""#));
+    assert!(second.contains(r#""source":"oauth2ClientRef""#));
+    assert!(second.contains(r#""source":"secretRef""#));
+    assert!(!second.contains("secret-value"));
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("Secret refs:"));
+    assert!(stdout.contains("COGNITO_CLIENT_ID(production; oauth2ClientRef)"));
+    assert!(stdout.contains("Synced 3 secret reference(s)."));
+    assert!(!stdout.contains("clientSecret"));
+    assert!(!stdout.contains("prod/resend/api-key"));
 }
 
 #[test]
