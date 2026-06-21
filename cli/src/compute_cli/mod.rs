@@ -912,6 +912,39 @@ mod tests {
     }
 
     #[test]
+    fn runtime_tail_utf8_buffer_waits_for_split_multibyte_sequence() {
+        let raw = "event: log\ndata: {\"message\":\"日本語\"}\n\n";
+        let bytes = raw.as_bytes();
+        let split = raw.find('語').unwrap() + 1;
+        assert!(!raw.is_char_boundary(split));
+
+        let mut utf8 = Utf8ChunkBuffer::default();
+        let mut pending = String::new();
+        pending.push_str(utf8.push_chunk(&bytes[..split]).unwrap().as_str());
+
+        assert!(!pending.contains('�'));
+        assert!(drain_sse_events(&mut pending).is_empty());
+
+        pending.push_str(utf8.push_chunk(&bytes[split..]).unwrap().as_str());
+        let events = drain_sse_events(&mut pending);
+
+        assert!(pending.is_empty());
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].data, vec![r#"{"message":"日本語"}"#]);
+        utf8.finish().unwrap();
+    }
+
+    #[test]
+    fn runtime_tail_utf8_buffer_errors_on_incomplete_sequence_at_eof() {
+        let mut utf8 = Utf8ChunkBuffer::default();
+
+        assert_eq!(utf8.push_chunk(&[0xe6, 0x97]).unwrap(), "");
+        let error = utf8.finish().unwrap_err().to_string();
+
+        assert!(error.contains("incomplete UTF-8"));
+    }
+
+    #[test]
     fn feedback_payload_includes_cloud_app_context() {
         let args = FeedbackArgs {
             app_id: "app_01test".to_string(),
