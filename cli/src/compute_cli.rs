@@ -2292,10 +2292,9 @@ async fn run_builds_logs(
         let no_progress_none_token_response = follow
             && !logs.is_complete
             && response_next_token.is_none()
-            && none_token_signature
-                .as_ref()
-                .is_some_and(|signature| signature.is_empty()
-                    || last_none_token_signature.as_ref() == Some(signature));
+            && none_token_signature.as_ref().is_some_and(|signature| {
+                signature.is_empty() || last_none_token_signature.as_ref() == Some(signature)
+            });
 
         if !no_progress_none_token_response {
             for line in &logs.lines {
