@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use tachyon_sdk::apis::configuration::Configuration;
 
 use crate::client::{print_json, ApiClient};
-use crate::commands::auth::manifest as auth_manifest;
+use crate::commands::auth::manifest::{self as auth_manifest, ApplyOutcome};
 use crate::compute_cli;
 
 use super::discovery::{discover, ManifestKind};
@@ -25,10 +25,16 @@ pub(crate) async fn run(
     }
 
     let api = ApiClient::new(config, tenant_id)?;
-    let mut fatal_errors = 0;
+    let mut errors = ManifestApplyErrors::default();
 
     for source in sources.iter().filter(|s| s.kind == ManifestKind::Iac) {
-        validate_source(source, args.app.as_deref(), &args.environment)?;
+        if let Err(error) = validate_source(source, args.app.as_deref(), &args.environment) {
+            errors.record(format!(
+                "Invalid IaC manifest {}: {error}",
+                source.path.display()
+            ));
+            continue;
+        }
         println!(
             "IaC manifest: {} is recognized but apply/reconcile is not supported yet.",
             source.path.display()
@@ -41,36 +47,61 @@ pub(crate) async fn run(
         .map(|s| s.path.clone())
         .collect::<Vec<_>>();
     if !auth_files.is_empty() {
-        let loaded = load_auth_manifests(&auth_files, args.file.is_some(), &cwd)?;
-        let merged = auth_manifest::merge_manifests(loaded);
-        auth_manifest::validate_manifest(&merged)?;
-        if dry_run {
-            let report = auth_manifest::build_plan(&api, &merged, args.prune).await?;
-            if args.json {
-                print_json(&report)?;
-            } else {
-                println!("=== Auth Manifest Plan ===");
-                auth_manifest::print_plan(&report);
+        match load_auth_manifests(&auth_files, args.file.is_some(), &cwd).and_then(|loaded| {
+            let merged = auth_manifest::merge_manifests(loaded);
+            auth_manifest::validate_manifest(&merged)?;
+            Ok(merged)
+        }) {
+            Ok(merged) if dry_run => {
+                match auth_manifest::build_plan(&api, &merged, args.prune).await {
+                    Ok(report) => {
+                        if args.json {
+                            print_json(&report)?;
+                        } else {
+                            println!("=== Auth Manifest Plan ===");
+                            auth_manifest::print_plan(&report);
+                        }
+                    }
+                    Err(error) => {
+                        errors.record(format!("Auth manifest plan failed: {error}"));
+                    }
+                }
             }
-        } else {
-            let result =
-                auth_manifest::apply_manifest(&api, &merged, args.prune, tenant_id).await?;
-            if args.json {
-                print_json(&result)?;
-            } else {
-                println!("=== Auth Manifest Apply ===");
-                auth_manifest::print_apply_result(&result);
+            Ok(merged) => {
+                match auth_manifest::apply_manifest(&api, &merged, args.prune, tenant_id).await {
+                    Ok(result) => {
+                        let has_errors = auth_apply_has_errors(&result);
+                        if args.json {
+                            print_json(&result)?;
+                        } else {
+                            println!("=== Auth Manifest Apply ===");
+                            auth_manifest::print_apply_result(&result);
+                        }
+                        if has_errors {
+                            errors.record("Auth manifest apply: some resources failed.");
+                        }
+                    }
+                    Err(error) => {
+                        errors.record(format!("Auth manifest apply failed: {error}"));
+                    }
+                }
+            }
+            Err(error) => {
+                if dry_run {
+                    errors.record(format!("Auth manifest plan skipped: {error}"));
+                } else {
+                    errors.record(format!("Auth manifest apply skipped: {error}"));
+                }
             }
         }
     }
 
     for source in sources.iter().filter(|s| s.kind == ManifestKind::CloudApps) {
         if let Err(error) = validate_source(source, args.app.as_deref(), &args.environment) {
-            fatal_errors += 1;
-            eprintln!(
+            errors.record(format!(
                 "Invalid Cloud Apps manifest {}: {error}",
                 source.path.display()
-            );
+            ));
             continue;
         }
         if !args.json {
@@ -79,7 +110,7 @@ pub(crate) async fn run(
                 if dry_run { "Plan" } else { "Apply" }
             );
         }
-        compute_cli::run_apps_apply(
+        if let Err(error) = compute_cli::run_apps_apply(
             &api,
             tenant_id,
             &source.path,
@@ -87,7 +118,13 @@ pub(crate) async fn run(
             &args.environment,
             dry_run,
         )
-        .await?;
+        .await
+        {
+            errors.record(format!(
+                "Cloud Apps manifest {} failed: {error}",
+                source.path.display()
+            ));
+        }
     }
 
     for source in sources
@@ -101,10 +138,48 @@ pub(crate) async fn run(
         );
     }
 
-    if fatal_errors > 0 {
-        return Err(anyhow!("{fatal_errors} manifest step(s) failed"));
+    errors.finish(mode)
+}
+
+#[derive(Default)]
+struct ManifestApplyErrors {
+    messages: Vec<String>,
+}
+
+impl ManifestApplyErrors {
+    fn record(&mut self, message: impl Into<String>) {
+        let message = message.into();
+        eprintln!("{message}");
+        self.messages.push(message);
     }
-    Ok(())
+
+    fn finish(self, mode: &str) -> Result<()> {
+        if self.messages.is_empty() {
+            return Ok(());
+        }
+
+        eprintln!();
+        eprintln!(
+            "Manifest {mode} completed with {} error(s):",
+            self.messages.len()
+        );
+        for message in &self.messages {
+            eprintln!("  - {message}");
+        }
+
+        Err(anyhow!("{} manifest step(s) failed", self.messages.len()))
+    }
+}
+
+fn auth_apply_has_errors(result: &auth_manifest::ApplyResult) -> bool {
+    result
+        .actions
+        .iter()
+        .any(|action| matches!(action.outcome, ApplyOutcome::Error(_)))
+        || result
+            .policies
+            .iter()
+            .any(|policy| matches!(policy.outcome, ApplyOutcome::Error(_)))
 }
 
 fn load_auth_manifests(

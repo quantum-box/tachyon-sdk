@@ -136,6 +136,28 @@ fn start_apply_action_server() -> (String, mpsc::Receiver<String>, thread::JoinH
     (url, rx, handle)
 }
 
+fn start_failing_apply_action_server() -> (String, mpsc::Receiver<String>, thread::JoinHandle<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    let (tx, rx) = mpsc::channel();
+    let handle = thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let mut buf = [0_u8; 8192];
+        let n = stream.read(&mut buf).unwrap();
+        let req = String::from_utf8_lossy(&buf[..n]).to_string();
+        tx.send(req).unwrap();
+
+        let body = r#"{"error":"action registry unavailable"}"#;
+        let response = format!(
+            "HTTP/1.1 500 Internal Server Error\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+            body.len(),
+            body
+        );
+        stream.write_all(response.as_bytes()).unwrap();
+    });
+    (url, rx, handle)
+}
+
 fn start_refresh_then_actions_server() -> (String, mpsc::Receiver<String>, thread::JoinHandle<()>) {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let url = format!("http://{}", listener.local_addr().unwrap());
@@ -485,6 +507,47 @@ fn manifest_apply_delegates_auth_manifest_file() {
 }
 
 #[test]
+fn manifest_apply_fails_when_auth_apply_reports_resource_errors() {
+    let tmp = TempDir::new().unwrap();
+    fs::create_dir(tmp.path().join(".git")).unwrap();
+    fs::write(
+        tmp.path().join("tachyon.yml"),
+        "metadata:\n  tenantId: tn_manifestapply123456\n",
+    )
+    .unwrap();
+    fs::create_dir_all(tmp.path().join(".tachyon/manifests")).unwrap();
+    fs::write(
+        tmp.path().join(".tachyon/manifests/auth.yml"),
+        "actions:\n  - context: manifest\n    name: Read\npolicies: []\n",
+    )
+    .unwrap();
+    let (api_url, rx, handle) = start_failing_apply_action_server();
+
+    let output = isolated_command(tmp.path())
+        .current_dir(tmp.path())
+        .env("TACHYON_API_URL", api_url)
+        .env("TACHYON_API_KEY", "test-token")
+        .args(["manifest", "apply", "--file", ".tachyon/manifests/auth.yml"])
+        .output()
+        .expect("run tachyon manifest apply auth");
+
+    handle.join().unwrap();
+    let req = rx.recv().unwrap();
+    assert!(req.starts_with("POST /v1/auth/actions "));
+    assert!(!output.status.success());
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("=== Auth Manifest Apply ==="));
+    assert!(stdout.contains("manifest:Read"));
+    assert!(stdout.contains("ERROR"));
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("Auth manifest apply: some resources failed."));
+    assert!(stderr.contains("Manifest apply completed with 1 error(s):"));
+    assert!(stderr.contains("1 manifest step(s) failed"));
+}
+
+#[test]
 fn manifest_apply_reports_unsupported_iac_manifest_without_api_call() {
     let tmp = TempDir::new().unwrap();
     fs::create_dir(tmp.path().join(".git")).unwrap();
@@ -506,4 +569,42 @@ fn manifest_apply_reports_unsupported_iac_manifest_without_api_call() {
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("IaC manifest:"));
     assert!(stdout.contains("apply/reconcile is not supported yet"));
+}
+
+#[test]
+fn manifest_apply_aggregates_invalid_cloud_apps_after_iac_skip() {
+    let tmp = TempDir::new().unwrap();
+    fs::create_dir(tmp.path().join(".git")).unwrap();
+    fs::write(
+        tmp.path().join("tachyon.yml"),
+        r#"apiVersion: apps.tachy.one/v1alpha
+kind: Operator
+metadata:
+  name: test
+---
+apiVersion: apps.tachy.one/v1alpha
+kind: CloudApps
+metadata:
+  name: broken
+"#,
+    )
+    .unwrap();
+
+    let output = isolated_command(tmp.path())
+        .current_dir(tmp.path())
+        .env("TACHYON_API_KEY", "test-token")
+        .env("TACHYON_TENANT_ID", "tn_test1234567890")
+        .args(["manifest", "apply", "--file", "tachyon.yml"])
+        .output()
+        .expect("run tachyon manifest apply mixed invalid manifests");
+
+    assert!(!output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("IaC manifest:"));
+    assert!(stdout.contains("apply/reconcile is not supported yet"));
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("Invalid Cloud Apps manifest"));
+    assert!(stderr.contains("Manifest apply completed with 1 error(s):"));
+    assert!(stderr.contains("1 manifest step(s) failed"));
 }
