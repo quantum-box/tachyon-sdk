@@ -17,6 +17,9 @@ use crate::client::{print_json, truncate, ApiClient};
 use crate::config::loader::ProjectConfig;
 use crate::resolve;
 
+const BUILD_LOGS_FOLLOW_INTERVAL: Duration = Duration::from_secs(2);
+const BUILD_LOGS_MAX_NO_PROGRESS_NONE_TOKEN_POLLS: usize = 3;
+
 #[derive(Debug, Clone, Args)]
 pub struct ComputeArgs {
     #[command(subcommand)]
@@ -2513,6 +2516,9 @@ async fn run_builds_logs(
 
     let mut next_token: Option<String> = None;
     let mut is_complete = false;
+    let mut last_none_token_signature: Option<Vec<(i64, String)>> = None;
+    let mut no_progress_none_token_polls = 0_usize;
+    let follow_interval = build_logs_follow_interval();
     loop {
         let path = format!("/v1/compute/builds/{resolved_build_id}/logs");
         let logs: BuildLogsResponse = if let Some(token) = &next_token {
@@ -2522,15 +2528,28 @@ async fn run_builds_logs(
             api.get(&path).await?
         };
 
-        for line in &logs.lines {
-            if agent {
-                print_agent_event(&AgentBuildEvent::Log {
-                    build_id: &resolved_build_id,
-                    timestamp: line.timestamp,
-                    message: compact_agent_message(&line.message),
-                })?;
-            } else {
-                println!("[{}] {}", format_timestamp_ms(line.timestamp), line.message);
+        let response_next_token = logs.next_token.clone();
+        let none_token_signature = response_next_token
+            .is_none()
+            .then(|| build_log_lines_signature(&logs.lines));
+        let no_progress_none_token_response = follow
+            && !logs.is_complete
+            && response_next_token.is_none()
+            && none_token_signature.as_ref().is_some_and(|signature| {
+                signature.is_empty() || last_none_token_signature.as_ref() == Some(signature)
+            });
+
+        if !no_progress_none_token_response {
+            for line in &logs.lines {
+                if agent {
+                    print_agent_event(&AgentBuildEvent::Log {
+                        build_id: &resolved_build_id,
+                        timestamp: line.timestamp,
+                        message: compact_agent_message(&line.message),
+                    })?;
+                } else {
+                    println!("[{}] {}", format_timestamp_ms(line.timestamp), line.message);
+                }
             }
         }
 
@@ -2538,9 +2557,24 @@ async fn run_builds_logs(
             is_complete = true;
             break;
         }
-        next_token = logs.next_token;
+
+        if let Some(signature) = none_token_signature {
+            last_none_token_signature = Some(signature);
+        } else {
+            last_none_token_signature = None;
+        }
+        if no_progress_none_token_response {
+            no_progress_none_token_polls += 1;
+        } else {
+            no_progress_none_token_polls = 0;
+        }
+
+        next_token = response_next_token;
         if follow {
-            sleep(Duration::from_secs(2)).await;
+            if no_progress_none_token_polls >= BUILD_LOGS_MAX_NO_PROGRESS_NONE_TOKEN_POLLS {
+                break;
+            }
+            sleep(follow_interval).await;
         } else {
             break;
         }
@@ -2569,6 +2603,21 @@ async fn run_builds_logs(
     }
 
     Ok(())
+}
+
+fn build_log_lines_signature(lines: &[BuildLogLineResponse]) -> Vec<(i64, String)> {
+    lines
+        .iter()
+        .map(|line| (line.timestamp, line.message.clone()))
+        .collect()
+}
+
+fn build_logs_follow_interval() -> Duration {
+    std::env::var("TACHYON_COMPUTE_BUILD_LOGS_FOLLOW_INTERVAL_MS")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .map(Duration::from_millis)
+        .unwrap_or(BUILD_LOGS_FOLLOW_INTERVAL)
 }
 
 async fn run_builds_watch(

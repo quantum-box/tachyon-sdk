@@ -257,6 +257,174 @@ fn compute_builds_watch_latest_build_uses_app_builds_endpoint() {
 }
 
 #[test]
+fn compute_builds_logs_follow_stops_after_repeated_none_token_no_progress() {
+    let tmp = TempDir::new().unwrap();
+    let (api_url, rx, handle) = start_server(vec![
+        r#"{"lines":[],"next_token":null,"is_complete":false}"#,
+        r#"{"lines":[],"next_token":null,"is_complete":false}"#,
+        r#"{"lines":[],"next_token":null,"is_complete":false}"#,
+    ]);
+
+    let output = isolated_command(tmp.path())
+        .env("TACHYON_API_URL", api_url)
+        .env("TACHYON_COMPUTE_BUILD_LOGS_FOLLOW_INTERVAL_MS", "1")
+        .args([
+            "compute",
+            "builds",
+            "logs",
+            "--build-id",
+            "bld_test1234567890",
+            "--follow",
+        ])
+        .output()
+        .expect("run tachyon compute builds logs --follow");
+
+    assert!(
+        output.status.success(),
+        "logs follow failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+
+    let first_req = rx.recv().unwrap();
+    let second_req = rx.recv().unwrap();
+    let third_req = rx.recv().unwrap();
+    handle.join().unwrap();
+    assert!(first_req.starts_with("GET /v1/compute/builds/bld_test1234567890/logs "));
+    assert!(second_req.starts_with("GET /v1/compute/builds/bld_test1234567890/logs "));
+    assert!(third_req.starts_with("GET /v1/compute/builds/bld_test1234567890/logs "));
+    assert!(
+        String::from_utf8(output.stdout).unwrap().is_empty(),
+        "stdout should not include duplicate no-progress logs",
+    );
+}
+
+#[test]
+fn compute_builds_logs_follow_continues_when_new_logs_arrive_without_token() {
+    let tmp = TempDir::new().unwrap();
+    let (api_url, rx, handle) = start_server(vec![
+        r#"{"lines":[],"next_token":null,"is_complete":false}"#,
+        r#"{"lines":[{"timestamp":1767225600000,"message":"installing"}],"next_token":null,"is_complete":false}"#,
+        r#"{"lines":[{"timestamp":1767225600000,"message":"installing"},{"timestamp":1767225601000,"message":"build finished"}],"next_token":null,"is_complete":true}"#,
+        r#"{"id":"bld_test1234567890","app_id":"app_test1234567890","status":"succeeded","error_message":null}"#,
+    ]);
+
+    let output = isolated_command(tmp.path())
+        .env("TACHYON_API_URL", api_url)
+        .env("TACHYON_COMPUTE_BUILD_LOGS_FOLLOW_INTERVAL_MS", "1")
+        .args([
+            "compute",
+            "builds",
+            "logs",
+            "--build-id",
+            "bld_test1234567890",
+            "--follow",
+        ])
+        .output()
+        .expect("run tachyon compute builds logs --follow");
+
+    assert!(
+        output.status.success(),
+        "logs follow failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+
+    let first_req = rx.recv().unwrap();
+    let second_req = rx.recv().unwrap();
+    let third_req = rx.recv().unwrap();
+    let fourth_req = rx.recv().unwrap();
+    handle.join().unwrap();
+    assert!(first_req.starts_with("GET /v1/compute/builds/bld_test1234567890/logs "));
+    assert!(second_req.starts_with("GET /v1/compute/builds/bld_test1234567890/logs "));
+    assert!(third_req.starts_with("GET /v1/compute/builds/bld_test1234567890/logs "));
+    assert!(fourth_req.starts_with("GET /v1/compute/builds/bld_test1234567890 "));
+
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("installing"), "stdout:\n{stdout}");
+    assert!(stdout.contains("build finished"), "stdout:\n{stdout}");
+}
+
+#[test]
+fn compute_builds_logs_follow_continues_when_next_token_advances() {
+    let tmp = TempDir::new().unwrap();
+    let (api_url, rx, handle) = start_server(vec![
+        r#"{"lines":[],"next_token":"n1","is_complete":false}"#,
+        r#"{"lines":[],"next_token":"n2","is_complete":false}"#,
+        r#"{"lines":[{"timestamp":1767225600000,"message":"build finished"}],"next_token":null,"is_complete":true}"#,
+        r#"{"id":"bld_test1234567890","app_id":"app_test1234567890","status":"succeeded","error_message":null}"#,
+    ]);
+
+    let output = isolated_command(tmp.path())
+        .env("TACHYON_API_URL", api_url)
+        .env("TACHYON_COMPUTE_BUILD_LOGS_FOLLOW_INTERVAL_MS", "1")
+        .args([
+            "compute",
+            "builds",
+            "logs",
+            "--build-id",
+            "bld_test1234567890",
+            "--follow",
+        ])
+        .output()
+        .expect("run tachyon compute builds logs --follow");
+
+    assert!(
+        output.status.success(),
+        "logs follow failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+
+    let first_req = rx.recv().unwrap();
+    let second_req = rx.recv().unwrap();
+    let third_req = rx.recv().unwrap();
+    let fourth_req = rx.recv().unwrap();
+    handle.join().unwrap();
+    assert!(first_req.starts_with("GET /v1/compute/builds/bld_test1234567890/logs "));
+    assert!(second_req.starts_with("GET /v1/compute/builds/bld_test1234567890/logs?next_token=n1 "));
+    assert!(third_req.starts_with("GET /v1/compute/builds/bld_test1234567890/logs?next_token=n2 "));
+    assert!(fourth_req.starts_with("GET /v1/compute/builds/bld_test1234567890 "));
+
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("build finished"), "stdout:\n{stdout}");
+}
+
+#[test]
+fn compute_builds_logs_without_follow_fetches_once() {
+    let tmp = TempDir::new().unwrap();
+    let (api_url, rx, handle) = start_server(vec![
+        r#"{"lines":[{"timestamp":1767225600000,"message":"first page"}],"next_token":"n1","is_complete":false}"#,
+    ]);
+
+    let output = isolated_command(tmp.path())
+        .env("TACHYON_API_URL", api_url)
+        .args([
+            "compute",
+            "builds",
+            "logs",
+            "--build-id",
+            "bld_test1234567890",
+        ])
+        .output()
+        .expect("run tachyon compute builds logs");
+
+    assert!(
+        output.status.success(),
+        "logs failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+
+    let request = rx.recv().unwrap();
+    handle.join().unwrap();
+    assert!(request.starts_with("GET /v1/compute/builds/bld_test1234567890/logs "));
+
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("first page"), "stdout:\n{stdout}");
+}
+
+#[test]
 fn compute_builds_list_prefers_public_preview_url() {
     let tmp = TempDir::new().unwrap();
     let app_id = "app_01kp4vm07tr3d4375597d15gkp";
