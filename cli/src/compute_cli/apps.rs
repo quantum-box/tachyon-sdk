@@ -1,4 +1,7 @@
 use super::*;
+use anyhow::Context;
+
+const DOCUMENT_TENANT_ID_KEY: &str = "__tachyonDocumentTenantId";
 
 // --- Apps subcommands ---
 
@@ -504,45 +507,46 @@ pub(crate) async fn run_apps_apply(
 
 pub(crate) fn load_cloud_apps_manifest(path: &Path) -> Result<Value> {
     let content = std::fs::read_to_string(path)?;
-    let mut manifests = Vec::new();
-    let mut unsupported_kinds = Vec::new();
+    let mut apps = Vec::new();
+    let mut oauth2_clients = HashMap::<(Option<String>, String), Value>::new();
+    let mut non_app_kinds = Vec::new();
 
-    for doc in serde_yaml::Deserializer::from_str(&content) {
-        let value = Value::deserialize(doc)?;
+    for (index, doc) in serde_yaml::Deserializer::from_str(&content).enumerate() {
+        let value = Value::deserialize(doc)
+            .with_context(|| format!("parse YAML document {} in {}", index + 1, path.display()))?;
         if value.is_null() {
             continue;
         }
-        let kind = value
-            .get("kind")
-            .and_then(Value::as_str)
-            .unwrap_or("<missing kind>")
-            .to_string();
-        match normalize_cloud_apps_manifest(value)? {
-            Some(manifest) => manifests.push(manifest),
-            None => unsupported_kinds.push(kind),
+        match value.get("kind").and_then(Value::as_str) {
+            Some("CloudApps") => apps.extend(cloud_apps_entries(&value)?),
+            Some("CloudApp") => apps.push(cloud_app_entry(&value)?),
+            Some("OAuth2Client") => {
+                let dependency = oauth2_client_dependency(&value)?;
+                let key = (dependency.tenant_id, dependency.name);
+                if oauth2_clients
+                    .insert(key.clone(), dependency.spec)
+                    .is_some()
+                {
+                    return Err(anyhow!(
+                        "manifest has multiple OAuth2Client documents named {}",
+                        key.1
+                    ));
+                }
+                non_app_kinds.push("OAuth2Client".to_string());
+            }
+            Some(kind) => non_app_kinds.push(kind.to_string()),
+            None => non_app_kinds.push("<missing kind>".to_string()),
         }
     }
 
-    if manifests.is_empty() {
-        return match unsupported_kinds.first() {
+    if apps.is_empty() {
+        return match non_app_kinds.first() {
             Some(kind) if kind == "<missing kind>" => Err(anyhow!("manifest is missing kind")),
             Some(kind) => Err(anyhow!("unsupported manifest kind: {kind}")),
             None => Err(anyhow!("manifest is empty")),
         };
     }
-
-    let mut apps = Vec::new();
-    for manifest in manifests {
-        apps.extend(
-            manifest
-                .get("spec")
-                .and_then(|s| s.get("apps"))
-                .and_then(Value::as_array)
-                .ok_or_else(|| anyhow!("CloudApps manifest must contain spec.apps[]"))?
-                .iter()
-                .cloned(),
-        );
-    }
+    enrich_oauth2_client_refs(&mut apps, &oauth2_clients)?;
 
     Ok(json!({
         "apiVersion": "apps.tachy.one/v1alpha",
@@ -557,29 +561,157 @@ pub(crate) fn load_cloud_apps_manifest(path: &Path) -> Result<Value> {
     }))
 }
 
-fn normalize_cloud_apps_manifest(value: Value) -> Result<Option<Value>> {
-    match value.get("kind").and_then(Value::as_str) {
-        Some("CloudApps") => Ok(Some(value)),
-        Some("CloudApp") => {
-            let name = value
-                .get("metadata")
-                .and_then(|m| m.get("name"))
-                .and_then(Value::as_str)
-                .ok_or_else(|| anyhow!("CloudApp manifest is missing metadata.name"))?;
-            let mut entry = value.get("spec").cloned().unwrap_or_else(|| json!({}));
-            entry
-                .as_object_mut()
-                .ok_or_else(|| anyhow!("CloudApp spec must be an object"))?
-                .insert("name".to_string(), Value::String(name.to_string()));
-            Ok(json!({
-                "apiVersion": "apps.tachy.one/v1alpha",
-                "kind": "CloudApps",
-                "metadata": { "name": name },
-                "spec": { "apps": [entry] }
-            })
-            .into())
+fn cloud_apps_entries(value: &Value) -> Result<Vec<Value>> {
+    let metadata = value.get("metadata").cloned().unwrap_or_else(|| json!({}));
+    let tenant_id = metadata.get("tenantId").cloned();
+    let apps = value
+        .get("spec")
+        .and_then(|s| s.get("apps"))
+        .and_then(Value::as_array)
+        .ok_or_else(|| anyhow!("CloudApps manifest must contain spec.apps[]"))?;
+
+    let mut entries = Vec::new();
+    for entry in apps {
+        let mut entry = entry.clone();
+        let entry_obj = entry
+            .as_object_mut()
+            .ok_or_else(|| anyhow!("CloudApps app entry must be an object"))?;
+        entry_obj
+            .get("name")
+            .and_then(Value::as_str)
+            .ok_or_else(|| anyhow!("CloudApps spec.apps[] entry is missing name"))?;
+        if let Some(tenant_id) = tenant_id.clone() {
+            entry_obj.insert(DOCUMENT_TENANT_ID_KEY.to_string(), tenant_id);
         }
-        Some(_) | None => Ok(None),
+        entries.push(entry);
+    }
+    Ok(entries)
+}
+
+fn cloud_app_entry(value: &Value) -> Result<Value> {
+    let metadata = value.get("metadata").cloned().unwrap_or_else(|| json!({}));
+    let name = metadata
+        .get("name")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow!("CloudApp manifest is missing metadata.name"))?;
+    let mut entry = value.get("spec").cloned().unwrap_or_else(|| json!({}));
+    let entry_obj = entry
+        .as_object_mut()
+        .ok_or_else(|| anyhow!("CloudApp spec must be an object"))?;
+    entry_obj.insert("name".to_string(), Value::String(name.to_string()));
+    if let Some(tenant_id) = metadata.get("tenantId").cloned() {
+        entry_obj.insert(DOCUMENT_TENANT_ID_KEY.to_string(), tenant_id);
+    }
+    Ok(entry)
+}
+
+struct OAuth2ClientDependency {
+    tenant_id: Option<String>,
+    name: String,
+    spec: Value,
+}
+
+fn oauth2_client_dependency(value: &Value) -> Result<OAuth2ClientDependency> {
+    let metadata = value.get("metadata").cloned().unwrap_or_else(|| json!({}));
+    let name = metadata
+        .get("name")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow!("OAuth2Client manifest is missing metadata.name"))?
+        .to_string();
+    let tenant_id = metadata
+        .get("tenantId")
+        .and_then(Value::as_str)
+        .map(ToString::to_string);
+    let spec = value
+        .get("spec")
+        .cloned()
+        .ok_or_else(|| anyhow!("OAuth2Client manifest {name} is missing spec"))?;
+    if !spec.is_object() {
+        return Err(anyhow!(
+            "OAuth2Client manifest {name} spec must be an object"
+        ));
+    }
+    Ok(OAuth2ClientDependency {
+        tenant_id,
+        name,
+        spec,
+    })
+}
+
+fn enrich_oauth2_client_refs(
+    apps: &mut [Value],
+    oauth2_clients: &HashMap<(Option<String>, String), Value>,
+) -> Result<()> {
+    if oauth2_clients.is_empty() {
+        return Ok(());
+    }
+
+    for app in apps {
+        let app_tenant_id = app
+            .get(DOCUMENT_TENANT_ID_KEY)
+            .and_then(Value::as_str)
+            .map(ToString::to_string);
+        let Some(env_vars) = app.get_mut("envVars").and_then(Value::as_array_mut) else {
+            continue;
+        };
+        for env_var in env_vars {
+            let Some(client_ref) = env_var
+                .get_mut("valueFrom")
+                .and_then(Value::as_object_mut)
+                .and_then(|value_from| value_from.get_mut("oauth2ClientRef"))
+                .and_then(Value::as_object_mut)
+            else {
+                continue;
+            };
+            let Some(client_name) = client_ref.get("name").and_then(Value::as_str) else {
+                continue;
+            };
+            let Some(spec) = find_oauth2_client_dependency(
+                oauth2_clients,
+                app_tenant_id.as_deref(),
+                client_name,
+            )?
+            else {
+                continue;
+            };
+            for key in [
+                "redirectUris",
+                "allowedScopes",
+                "grantTypes",
+                "useTachyonUserPool",
+            ] {
+                if !client_ref.contains_key(key) {
+                    if let Some(value) = spec.get(key) {
+                        client_ref.insert(key.to_string(), value.clone());
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn find_oauth2_client_dependency<'a>(
+    oauth2_clients: &'a HashMap<(Option<String>, String), Value>,
+    tenant_id: Option<&str>,
+    name: &str,
+) -> Result<Option<&'a Value>> {
+    let key = (tenant_id.map(ToString::to_string), name.to_string());
+    if let Some(spec) = oauth2_clients.get(&key) {
+        return Ok(Some(spec));
+    }
+
+    let matches = oauth2_clients
+        .iter()
+        .filter(|((_, client_name), _)| client_name == name)
+        .collect::<Vec<_>>();
+    match matches.as_slice() {
+        [] => Ok(None),
+        [(_, spec)] => Ok(Some(*spec)),
+        _ => Err(anyhow!(
+            "OAuth2Client dependency {name} is ambiguous across manifest documents"
+        )),
     }
 }
 
@@ -887,6 +1019,72 @@ spec:
     }
 
     #[test]
+    fn load_cloud_apps_manifest_enriches_oauth2_client_refs_from_dependency_documents() {
+        let (_tmp, path) = write_manifest(
+            r#"
+apiVersion: apps.tachy.one/v1alpha
+kind: CloudApps
+metadata:
+  name: first
+  tenantId: tn_01hjjn348rn3t49zz6hvmfq67p
+spec:
+  apps:
+    - name: fieldadmin
+      repository:
+        url: https://github.com/quantum-box/tachyonfield
+        owner: quantum-box
+        name: tachyonfield
+      framework: vinext
+      deploymentTarget: cloudflare_pages
+      envVars:
+        - name: COGNITO_CLIENT_ID
+          type: credential
+          valueFrom:
+            oauth2ClientRef:
+              name: fieldadmin-web
+              field: clientId
+---
+apiVersion: apps.tachy.one/v1alpha
+kind: OAuth2Client
+metadata:
+  name: fieldadmin-web
+  tenantId: tn_01hjjn348rn3t49zz6hvmfq67p
+spec:
+  redirectUris:
+    - https://fieldadmin.txcloud.app/api/auth/callback/cognito
+  allowedScopes:
+    - openid
+    - profile
+  grantTypes:
+    - authorization_code
+    - password
+  useTachyonUserPool: true
+"#,
+        );
+
+        let manifest = load_cloud_apps_manifest(&path).unwrap();
+        let entries = select_app_entries(&manifest, Some("fieldadmin")).unwrap();
+        let client_ref = &entries[0]["envVars"][0]["valueFrom"]["oauth2ClientRef"];
+
+        assert_eq!(
+            client_ref["redirectUris"][0],
+            "https://fieldadmin.txcloud.app/api/auth/callback/cognito"
+        );
+        assert_eq!(client_ref["allowedScopes"], json!(["openid", "profile"]));
+        assert_eq!(
+            client_ref["grantTypes"],
+            json!(["authorization_code", "password"])
+        );
+        assert_eq!(client_ref["useTachyonUserPool"], true);
+
+        let iac_manifest =
+            cloud_app_manifest_for_iac(&entries[0], "tn_01hjjn348rn3t49zz6hvmfq67p").unwrap();
+        let iac_ref = &iac_manifest["spec"]["envVars"][0]["valueFrom"]["oauth2ClientRef"];
+        assert_eq!(iac_ref["allowedScopes"], json!(["openid", "profile"]));
+        assert!(iac_manifest["spec"].get(DOCUMENT_TENANT_ID_KEY).is_none());
+    }
+
+    #[test]
     fn load_cloud_apps_manifest_skips_unsupported_documents() {
         let (_tmp, path) = write_manifest(
             r#"
@@ -1156,6 +1354,9 @@ pub(super) fn cloud_app_manifest_for_iac(entry: &Value, tenant_id: &str) -> Resu
     spec.as_object_mut()
         .ok_or_else(|| anyhow!("CloudApps app entry must be an object"))?
         .remove("name");
+    spec.as_object_mut()
+        .ok_or_else(|| anyhow!("CloudApps app entry must be an object"))?
+        .remove(DOCUMENT_TENANT_ID_KEY);
     Ok(json!({
         "apiVersion": "apps.tachy.one/v1alpha",
         "kind": "CloudApp",
