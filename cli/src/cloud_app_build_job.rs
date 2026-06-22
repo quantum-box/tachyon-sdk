@@ -759,7 +759,8 @@ async fn run_buildkit(
     app_dir: &Path,
     env: &BTreeMap<String, String>,
 ) -> Result<CommandResult> {
-    let dockerfile = dockerfile_path(workload, app_dir);
+    let context = docker_context_path(workload, checkout_dir, app_dir);
+    let dockerfile = dockerfile_path(workload, app_dir, &context);
     if !dockerfile.exists() {
         return Err(anyhow!(
             "Dockerfile is required for Cloud Run JobRun builds: {}",
@@ -767,7 +768,6 @@ async fn run_buildkit(
         ));
     }
 
-    let context = docker_context_path(workload, checkout_dir, app_dir);
     if !context.exists() {
         return Err(anyhow!(
             "Docker build context does not exist: {}",
@@ -837,14 +837,18 @@ fn buildkit_cache_repository(workload: &BuildWorkloadSpec) -> Option<String> {
         })
 }
 
-fn dockerfile_path(workload: &BuildWorkloadSpec, app_dir: &Path) -> PathBuf {
-    workload
+fn dockerfile_path(workload: &BuildWorkloadSpec, app_dir: &Path, context_dir: &Path) -> PathBuf {
+    if workload
         .workspace
-        .root_directory
+        .docker_context
         .as_ref()
         .filter(|value| !value.trim().is_empty())
-        .map(|_| app_dir.join("Dockerfile"))
-        .unwrap_or_else(|| app_dir.join("Dockerfile"))
+        .is_some()
+    {
+        return context_dir.join("Dockerfile");
+    }
+
+    app_dir.join("Dockerfile")
 }
 
 fn docker_context_path(
@@ -1523,6 +1527,46 @@ mod tests {
     }
 
     #[test]
+    fn dockerfile_path_defaults_to_app_dir_when_context_is_missing() {
+        let temp = tempfile::tempdir().unwrap();
+        let checkout = temp.path().join("source");
+        let app = checkout.join("apps").join("demo");
+        let workload = BuildWorkloadSpec {
+            project_id: "app_123".to_string(),
+            source: BuildWorkloadSource {
+                repository_url: "https://github.com/example/app".to_string(),
+                branch: "main".to_string(),
+                commit_sha: "abc".to_string(),
+            },
+            workspace: BuildWorkloadWorkspace {
+                root_directory: Some("apps/demo".to_string()),
+                docker_context: None,
+            },
+            commands: BuildWorkloadCommands {
+                install: None,
+                build: Some("true".to_string()),
+                node_version: None,
+            },
+            env: vec![],
+            artifact: BuildWorkloadArtifact {
+                image_name: "demo".to_string(),
+                image_tag: "bld_123".to_string(),
+                output_directory: None,
+                container_registry: None,
+            },
+            callback: None,
+            deployment_target: Some("cloud_run".to_string()),
+            framework: Some("docker".to_string()),
+        };
+        let context = docker_context_path(&workload, &checkout, &app);
+
+        assert_eq!(
+            dockerfile_path(&workload, &app, &context),
+            app.join("Dockerfile")
+        );
+    }
+
+    #[test]
     fn explicit_dot_docker_context_uses_checkout_root() {
         let temp = tempfile::tempdir().unwrap();
         let checkout = temp.path().join("source");
@@ -1556,5 +1600,46 @@ mod tests {
         };
 
         assert_eq!(docker_context_path(&workload, &checkout, &app), checkout);
+    }
+
+    #[test]
+    fn dockerfile_path_uses_explicit_docker_context_dir() {
+        let temp = tempfile::tempdir().unwrap();
+        let checkout = temp.path().join("source");
+        let app = checkout.join("apps").join("demo");
+        let context = checkout.join("services").join("api");
+        let workload = BuildWorkloadSpec {
+            project_id: "app_123".to_string(),
+            source: BuildWorkloadSource {
+                repository_url: "https://github.com/example/app".to_string(),
+                branch: "main".to_string(),
+                commit_sha: "abc".to_string(),
+            },
+            workspace: BuildWorkloadWorkspace {
+                root_directory: Some("apps/demo".to_string()),
+                docker_context: Some("services/api".to_string()),
+            },
+            commands: BuildWorkloadCommands {
+                install: None,
+                build: Some("true".to_string()),
+                node_version: None,
+            },
+            env: vec![],
+            artifact: BuildWorkloadArtifact {
+                image_name: "demo".to_string(),
+                image_tag: "bld_123".to_string(),
+                output_directory: None,
+                container_registry: None,
+            },
+            callback: None,
+            deployment_target: Some("cloud_run".to_string()),
+            framework: Some("docker".to_string()),
+        };
+
+        assert_eq!(docker_context_path(&workload, &checkout, &app), context);
+        assert_eq!(
+            dockerfile_path(&workload, &app, &context),
+            context.join("Dockerfile")
+        );
     }
 }
