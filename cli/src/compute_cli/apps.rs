@@ -1372,12 +1372,13 @@ async fn graphql_request(api: &ApiClient, body: Value) -> Result<Value> {
     let url = format!("{}/v1/graphql", api.base_url);
     let response = api.client.post(url).json(&body).send().await?;
     let status = response.status();
-    let payload: Value = response.json().await?;
     if !status.is_success() {
+        let body = response.text().await?;
         return Err(anyhow!(
-            "graphql request failed: status={status}, body={payload}"
+            "graphql request failed: status={status}, body={body}"
         ));
     }
+    let payload: Value = response.json().await?;
     if let Some(errors) = payload.get("errors") {
         return Err(anyhow!("graphql error: {errors}"));
     }
