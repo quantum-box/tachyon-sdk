@@ -100,6 +100,67 @@ fn start_apply_server() -> (String, mpsc::Receiver<String>, thread::JoinHandle<(
     (url, rx, handle)
 }
 
+fn start_apply_graphql_error_server() -> (String, mpsc::Receiver<String>, thread::JoinHandle<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    let (tx, rx) = mpsc::channel();
+    let handle = thread::spawn(move || {
+        for _ in 0..5 {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut buf = [0_u8; 8192];
+            let n = stream.read(&mut buf).unwrap();
+            let req = String::from_utf8_lossy(&buf[..n]).to_string();
+            tx.send(req.clone()).unwrap();
+
+            let mut should_stop = false;
+            let (status, content_type, body) = if req.starts_with("GET /v1/compute/apps ") {
+                ("HTTP/1.1 200 OK", "application/json", r#"{"apps":[]}"#)
+            } else if req.starts_with("POST /v1/compute/apps ") {
+                (
+                    "HTTP/1.1 200 OK",
+                    "application/json",
+                    r#"{"id":"app_created","name":"bakuure-api","repository_url":"https://github.com/quantum-box/erp","repository_owner":"quantum-box","repository_name":"erp","default_branch":"main","framework":"cargo_lambda","deployment_target":"lambda","root_directory":"apps/bakuure-api","docker_context":".","build_command":"cargo lambda build --package bakuure-api --bin lambda-bakuure-api --release --arm64"}"#,
+                )
+            } else if req.starts_with("PUT /v1/compute/apps/app_created/env ") {
+                (
+                    "HTTP/1.1 200 OK",
+                    "application/json",
+                    r#"{"env_vars":[{"id":"env_01testtesttesttesttesttest","key":"DATABASE_URL","value":"********","target":"all","is_secret":true}]}"#,
+                )
+            } else if req.starts_with("GET /v1/compute/apps/app_created/env ") {
+                (
+                    "HTTP/1.1 200 OK",
+                    "application/json",
+                    r#"{"env_vars":[{"id":"env_secret","key":"DATABASE_URL","value":"********","target":"all","is_secret":true}]}"#,
+                )
+            } else if req.starts_with("POST /v1/graphql ") {
+                should_stop = true;
+                (
+                    "HTTP/1.1 502 Bad Gateway",
+                    "text/html",
+                    "<html>upstream unavailable</html>",
+                )
+            } else {
+                (
+                    "HTTP/1.1 500 Internal Server Error",
+                    "application/json",
+                    r#"{"error":"unexpected request"}"#,
+                )
+            };
+            let response = format!(
+                "{status}\r\ncontent-type: {content_type}\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            stream.write_all(response.as_bytes()).unwrap();
+            if should_stop {
+                break;
+            }
+        }
+    });
+    (url, rx, handle)
+}
+
 fn start_secret_server() -> (String, mpsc::Receiver<String>, thread::JoinHandle<()>) {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let url = format!("http://{}", listener.local_addr().unwrap());
@@ -495,6 +556,81 @@ spec:
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("=== Cloud Apps Manifest Apply ==="));
     assert!(stdout.contains("CREATED bakuure-api (app_created)"));
+}
+
+#[test]
+fn compute_apps_apply_reports_raw_graphql_http_error_body() {
+    let tmp = TempDir::new().unwrap();
+    let manifest = tmp.path().join("tachyon.yml");
+    fs::write(
+        &manifest,
+        r#"
+apiVersion: apps.tachy.one/v1alpha
+kind: CloudApps
+metadata:
+  name: bakuure-api
+spec:
+  apps:
+    - name: bakuure-api
+      repository:
+        url: https://github.com/quantum-box/erp
+        owner: quantum-box
+        name: erp
+        defaultBranch: main
+      rootDirectory: apps/bakuure-api
+      dockerContext: "."
+      framework: cargo_lambda
+      deploymentTarget: lambda
+      build:
+        package: bakuure-api
+        binary: lambda-bakuure-api
+      envVars:
+        - name: DATABASE_URL
+          type: credential
+          valueFrom:
+            databaseRef:
+              name: app-db
+              field: connectionString
+"#,
+    )
+    .unwrap();
+    let (api_url, rx, handle) = start_apply_graphql_error_server();
+
+    let mut cmd = isolated_command(tmp.path());
+    let output = cmd
+        .current_dir(tmp.path())
+        .env("TACHYON_API_URL", api_url)
+        .env("TACHYON_API_KEY", "test-token")
+        .env("TACHYON_TENANT_ID", "tn_01hjryxysgey07h5jz5wagqj0m")
+        .args([
+            "compute",
+            "apps",
+            "apply",
+            "-f",
+            manifest.to_str().unwrap(),
+            "--environment",
+            "sandbox",
+        ])
+        .output()
+        .expect("run compute apps apply");
+
+    assert!(
+        !output.status.success(),
+        "apply unexpectedly succeeded\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let _list = rx.recv().unwrap();
+    let _create = rx.recv().unwrap();
+    let graphql = rx.recv().unwrap();
+    handle.join().unwrap();
+
+    assert!(graphql.starts_with("POST /v1/graphql "));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("graphql request failed: status=502 Bad Gateway"));
+    assert!(stderr.contains("body=<html>upstream unavailable</html>"));
+    assert!(!stderr.contains("error decoding response body"));
 }
 
 #[test]
