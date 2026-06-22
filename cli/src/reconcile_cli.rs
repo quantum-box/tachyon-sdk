@@ -1,5 +1,6 @@
 use anyhow::Result;
 use clap::Args;
+use serde::Deserialize;
 use serde_json::Value;
 use std::path::PathBuf;
 use tachyon_sdk::apis::configuration::Configuration;
@@ -99,11 +100,16 @@ fn is_cloud_apps_manifest(path: &std::path::Path) -> bool {
     let Ok(content) = std::fs::read_to_string(path) else {
         return false;
     };
-    let Ok(value) = serde_yaml::from_str::<Value>(&content) else {
-        return false;
-    };
-    matches!(
-        value.get("kind").and_then(Value::as_str),
-        Some("CloudApps") | Some("CloudApp")
-    )
+    for document in serde_yaml::Deserializer::from_str(&content) {
+        let Ok(value) = Value::deserialize(document) else {
+            return false;
+        };
+        if matches!(
+            value.get("kind").and_then(Value::as_str),
+            Some("CloudApps") | Some("CloudApp")
+        ) {
+            return true;
+        }
+    }
+    false
 }
