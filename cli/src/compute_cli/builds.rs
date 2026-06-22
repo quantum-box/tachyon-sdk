@@ -809,9 +809,10 @@ pub(super) async fn run_runtime_log_tail_once(
         ));
     }
 
+    let mut utf8 = Utf8ChunkBuffer::default();
     let mut pending = String::new();
     while let Some(chunk) = resp.chunk().await? {
-        pending.push_str(&String::from_utf8_lossy(&chunk));
+        pending.push_str(&utf8.push_chunk(&chunk)?);
         for event in drain_sse_events(&mut pending) {
             if print_runtime_log_tail_event(&event, options.raw_json)? {
                 return Err(anyhow!("runtime log tail stream error"));
@@ -819,6 +820,7 @@ pub(super) async fn run_runtime_log_tail_once(
         }
         std::io::stdout().flush().ok();
     }
+    pending.push_str(&utf8.finish()?);
     if let Some(event) = parse_sse_event(&pending) {
         if print_runtime_log_tail_event(&event, options.raw_json)? {
             return Err(anyhow!("runtime log tail stream error"));
@@ -827,6 +829,43 @@ pub(super) async fn run_runtime_log_tail_once(
     }
 
     Ok(())
+}
+
+#[derive(Debug, Default)]
+pub(super) struct Utf8ChunkBuffer {
+    pending: Vec<u8>,
+}
+
+impl Utf8ChunkBuffer {
+    pub(super) fn push_chunk(&mut self, chunk: &[u8]) -> Result<String> {
+        self.pending.extend_from_slice(chunk);
+        let valid_len = match std::str::from_utf8(&self.pending) {
+            Ok(_) => self.pending.len(),
+            Err(error) if error.error_len().is_none() => error.valid_up_to(),
+            Err(error) => {
+                return Err(anyhow!(
+                    "runtime log tail received invalid UTF-8 at byte {}",
+                    error.valid_up_to()
+                ));
+            }
+        };
+        if valid_len == 0 {
+            return Ok(String::new());
+        }
+        let text = std::str::from_utf8(&self.pending[..valid_len])
+            .expect("valid_up_to must point at a UTF-8 boundary")
+            .to_string();
+        self.pending.drain(..valid_len);
+        Ok(text)
+    }
+
+    pub(super) fn finish(self) -> Result<String> {
+        if self.pending.is_empty() {
+            return Ok(String::new());
+        }
+        String::from_utf8(self.pending)
+            .map_err(|error| anyhow!("runtime log tail ended with incomplete UTF-8: {error}"))
+    }
 }
 
 pub(super) fn drain_sse_events(pending: &mut String) -> Vec<SseEvent> {

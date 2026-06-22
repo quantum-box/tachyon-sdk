@@ -912,6 +912,34 @@ mod tests {
     }
 
     #[test]
+    fn runtime_tail_utf8_buffer_preserves_multibyte_split_across_chunks() {
+        let event = "event: log\ndata: {\"message\":\"日本語ログ\"}\n\n";
+        let bytes = event.as_bytes();
+        let split = event.find("語").unwrap() + "語".len() - 1;
+        assert!(
+            std::str::from_utf8(&bytes[..split]).is_err(),
+            "test split must cut inside a multibyte codepoint"
+        );
+
+        let mut utf8 = Utf8ChunkBuffer::default();
+        let mut pending = String::new();
+        pending.push_str(&utf8.push_chunk(&bytes[..split]).unwrap());
+        assert!(drain_sse_events(&mut pending).is_empty());
+
+        pending.push_str(&utf8.push_chunk(&bytes[split..]).unwrap());
+        pending.push_str(&utf8.finish().unwrap());
+        let events = drain_sse_events(&mut pending);
+
+        assert!(pending.is_empty());
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].event.as_deref(), Some("log"));
+        assert_eq!(
+            events[0].data,
+            vec!["{\"message\":\"日本語ログ\"}".to_string()]
+        );
+    }
+
+    #[test]
     fn feedback_payload_includes_cloud_app_context() {
         let args = FeedbackArgs {
             app_id: "app_01test".to_string(),
