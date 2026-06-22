@@ -52,6 +52,7 @@ fn request_json_body(request: &str) -> Value {
 }
 
 fn write_cloud_apps_manifest(tmp: &TempDir) {
+    fs::create_dir_all(tmp.path().join("repos/tachyonfield")).unwrap();
     fs::write(
         tmp.path().join("tachyon.yml"),
         r#"
@@ -86,6 +87,13 @@ spec:
 "#,
     )
     .unwrap();
+}
+
+fn expected_repo_cwd(tmp: &TempDir) -> String {
+    fs::canonicalize(tmp.path().join("repos/tachyonfield"))
+        .unwrap()
+        .display()
+        .to_string()
 }
 
 #[test]
@@ -127,10 +135,7 @@ fn tool_jobs_create_uses_repo_local_path_as_cwd() {
     let body = request_json_body(&req);
     assert_eq!(body["provider"], "codex");
     assert_eq!(body["prompt"], "inspect");
-    assert_eq!(
-        body["metadata"]["cwd"],
-        tmp.path().join("repos/tachyonfield").display().to_string()
-    );
+    assert_eq!(body["metadata"]["cwd"], expected_repo_cwd(&tmp));
     assert_eq!(body["metadata"]["source"], "tachyon-cli");
     assert_eq!(body["metadata"]["codex_mode"], "app_server_ws");
 }
@@ -169,10 +174,7 @@ fn tool_jobs_create_uses_cloud_app_repo_local_path_as_cwd() {
     handle.join().unwrap();
     let req = rx.recv().unwrap();
     let body = request_json_body(&req);
-    assert_eq!(
-        body["metadata"]["cwd"],
-        tmp.path().join("repos/tachyonfield").display().to_string()
-    );
+    assert_eq!(body["metadata"]["cwd"], expected_repo_cwd(&tmp));
 }
 
 #[test]

@@ -1,7 +1,7 @@
 use std::fs;
 use std::io::{Read, Write};
 use std::net::TcpListener;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::mpsc;
 use std::thread;
@@ -32,8 +32,31 @@ fn assert_ok(output: &std::process::Output, label: &str) {
     );
 }
 
+fn has_header(req: &str, name: &str, value: &str) -> bool {
+    req.lines().any(|line| {
+        let Some((header_name, header_value)) = line.split_once(':') else {
+            return false;
+        };
+        header_name.eq_ignore_ascii_case(name) && header_value.trim() == value
+    })
+}
+
+fn config_root(home: &Path) -> PathBuf {
+    #[cfg(target_os = "macos")]
+    {
+        return home
+            .join("Library")
+            .join("Application Support")
+            .join("tachyon");
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        home.join(".config").join("tachyon")
+    }
+}
+
 fn write_profile(home: &Path) {
-    let root = home.join(".config").join("tachyon");
+    let root = config_root(home);
     let profiles = root.join("profiles");
     fs::create_dir_all(&profiles).unwrap();
     fs::write(root.join("active_profile"), "default\n").unwrap();
@@ -52,7 +75,7 @@ fn write_profile(home: &Path) {
 }
 
 fn write_refreshable_profile(home: &Path) {
-    let root = home.join(".config").join("tachyon");
+    let root = config_root(home);
     let profiles = root.join("profiles");
     fs::create_dir_all(&profiles).unwrap();
     fs::write(root.join("active_profile"), "default\n").unwrap();
@@ -171,7 +194,7 @@ fn start_refresh_then_actions_server() -> (String, mpsc::Receiver<String>, threa
             tx.send(req.clone()).unwrap();
 
             let (status, body) = if req.starts_with("GET /v1/auth/actions")
-                && req.contains("authorization: Bearer stale-access-token")
+                && has_header(&req, "authorization", "Bearer stale-access-token")
             {
                 (
                     "401 Unauthorized",
@@ -183,7 +206,7 @@ fn start_refresh_then_actions_server() -> (String, mpsc::Receiver<String>, threa
                     r#"{"access_token":"fresh-access-token","refresh_token":"fresh-refresh-token","id_token":"fresh-id-token","expires_in":3600,"token_type":"Bearer"}"#,
                 )
             } else if req.starts_with("GET /v1/auth/actions")
-                && req.contains("authorization: Bearer fresh-access-token")
+                && has_header(&req, "authorization", "Bearer fresh-access-token")
             {
                 ("200 OK", r#"{"actions":[]}"#)
             } else {
@@ -233,7 +256,10 @@ fn auth_manifest_plan_uses_access_token_and_explains_unauthorized() {
     handle.join().unwrap();
     let req = rx.recv().unwrap();
     assert!(req.starts_with("GET /v1/auth/actions "));
-    assert!(req.contains("authorization: Bearer access-token-for-api"));
+    assert!(
+        has_header(&req, "authorization", "Bearer access-token-for-api"),
+        "request did not include the expected bearer token:\n{req}"
+    );
     assert!(!req.contains("id-token-not-selected"));
 
     assert!(!output.status.success());
@@ -288,10 +314,10 @@ fn auth_manifest_plan_refreshes_access_token_after_401() {
     assert!(requests.iter().any(|r| r.starts_with("POST /oauth2/token")));
 
     let profile =
-        fs::read_to_string(tmp.path().join(".config/tachyon/profiles/default.json")).unwrap();
+        fs::read_to_string(config_root(tmp.path()).join("profiles/default.json")).unwrap();
     assert!(profile.contains("fresh-access-token"));
     assert!(profile.contains("fresh-refresh-token"));
-    let legacy = fs::read_to_string(tmp.path().join(".config/tachyon/credentials.json")).unwrap();
+    let legacy = fs::read_to_string(config_root(tmp.path()).join("credentials.json")).unwrap();
     assert!(legacy.contains("fresh-access-token"));
 }
 
@@ -335,7 +361,11 @@ fn auth_manifest_plan_infers_tenant_from_parent_tachyon_yml_for_dot_tachyon_file
         String::from_utf8_lossy(&output.stderr)
     );
     assert!(req.starts_with("GET /v1/auth/actions "));
-    assert!(req.contains("x-operator-id: tn_01hjjn348rn3t49zz6hvmfq67p"));
+    assert!(has_header(
+        &req,
+        "x-operator-id",
+        "tn_01hjjn348rn3t49zz6hvmfq67p"
+    ));
 }
 
 #[test]
@@ -444,7 +474,7 @@ fn reconcile_infers_tenant_from_project_config() {
         String::from_utf8_lossy(&output.stderr)
     );
     assert!(req.starts_with("GET /v1/auth/actions "));
-    assert!(req.contains("x-operator-id: tn_reconcile1234567890"));
+    assert!(has_header(&req, "x-operator-id", "tn_reconcile1234567890"));
 }
 
 #[test]
@@ -499,7 +529,7 @@ fn manifest_apply_delegates_auth_manifest_file() {
     let req = rx.recv().unwrap();
     assert_ok(&output, "manifest apply auth");
     assert!(req.starts_with("POST /v1/auth/actions "));
-    assert!(req.contains("x-operator-id: tn_manifestapply123456"));
+    assert!(has_header(&req, "x-operator-id", "tn_manifestapply123456"));
     assert!(req.contains("\"context\":\"manifest\""));
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("=== Auth Manifest Apply ==="));
