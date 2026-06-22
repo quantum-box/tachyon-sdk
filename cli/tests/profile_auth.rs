@@ -40,7 +40,17 @@ fn isolated_command(home: &Path) -> Command {
 }
 
 fn config_root(home: &Path) -> PathBuf {
-    home.join(".config").join("tachyon")
+    #[cfg(target_os = "macos")]
+    {
+        return home
+            .join("Library")
+            .join("Application Support")
+            .join("tachyon");
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        home.join(".config").join("tachyon")
+    }
 }
 
 fn write_profile(home: &Path, name: &str, body: &str) {
