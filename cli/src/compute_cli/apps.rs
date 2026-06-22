@@ -504,9 +504,62 @@ pub(crate) async fn run_apps_apply(
 
 pub(crate) fn load_cloud_apps_manifest(path: &Path) -> Result<Value> {
     let content = std::fs::read_to_string(path)?;
-    let value: Value = serde_yaml::from_str(&content)?;
+    let mut manifests = Vec::new();
+    let mut unsupported_kinds = Vec::new();
+
+    for doc in serde_yaml::Deserializer::from_str(&content) {
+        let value = Value::deserialize(doc)?;
+        if value.is_null() {
+            continue;
+        }
+        let kind = value
+            .get("kind")
+            .and_then(Value::as_str)
+            .unwrap_or("<missing kind>")
+            .to_string();
+        match normalize_cloud_apps_manifest(value)? {
+            Some(manifest) => manifests.push(manifest),
+            None => unsupported_kinds.push(kind),
+        }
+    }
+
+    if manifests.is_empty() {
+        return match unsupported_kinds.first() {
+            Some(kind) if kind == "<missing kind>" => Err(anyhow!("manifest is missing kind")),
+            Some(kind) => Err(anyhow!("unsupported manifest kind: {kind}")),
+            None => Err(anyhow!("manifest is empty")),
+        };
+    }
+
+    let mut apps = Vec::new();
+    for manifest in manifests {
+        apps.extend(
+            manifest
+                .get("spec")
+                .and_then(|s| s.get("apps"))
+                .and_then(Value::as_array)
+                .ok_or_else(|| anyhow!("CloudApps manifest must contain spec.apps[]"))?
+                .iter()
+                .cloned(),
+        );
+    }
+
+    Ok(json!({
+        "apiVersion": "apps.tachy.one/v1alpha",
+        "kind": "CloudApps",
+        "metadata": {
+            "name": path
+                .file_stem()
+                .and_then(|name| name.to_str())
+                .unwrap_or("cloud-apps")
+        },
+        "spec": { "apps": apps }
+    }))
+}
+
+fn normalize_cloud_apps_manifest(value: Value) -> Result<Option<Value>> {
     match value.get("kind").and_then(Value::as_str) {
-        Some("CloudApps") => Ok(value),
+        Some("CloudApps") => Ok(Some(value)),
         Some("CloudApp") => {
             let name = value
                 .get("metadata")
@@ -523,10 +576,10 @@ pub(crate) fn load_cloud_apps_manifest(path: &Path) -> Result<Value> {
                 "kind": "CloudApps",
                 "metadata": { "name": name },
                 "spec": { "apps": [entry] }
-            }))
+            })
+            .into())
         }
-        Some(kind) => Err(anyhow!("unsupported manifest kind: {kind}")),
-        None => Err(anyhow!("manifest is missing kind")),
+        Some(_) | None => Ok(None),
     }
 }
 
@@ -549,7 +602,33 @@ pub(crate) fn select_app_entries(manifest: &Value, app: Option<&str>) -> Result<
             app.unwrap_or("<all apps>")
         ));
     }
+    ensure_unique_app_names(&entries, app)?;
     Ok(entries)
+}
+
+fn ensure_unique_app_names(entries: &[Value], selected_app: Option<&str>) -> Result<()> {
+    let mut seen = BTreeSet::new();
+    let mut duplicates = BTreeSet::new();
+    for entry in entries {
+        let Some(name) = entry.get("name").and_then(Value::as_str) else {
+            continue;
+        };
+        if !seen.insert(name.to_string()) {
+            duplicates.insert(name.to_string());
+        }
+    }
+    if duplicates.is_empty() {
+        return Ok(());
+    }
+    if let Some(app) = selected_app {
+        return Err(anyhow!(
+            "multiple CloudApps documents contain app {app}; app names must be unique to avoid ambiguous apply"
+        ));
+    }
+    Err(anyhow!(
+        "CloudApps manifest contains duplicate app name(s): {}",
+        duplicates.into_iter().collect::<Vec<_>>().join(", ")
+    ))
 }
 
 pub(super) fn select_single_app_entry(manifest: &Value, app: Option<&str>) -> Result<Value> {
@@ -753,6 +832,118 @@ fn opt_string_value(value: Option<&str>) -> Value {
     match value.filter(|v| !v.is_empty()) {
         Some(value) => Value::String(value.to_string()),
         None => Value::Null,
+    }
+}
+
+#[cfg(test)]
+mod manifest_tests {
+    use super::*;
+    use std::fs;
+    use tempfile::TempDir;
+
+    fn write_manifest(content: &str) -> (TempDir, PathBuf) {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("tachyon.yml");
+        fs::write(&path, content).unwrap();
+        (tmp, path)
+    }
+
+    #[test]
+    fn load_cloud_apps_manifest_reads_apps_from_all_yaml_documents() {
+        let (_tmp, path) = write_manifest(
+            r#"
+apiVersion: apps.tachy.one/v1alpha
+kind: CloudApps
+metadata:
+  name: first
+spec:
+  apps:
+    - name: api
+      repository:
+        url: https://github.com/quantum-box/tachyonfield
+        owner: quantum-box
+        name: tachyonfield
+---
+apiVersion: apps.tachy.one/v1alpha
+kind: CloudApps
+metadata:
+  name: second
+spec:
+  apps:
+    - name: fieldadmin
+      repository:
+        url: https://github.com/quantum-box/tachyonfield
+        owner: quantum-box
+        name: tachyonfield
+"#,
+        );
+
+        let manifest = load_cloud_apps_manifest(&path).unwrap();
+        let first = select_app_entries(&manifest, Some("api")).unwrap();
+        let second = select_app_entries(&manifest, Some("fieldadmin")).unwrap();
+
+        assert_eq!(first[0]["name"], "api");
+        assert_eq!(second[0]["name"], "fieldadmin");
+    }
+
+    #[test]
+    fn load_cloud_apps_manifest_skips_unsupported_documents() {
+        let (_tmp, path) = write_manifest(
+            r#"
+apiVersion: iac.tachy.one/v1alpha
+kind: TerraformStack
+metadata:
+  name: infra
+---
+apiVersion: apps.tachy.one/v1alpha
+kind: CloudApps
+spec:
+  apps:
+    - name: field
+      repository:
+        url: https://github.com/quantum-box/tachyonfield
+        owner: quantum-box
+        name: tachyonfield
+"#,
+        );
+
+        let manifest = load_cloud_apps_manifest(&path).unwrap();
+        let entries = select_app_entries(&manifest, Some("field")).unwrap();
+
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0]["name"], "field");
+    }
+
+    #[test]
+    fn select_app_entries_rejects_duplicate_app_names_across_documents() {
+        let (_tmp, path) = write_manifest(
+            r#"
+kind: CloudApps
+spec:
+  apps:
+    - name: fieldadmin
+      repository:
+        url: https://github.com/quantum-box/tachyonfield
+        owner: quantum-box
+        name: tachyonfield
+---
+kind: CloudApps
+spec:
+  apps:
+    - name: fieldadmin
+      repository:
+        url: https://github.com/quantum-box/tachyonfield
+        owner: quantum-box
+        name: tachyonfield
+"#,
+        );
+
+        let manifest = load_cloud_apps_manifest(&path).unwrap();
+        let error = select_app_entries(&manifest, Some("fieldadmin"))
+            .unwrap_err()
+            .to_string();
+
+        assert!(error.contains("multiple CloudApps documents contain app fieldadmin"));
     }
 }
 
