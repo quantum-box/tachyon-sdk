@@ -1,6 +1,7 @@
-use anyhow::{Context, Result};
+use anyhow::{anyhow, Context, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::collections::{HashMap, VecDeque};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -18,6 +19,10 @@ pub(crate) struct ManifestSource {
     pub(crate) path: PathBuf,
     pub(crate) kind: ManifestKind,
     pub(crate) detail: String,
+    pub(crate) id: String,
+    pub(crate) depends_on: Vec<String>,
+    #[serde(skip_serializing)]
+    pub(crate) document: Value,
 }
 
 pub(crate) fn discover(explicit_file: Option<&Path>, cwd: &Path) -> Result<Vec<ManifestSource>> {
@@ -45,24 +50,19 @@ pub(crate) fn discover(explicit_file: Option<&Path>, cwd: &Path) -> Result<Vec<M
         }
     }
 
-    sources.sort_by(|a, b| {
-        source_order(a)
-            .cmp(&source_order(b))
-            .then(a.path.cmp(&b.path))
-    });
-    Ok(sources)
+    sort_by_dependencies(sources)
 }
 
 fn classify_file(path: &Path) -> Result<Vec<ManifestSource>> {
     let raw = fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;
     let mut sources = Vec::new();
 
-    for doc in serde_yaml::Deserializer::from_str(&raw) {
+    for (document_index, doc) in serde_yaml::Deserializer::from_str(&raw).enumerate() {
         let value = Value::deserialize(doc).with_context(|| format!("parse {}", path.display()))?;
         if value.is_null() {
             continue;
         }
-        classify_value(path, &value, &mut sources);
+        classify_value(path, document_index, &value, &mut sources);
     }
 
     if sources.is_empty() {
@@ -70,22 +70,34 @@ fn classify_file(path: &Path) -> Result<Vec<ManifestSource>> {
             path: path.to_path_buf(),
             kind: ManifestKind::Unsupported,
             detail: "empty".to_string(),
+            id: fallback_id(path, 0, "empty"),
+            depends_on: Vec::new(),
+            document: Value::Null,
         });
     }
 
     Ok(sources)
 }
 
-fn classify_value(path: &Path, value: &Value, sources: &mut Vec<ManifestSource>) {
+fn classify_value(
+    path: &Path,
+    document_index: usize,
+    value: &Value,
+    sources: &mut Vec<ManifestSource>,
+) {
     let is_cloud_apps = matches!(
         value.get("kind").and_then(Value::as_str),
         Some("CloudApps") | Some("CloudApp")
     );
     if is_cloud_apps {
+        let detail = "Cloud Apps".to_string();
         sources.push(ManifestSource {
             path: path.to_path_buf(),
             kind: ManifestKind::CloudApps,
-            detail: "Cloud Apps".to_string(),
+            id: manifest_id(path, document_index, value, "CloudApps"),
+            depends_on: manifest_dependencies(value),
+            document: value.clone(),
+            detail,
         });
         return;
     }
@@ -96,30 +108,42 @@ fn classify_value(path: &Path, value: &Value, sources: &mut Vec<ManifestSource>)
         .is_some()
         || looks_like_auth(value)
     {
+        let detail = "auth manifest".to_string();
         sources.push(ManifestSource {
             path: path.to_path_buf(),
             kind: ManifestKind::Auth,
-            detail: "auth manifest".to_string(),
+            id: manifest_id(path, document_index, value, "AuthManifest"),
+            depends_on: manifest_dependencies(value),
+            document: value.clone(),
+            detail,
         });
     } else if value.get("apiVersion").and_then(Value::as_str) == Some("apps.tachy.one/v1alpha") {
+        let detail = value
+            .get("kind")
+            .and_then(Value::as_str)
+            .unwrap_or("unknown")
+            .to_string();
         sources.push(ManifestSource {
             path: path.to_path_buf(),
             kind: ManifestKind::Iac,
-            detail: value
-                .get("kind")
-                .and_then(Value::as_str)
-                .unwrap_or("unknown")
-                .to_string(),
+            id: manifest_id(path, document_index, value, &detail),
+            depends_on: manifest_dependencies(value),
+            document: value.clone(),
+            detail,
         });
     } else {
+        let detail = value
+            .get("kind")
+            .and_then(Value::as_str)
+            .unwrap_or("unknown")
+            .to_string();
         sources.push(ManifestSource {
             path: path.to_path_buf(),
             kind: ManifestKind::Unsupported,
-            detail: value
-                .get("kind")
-                .and_then(Value::as_str)
-                .unwrap_or("unknown")
-                .to_string(),
+            id: manifest_id(path, document_index, value, &detail),
+            depends_on: manifest_dependencies(value),
+            document: value.clone(),
+            detail,
         });
     }
 }
@@ -151,6 +175,176 @@ fn source_order(source: &ManifestSource) -> (u8, &Path) {
         ManifestKind::Unsupported => 3,
     };
     (rank, source.path.as_path())
+}
+
+fn sort_by_dependencies(mut sources: Vec<ManifestSource>) -> Result<Vec<ManifestSource>> {
+    sources.sort_by(|a, b| {
+        source_order(a)
+            .cmp(&source_order(b))
+            .then(a.path.cmp(&b.path))
+            .then(a.id.cmp(&b.id))
+    });
+
+    let mut id_to_index = HashMap::new();
+    let mut name_to_indexes: HashMap<String, Vec<usize>> = HashMap::new();
+    for (index, source) in sources.iter().enumerate() {
+        if id_to_index.insert(source.id.clone(), index).is_some() {
+            return Err(anyhow!("duplicate manifest id '{}'", source.id));
+        }
+        if let Some(name) = source.id.split('/').nth(1) {
+            name_to_indexes
+                .entry(name.to_string())
+                .or_default()
+                .push(index);
+        }
+    }
+
+    let mut dependents = vec![Vec::<usize>::new(); sources.len()];
+    let mut indegree = vec![0usize; sources.len()];
+    for (source_index, source) in sources.iter().enumerate() {
+        for dependency in &source.depends_on {
+            let dependency_index =
+                resolve_dependency(dependency, &id_to_index, &name_to_indexes, source)?;
+            dependents[dependency_index].push(source_index);
+            indegree[source_index] += 1;
+        }
+    }
+
+    let mut ready = indegree
+        .iter()
+        .enumerate()
+        .filter_map(|(index, degree)| (*degree == 0).then_some(index))
+        .collect::<VecDeque<_>>();
+    let mut ordered_indexes = Vec::with_capacity(sources.len());
+    while let Some(index) = ready.pop_front() {
+        ordered_indexes.push(index);
+        for dependent in &dependents[index] {
+            indegree[*dependent] -= 1;
+            if indegree[*dependent] == 0 {
+                ready.push_back(*dependent);
+            }
+        }
+    }
+
+    if ordered_indexes.len() != sources.len() {
+        let cycle = sources
+            .iter()
+            .enumerate()
+            .filter_map(|(index, source)| (indegree[index] > 0).then_some(source.id.as_str()))
+            .collect::<Vec<_>>()
+            .join(", ");
+        return Err(anyhow!("manifest dependency cycle detected: {cycle}"));
+    }
+
+    Ok(ordered_indexes
+        .into_iter()
+        .map(|index| sources[index].clone())
+        .collect())
+}
+
+fn resolve_dependency(
+    dependency: &str,
+    id_to_index: &HashMap<String, usize>,
+    name_to_indexes: &HashMap<String, Vec<usize>>,
+    source: &ManifestSource,
+) -> Result<usize> {
+    let normalized = dependency.trim().replace(':', "/");
+    if let Some(index) = id_to_index.get(&normalized) {
+        return Ok(*index);
+    }
+
+    if !normalized.contains('/') {
+        if let Some(indexes) = name_to_indexes.get(&normalized) {
+            if indexes.len() == 1 {
+                return Ok(indexes[0]);
+            }
+            return Err(anyhow!(
+                "manifest dependency '{}' referenced by '{}' is ambiguous; use kind/name",
+                dependency,
+                source.id
+            ));
+        }
+    }
+
+    Err(anyhow!(
+        "manifest dependency '{}' referenced by '{}' was not found",
+        dependency,
+        source.id
+    ))
+}
+
+fn manifest_id(path: &Path, document_index: usize, value: &Value, fallback_kind: &str) -> String {
+    let kind = value
+        .get("kind")
+        .and_then(Value::as_str)
+        .unwrap_or(fallback_kind);
+    if let Some(name) = value
+        .get("metadata")
+        .and_then(|metadata| metadata.get("name"))
+        .and_then(Value::as_str)
+    {
+        return format!("{kind}/{name}");
+    }
+    fallback_id(path, document_index, kind)
+}
+
+fn fallback_id(path: &Path, document_index: usize, kind: &str) -> String {
+    format!("{}#doc{}:{kind}", path.display(), document_index + 1)
+}
+
+fn manifest_dependencies(value: &Value) -> Vec<String> {
+    dependency_value(value)
+        .map(parse_dependency_refs)
+        .unwrap_or_default()
+}
+
+fn dependency_value(value: &Value) -> Option<&Value> {
+    value
+        .get("metadata")
+        .and_then(|metadata| {
+            metadata
+                .get("dependsOn")
+                .or_else(|| metadata.get("depends_on"))
+        })
+        .or_else(|| {
+            value
+                .get("spec")
+                .and_then(|spec| spec.get("dependsOn").or_else(|| spec.get("depends_on")))
+        })
+        .or_else(|| value.get("dependsOn"))
+        .or_else(|| value.get("depends_on"))
+}
+
+fn parse_dependency_refs(value: &Value) -> Vec<String> {
+    match value {
+        Value::String(dep) => vec![dep.trim().to_string()],
+        Value::Array(items) => items
+            .iter()
+            .flat_map(parse_dependency_refs)
+            .filter(|dep| !dep.is_empty())
+            .collect(),
+        Value::Object(map) => {
+            if let Some(reference) = map
+                .get("ref")
+                .or_else(|| map.get("id"))
+                .and_then(Value::as_str)
+            {
+                return vec![reference.trim().to_string()];
+            }
+            let kind = map.get("kind").and_then(Value::as_str);
+            let name = map.get("name").and_then(Value::as_str).or_else(|| {
+                map.get("metadata")
+                    .and_then(|metadata| metadata.get("name"))
+                    .and_then(Value::as_str)
+            });
+            match (kind, name) {
+                (Some(kind), Some(name)) => vec![format!("{kind}/{name}")],
+                (None, Some(name)) => vec![name.to_string()],
+                _ => Vec::new(),
+            }
+        }
+        _ => Vec::new(),
+    }
 }
 
 fn find_tachyon_yml(cwd: &Path) -> Option<PathBuf> {
@@ -293,6 +487,99 @@ metadata:
             .collect::<Vec<_>>();
 
         assert_eq!(kinds, vec![ManifestKind::Iac, ManifestKind::CloudApps]);
+    }
+
+    #[test]
+    fn discover_orders_multi_document_manifests_by_dependency_dag() {
+        let tmp = TempDir::new().unwrap();
+        fs::create_dir(tmp.path().join(".git")).unwrap();
+        write(
+            &tmp.path().join("tachyon.yml"),
+            r#"actions:
+  - context: fieldadmin
+    name: Deploy
+policies: []
+metadata:
+  name: fieldadmin-auth
+  dependsOn:
+    - CloudApps/fieldadmin
+---
+apiVersion: apps.tachy.one/v1alpha
+kind: CloudApps
+metadata:
+  name: fieldadmin
+spec:
+  apps:
+    - name: fieldadmin
+"#,
+        );
+
+        let sources = discover(None, tmp.path()).unwrap();
+        let ids = sources
+            .iter()
+            .map(|source| source.id.as_str())
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            ids,
+            vec!["CloudApps/fieldadmin", "AuthManifest/fieldadmin-auth"]
+        );
+    }
+
+    #[test]
+    fn discover_reports_missing_manifest_dependency() {
+        let tmp = TempDir::new().unwrap();
+        fs::create_dir(tmp.path().join(".git")).unwrap();
+        write(
+            &tmp.path().join("tachyon.yml"),
+            r#"apiVersion: apps.tachy.one/v1alpha
+kind: CloudApps
+metadata:
+  name: fieldadmin
+  dependsOn:
+    - OAuth2Client/missing
+spec:
+  apps:
+    - name: fieldadmin
+"#,
+        );
+
+        let error = discover(None, tmp.path()).unwrap_err().to_string();
+
+        assert!(error.contains("OAuth2Client/missing"));
+        assert!(error.contains("was not found"));
+    }
+
+    #[test]
+    fn discover_reports_manifest_dependency_cycles() {
+        let tmp = TempDir::new().unwrap();
+        fs::create_dir(tmp.path().join(".git")).unwrap();
+        write(
+            &tmp.path().join("tachyon.yml"),
+            r#"apiVersion: apps.tachy.one/v1alpha
+kind: Operator
+metadata:
+  name: platform
+  dependsOn:
+    - CloudApps/fieldadmin
+---
+apiVersion: apps.tachy.one/v1alpha
+kind: CloudApps
+metadata:
+  name: fieldadmin
+  dependsOn:
+    - Operator/platform
+spec:
+  apps:
+    - name: fieldadmin
+"#,
+        );
+
+        let error = discover(None, tmp.path()).unwrap_err().to_string();
+
+        assert!(error.contains("dependency cycle"));
+        assert!(error.contains("Operator/platform"));
+        assert!(error.contains("CloudApps/fieldadmin"));
     }
 
     #[test]
