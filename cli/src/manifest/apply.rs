@@ -96,34 +96,50 @@ pub(crate) async fn run(
         }
     }
 
-    for source in sources.iter().filter(|s| s.kind == ManifestKind::CloudApps) {
-        if let Err(error) = validate_source(source, args.app.as_deref(), &args.environment) {
-            errors.record(format!(
-                "Invalid Cloud Apps manifest {}: {error}",
-                source.path.display()
-            ));
-            continue;
+    let cloud_apps_sources = sources
+        .iter()
+        .filter(|s| s.kind == ManifestKind::CloudApps)
+        .collect::<Vec<_>>();
+    let cloud_apps_preflight_errors = cloud_apps_sources
+        .iter()
+        .filter_map(|source| {
+            validate_source(source, args.app.as_deref(), &args.environment)
+                .err()
+                .map(|error| {
+                    format!(
+                        "Invalid Cloud Apps manifest {}: {error}",
+                        source.path.display()
+                    )
+                })
+        })
+        .collect::<Vec<_>>();
+    if cloud_apps_preflight_errors.is_empty() {
+        for source in cloud_apps_sources {
+            if !args.json {
+                println!(
+                    "=== Cloud Apps Manifest {} ===",
+                    if dry_run { "Plan" } else { "Apply" }
+                );
+            }
+            if let Err(error) = compute_cli::run_apps_apply(
+                &api,
+                tenant_id,
+                &source.path,
+                args.app.as_deref(),
+                &args.environment,
+                dry_run,
+            )
+            .await
+            {
+                errors.record(format!(
+                    "Cloud Apps manifest {} failed: {error}",
+                    source.path.display()
+                ));
+            }
         }
-        if !args.json {
-            println!(
-                "=== Cloud Apps Manifest {} ===",
-                if dry_run { "Plan" } else { "Apply" }
-            );
-        }
-        if let Err(error) = compute_cli::run_apps_apply(
-            &api,
-            tenant_id,
-            &source.path,
-            args.app.as_deref(),
-            &args.environment,
-            dry_run,
-        )
-        .await
-        {
-            errors.record(format!(
-                "Cloud Apps manifest {} failed: {error}",
-                source.path.display()
-            ));
+    } else {
+        for error in cloud_apps_preflight_errors {
+            errors.record(error);
         }
     }
 
