@@ -507,10 +507,7 @@ mod tests {
             method: "GET".to_string(),
             path: "/v1/compute/builds/b_123/logs".to_string(),
             status,
-            body: status
-                .canonical_reason()
-                .unwrap_or("error")
-                .to_string(),
+            body: status.canonical_reason().unwrap_or("error").to_string(),
             diagnostics: diagnostics.map(str::to_string),
         })
     }
@@ -543,7 +540,10 @@ mod tests {
 
     #[test]
     fn http_error_display_includes_diagnostics_when_present() {
-        let err = http_err(StatusCode::UNAUTHORIZED, Some("Authentication diagnostics: ..."));
+        let err = http_err(
+            StatusCode::UNAUTHORIZED,
+            Some("Authentication diagnostics: ..."),
+        );
         let rendered = err.to_string();
         assert!(rendered.contains("status=401 Unauthorized"));
         assert!(rendered.contains("Authentication diagnostics: ..."));
