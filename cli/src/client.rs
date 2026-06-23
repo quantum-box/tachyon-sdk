@@ -13,6 +13,45 @@ pub struct AuthDiagnostics {
     pub oauth_client_configured: bool,
 }
 
+/// Structured HTTP error returned by [`ApiClient`] requests.
+///
+/// Carries the HTTP status as a typed value so callers can branch on it
+/// (e.g. retry on 404) without parsing the human-readable message. The
+/// `Display` output is kept byte-compatible with the previous inline
+/// `anyhow!` message so existing user-facing logs are unchanged.
+#[derive(Debug)]
+pub struct HttpError {
+    pub method: String,
+    pub path: String,
+    pub status: reqwest::StatusCode,
+    pub body: String,
+    /// Extra authentication diagnostics appended for 401 responses.
+    pub diagnostics: Option<String>,
+}
+
+impl std::fmt::Display for HttpError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{} {} failed: status={}, body={}",
+            self.method, self.path, self.status, self.body
+        )?;
+        if let Some(diagnostics) = &self.diagnostics {
+            write!(f, "\n{diagnostics}")?;
+        }
+        Ok(())
+    }
+}
+
+impl std::error::Error for HttpError {}
+
+/// Returns the HTTP status of `err` when it originates from an [`ApiClient`]
+/// request, without relying on string matching. Returns `None` for errors that
+/// are not [`HttpError`] (e.g. transport/parse failures).
+pub fn http_error_status(err: &anyhow::Error) -> Option<reqwest::StatusCode> {
+    err.downcast_ref::<HttpError>().map(|e| e.status)
+}
+
 /// Shared API client that carries Tachyon auth headers.
 pub struct ApiClient {
     pub client: Client,
@@ -402,13 +441,22 @@ impl ApiClient {
         status: reqwest::StatusCode,
         body: &str,
     ) -> anyhow::Error {
-        let base = format!("{method} {path} failed: status={status}, body={body}");
+        let make = |diagnostics: Option<String>| {
+            anyhow::Error::new(HttpError {
+                method: method.to_string(),
+                path: path.to_string(),
+                status,
+                body: body.to_string(),
+                diagnostics,
+            })
+        };
+
         if status != reqwest::StatusCode::UNAUTHORIZED {
-            return anyhow!(base);
+            return make(None);
         }
 
         let Some(diagnostics) = &self.auth_diagnostics else {
-            return anyhow!(base);
+            return make(None);
         };
 
         let profile = diagnostics.profile.as_deref().unwrap_or("-");
@@ -419,9 +467,8 @@ impl ApiClient {
             "not configured"
         };
 
-        anyhow!(
-            "{base}\n\
-             Authentication diagnostics: profile='{profile}', token_kind='{token_kind}', \
+        make(Some(format!(
+            "Authentication diagnostics: profile='{profile}', token_kind='{token_kind}', \
              oauth_client={oauth_client}, api_base='{}'. \
              If this is `verify token failed`, check that the profile was created \
              by the intended Cognito OAuth client, the token issuer matches the \
@@ -430,7 +477,7 @@ impl ApiClient {
              inspect `client_id`. Re-run `tachyon auth login --profile {profile}` \
              after correcting the client/issuer/audience configuration.",
             self.base_url
-        )
+        )))
     }
 }
 
@@ -448,4 +495,57 @@ pub fn truncate(s: &str, max_len: usize) -> String {
 pub fn print_json<T: serde::Serialize>(value: &T) -> Result<()> {
     println!("{}", serde_json::to_string_pretty(value)?);
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use reqwest::StatusCode;
+
+    fn http_err(status: StatusCode, diagnostics: Option<&str>) -> anyhow::Error {
+        anyhow::Error::new(HttpError {
+            method: "GET".to_string(),
+            path: "/v1/compute/builds/b_123/logs".to_string(),
+            status,
+            body: status
+                .canonical_reason()
+                .unwrap_or("error")
+                .to_string(),
+            diagnostics: diagnostics.map(str::to_string),
+        })
+    }
+
+    #[test]
+    fn http_error_status_extracts_typed_status() {
+        let err = http_err(StatusCode::NOT_FOUND, None);
+        assert_eq!(http_error_status(&err), Some(StatusCode::NOT_FOUND));
+
+        let err = http_err(StatusCode::INTERNAL_SERVER_ERROR, None);
+        assert_eq!(
+            http_error_status(&err),
+            Some(StatusCode::INTERNAL_SERVER_ERROR)
+        );
+    }
+
+    #[test]
+    fn http_error_status_is_none_for_non_http_errors() {
+        let err = anyhow::anyhow!("transport failure");
+        assert_eq!(http_error_status(&err), None);
+    }
+
+    #[test]
+    fn http_error_display_is_backward_compatible() {
+        // The previous string-parsing call site matched this exact substring;
+        // keep it stable so logs and any external scrapers are unaffected.
+        let err = http_err(StatusCode::NOT_FOUND, None);
+        assert!(err.to_string().contains("status=404 Not Found"));
+    }
+
+    #[test]
+    fn http_error_display_includes_diagnostics_when_present() {
+        let err = http_err(StatusCode::UNAUTHORIZED, Some("Authentication diagnostics: ..."));
+        let rendered = err.to_string();
+        assert!(rendered.contains("status=401 Unauthorized"));
+        assert!(rendered.contains("Authentication diagnostics: ..."));
+    }
 }

@@ -185,7 +185,7 @@ fn is_success_build_status(status: &str) -> bool {
 }
 
 fn is_http_not_found_error(err: &anyhow::Error) -> bool {
-    err.to_string().contains("status=404 Not Found")
+    crate::client::http_error_status(err) == Some(reqwest::StatusCode::NOT_FOUND)
 }
 
 fn print_agent_event(event: &AgentBuildEvent<'_>) -> Result<()> {
