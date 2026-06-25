@@ -20,6 +20,9 @@ jobs:
       - name: Test release tag prefix lint
         run: node scripts/test-release-tag-prefix-lint.mjs
 
+      - name: Check npm CLI package
+        run: npm --prefix packages/cli run check
+
   check:
     name: Check CLI
     runs-on: ubuntu-latest
