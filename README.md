@@ -9,6 +9,16 @@ Latest release: **v0.6.12**
 ### Install
 
 ```sh
+npm install -g @tachyon-sdk/cli
+```
+
+This installs the `tachyon` command and the `tc` alias. The npm package
+downloads the matching native binary from the GitHub Release for your
+OS/architecture during `postinstall`.
+
+Standalone installer:
+
+```sh
 curl -fsSL https://raw.githubusercontent.com/quantum-box/tachyon-sdk/main/scripts/install.sh | sh
 ```
 
@@ -240,6 +250,7 @@ Additional domain-specific TypeScript SDKs published under the `@tachyon-sdk/*` 
 
 | Package | Version | Description |
 |---------|---------|-------------|
+| [`@tachyon-sdk/cli`](packages/cli) | `0.6.12` | Global npm installer for the Tachyon CLI |
 | [`@tachyon-sdk/storekit`](packages/storekit) | `0.3.0` | Commerce SDK: auth, order management (updateStatus/cancel/refund), inventory operations |
 | [`@tachyon-sdk/agent`](packages/agent) | — | Agent runtime SDK |
 | [`@tachyon-sdk/agent-chat`](packages/agent-chat) | — | Agent chat utilities + bundled skills |

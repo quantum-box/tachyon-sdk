@@ -1,0 +1,50 @@
+{
+  "name": "@tachyon-sdk/cli",
+  "version": "0.6.12",
+  "description": "Command-line interface for the Tachyon Platform",
+  "license": "MIT",
+  "bin": {
+    "tachyon": "bin/tachyon.js",
+    "tc": "bin/tachyon.js"
+  },
+  "files": [
+    "bin",
+    "scripts/install.js",
+    "scripts/platform.js",
+    "README.md"
+  ],
+  "scripts": {
+    "postinstall": "node scripts/install.js",
+    "check": "node --check bin/tachyon.js && node --check scripts/install.js && node --check scripts/platform.js && node --check scripts/check-version.js && node scripts/check-version.js",
+    "prepublishOnly": "npm run check"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/quantum-box/tachyon-sdk.git",
+    "directory": "packages/cli"
+  },
+  "bugs": {
+    "url": "https://github.com/quantum-box/tachyon-sdk/issues"
+  },
+  "homepage": "https://github.com/quantum-box/tachyon-sdk#readme",
+  "keywords": [
+    "tachyon",
+    "cli",
+    "cloud",
+    "compute"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "os": [
+    "darwin",
+    "linux"
+  ],
+  "cpu": [
+    "arm64",
+    "x64"
+  ],
+  "publishConfig": {
+    "access": "public"
+  }
+}
