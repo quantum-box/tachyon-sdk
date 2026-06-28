@@ -269,8 +269,20 @@ pub async fn run(
                 file,
                 app,
                 environment,
+                change_control_token,
                 dry_run,
-            } => run_apps_apply(&api, tenant_id, file, app.as_deref(), environment, *dry_run).await,
+            } => {
+                run_apps_apply(
+                    &api,
+                    tenant_id,
+                    file,
+                    app.as_deref(),
+                    environment,
+                    change_control_token.as_deref(),
+                    *dry_run,
+                )
+                .await
+            }
             AppsCommand::SyncSecrets {
                 file,
                 app,

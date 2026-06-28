@@ -127,6 +127,7 @@ pub(crate) async fn run(
                 &source.path,
                 args.app.as_deref(),
                 &args.environment,
+                args.change_control_token.as_deref(),
                 dry_run,
             )
             .await

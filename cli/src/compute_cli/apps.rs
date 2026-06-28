@@ -37,6 +37,16 @@ pub enum AppsCommand {
         /// Target environment label for this apply operation
         #[arg(long, default_value = "sandbox")]
         environment: String,
+        /// Required approval token for production apply.
+        ///
+        /// This only gates write execution. The token is never printed or sent
+        /// to the Cloud Apps API by the CLI.
+        #[arg(
+            long = "change-control-token",
+            env = "TACHYON_CHANGE_CONTROL_APPROVAL_TOKEN",
+            hide_env_values = true
+        )]
+        change_control_token: Option<String>,
         /// Preview changes without mutating Cloud Apps
         #[arg(long)]
         dry_run: bool,
@@ -400,8 +410,11 @@ pub(crate) async fn run_apps_apply(
     file: &Path,
     selected_app: Option<&str>,
     environment: &str,
+    change_control_token: Option<&str>,
     dry_run: bool,
 ) -> Result<()> {
+    require_production_apply_approval(environment, change_control_token, dry_run)?;
+
     let manifest = load_cloud_apps_manifest(file)?;
     let entries = select_app_entries(&manifest, selected_app)?;
     let plans = build_app_apply_plans(entries, tenant_id, environment)?;
@@ -501,6 +514,34 @@ pub(crate) async fn run_apps_apply(
     println!();
     println!("Summary: {created} created, {updated} updated, {unchanged} unchanged");
     Ok(())
+}
+
+fn require_production_apply_approval(
+    environment: &str,
+    change_control_token: Option<&str>,
+    dry_run: bool,
+) -> Result<()> {
+    if dry_run || !is_production_environment(environment) {
+        return Ok(());
+    }
+
+    let approved = change_control_token
+        .map(str::trim)
+        .is_some_and(|token| !token.is_empty());
+    if approved {
+        return Ok(());
+    }
+
+    Err(anyhow!(
+        "production Cloud App apply requires change-control approval; pass --change-control-token or set TACHYON_CHANGE_CONTROL_APPROVAL_TOKEN. Use --dry-run to preview without writing."
+    ))
+}
+
+fn is_production_environment(environment: &str) -> bool {
+    matches!(
+        environment.trim().to_ascii_lowercase().as_str(),
+        "production" | "prod"
+    )
 }
 
 fn build_app_apply_plans(

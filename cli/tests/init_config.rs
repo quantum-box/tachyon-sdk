@@ -20,6 +20,7 @@ fn isolated_command(home: &Path) -> Command {
         .env_remove("TACHYON_CONFIG")
         .env_remove("TACHYON_TENANT_ID")
         .env_remove("TACHYON_PROFILE")
+        .env_remove("TACHYON_CHANGE_CONTROL_APPROVAL_TOKEN")
         .env_remove("TACHYON_SECRET_VALUE");
     cmd
 }
@@ -531,6 +532,147 @@ spec:
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("CREATED bakuure-api (app_created)"));
     assert!(stdout.contains("Environment: sandbox"));
+}
+
+#[test]
+fn compute_apps_apply_rejects_production_without_change_control_token_before_api_write() {
+    let tmp = TempDir::new().unwrap();
+    let manifest = tmp.path().join("tachyon.yml");
+    fs::write(
+        &manifest,
+        r#"
+apiVersion: apps.tachy.one/v1alpha
+kind: CloudApps
+metadata:
+  name: fieldadmin
+spec:
+  apps:
+    - name: fieldadmin
+      repository:
+        url: https://github.com/quantum-box/tachyonfield
+        owner: quantum-box
+        name: tachyonfield
+      framework: next_js
+      deploymentTarget: cloudflare_workers
+      envVars:
+        - name: NEXT_PUBLIC_API_URL
+          value: https://fieldadmin.txcloud.app
+"#,
+    )
+    .unwrap();
+    let (api_url, rx, handle) = start_collecting_apply_server();
+
+    let mut cmd = isolated_command(tmp.path());
+    let output = cmd
+        .current_dir(tmp.path())
+        .env("TACHYON_API_URL", api_url)
+        .env("TACHYON_API_KEY", "test-token")
+        .env("TACHYON_TENANT_ID", "tn_01hjryxysgey07h5jz5wagqj0m")
+        .args([
+            "compute",
+            "apps",
+            "apply",
+            "-f",
+            manifest.to_str().unwrap(),
+            "--environment",
+            "production",
+        ])
+        .output()
+        .expect("run compute apps apply");
+
+    assert!(
+        !output.status.success(),
+        "production apply unexpectedly succeeded\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let requests = rx.recv_timeout(Duration::from_secs(2)).unwrap();
+    handle.join().unwrap();
+    assert!(
+        requests.is_empty(),
+        "approval gate must reject before any API request; requests: {requests:#?}"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("production Cloud App apply requires change-control approval"));
+    assert!(stderr.contains("TACHYON_CHANGE_CONTROL_APPROVAL_TOKEN"));
+    assert!(!stderr.contains("test-token"));
+}
+
+#[test]
+fn compute_apps_apply_allows_production_with_change_control_token() {
+    let tmp = TempDir::new().unwrap();
+    let manifest = tmp.path().join("tachyon.yml");
+    fs::write(
+        &manifest,
+        r#"
+apiVersion: apps.tachy.one/v1alpha
+kind: CloudApps
+metadata:
+  name: valid-app
+spec:
+  apps:
+    - name: valid-app
+      repository:
+        url: https://github.com/quantum-box/tachyonfield
+        owner: quantum-box
+        name: tachyonfield
+      framework: next_js
+      deploymentTarget: cloudflare_workers
+"#,
+    )
+    .unwrap();
+    let (api_url, rx, handle) = start_collecting_apply_server();
+
+    let mut cmd = isolated_command(tmp.path());
+    let output = cmd
+        .current_dir(tmp.path())
+        .env("TACHYON_API_URL", api_url)
+        .env("TACHYON_API_KEY", "test-token")
+        .env("TACHYON_TENANT_ID", "tn_01hjryxysgey07h5jz5wagqj0m")
+        .args([
+            "compute",
+            "apps",
+            "apply",
+            "-f",
+            manifest.to_str().unwrap(),
+            "--environment",
+            "production",
+            "--change-control-token",
+            "dummy-approved-token",
+        ])
+        .output()
+        .expect("run compute apps apply");
+
+    assert!(
+        output.status.success(),
+        "approved production apply failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let requests = rx.recv_timeout(Duration::from_secs(2)).unwrap();
+    handle.join().unwrap();
+    assert!(
+        requests
+            .iter()
+            .any(|request| request.starts_with("GET /v1/compute/apps ")),
+        "approved apply must pass the local gate and read live apps; requests: {requests:#?}"
+    );
+    assert!(
+        requests
+            .iter()
+            .any(|request| request.starts_with("POST /v1/compute/apps ")),
+        "approved apply must pass the local gate and create the app; requests: {requests:#?}"
+    );
+    let joined_requests = requests.join("\n");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!joined_requests.contains("dummy-approved-token"));
+    assert!(!stdout.contains("dummy-approved-token"));
+    assert!(!stderr.contains("dummy-approved-token"));
+    assert!(stdout.contains("Environment: production"));
+    assert!(stdout.contains("CREATED valid-app (app_created)"));
 }
 
 #[test]

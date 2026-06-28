@@ -17,6 +17,7 @@ pub(crate) async fn run_alias(
             file: args.file.clone(),
             app: args.app.clone(),
             environment: args.environment.clone(),
+            change_control_token: args.change_control_token.clone(),
             prune: args.prune,
             dry_run: args.dry_run,
             json: args.json,
