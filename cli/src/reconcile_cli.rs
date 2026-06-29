@@ -27,6 +27,17 @@ pub struct ReconcileArgs {
     #[arg(long, default_value = "sandbox")]
     pub environment: String,
 
+    /// Required approval token for production CloudApps reconcile.
+    ///
+    /// This only gates write execution. The token is never printed or sent
+    /// to the Cloud Apps API by the CLI.
+    #[arg(
+        long = "change-control-token",
+        env = "TACHYON_CHANGE_CONTROL_APPROVAL_TOKEN",
+        hide_env_values = true
+    )]
+    pub change_control_token: Option<String>,
+
     /// Remove resources absent from the CloudApps manifest
     /// (auth prune is unsupported – no delete endpoint)
     #[arg(long)]
@@ -57,6 +68,7 @@ pub async fn run(args: &ReconcileArgs, config: &Configuration, tenant_id: &str) 
                     file: cloud_apps_file.clone(),
                     app: args.app.clone(),
                     environment: args.environment.clone(),
+                    change_control_token: args.change_control_token.clone(),
                     dry_run: args.dry_run,
                 },
             },

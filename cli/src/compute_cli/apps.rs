@@ -37,6 +37,16 @@ pub enum AppsCommand {
         /// Target environment label for this apply operation
         #[arg(long, default_value = "sandbox")]
         environment: String,
+        /// Required approval token for production apply.
+        ///
+        /// This only gates write execution. The token is never printed or sent
+        /// to the Cloud Apps API by the CLI.
+        #[arg(
+            long = "change-control-token",
+            env = "TACHYON_CHANGE_CONTROL_APPROVAL_TOKEN",
+            hide_env_values = true
+        )]
+        change_control_token: Option<String>,
         /// Preview changes without mutating Cloud Apps
         #[arg(long)]
         dry_run: bool,
@@ -275,6 +285,14 @@ enum ApplyAction {
     NoChange,
 }
 
+struct AppApplyPlan {
+    name: String,
+    body: Value,
+    env_plan: EnvPlan,
+    iac_manifest: Option<Value>,
+    sentry_plan: Option<SentryIntegrationPlan>,
+}
+
 #[derive(Debug, Default)]
 pub(crate) struct EnvPlan {
     pub(super) plain: Vec<SetEnvVarEntry>,
@@ -392,21 +410,18 @@ pub(crate) async fn run_apps_apply(
     file: &Path,
     selected_app: Option<&str>,
     environment: &str,
+    change_control_token: Option<&str>,
     dry_run: bool,
 ) -> Result<()> {
+    require_production_apply_approval(environment, change_control_token, dry_run)?;
+
     let manifest = load_cloud_apps_manifest(file)?;
     let entries = select_app_entries(&manifest, selected_app)?;
-    let live: ListAppsResponse = api.get("/v1/compute/apps").await?;
-    let sentry_plans = entries
-        .iter()
-        .map(plan_sentry_integration)
-        .collect::<Result<Vec<_>>>()?
-        .into_iter()
-        .flatten()
-        .collect::<Vec<_>>();
-    if !sentry_plans.is_empty() {
+    let plans = build_app_apply_plans(entries, tenant_id, environment)?;
+    if plans.iter().any(|plan| plan.sentry_plan.is_some()) {
         validate_sentry_integration(api).await?;
     }
+    let live: ListAppsResponse = api.get("/v1/compute/apps").await?;
 
     println!("Manifest:    {}", file.display());
     println!("Environment: {environment}");
@@ -416,25 +431,19 @@ pub(crate) async fn run_apps_apply(
     let mut created = 0;
     let mut updated = 0;
     let mut unchanged = 0;
-    for entry in entries {
-        let name = entry
-            .get("name")
-            .and_then(Value::as_str)
-            .ok_or_else(|| anyhow!("app entry is missing name"))?;
-        let body = app_entry_to_api_body(&entry)?;
-        let env_plan = plan_env_vars(&entry, environment)?;
-        let existing = live.apps.iter().find(|app| app.name == name);
-        let (action, changed_fields) = classify_app_action(existing, &body);
+    for plan in plans {
+        let existing = live.apps.iter().find(|app| app.name == plan.name);
+        let (action, changed_fields) = classify_app_action(existing, &plan.body);
         let app_id = match (existing, &action, dry_run) {
             (Some(app), ApplyAction::Update, false) => {
                 let updated: AppResponse = api
-                    .patch(&format!("/v1/compute/apps/{}", app.id), &body)
+                    .patch(&format!("/v1/compute/apps/{}", app.id), &plan.body)
                     .await?;
                 updated.id
             }
             (Some(app), _, _) => app.id.clone(),
             (None, ApplyAction::Create, false) => {
-                let created: AppResponse = api.post("/v1/compute/apps", &body).await?;
+                let created: AppResponse = api.post("/v1/compute/apps", &plan.body).await?;
                 created.id
             }
             (None, _, true) => "<new app>".to_string(),
@@ -442,7 +451,7 @@ pub(crate) async fn run_apps_apply(
         };
 
         let (env_changed, missing_secrets) =
-            apply_env_plan(api, &app_id, &env_plan, dry_run).await?;
+            apply_env_plan(api, &app_id, &plan.env_plan, dry_run).await?;
         match action {
             ApplyAction::Create => created += 1,
             ApplyAction::Update => updated += 1,
@@ -453,7 +462,7 @@ pub(crate) async fn run_apps_apply(
             ApplyAction::Update => "UPDATED",
             ApplyAction::NoChange => "UNCHANGED",
         };
-        println!("{label} {name} ({app_id})");
+        println!("{label} {} ({app_id})", plan.name);
         println!("  environment: {environment}");
         println!("  manifest:    {}", file.display());
         if changed_fields.is_empty() {
@@ -464,8 +473,9 @@ pub(crate) async fn run_apps_apply(
         if !env_changed.is_empty() {
             println!("  env:         {}", env_changed.join(", "));
         }
-        if !env_plan.server_managed_credentials.is_empty() {
-            let refs = env_plan
+        if !plan.env_plan.server_managed_credentials.is_empty() {
+            let refs = plan
+                .env_plan
                 .server_managed_credentials
                 .iter()
                 .map(|credential| {
@@ -479,20 +489,21 @@ pub(crate) async fn run_apps_apply(
             if dry_run {
                 println!("  next:        run without --dry-run to save/apply the CloudApp manifest server-side");
             } else {
-                let manifest = cloud_app_manifest_for_iac(&entry, tenant_id)?;
-                apply_compute_cloud_app_manifest(api, &manifest).await?;
+                let manifest = plan
+                    .iac_manifest
+                    .as_ref()
+                    .ok_or_else(|| anyhow!("missing CloudApp IaC manifest for {}", plan.name))?;
+                apply_compute_cloud_app_manifest(api, manifest).await?;
                 println!("  iac:         applied server-managed credential refs");
             }
         }
-        if !env_plan.sentry_integrations.is_empty() {
-            for sentry in &env_plan.sentry_integrations {
-                println!(
-                    "  sentry:      project={} provider={} env={}",
-                    sentry.project,
-                    sentry.provider,
-                    sentry.env_vars.join(", ")
-                );
-            }
+        if let Some(sentry) = &plan.sentry_plan {
+            println!(
+                "  sentry:      project={} provider={} env={}",
+                sentry.project,
+                sentry.provider,
+                sentry.env_vars.join(", ")
+            );
         }
         if !missing_secrets.is_empty() {
             println!("  missing secrets: {}", missing_secrets.join(", "));
@@ -503,6 +514,66 @@ pub(crate) async fn run_apps_apply(
     println!();
     println!("Summary: {created} created, {updated} updated, {unchanged} unchanged");
     Ok(())
+}
+
+fn require_production_apply_approval(
+    environment: &str,
+    change_control_token: Option<&str>,
+    dry_run: bool,
+) -> Result<()> {
+    if dry_run || !is_production_environment(environment) {
+        return Ok(());
+    }
+
+    let approved = change_control_token
+        .map(str::trim)
+        .is_some_and(|token| !token.is_empty());
+    if approved {
+        return Ok(());
+    }
+
+    Err(anyhow!(
+        "production Cloud App apply requires change-control approval; pass --change-control-token or set TACHYON_CHANGE_CONTROL_APPROVAL_TOKEN. Use --dry-run to preview without writing."
+    ))
+}
+
+fn is_production_environment(environment: &str) -> bool {
+    matches!(
+        environment.trim().to_ascii_lowercase().as_str(),
+        "production" | "prod"
+    )
+}
+
+fn build_app_apply_plans(
+    entries: Vec<Value>,
+    tenant_id: &str,
+    environment: &str,
+) -> Result<Vec<AppApplyPlan>> {
+    entries
+        .into_iter()
+        .map(|entry| {
+            let name = entry
+                .get("name")
+                .and_then(Value::as_str)
+                .ok_or_else(|| anyhow!("app entry is missing name"))?
+                .to_string();
+            let body = app_entry_to_api_body(&entry)?;
+            let env_plan = plan_env_vars(&entry, environment)?;
+            let iac_manifest = if env_plan.server_managed_credentials.is_empty() {
+                None
+            } else {
+                Some(cloud_app_manifest_for_iac(&entry, tenant_id)?)
+            };
+            let sentry_plan = plan_sentry_integration(&entry)?;
+            Ok(AppApplyPlan {
+                name,
+                body,
+                env_plan,
+                iac_manifest,
+                sentry_plan,
+            })
+        })
+        .collect()
 }
 
 pub(crate) fn load_cloud_apps_manifest(path: &Path) -> Result<Value> {

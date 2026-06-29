@@ -26,6 +26,7 @@ const ENV_DIR: &str = "/etc/tachyon";
 const ENV_PATH: &str = "/etc/tachyon/worker.env";
 const DEFAULT_PROVIDER: &str = "containerized_codex";
 const TOOL_JOB_WORKER_POLICY_ID: &str = "pol_01tooljobworkerpolicy";
+const CHILD_OUTPUT_TAIL_LIMIT_BYTES: usize = 1024 * 1024;
 
 #[derive(Args)]
 pub struct WorkerArgs {
@@ -430,15 +431,37 @@ async fn run_containerized_codex(job: &WorkerToolJob) -> Result<WorkerJobOutput>
     let container_name = format!("tachyon-codex-{}", job.id.to_lowercase());
     let docker_args = build_codex_exec_docker_args(job, &container_name);
 
-    let output = TokioCommand::new("docker")
+    let mut child = TokioCommand::new("docker")
         .args(&docker_args)
         .kill_on_drop(true)
-        .output()
-        .await
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
         .context("failed to run containerized Codex")?;
 
-    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| anyhow!("failed to capture Codex container stdout"))?;
+    let stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| anyhow!("failed to capture Codex container stderr"))?;
+    let stdout_task = tokio::spawn(read_child_output_tail(stdout));
+    let stderr_task = tokio::spawn(read_child_output_tail(stderr));
+
+    let status = child.wait().await.context("wait for Codex container")?;
+    let stdout = stdout_task
+        .await
+        .context("join Codex stdout reader")?
+        .context("read Codex stdout")?
+        .into_utf8_tail();
+    let stderr = stderr_task
+        .await
+        .context("join Codex stderr reader")?
+        .context("read Codex stderr")?
+        .into_utf8_tail();
+
     let mut raw_events = Vec::new();
     if !stdout.trim().is_empty() {
         raw_events.push(json!({
@@ -453,7 +476,7 @@ async fn run_containerized_codex(job: &WorkerToolJob) -> Result<WorkerJobOutput>
         }));
     }
 
-    if !output.status.success() {
+    if !status.success() {
         bail!("Codex container exited with non-zero status: {stderr}");
     }
 
@@ -472,9 +495,76 @@ async fn run_containerized_codex(job: &WorkerToolJob) -> Result<WorkerJobOutput>
     Ok(WorkerJobOutput {
         result_text,
         raw_events,
-        exit_code: output.status.code(),
+        exit_code: status.code(),
         session_id: None,
     })
+}
+
+async fn read_child_output_tail<R>(mut reader: R) -> Result<TailBuffer>
+where
+    R: tokio::io::AsyncRead + Unpin,
+{
+    let mut tail = TailBuffer::new(CHILD_OUTPUT_TAIL_LIMIT_BYTES);
+    let mut chunk = [0_u8; 8192];
+    loop {
+        let n = reader.read(&mut chunk).await?;
+        if n == 0 {
+            break;
+        }
+        tail.push(&chunk[..n]);
+    }
+    Ok(tail)
+}
+
+#[derive(Debug, Clone)]
+struct TailBuffer {
+    bytes: Vec<u8>,
+    limit: usize,
+}
+
+impl TailBuffer {
+    fn new(limit: usize) -> Self {
+        Self {
+            bytes: Vec::with_capacity(limit.min(8192)),
+            limit,
+        }
+    }
+
+    fn push(&mut self, chunk: &[u8]) {
+        if self.limit == 0 {
+            self.bytes.clear();
+            return;
+        }
+        if chunk.len() >= self.limit {
+            self.bytes.clear();
+            self.bytes
+                .extend_from_slice(&chunk[chunk.len() - self.limit..]);
+            return;
+        }
+        self.bytes.extend_from_slice(chunk);
+        let overflow = self.bytes.len().saturating_sub(self.limit);
+        if overflow > 0 {
+            self.bytes.drain(..overflow);
+        }
+    }
+
+    #[cfg(test)]
+    fn len(&self) -> usize {
+        self.bytes.len()
+    }
+
+    fn into_utf8_tail(self) -> String {
+        let bytes = trim_leading_utf8_continuation_bytes(&self.bytes);
+        String::from_utf8_lossy(bytes).into_owned()
+    }
+}
+
+fn trim_leading_utf8_continuation_bytes(bytes: &[u8]) -> &[u8] {
+    let start = bytes
+        .iter()
+        .position(|byte| (byte & 0b1100_0000) != 0b1000_0000)
+        .unwrap_or(bytes.len());
+    &bytes[start..]
 }
 
 async fn run_containerized_codex_app_server(job: &WorkerToolJob) -> Result<WorkerJobOutput> {
@@ -493,25 +583,17 @@ async fn run_containerized_codex_app_server(job: &WorkerToolJob) -> Result<Worke
         .spawn()
         .context("failed to run containerized Codex app-server")?;
 
-    let mut stdout = child
+    let stdout = child
         .stdout
         .take()
         .ok_or_else(|| anyhow!("failed to capture Codex app-server stdout"))?;
-    let stdout_reader = tokio::spawn(async move {
-        let mut buf = Vec::new();
-        let _ = stdout.read_to_end(&mut buf).await;
-        String::from_utf8_lossy(&buf).to_string()
-    });
+    let stdout_reader = tokio::spawn(read_child_output_tail(stdout));
 
-    let mut stderr = child
+    let stderr = child
         .stderr
         .take()
         .ok_or_else(|| anyhow!("failed to capture Codex app-server stderr"))?;
-    let stderr_reader = tokio::spawn(async move {
-        let mut buf = Vec::new();
-        let _ = stderr.read_to_end(&mut buf).await;
-        String::from_utf8_lossy(&buf).to_string()
-    });
+    let stderr_reader = tokio::spawn(read_child_output_tail(stderr));
 
     let invocation = CodexAppServerInvocation::from_job(job);
     let execution_result = timeout(
@@ -530,11 +612,15 @@ async fn run_containerized_codex_app_server(job: &WorkerToolJob) -> Result<Worke
         .await
         .ok()
         .and_then(|result| result.ok())
+        .and_then(|result| result.ok())
+        .map(TailBuffer::into_utf8_tail)
         .unwrap_or_default();
     let stderr = timeout(Duration::from_secs(5), stderr_reader)
         .await
         .ok()
         .and_then(|result| result.ok())
+        .and_then(|result| result.ok())
+        .map(TailBuffer::into_utf8_tail)
         .unwrap_or_default();
 
     let execution = execution_result
@@ -1586,6 +1672,37 @@ mod tests {
         assert!(env.contains("TACHYON_WORKER_PROVIDER='containerized_codex'"));
         assert!(env.contains("TACHYON_WORKER_MAX_CONCURRENT_JOBS='2'"));
         assert!(env.contains("TACHYON_API_KEY='pk_test'"));
+    }
+
+    #[test]
+    fn tail_buffer_keeps_only_the_byte_limit() {
+        let mut tail = TailBuffer::new(8);
+
+        tail.push(b"012345");
+        tail.push(b"6789abcd");
+
+        assert_eq!(tail.len(), 8);
+        assert_eq!(tail.into_utf8_tail(), "6789abcd");
+    }
+
+    #[test]
+    fn tail_buffer_keeps_suffix_from_large_chunk() {
+        let mut tail = TailBuffer::new(5);
+
+        tail.push(b"prefix-tail");
+
+        assert_eq!(tail.len(), 5);
+        assert_eq!(tail.into_utf8_tail(), "-tail");
+    }
+
+    #[test]
+    fn tail_buffer_drops_leading_utf8_continuation_bytes() {
+        let mut tail = TailBuffer::new(5);
+
+        tail.push("あい".as_bytes());
+
+        assert!(tail.len() <= 5);
+        assert_eq!(tail.into_utf8_tail(), "い");
     }
 
     #[test]

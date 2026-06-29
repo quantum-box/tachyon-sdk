@@ -48,6 +48,16 @@ pub struct ApplyArgs {
     /// Environment label for CloudApps manifest operations
     #[arg(long, default_value = "sandbox")]
     pub environment: String,
+    /// Required approval token for production CloudApps apply.
+    ///
+    /// This only gates write execution. The token is never printed or sent
+    /// to the Cloud Apps API by the CLI.
+    #[arg(
+        long = "change-control-token",
+        env = "TACHYON_CHANGE_CONTROL_APPROVAL_TOKEN",
+        hide_env_values = true
+    )]
+    pub change_control_token: Option<String>,
     /// Remove resources absent from manifest where supported
     #[arg(long)]
     pub prune: bool,
