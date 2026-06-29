@@ -50,6 +50,9 @@ pub enum IssueCommand {
         /// Provider-specific assignee id
         #[arg(long, visible_alias = "assignee")]
         assignee_id: Option<String>,
+        /// Provider-specific delegate agent user id
+        #[arg(long)]
+        delegate_id: Option<String>,
         /// Provider-specific label id. Can be specified multiple times.
         #[arg(long = "label-id")]
         label_ids: Vec<String>,
@@ -130,6 +133,9 @@ pub enum IssueCommand {
         /// Provider-specific assignee id
         #[arg(long, visible_alias = "assignee")]
         assignee_id: Option<String>,
+        /// Provider-specific delegate agent user id
+        #[arg(long)]
+        delegate_id: Option<String>,
         /// Priority: urgent, high, medium, low, none, or provider alias
         #[arg(long)]
         priority: Option<String>,
@@ -153,6 +159,10 @@ struct CreatePmIssueRequest {
     description: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     assignee_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    delegate_id: Option<String>,
+    #[serde(skip_serializing_if = "is_false")]
+    auto_delegate_to_linear_agent: bool,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     label_ids: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -190,6 +200,10 @@ struct UpdatePmIssueRequest {
     title: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     assignee_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    delegate_id: Option<String>,
+    #[serde(skip_serializing_if = "is_false")]
+    auto_delegate_to_linear_agent: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     priority: Option<String>,
 }
@@ -242,6 +256,12 @@ fn provider_with_alias(provider: &Option<String>, provider_alias: Option<&str>) 
     provider
         .clone()
         .or_else(|| provider_alias.map(str::to_string))
+}
+
+fn is_linear_provider(provider: &Option<String>) -> bool {
+    provider
+        .as_deref()
+        .is_some_and(|provider| provider.eq_ignore_ascii_case("linear"))
 }
 
 async fn run_create(
@@ -323,6 +343,7 @@ pub async fn run_issue(
             title,
             description,
             assignee_id,
+            delegate_id,
             label_ids,
             priority,
             project,
@@ -332,16 +353,21 @@ pub async fn run_issue(
             skip_if_exists,
             json,
         } => {
+            let provider = provider_with_alias(provider, provider_alias);
+            let auto_delegate_to_linear_agent =
+                delegate_id.is_none() && is_linear_provider(&provider);
             run_create(
                 &api,
                 tenant_id,
                 CreatePmIssueRequest {
-                    provider: provider_with_alias(provider, provider_alias),
+                    provider,
                     team: team.clone(),
                     team_id: team_id.clone(),
                     title: title.clone(),
                     description: description.clone(),
                     assignee_id: assignee_id.clone(),
+                    delegate_id: delegate_id.clone(),
+                    auto_delegate_to_linear_agent,
                     label_ids: label_ids.clone(),
                     priority: priority.clone(),
                     project: project.clone(),
@@ -392,15 +418,19 @@ pub async fn run_issue(
             state,
             title,
             assignee_id,
+            delegate_id,
             priority,
             json,
         } => {
+            let provider = provider_with_alias(provider, provider_alias);
+            let auto_delegate_to_linear_agent =
+                delegate_id.is_none() && is_linear_provider(&provider);
             run_update(
                 &api,
                 tenant_id,
                 issue_id,
                 UpdatePmIssueRequest {
-                    provider: provider_with_alias(provider, provider_alias),
+                    provider,
                     team: team.clone(),
                     team_id: team_id.clone(),
                     status_id: status_id.clone(),
@@ -409,6 +439,8 @@ pub async fn run_issue(
                     state: state.clone(),
                     title: title.clone(),
                     assignee_id: assignee_id.clone(),
+                    delegate_id: delegate_id.clone(),
+                    auto_delegate_to_linear_agent,
                     priority: priority.clone(),
                 },
                 *json,
@@ -454,6 +486,8 @@ mod tests {
             title: "Test issue".to_string(),
             description: None,
             assignee_id: None,
+            delegate_id: None,
+            auto_delegate_to_linear_agent: false,
             label_ids: vec!["label_1".to_string()],
             priority: Some("medium".to_string()),
             project: None,
@@ -473,5 +507,69 @@ mod tests {
                 "priority": "medium"
             })
         );
+    }
+
+    #[test]
+    fn serializes_linear_auto_delegate_create_request() {
+        let request = CreatePmIssueRequest {
+            provider: Some("linear".to_string()),
+            team: Some("PLT".to_string()),
+            team_id: None,
+            title: "Test issue".to_string(),
+            description: None,
+            assignee_id: None,
+            delegate_id: None,
+            auto_delegate_to_linear_agent: true,
+            label_ids: Vec::new(),
+            priority: None,
+            project: None,
+            project_id: None,
+            due_date: None,
+            related_issue_ids: Vec::new(),
+            skip_if_exists: false,
+        };
+
+        assert_eq!(
+            serde_json::to_value(&request).unwrap(),
+            serde_json::json!({
+                "provider": "linear",
+                "team": "PLT",
+                "title": "Test issue",
+                "auto_delegate_to_linear_agent": true
+            })
+        );
+    }
+
+    #[test]
+    fn serializes_explicit_delegate_update_request() {
+        let request = UpdatePmIssueRequest {
+            provider: Some("linear".to_string()),
+            team: None,
+            team_id: None,
+            status_id: None,
+            status: None,
+            state_id: None,
+            state: None,
+            title: None,
+            assignee_id: None,
+            delegate_id: Some("agent_user_1".to_string()),
+            auto_delegate_to_linear_agent: false,
+            priority: None,
+        };
+
+        assert_eq!(
+            serde_json::to_value(&request).unwrap(),
+            serde_json::json!({
+                "provider": "linear",
+                "delegate_id": "agent_user_1"
+            })
+        );
+    }
+
+    #[test]
+    fn detects_linear_provider_case_insensitively() {
+        assert!(is_linear_provider(&Some("Linear".to_string())));
+        assert!(!is_linear_provider(&Some("jira".to_string())));
+        assert!(!is_linear_provider(&None));
     }
 }
