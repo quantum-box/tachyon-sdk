@@ -1,6 +1,5 @@
 use anyhow::{anyhow, Result};
 use serde::Serialize;
-use std::path::Path;
 
 use crate::client::print_json;
 use crate::commands::auth::manifest as auth_manifest;
@@ -76,7 +75,8 @@ pub(crate) fn validate_source(
 ) -> Result<String> {
     match source.kind {
         ManifestKind::CloudApps => {
-            let manifest = compute_cli::load_cloud_apps_manifest(&source.path)?;
+            let manifest = compute_cli::normalize_cloud_apps_document(&source.document)?
+                .ok_or_else(|| anyhow!("unsupported Cloud Apps document"))?;
             let entries = compute_cli::select_app_entries(&manifest, app)?;
             for entry in &entries {
                 let _ = compute_cli::app_entry_to_api_body(entry)?;
@@ -85,10 +85,9 @@ pub(crate) fn validate_source(
             Ok(format!("{} Cloud Apps entry(s)", entries.len()))
         }
         ManifestKind::Auth => {
-            let cwd = source.path.parent().unwrap_or_else(|| Path::new("."));
-            let loaded = auth_manifest::discover_manifests(Some(&source.path), cwd)?;
-            let merged = auth_manifest::merge_manifests(loaded);
-            auth_manifest::validate_manifest(&merged)?;
+            let yaml_value = serde_yaml::to_value(&source.document)?;
+            let manifest = auth_manifest::parse_manifest_document_value(yaml_value)?;
+            auth_manifest::validate_manifest(&manifest)?;
             Ok("auth actions/policies".to_string())
         }
         ManifestKind::Iac => {

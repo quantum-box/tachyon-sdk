@@ -136,8 +136,8 @@ pub use local::PagesApp;
 pub use scaling::ScalingCommand;
 
 pub(crate) use apps::{
-    app_entry_to_api_body, load_cloud_apps_manifest, plan_env_vars, run_apps_apply,
-    select_app_entries,
+    app_entry_to_api_body, normalize_cloud_apps_document, plan_env_vars, run_apps_apply,
+    run_apps_apply_manifest, select_app_entries, AppsApplyManifestInput,
 };
 pub(crate) use env::validate_secret_key;
 
