@@ -39,6 +39,11 @@ pub enum OpsCommand {
         #[command(subcommand)]
         command: ToolJobsCommand,
     },
+    /// Run coding-agent jobs that push a branch and open a PR
+    CodingJobs {
+        #[command(subcommand)]
+        command: CodingJobsCommand,
+    },
     /// Send chat notifications to configured Slack/Discord destinations
     #[command(visible_alias = "slack")]
     Notify {
@@ -155,6 +160,61 @@ pub enum ToolJobsCommand {
 }
 
 #[derive(Debug, Clone, Subcommand)]
+pub enum CodingJobsCommand {
+    /// Run a coding job and optionally wait for the PR URL.
+    Run {
+        /// Git repository URL to clone.
+        #[arg(long = "repo")]
+        repository_url: String,
+        /// Base branch to clone and target for the PR.
+        #[arg(long, default_value = "main")]
+        base: String,
+        /// Branch name the agent will push.
+        #[arg(long)]
+        branch: String,
+        /// Prompt to send. If omitted, stdin is read.
+        #[arg(long)]
+        prompt: Option<String>,
+        /// PR title. Defaults to the pushed branch.
+        #[arg(long = "title")]
+        pull_request_title: Option<String>,
+        /// PR body.
+        #[arg(long = "body")]
+        pull_request_body: Option<String>,
+        /// Git commit message. Defaults to the PR title or branch.
+        #[arg(long = "commit-message")]
+        git_commit_message: Option<String>,
+        /// Secret selector for the GitHub token, formatted as NAME:KEY.
+        #[arg(long = "github-token-secret")]
+        github_token_secret: String,
+        /// Optional Codex access token secret selector, formatted as NAME:KEY.
+        #[arg(long = "codex-access-token-secret")]
+        codex_access_token_secret: Option<String>,
+        /// Optional OpenAI API key secret selector, formatted as NAME:KEY.
+        #[arg(long = "openai-api-key-secret")]
+        openai_api_key_secret: Option<String>,
+        /// Codex model/output profile.
+        #[arg(long)]
+        model: Option<String>,
+        /// Container image to run.
+        #[arg(long)]
+        image: Option<String>,
+        /// Wait until the underlying tool job reaches a terminal status.
+        #[arg(long)]
+        wait: bool,
+        /// Maximum wait time in seconds.
+        #[arg(long, default_value_t = 1800)]
+        wait_timeout_seconds: u64,
+        /// Poll interval in seconds while waiting.
+        #[arg(long, default_value_t = 5)]
+        wait_interval_seconds: u64,
+        /// Print the API response as JSON.
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+#[derive(Debug, Clone, Subcommand)]
 pub enum NotifyCommand {
     /// Send a plain-text notification
     Send {
@@ -255,6 +315,43 @@ struct ToolJobCreatedResponse {
 #[derive(Debug, Deserialize, Serialize)]
 struct ToolJobProvidersResponse {
     providers: Vec<String>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct CloudCodingJobCreatedResponse {
+    tool_job_id: String,
+    job_run_id: String,
+    worker_id: String,
+    provider: String,
+    execution_backend: String,
+    status: String,
+}
+
+#[derive(Debug, Serialize)]
+struct CloudCodingJobCreateRequest {
+    prompt: String,
+    repository_url: String,
+    branch: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    output_profile: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    model: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    image: Option<String>,
+    github_token_secret: SecretKeySelector,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    codex_access_token_secret: Option<SecretKeySelector>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    openai_api_key_secret: Option<SecretKeySelector>,
+    git_push_branch: String,
+    git_commit_message: String,
+    metadata: Value,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct SecretKeySelector {
+    name: String,
+    key: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -754,6 +851,54 @@ fn print_tool_job_final(job: &ToolJobResponse) -> Result<()> {
     Ok(())
 }
 
+fn parse_secret_selector(value: &str) -> Result<SecretKeySelector> {
+    let (name, key) = value
+        .split_once(':')
+        .ok_or_else(|| anyhow!("secret selector must be formatted as NAME:KEY"))?;
+    if name.trim().is_empty() || key.trim().is_empty() {
+        bail!("secret selector must include non-empty NAME and KEY");
+    }
+    Ok(SecretKeySelector {
+        name: name.to_string(),
+        key: key.to_string(),
+    })
+}
+
+fn extract_pull_request_url(output: &Value) -> Option<String> {
+    for pointer in [
+        "/pull_request/url",
+        "/pullRequest/url",
+        "/pr_url",
+        "/prUrl",
+        "/html_url",
+        "/body/pull_request/url",
+        "/body/pr_url",
+    ] {
+        if let Some(value) = output.pointer(pointer).and_then(Value::as_str) {
+            if is_github_pull_request_url(value) {
+                return Some(value.to_string());
+            }
+        }
+    }
+    output
+        .pointer("/body/text")
+        .and_then(Value::as_str)
+        .and_then(find_github_pull_request_url)
+}
+
+fn find_github_pull_request_url(text: &str) -> Option<String> {
+    text.split_whitespace()
+        .map(|part| {
+            part.trim_matches(|c: char| matches!(c, '"' | '\'' | ')' | ']' | '}' | ',' | '.'))
+        })
+        .find(|part| is_github_pull_request_url(part))
+        .map(ToString::to_string)
+}
+
+fn is_github_pull_request_url(value: &str) -> bool {
+    value.starts_with("https://github.com/") && value.contains("/pull/")
+}
+
 async fn wait_tool_job(
     api: &ApiClient,
     job_id: &str,
@@ -778,6 +923,98 @@ async fn wait_tool_job(
         }
         tokio::time::sleep(interval).await;
     }
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn run_coding_jobs_run(
+    api: &ApiClient,
+    repository_url: &str,
+    base: &str,
+    branch: &str,
+    prompt: &Option<String>,
+    pull_request_title: Option<&str>,
+    pull_request_body: Option<&str>,
+    git_commit_message: Option<&str>,
+    github_token_secret: &str,
+    codex_access_token_secret: Option<&str>,
+    openai_api_key_secret: Option<&str>,
+    model: Option<&str>,
+    image: Option<&str>,
+    wait: bool,
+    wait_timeout_seconds: u64,
+    wait_interval_seconds: u64,
+    json: bool,
+) -> Result<()> {
+    let prompt = read_prompt(prompt)?;
+    let title = pull_request_title.unwrap_or(branch);
+    let request = CloudCodingJobCreateRequest {
+        prompt,
+        repository_url: repository_url.to_string(),
+        branch: base.to_string(),
+        output_profile: model.map(ToString::to_string),
+        model: model.map(ToString::to_string),
+        image: image.map(ToString::to_string),
+        github_token_secret: parse_secret_selector(github_token_secret)?,
+        codex_access_token_secret: codex_access_token_secret
+            .map(parse_secret_selector)
+            .transpose()?,
+        openai_api_key_secret: openai_api_key_secret
+            .map(parse_secret_selector)
+            .transpose()?,
+        git_push_branch: branch.to_string(),
+        git_commit_message: git_commit_message.unwrap_or(title).to_string(),
+        metadata: json!({
+            "source": "tachyon-cli",
+            "cloud_coding": {
+                "repository_url": repository_url,
+                "base": base,
+                "branch": branch,
+                "pull_request": {
+                    "base": base,
+                    "head": branch,
+                    "title": title,
+                    "body": pull_request_body,
+                },
+            },
+        }),
+    };
+
+    let created: CloudCodingJobCreatedResponse =
+        api.post("/v1/agent/cloud-coding-jobs", &request).await?;
+    if !wait {
+        if json {
+            return print_json(&created);
+        }
+        println!("Coding job created.");
+        println!("Tool job ID: {}", created.tool_job_id);
+        println!("JobRun ID:   {}", created.job_run_id);
+        println!("Status:      {}", created.status);
+        return Ok(());
+    }
+
+    let final_job = wait_tool_job(
+        api,
+        &created.tool_job_id,
+        wait_timeout_seconds,
+        wait_interval_seconds,
+    )
+    .await?;
+    if json {
+        return print_json(&json!({
+            "cloud_coding_job": created,
+            "tool_job": final_job,
+        }));
+    }
+    println!("Coding job created.");
+    println!("Tool job ID: {}", created.tool_job_id);
+    println!("JobRun ID:   {}", created.job_run_id);
+    print_tool_job_final(&final_job)?;
+    if let Some(output) = final_job.normalized_output.as_ref() {
+        if let Some(url) = extract_pull_request_url(output) {
+            println!("Pull request: {url}");
+        }
+    }
+    Ok(())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1144,6 +1381,47 @@ pub async fn run(
         OpsCommand::Reports { command } => match command {
             ReportsCommand::List { json } => run_reports_list(&api, *json).await,
             ReportsCommand::Get { run_id, json } => run_reports_get(&api, run_id, *json).await,
+        },
+        OpsCommand::CodingJobs { command } => match command {
+            CodingJobsCommand::Run {
+                repository_url,
+                base,
+                branch,
+                prompt,
+                pull_request_title,
+                pull_request_body,
+                git_commit_message,
+                github_token_secret,
+                codex_access_token_secret,
+                openai_api_key_secret,
+                model,
+                image,
+                wait,
+                wait_timeout_seconds,
+                wait_interval_seconds,
+                json,
+            } => {
+                run_coding_jobs_run(
+                    &api,
+                    repository_url,
+                    base,
+                    branch,
+                    prompt,
+                    pull_request_title.as_deref(),
+                    pull_request_body.as_deref(),
+                    git_commit_message.as_deref(),
+                    github_token_secret,
+                    codex_access_token_secret.as_deref(),
+                    openai_api_key_secret.as_deref(),
+                    model.as_deref(),
+                    image.as_deref(),
+                    *wait,
+                    *wait_timeout_seconds,
+                    *wait_interval_seconds,
+                    *json,
+                )
+                .await
+            }
         },
         OpsCommand::ToolJobs { command } => match command {
             ToolJobsCommand::Create {

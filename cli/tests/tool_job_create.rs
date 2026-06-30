@@ -46,6 +46,28 @@ fn start_tool_jobs_server() -> (String, mpsc::Receiver<String>, thread::JoinHand
     (url, rx, handle)
 }
 
+fn start_cloud_coding_server() -> (String, mpsc::Receiver<String>, thread::JoinHandle<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    let (tx, rx) = mpsc::channel();
+    let handle = thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let mut buf = [0_u8; 32768];
+        let n = stream.read(&mut buf).unwrap();
+        let req = String::from_utf8_lossy(&buf[..n]).to_string();
+        tx.send(req).unwrap();
+
+        let body = r#"{"tool_job_id":"job_01cloudcoding","job_run_id":"jr_01cloudcoding","worker_id":"kubernetes-jobrun","provider":"containerized_codex","execution_backend":"kubernetes_job_run","status":"queued"}"#;
+        let response = format!(
+            "HTTP/1.1 201 Created\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+            body.len(),
+            body
+        );
+        stream.write_all(response.as_bytes()).unwrap();
+    });
+    (url, rx, handle)
+}
+
 fn request_json_body(request: &str) -> Value {
     let body = request.split("\r\n\r\n").nth(1).unwrap();
     serde_json::from_str(body).unwrap()
@@ -94,6 +116,102 @@ fn expected_repo_cwd(tmp: &TempDir) -> String {
         .unwrap()
         .display()
         .to_string()
+}
+
+#[test]
+fn coding_jobs_run_posts_cloud_coding_request() {
+    let tmp = TempDir::new().unwrap();
+    let (api_url, rx, handle) = start_cloud_coding_server();
+
+    let output = isolated_command(tmp.path())
+        .current_dir(tmp.path())
+        .env("TACHYON_API_URL", api_url)
+        .args([
+            "ops",
+            "coding-jobs",
+            "run",
+            "--repo",
+            "https://github.com/quantum-box/tachyonfield.git",
+            "--base",
+            "main",
+            "--branch",
+            "codex/plt-2385",
+            "--title",
+            "PLT-2385 test",
+            "--body",
+            "opened by tachyon cli",
+            "--commit-message",
+            "PLT-2385 test",
+            "--github-token-secret",
+            "github-app-token:token",
+            "--codex-access-token-secret",
+            "codex-auth:token",
+            "--prompt",
+            "implement change",
+            "--json",
+        ])
+        .output()
+        .expect("run tachyon ops coding-jobs run");
+
+    assert!(
+        output.status.success(),
+        "coding-jobs run failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    handle.join().unwrap();
+    let req = rx.recv().unwrap();
+    assert!(req.starts_with("POST /v1/agent/cloud-coding-jobs "));
+    assert!(req.contains("authorization: Bearer test-token"));
+    assert!(req.contains("x-operator-id: tn_test1234567890"));
+    let body = request_json_body(&req);
+    assert_eq!(body["prompt"], "implement change");
+    assert_eq!(
+        body["repository_url"],
+        "https://github.com/quantum-box/tachyonfield.git"
+    );
+    assert_eq!(body["branch"], "main");
+    assert_eq!(body["git_push_branch"], "codex/plt-2385");
+    assert_eq!(body["git_commit_message"], "PLT-2385 test");
+    assert_eq!(body["github_token_secret"]["name"], "github-app-token");
+    assert_eq!(body["github_token_secret"]["key"], "token");
+    assert_eq!(body["codex_access_token_secret"]["name"], "codex-auth");
+    assert_eq!(
+        body["metadata"]["cloud_coding"]["pull_request"]["base"],
+        "main"
+    );
+    assert_eq!(
+        body["metadata"]["cloud_coding"]["pull_request"]["head"],
+        "codex/plt-2385"
+    );
+}
+
+#[test]
+fn coding_jobs_run_rejects_invalid_secret_selector() {
+    let tmp = TempDir::new().unwrap();
+
+    let output = isolated_command(tmp.path())
+        .current_dir(tmp.path())
+        .args([
+            "ops",
+            "coding-jobs",
+            "run",
+            "--repo",
+            "https://github.com/quantum-box/tachyonfield.git",
+            "--branch",
+            "codex/plt-2385",
+            "--github-token-secret",
+            "missing-key",
+            "--prompt",
+            "implement change",
+        ])
+        .output()
+        .expect("run tachyon ops coding-jobs run");
+
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr)
+        .contains("secret selector must be formatted as NAME:KEY"));
 }
 
 #[test]
