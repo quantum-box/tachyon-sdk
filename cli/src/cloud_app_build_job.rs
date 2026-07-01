@@ -480,27 +480,15 @@ fn is_rust_lambda(workload: &BuildWorkloadSpec) -> bool {
 
 /// Package the Lambda artifact and upload it through the
 /// presigned URL.
-///
-/// Node Lambda only: the builder image carries no Rust
-/// toolchain, so cargo / cargo-lambda / rust_server apps must
-/// keep using the CodeBuild backend until the image gains one.
 async fn run_lambda_package_and_upload(
     workload: &BuildWorkloadSpec,
     app_dir: &Path,
     env: &BTreeMap<String, String>,
 ) -> Result<CommandResult> {
-    if is_rust_lambda(workload) {
-        return Err(anyhow!(
-            "Rust Lambda builds are not supported by the JobRun builder \
-             yet; use the CodeBuild backend for cargo / cargo-lambda / \
-             rust_server apps"
-        ));
-    }
-
     let upload_url = env_value(env, LAMBDA_UPLOAD_URL_ENV)
         .ok_or_else(|| anyhow!("{LAMBDA_UPLOAD_URL_ENV} is required for Lambda artifact upload"))?;
 
-    let (archive, source) = package_lambda_archive(app_dir)?;
+    let (archive, source) = package_lambda_archive_for_workload(workload, app_dir)?;
     let size = archive.len();
     tracing::info!(%source, size_bytes = size, "uploading Lambda artifact");
 
@@ -519,6 +507,16 @@ async fn run_lambda_package_and_upload(
     })
 }
 
+fn package_lambda_archive_for_workload(
+    workload: &BuildWorkloadSpec,
+    app_dir: &Path,
+) -> Result<(Vec<u8>, String)> {
+    if is_rust_lambda(workload) {
+        return package_rust_lambda_archive(workload, app_dir);
+    }
+    package_lambda_archive(app_dir)
+}
+
 fn package_lambda_archive(app_dir: &Path) -> Result<(Vec<u8>, String)> {
     let prebuilt = app_dir.join("lambda.zip");
     if prebuilt.is_file() {
@@ -533,6 +531,161 @@ fn package_lambda_archive(app_dir: &Path) -> Result<(Vec<u8>, String)> {
         "no lambda.zip or dist/ found after build; Lambda apps must \
          produce either a pre-built lambda.zip or a dist/ directory"
     ))
+}
+
+fn package_rust_lambda_archive(
+    workload: &BuildWorkloadSpec,
+    app_dir: &Path,
+) -> Result<(Vec<u8>, String)> {
+    let bootstrap = if workload.framework.as_deref() == Some("rust_server") {
+        rust_server_bootstrap_path(workload, app_dir)?
+    } else {
+        cargo_lambda_bootstrap_path(workload, app_dir)?
+    };
+    let bytes = zip_bootstrap_file(&bootstrap)?;
+    Ok((bytes, format!("{}", bootstrap.display())))
+}
+
+fn rust_server_bootstrap_path(workload: &BuildWorkloadSpec, app_dir: &Path) -> Result<PathBuf> {
+    let package_name = rust_binary_name(workload, app_dir)?;
+    let binary = app_dir
+        .join("target")
+        .join("aarch64-unknown-linux-gnu")
+        .join("release")
+        .join(&package_name);
+    if binary.is_file() {
+        return Ok(binary);
+    }
+    Err(anyhow!(
+        "rust_server Lambda binary not found at {}; ensure the build command \
+         produced target/aarch64-unknown-linux-gnu/release/{}",
+        binary.display(),
+        package_name
+    ))
+}
+
+fn cargo_lambda_bootstrap_path(workload: &BuildWorkloadSpec, app_dir: &Path) -> Result<PathBuf> {
+    let explicit_name = workload
+        .commands
+        .build
+        .as_deref()
+        .and_then(cargo_lambda_bootstrap_name);
+    let mut candidates = Vec::new();
+    if let Some(name) = explicit_name {
+        candidates.push(
+            app_dir
+                .join("target")
+                .join("lambda")
+                .join(name)
+                .join("bootstrap"),
+        );
+    } else if let Ok(name) = rust_binary_name(workload, app_dir) {
+        candidates.push(
+            app_dir
+                .join("target")
+                .join("lambda")
+                .join(name)
+                .join("bootstrap"),
+        );
+    }
+
+    for candidate in &candidates {
+        if candidate.is_file() {
+            return Ok(candidate.clone());
+        }
+    }
+
+    let lambda_dir = app_dir.join("target").join("lambda");
+    let mut discovered = Vec::new();
+    if lambda_dir.is_dir() {
+        for entry in std::fs::read_dir(&lambda_dir)
+            .with_context(|| format!("failed to read {}", lambda_dir.display()))?
+        {
+            let entry = entry?;
+            let bootstrap = entry.path().join("bootstrap");
+            if bootstrap.is_file() {
+                discovered.push(bootstrap);
+            }
+        }
+    }
+    discovered.sort();
+    if let Some(path) = discovered.into_iter().next() {
+        return Ok(path);
+    }
+
+    let expected = candidates
+        .first()
+        .map(|path| path.display().to_string())
+        .unwrap_or_else(|| format!("{}/target/lambda/<name>/bootstrap", app_dir.display()));
+    Err(anyhow!(
+        "cargo-lambda bootstrap not found; expected {expected}. Ensure the \
+         build command ran cargo lambda build and produced target/lambda/<name>/bootstrap"
+    ))
+}
+
+fn rust_binary_name(workload: &BuildWorkloadSpec, app_dir: &Path) -> Result<String> {
+    if let Some(name) = workload.commands.build.as_deref().and_then(|command| {
+        flag_value(command, "--bin").or_else(|| flag_value(command, "--package"))
+    }) {
+        return Ok(name);
+    }
+
+    let output = std::process::Command::new("cargo")
+        .arg("metadata")
+        .arg("--no-deps")
+        .arg("--format-version")
+        .arg("1")
+        .current_dir(app_dir)
+        .output()
+        .context("failed to run cargo metadata for Rust Lambda package detection")?;
+    if !output.status.success() {
+        return Err(anyhow!(
+            "cargo metadata failed while detecting Rust Lambda package name: {}",
+            String::from_utf8_lossy(&output.stderr)
+        ));
+    }
+    let metadata: serde_json::Value =
+        serde_json::from_slice(&output.stdout).context("failed to parse cargo metadata")?;
+    metadata
+        .get("packages")
+        .and_then(|packages| packages.as_array())
+        .and_then(|packages| packages.first())
+        .and_then(|package| package.get("name"))
+        .and_then(|name| name.as_str())
+        .map(ToString::to_string)
+        .ok_or_else(|| anyhow!("cargo metadata did not contain a package name"))
+}
+
+fn cargo_lambda_bootstrap_name(command: &str) -> Option<String> {
+    flag_value(command, "--bin").or_else(|| flag_value(command, "--package"))
+}
+
+fn flag_value(command: &str, flag: &str) -> Option<String> {
+    let mut parts = command.split_whitespace();
+    while let Some(part) = parts.next() {
+        if part == flag {
+            return parts.next().map(ToString::to_string);
+        }
+        if let Some(value) = part.strip_prefix(&format!("{flag}=")) {
+            return Some(value.to_string());
+        }
+    }
+    None
+}
+
+fn zip_bootstrap_file(path: &Path) -> Result<Vec<u8>> {
+    use std::io::Write;
+
+    let mut writer = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    let options = zip::write::SimpleFileOptions::default()
+        .compression_method(zip::CompressionMethod::Deflated)
+        .unix_permissions(0o755);
+    writer.start_file("bootstrap", options)?;
+    let bytes = std::fs::read(path)
+        .with_context(|| format!("failed to read Lambda bootstrap: {}", path.display()))?;
+    writer.write_all(&bytes)?;
+    let cursor = writer.finish().context("failed to finalize zip archive")?;
+    Ok(cursor.into_inner())
 }
 
 /// Zip a directory recursively with the entries rooted at the
@@ -1083,6 +1236,8 @@ fn cache_key(source_dir: &Path) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use axum::{body::Bytes, extract::State, routing::put, Router};
+    use std::sync::{Arc, Mutex};
 
     fn test_workload(deployment_target: Option<&str>) -> BuildWorkloadSpec {
         BuildWorkloadSpec {
@@ -1152,7 +1307,7 @@ mod tests {
     }
 
     #[test]
-    fn lambda_rejects_rust_builds() {
+    fn lambda_detects_rust_builds() {
         let mut workload = test_workload(Some("lambda"));
         workload.framework = Some("rust_server".to_string());
         assert!(is_rust_lambda(&workload));
@@ -1166,6 +1321,137 @@ mod tests {
 
         workload.commands.build = Some("yarn build".to_string());
         assert!(!is_rust_lambda(&workload));
+    }
+
+    #[test]
+    fn package_lambda_archive_for_cargo_lambda_zips_bootstrap() {
+        let temp = tempfile::tempdir().unwrap();
+        let bootstrap = temp
+            .path()
+            .join("target")
+            .join("lambda")
+            .join("lambda-field-api")
+            .join("bootstrap");
+        std::fs::create_dir_all(bootstrap.parent().unwrap()).unwrap();
+        std::fs::write(&bootstrap, b"rust bootstrap").unwrap();
+
+        let mut workload = test_workload(Some("lambda"));
+        workload.framework = Some("cargo_lambda".to_string());
+        workload.commands.build = Some(
+            "cargo lambda build --package field-api --bin lambda-field-api --release --arm64"
+                .to_string(),
+        );
+
+        let (bytes, source) = package_lambda_archive_for_workload(&workload, temp.path()).unwrap();
+        assert_eq!(source, bootstrap.display().to_string());
+
+        let mut archive = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
+        let mut entry = archive.by_name("bootstrap").unwrap();
+        let mut contents = String::new();
+        use std::io::Read;
+        entry.read_to_string(&mut contents).unwrap();
+        assert_eq!(contents, "rust bootstrap");
+    }
+
+    #[test]
+    fn package_lambda_archive_for_cargo_lambda_uses_package_flag() {
+        let temp = tempfile::tempdir().unwrap();
+        let bootstrap = temp
+            .path()
+            .join("target")
+            .join("lambda")
+            .join("tachyon-field-api")
+            .join("bootstrap");
+        std::fs::create_dir_all(bootstrap.parent().unwrap()).unwrap();
+        std::fs::write(&bootstrap, b"field api bootstrap").unwrap();
+
+        let mut workload = test_workload(Some("lambda"));
+        workload.framework = Some("cargo_lambda".to_string());
+        workload.commands.build =
+            Some("cargo lambda build --package tachyon-field-api --release --arm64".to_string());
+
+        let (bytes, _) = package_lambda_archive_for_workload(&workload, temp.path()).unwrap();
+        let mut archive = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
+        assert!(archive.by_name("bootstrap").is_ok());
+    }
+
+    #[tokio::test]
+    async fn run_lambda_package_and_upload_puts_cargo_lambda_archive() {
+        let temp = tempfile::tempdir().unwrap();
+        let bootstrap = temp
+            .path()
+            .join("target")
+            .join("lambda")
+            .join("tachyon-field-api")
+            .join("bootstrap");
+        std::fs::create_dir_all(bootstrap.parent().unwrap()).unwrap();
+        std::fs::write(&bootstrap, b"field api bootstrap").unwrap();
+
+        let uploaded = Arc::new(Mutex::new(Vec::<u8>::new()));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let upload_url = format!("http://{}/lambda.zip", listener.local_addr().unwrap());
+        let app = Router::new()
+            .route(
+                "/lambda.zip",
+                put(
+                    |State(uploaded): State<Arc<Mutex<Vec<u8>>>>, body: Bytes| async move {
+                        *uploaded.lock().unwrap() = body.to_vec();
+                        "ok"
+                    },
+                ),
+            )
+            .with_state(uploaded.clone());
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+
+        let mut workload = test_workload(Some("lambda"));
+        workload.framework = Some("cargo_lambda".to_string());
+        workload.commands.build =
+            Some("cargo lambda build --package tachyon-field-api --release --arm64".to_string());
+        workload.env.push(BuildWorkloadEnvVar {
+            name: LAMBDA_UPLOAD_URL_ENV.to_string(),
+            value: upload_url,
+        });
+        let env = workload_env(&workload);
+
+        let output = run_lambda_package_and_upload(&workload, temp.path(), &env)
+            .await
+            .unwrap();
+
+        assert!(output.stdout.contains("uploaded lambda.zip"));
+        let body = uploaded.lock().unwrap().clone();
+        let mut archive = zip::ZipArchive::new(std::io::Cursor::new(body)).unwrap();
+        let mut entry = archive.by_name("bootstrap").unwrap();
+        let mut contents = String::new();
+        use std::io::Read;
+        entry.read_to_string(&mut contents).unwrap();
+        assert_eq!(contents, "field api bootstrap");
+    }
+
+    #[test]
+    fn package_lambda_archive_for_rust_server_zips_release_binary() {
+        let temp = tempfile::tempdir().unwrap();
+        let binary = temp
+            .path()
+            .join("target")
+            .join("aarch64-unknown-linux-gnu")
+            .join("release")
+            .join("starter-api");
+        std::fs::create_dir_all(binary.parent().unwrap()).unwrap();
+        std::fs::write(&binary, b"starter api binary").unwrap();
+
+        let mut workload = test_workload(Some("lambda"));
+        workload.framework = Some("rust_server".to_string());
+        workload.commands.build = Some(
+            "cargo build --package starter-api --release --target aarch64-unknown-linux-gnu"
+                .to_string(),
+        );
+
+        let (bytes, source) = package_lambda_archive_for_workload(&workload, temp.path()).unwrap();
+        assert_eq!(source, binary.display().to_string());
+        let mut archive = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
+        assert!(archive.by_name("bootstrap").is_ok());
     }
 
     #[test]
