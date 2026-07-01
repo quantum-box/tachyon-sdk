@@ -173,7 +173,9 @@ async fn run_build(workload: &BuildWorkloadSpec) -> Result<CommandResult> {
     // CodeBuild buildspec branching.
     let is_workers = is_cloudflare_workers(workload);
     let is_pages = !is_workers && is_cloudflare_pages(workload, &env);
-    if is_pages {
+    if is_workers {
+        validate_workers_binding_keys(&env)?;
+    } else if is_pages {
         validate_pages_binding_keys(&env)?;
     }
 
@@ -447,6 +449,10 @@ async fn run_cloudflare_workers_deploy(
     if let Some(name) = env_value(env, "WORKERS_SCRIPT_NAME") {
         command.arg("--name").arg(name);
     }
+    for key in validate_workers_binding_keys(env)? {
+        let value = required_env(env, &key)?;
+        command.arg("--var").arg(format!("{key}:{value}"));
+    }
     command
         .current_dir(app_dir)
         .envs(env)
@@ -654,6 +660,18 @@ fn pages_binding_keys(env: &BTreeMap<String, String>) -> Vec<String> {
         .unwrap_or_default()
 }
 
+fn workers_binding_keys(env: &BTreeMap<String, String>) -> Vec<String> {
+    env_value(env, "CF_WORKERS_BINDING_KEYS")
+        .map(|keys| {
+            keys.split(',')
+                .map(str::trim)
+                .filter(|key| !key.is_empty())
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 fn validate_pages_binding_keys(env: &BTreeMap<String, String>) -> Result<Vec<String>> {
     let keys = pages_binding_keys(env);
     for key in &keys {
@@ -663,6 +681,21 @@ fn validate_pages_binding_keys(env: &BTreeMap<String, String>) -> Result<Vec<Str
         if !env.contains_key(key) {
             return Err(anyhow!(
                 "Cloudflare Pages binding env var is missing: {key}"
+            ));
+        }
+    }
+    Ok(keys)
+}
+
+fn validate_workers_binding_keys(env: &BTreeMap<String, String>) -> Result<Vec<String>> {
+    let keys = workers_binding_keys(env);
+    for key in &keys {
+        if !is_valid_env_key(key) {
+            return Err(anyhow!("invalid Cloudflare Workers binding key: {key}"));
+        }
+        if !env.contains_key(key) {
+            return Err(anyhow!(
+                "Cloudflare Workers binding env var is missing: {key}"
             ));
         }
     }
@@ -1411,6 +1444,20 @@ mod tests {
     }
 
     #[test]
+    fn workers_binding_keys_parses_and_trims_keys() {
+        let mut env = BTreeMap::new();
+        env.insert(
+            "CF_WORKERS_BINDING_KEYS".to_string(),
+            "API_URL, AUTH_SECRET,,".to_string(),
+        );
+
+        assert_eq!(
+            workers_binding_keys(&env),
+            vec!["API_URL".to_string(), "AUTH_SECRET".to_string()]
+        );
+    }
+
+    #[test]
     fn validate_pages_binding_keys_requires_valid_present_env_keys() {
         let mut env = BTreeMap::new();
         env.insert(
@@ -1424,6 +1471,44 @@ mod tests {
             validate_pages_binding_keys(&env).unwrap(),
             vec!["API_URL".to_string(), "SECRET_TOKEN".to_string()]
         );
+    }
+
+    #[test]
+    fn validate_workers_binding_keys_requires_valid_present_env_keys() {
+        let mut env = BTreeMap::new();
+        env.insert(
+            "CF_WORKERS_BINDING_KEYS".to_string(),
+            "API_URL, AUTH_SECRET".to_string(),
+        );
+        env.insert("API_URL".to_string(), "https://example.com".to_string());
+        env.insert("AUTH_SECRET".to_string(), "secret-value".to_string());
+
+        assert_eq!(
+            validate_workers_binding_keys(&env).unwrap(),
+            vec!["API_URL".to_string(), "AUTH_SECRET".to_string()]
+        );
+    }
+
+    #[test]
+    fn validate_workers_binding_keys_rejects_invalid_keys() {
+        let mut env = BTreeMap::new();
+        env.insert("CF_WORKERS_BINDING_KEYS".to_string(), "BAD-KEY".to_string());
+        env.insert("BAD-KEY".to_string(), "value".to_string());
+
+        let error = validate_workers_binding_keys(&env).unwrap_err().to_string();
+        assert!(error.contains("invalid Cloudflare Workers binding key"));
+    }
+
+    #[test]
+    fn validate_workers_binding_keys_rejects_missing_env_values() {
+        let mut env = BTreeMap::new();
+        env.insert(
+            "CF_WORKERS_BINDING_KEYS".to_string(),
+            "AUTH_SECRET".to_string(),
+        );
+
+        let error = validate_workers_binding_keys(&env).unwrap_err().to_string();
+        assert!(error.contains("Cloudflare Workers binding env var is missing"));
     }
 
     #[test]
