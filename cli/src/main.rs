@@ -196,6 +196,103 @@ mod tests {
     }
 
     #[test]
+    fn parses_ops_sentry_issues_list_command() {
+        let cli = Cli::try_parse_from([
+            "tachyon",
+            "ops",
+            "sentry",
+            "issues",
+            "list",
+            "--project",
+            "fieldadmin",
+            "--query",
+            "is:unresolved",
+            "--limit",
+            "25",
+            "--json",
+        ])
+        .unwrap();
+
+        match cli.command {
+            Commands::Ops(ops_cli::OpsArgs {
+                command:
+                    ops_cli::OpsCommand::Sentry {
+                        command:
+                            ops_cli::SentryCommand::Issues {
+                                command:
+                                    ops_cli::SentryIssuesCommand::List {
+                                        project,
+                                        query,
+                                        limit,
+                                        json,
+                                    },
+                            },
+                    },
+            }) => {
+                assert_eq!(project.as_deref(), Some("fieldadmin"));
+                assert_eq!(query.as_deref(), Some("is:unresolved"));
+                assert_eq!(limit, Some(25));
+                assert!(json);
+            }
+            _ => panic!("expected ops sentry issues list command"),
+        }
+    }
+
+    #[test]
+    fn parses_ops_sentry_issue_alias_commands() {
+        let view =
+            Cli::try_parse_from(["tachyon", "ops", "sentry", "issue", "view", "12345"]).unwrap();
+        match view.command {
+            Commands::Ops(ops_cli::OpsArgs {
+                command:
+                    ops_cli::OpsCommand::Sentry {
+                        command:
+                            ops_cli::SentryCommand::Issues {
+                                command: ops_cli::SentryIssuesCommand::View { issue_id, json },
+                            },
+                    },
+            }) => {
+                assert_eq!(issue_id, "12345");
+                assert!(!json);
+            }
+            _ => panic!("expected ops sentry issue view command"),
+        }
+
+        let assign = Cli::try_parse_from([
+            "tachyon",
+            "ops",
+            "sentry",
+            "issue",
+            "assign",
+            "12345",
+            "user@example.com",
+            "--json",
+        ])
+        .unwrap();
+        match assign.command {
+            Commands::Ops(ops_cli::OpsArgs {
+                command:
+                    ops_cli::OpsCommand::Sentry {
+                        command:
+                            ops_cli::SentryCommand::Issues {
+                                command:
+                                    ops_cli::SentryIssuesCommand::Assign {
+                                        issue_id,
+                                        user,
+                                        json,
+                                    },
+                            },
+                    },
+            }) => {
+                assert_eq!(issue_id, "12345");
+                assert_eq!(user, "user@example.com");
+                assert!(json);
+            }
+            _ => panic!("expected ops sentry issue assign command"),
+        }
+    }
+
+    #[test]
     fn parses_top_level_slack_send_command() {
         let cli = Cli::try_parse_from([
             "tachyon",
