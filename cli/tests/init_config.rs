@@ -129,8 +129,12 @@ fn start_collecting_apply_server() -> (String, mpsc::Receiver<Vec<String>>, thre
                         r#"{"apps":[]}"#
                     } else if req.starts_with("GET /v1/build-runner-backends ") {
                         build_runner_backend_availability_body()
+                    } else if req.starts_with("POST /v1/internal-service-refs/preflight ") {
+                        r#"{"checked":1}"#
                     } else if req.starts_with("POST /v1/compute/apps ") {
                         r#"{"id":"app_created","name":"valid-app","repository_url":"https://github.com/quantum-box/erp","repository_owner":"quantum-box","repository_name":"erp","default_branch":"main","framework":"next_js","deployment_target":"cloud_run"}"#
+                    } else if req.starts_with("POST /v1/graphql ") {
+                        r#"{"data":{"saveManifest":{"kind":"CloudApp"},"applyManifest":{"success":true}}}"#
                     } else {
                         r#"{"error":"unexpected request"}"#
                     };
@@ -830,6 +834,84 @@ spec:
     );
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("app entry invalid-app is missing repository"));
+}
+
+#[test]
+fn compute_apps_apply_preflights_internal_service_refs_before_mutation() {
+    let tmp = TempDir::new().unwrap();
+    let manifest = tmp.path().join("tachyon.yml");
+    fs::write(
+        &manifest,
+        r#"
+apiVersion: apps.tachy.one/v1alpha
+kind: CloudApps
+metadata:
+  name: fieldadmin
+spec:
+  apps:
+    - name: fieldadmin
+      repository:
+        url: https://github.com/quantum-box/tachyonfield
+        owner: quantum-box
+        name: tachyonfield
+      envVars:
+        - name: TACHYON_FIELD_API_URL
+          valueFrom:
+            internalService:
+              appName: tachyon-field-api
+"#,
+    )
+    .unwrap();
+    let (api_url, rx, handle) = start_collecting_apply_server();
+
+    let mut cmd = isolated_command(tmp.path());
+    let output = cmd
+        .current_dir(tmp.path())
+        .env("TACHYON_API_URL", api_url)
+        .env("TACHYON_API_KEY", "test-token")
+        .env("TACHYON_TENANT_ID", "tn_01hjryxysgey07h5jz5wagqj0m")
+        .args([
+            "compute",
+            "apps",
+            "apply",
+            "-f",
+            manifest.to_str().unwrap(),
+            "--environment",
+            "production",
+        ])
+        .output()
+        .expect("run compute apps apply");
+
+    assert!(
+        output.status.success(),
+        "apply failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let requests = rx.recv_timeout(Duration::from_secs(2)).unwrap();
+    handle.join().unwrap();
+
+    let runner_preflight = requests
+        .iter()
+        .position(|request| request.starts_with("GET /v1/build-runner-backends "));
+    let internal_service_preflight = requests
+        .iter()
+        .position(|request| request.starts_with("POST /v1/internal-service-refs/preflight "));
+    let create_app = requests
+        .iter()
+        .position(|request| request.starts_with("POST /v1/compute/apps "));
+
+    assert!(runner_preflight.is_some(), "requests: {requests:#?}");
+    let internal_service_preflight =
+        internal_service_preflight.expect("missing internalService preflight");
+    let create_app = create_app.expect("missing create app request");
+    assert!(
+        internal_service_preflight < create_app,
+        "internalService preflight must run before mutation: {requests:#?}"
+    );
+    assert!(requests[internal_service_preflight].contains("TACHYON_FIELD_API_URL"));
+    assert!(requests[internal_service_preflight].contains("tachyon-field-api"));
 }
 
 #[test]
