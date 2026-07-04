@@ -45,6 +45,11 @@ pub enum OpsCommand {
         #[command(subcommand)]
         command: NotifyCommand,
     },
+    /// Inspect and manage Sentry issues
+    Sentry {
+        #[command(subcommand)]
+        command: SentryCommand,
+    },
 }
 
 #[derive(Debug, Clone, Subcommand)]
@@ -176,6 +181,58 @@ pub enum NotifyCommand {
         /// Slack Bot token used for users.list
         #[arg(long = "bot-token", env = "TACHYON_SLACK_BOT_TOKEN")]
         bot_token: Option<String>,
+        /// Print the API response as JSON
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+#[derive(Debug, Clone, Subcommand)]
+pub enum SentryCommand {
+    /// Inspect and manage Sentry issues
+    #[command(visible_alias = "issue")]
+    Issues {
+        #[command(subcommand)]
+        command: SentryIssuesCommand,
+    },
+}
+
+#[derive(Debug, Clone, Subcommand)]
+pub enum SentryIssuesCommand {
+    /// List Sentry issues
+    List {
+        /// Sentry project slug or id
+        #[arg(long)]
+        project: Option<String>,
+        /// Sentry search query
+        #[arg(long)]
+        query: Option<String>,
+        /// Maximum number of issues to return
+        #[arg(long)]
+        limit: Option<u32>,
+        /// Print the API response as JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// Get Sentry issue details
+    View {
+        issue_id: String,
+        /// Print the API response as JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// Mark a Sentry issue as resolved
+    Resolve {
+        issue_id: String,
+        /// Print the API response as JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// Assign a Sentry issue to a user
+    Assign {
+        issue_id: String,
+        /// Sentry user id, username, or email
+        user: String,
         /// Print the API response as JSON
         #[arg(long)]
         json: bool,
@@ -334,6 +391,76 @@ struct SlackUserProfile {
 struct SlackResponseMetadata {
     #[serde(default)]
     next_cursor: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(untagged)]
+enum SentryIssueListResponse {
+    Wrapped {
+        #[serde(default)]
+        issues: Vec<SentryIssueResponse>,
+    },
+    Bare(Vec<SentryIssueResponse>),
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct SentryIssueResponse {
+    id: String,
+    #[serde(default, alias = "shortId")]
+    short_id: Option<String>,
+    #[serde(default)]
+    title: Option<String>,
+    #[serde(default)]
+    culprit: Option<String>,
+    #[serde(default)]
+    project: Option<String>,
+    #[serde(default)]
+    status: Option<String>,
+    #[serde(default)]
+    count: Option<Value>,
+    #[serde(default, alias = "userCount")]
+    user_count: Option<Value>,
+    #[serde(default, alias = "firstSeen")]
+    first_seen: Option<String>,
+    #[serde(default, alias = "lastSeen")]
+    last_seen: Option<String>,
+    #[serde(default)]
+    permalink: Option<String>,
+    #[serde(default, alias = "assignedTo")]
+    assigned_to: Option<SentryAssignedTo>,
+    #[serde(default, alias = "latestEvent")]
+    latest_event: Option<SentryEventResponse>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct SentryAssignedTo {
+    #[serde(default)]
+    id: Option<String>,
+    #[serde(default)]
+    name: Option<String>,
+    #[serde(default)]
+    email: Option<String>,
+    #[serde(default)]
+    username: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct SentryEventResponse {
+    #[serde(default)]
+    id: Option<String>,
+    #[serde(default)]
+    event_id: Option<String>,
+    #[serde(default)]
+    title: Option<String>,
+    #[serde(default)]
+    message: Option<String>,
+    #[serde(default)]
+    timestamp: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct SentryAssignRequest {
+    user: String,
 }
 
 // ---- Handlers ----
@@ -971,6 +1098,201 @@ async fn run_notify_users(bot_token: Option<&str>, json: bool) -> Result<()> {
     Ok(())
 }
 
+async fn run_sentry_issues_list(
+    api: &ApiClient,
+    project: Option<&str>,
+    query: Option<&str>,
+    limit: Option<u32>,
+    json: bool,
+) -> Result<()> {
+    let mut params = Vec::new();
+    if let Some(project) = project.filter(|value| !value.trim().is_empty()) {
+        params.push(("project", project));
+    }
+    if let Some(query) = query.filter(|value| !value.trim().is_empty()) {
+        params.push(("query", query));
+    }
+    let limit_value;
+    if let Some(limit) = limit {
+        limit_value = limit.to_string();
+        params.push(("limit", limit_value.as_str()));
+    }
+
+    let response: SentryIssueListResponse = api.get_query("/v1/ops/sentry/issues", &params).await?;
+    if json {
+        return print_json(&response);
+    }
+    let issues = sentry_issue_list_items(response);
+    if issues.is_empty() {
+        println!("No Sentry issues found.");
+        return Ok(());
+    }
+
+    println!(
+        "{:<14}  {:<10}  {:<10}  {:<8}  {:<18}  TITLE",
+        "ISSUE", "PROJECT", "STATUS", "COUNT", "LAST SEEN"
+    );
+    println!(
+        "{:-<14}  {:-<10}  {:-<10}  {:-<8}  {:-<18}  {:-<60}",
+        "", "", "", "", "", ""
+    );
+    for issue in &issues {
+        println!(
+            "{:<14}  {:<10}  {:<10}  {:<8}  {:<18}  {}",
+            sentry_issue_label(issue),
+            truncate(issue.project.as_deref().unwrap_or("-"), 10),
+            issue.status.as_deref().unwrap_or("-"),
+            sentry_value_label(issue.count.as_ref()),
+            issue.last_seen.as_deref().unwrap_or("-"),
+            truncate(issue.title.as_deref().unwrap_or("-"), 60),
+        );
+    }
+    Ok(())
+}
+
+async fn run_sentry_issue_view(api: &ApiClient, issue_id: &str, json: bool) -> Result<()> {
+    let issue: SentryIssueResponse = api
+        .get(&format!("/v1/ops/sentry/issues/{issue_id}"))
+        .await?;
+    if json {
+        return print_json(&issue);
+    }
+    print_sentry_issue(&issue);
+    Ok(())
+}
+
+async fn run_sentry_issue_resolve(api: &ApiClient, issue_id: &str, json: bool) -> Result<()> {
+    let issue: SentryIssueResponse = api
+        .post(
+            &format!("/v1/ops/sentry/issues/{issue_id}/resolve"),
+            &json!({}),
+        )
+        .await?;
+    if json {
+        return print_json(&issue);
+    }
+    println!("Sentry issue {} resolved.", sentry_issue_label(&issue));
+    Ok(())
+}
+
+async fn run_sentry_issue_assign(
+    api: &ApiClient,
+    issue_id: &str,
+    user: &str,
+    json: bool,
+) -> Result<()> {
+    let request = SentryAssignRequest {
+        user: user.to_string(),
+    };
+    let issue: SentryIssueResponse = api
+        .post(
+            &format!("/v1/ops/sentry/issues/{issue_id}/assign"),
+            &request,
+        )
+        .await?;
+    if json {
+        return print_json(&issue);
+    }
+    println!(
+        "Sentry issue {} assigned to {user}.",
+        sentry_issue_label(&issue)
+    );
+    Ok(())
+}
+
+fn sentry_issue_label(issue: &SentryIssueResponse) -> &str {
+    issue.short_id.as_deref().unwrap_or(&issue.id)
+}
+
+fn sentry_issue_list_items(response: SentryIssueListResponse) -> Vec<SentryIssueResponse> {
+    match response {
+        SentryIssueListResponse::Wrapped { issues } => issues,
+        SentryIssueListResponse::Bare(issues) => issues,
+    }
+}
+
+fn sentry_value_label(value: Option<&Value>) -> String {
+    match value {
+        Some(Value::String(value)) => value.clone(),
+        Some(Value::Number(value)) => value.to_string(),
+        Some(Value::Bool(value)) => value.to_string(),
+        Some(value) if value.is_null() => "-".to_string(),
+        Some(value) => value.to_string(),
+        None => "-".to_string(),
+    }
+}
+
+fn sentry_assignee_label(assigned_to: Option<&SentryAssignedTo>) -> &str {
+    assigned_to
+        .and_then(|assignee| {
+            assignee
+                .name
+                .as_deref()
+                .filter(|value| !value.is_empty())
+                .or_else(|| assignee.email.as_deref().filter(|value| !value.is_empty()))
+                .or_else(|| {
+                    assignee
+                        .username
+                        .as_deref()
+                        .filter(|value| !value.is_empty())
+                })
+                .or_else(|| assignee.id.as_deref().filter(|value| !value.is_empty()))
+        })
+        .unwrap_or("-")
+}
+
+fn sentry_latest_event_label(latest_event: Option<&SentryEventResponse>) -> String {
+    let Some(event) = latest_event else {
+        return "-".to_string();
+    };
+    let id = event
+        .event_id
+        .as_deref()
+        .or(event.id.as_deref())
+        .unwrap_or("-");
+    let title = event
+        .title
+        .as_deref()
+        .or(event.message.as_deref())
+        .unwrap_or("-");
+    let timestamp = event.timestamp.as_deref().unwrap_or("-");
+    format!("{id}  {timestamp}  {title}")
+}
+
+fn print_sentry_issue(issue: &SentryIssueResponse) {
+    println!("Issue:        {}", sentry_issue_label(issue));
+    println!("ID:           {}", issue.id);
+    println!("Title:        {}", issue.title.as_deref().unwrap_or("-"));
+    println!("Culprit:      {}", issue.culprit.as_deref().unwrap_or("-"));
+    println!("Project:      {}", issue.project.as_deref().unwrap_or("-"));
+    println!("Status:       {}", issue.status.as_deref().unwrap_or("-"));
+    println!("Count:        {}", sentry_value_label(issue.count.as_ref()));
+    println!(
+        "Users:        {}",
+        sentry_value_label(issue.user_count.as_ref())
+    );
+    println!(
+        "Assigned To:  {}",
+        sentry_assignee_label(issue.assigned_to.as_ref())
+    );
+    println!(
+        "First Seen:   {}",
+        issue.first_seen.as_deref().unwrap_or("-")
+    );
+    println!(
+        "Last Seen:    {}",
+        issue.last_seen.as_deref().unwrap_or("-")
+    );
+    println!(
+        "Latest Event: {}",
+        sentry_latest_event_label(issue.latest_event.as_ref())
+    );
+    println!(
+        "Permalink:    {}",
+        issue.permalink.as_deref().unwrap_or("-")
+    );
+}
+
 async fn resolve_mentions(mentions: &[String], bot_token: Option<&str>) -> Result<Vec<String>> {
     let mut resolved = Vec::with_capacity(mentions.len());
     for mention in mentions {
@@ -1204,6 +1526,36 @@ pub async fn run(
                 run_notify_users(bot_token.as_deref(), *json).await
             }
         },
+        OpsCommand::Sentry { command } => match command {
+            SentryCommand::Issues { command } => match command {
+                SentryIssuesCommand::List {
+                    project,
+                    query,
+                    limit,
+                    json,
+                } => {
+                    run_sentry_issues_list(
+                        &api,
+                        project.as_deref(),
+                        query.as_deref(),
+                        *limit,
+                        *json,
+                    )
+                    .await
+                }
+                SentryIssuesCommand::View { issue_id, json } => {
+                    run_sentry_issue_view(&api, issue_id, *json).await
+                }
+                SentryIssuesCommand::Resolve { issue_id, json } => {
+                    run_sentry_issue_resolve(&api, issue_id, *json).await
+                }
+                SentryIssuesCommand::Assign {
+                    issue_id,
+                    user,
+                    json,
+                } => run_sentry_issue_assign(&api, issue_id, user, *json).await,
+            },
+        },
     }
 }
 
@@ -1272,5 +1624,47 @@ mod tests {
         };
 
         assert_eq!(slack_user_display_name(&user), "display");
+    }
+
+    #[test]
+    fn deserializes_sentry_issues_from_wrapped_and_bare_responses() {
+        let wrapped: SentryIssueListResponse = serde_json::from_value(json!({
+            "issues": [{
+                "id": "12345",
+                "shortId": "FIELDADMIN-1",
+                "title": "TypeError",
+                "count": 42,
+                "userCount": "3",
+                "firstSeen": "2026-07-01T00:00:00Z",
+                "lastSeen": "2026-07-02T00:00:00Z",
+                "assignedTo": {"email": "user@example.com"},
+                "latestEvent": {"event_id": "evt_1", "timestamp": "2026-07-02T00:00:00Z"}
+            }]
+        }))
+        .unwrap();
+        let wrapped = sentry_issue_list_items(wrapped);
+        assert_eq!(wrapped[0].short_id.as_deref(), Some("FIELDADMIN-1"));
+        assert_eq!(sentry_value_label(wrapped[0].count.as_ref()), "42");
+        assert_eq!(sentry_value_label(wrapped[0].user_count.as_ref()), "3");
+        assert_eq!(
+            sentry_assignee_label(wrapped[0].assigned_to.as_ref()),
+            "user@example.com"
+        );
+
+        let bare: SentryIssueListResponse =
+            serde_json::from_value(json!([{ "id": "12345", "title": "TypeError" }])).unwrap();
+        assert_eq!(sentry_issue_list_items(bare).len(), 1);
+    }
+
+    #[test]
+    fn serializes_sentry_assign_request() {
+        let request = SentryAssignRequest {
+            user: "user@example.com".to_string(),
+        };
+
+        assert_eq!(
+            serde_json::to_value(&request).unwrap(),
+            json!({ "user": "user@example.com" })
+        );
     }
 }
