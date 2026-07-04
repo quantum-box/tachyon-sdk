@@ -306,11 +306,32 @@ struct BuildRunnerBackendStatusResponse {
     available: bool,
 }
 
+#[derive(Debug, Serialize)]
+struct InternalServiceRefsPreflightRequest {
+    environment: String,
+    pr_number: Option<i32>,
+    refs: Vec<InternalServiceRefsPreflightEntry>,
+}
+
+#[derive(Debug, Serialize)]
+struct InternalServiceRefsPreflightEntry {
+    app_name: String,
+    env_var_name: String,
+    internal_service_app: String,
+    field: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct InternalServiceRefsPreflightResponse {
+    checked: usize,
+}
+
 #[derive(Debug, Default)]
 pub(crate) struct EnvPlan {
     pub(super) plain: Vec<SetEnvVarEntry>,
     pub(super) secret_refs: Vec<SecretEnvRef>,
     pub(super) server_managed_credentials: Vec<ServerManagedCredentialRef>,
+    pub(super) internal_service_refs: Vec<InternalServiceRefPlan>,
     pub(super) sentry_integrations: Vec<SentryIntegrationPlan>,
 }
 
@@ -325,6 +346,13 @@ pub(super) struct ServerManagedCredentialRef {
     pub(super) key: String,
     pub(super) target: String,
     pub(super) source: ServerManagedCredentialSource,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub(super) struct InternalServiceRefPlan {
+    pub(super) key: String,
+    pub(super) app_name: String,
+    pub(super) field: Option<String>,
 }
 
 /// Server-managed credential source accepted by `tachyon compute apps apply`.
@@ -469,6 +497,7 @@ pub(crate) async fn run_apps_apply_manifest(input: AppsApplyManifestInput<'_>) -
     let entries = select_app_entries(manifest, selected_app)?;
     let plans = build_app_apply_plans(entries, tenant_id, environment)?;
     preflight_build_runner_backends(api, &plans).await?;
+    preflight_internal_service_refs(api, environment, &plans).await?;
     if plans.iter().any(|plan| plan.sentry_plan.is_some()) {
         validate_sentry_integration(api).await?;
     }
@@ -524,7 +553,9 @@ pub(crate) async fn run_apps_apply_manifest(input: AppsApplyManifestInput<'_>) -
         if !env_changed.is_empty() {
             println!("  env:         {}", env_changed.join(", "));
         }
-        if !plan.env_plan.server_managed_credentials.is_empty() {
+        let has_server_side_env_refs = !plan.env_plan.server_managed_credentials.is_empty()
+            || !plan.env_plan.internal_service_refs.is_empty();
+        if has_server_side_env_refs {
             let refs = plan
                 .env_plan
                 .server_managed_credentials
@@ -536,6 +567,15 @@ pub(crate) async fn run_apps_apply_manifest(input: AppsApplyManifestInput<'_>) -
                     )
                 })
                 .collect::<Vec<_>>();
+            let internal_refs = plan
+                .env_plan
+                .internal_service_refs
+                .iter()
+                .map(|reference| {
+                    format!("{}(internalService:{})", reference.key, reference.app_name)
+                })
+                .collect::<Vec<_>>();
+            let refs = refs.into_iter().chain(internal_refs).collect::<Vec<_>>();
             println!("  managed env: {}", refs.join(", "));
             if dry_run {
                 println!("  next:        run without --dry-run to save/apply the CloudApp manifest server-side");
@@ -545,7 +585,7 @@ pub(crate) async fn run_apps_apply_manifest(input: AppsApplyManifestInput<'_>) -
                     .as_ref()
                     .ok_or_else(|| anyhow!("missing CloudApp IaC manifest for {}", plan.name))?;
                 apply_compute_cloud_app_manifest(api, manifest).await?;
-                println!("  iac:         applied server-managed credential refs");
+                println!("  iac:         applied server-managed env refs");
             }
         }
         if let Some(sentry) = &plan.sentry_plan {
@@ -610,7 +650,9 @@ fn build_app_apply_plans(
                 .to_string();
             let body = app_entry_to_api_body(&entry)?;
             let env_plan = plan_env_vars(&entry, environment)?;
-            let iac_manifest = if env_plan.server_managed_credentials.is_empty() {
+            let iac_manifest = if env_plan.server_managed_credentials.is_empty()
+                && env_plan.internal_service_refs.is_empty()
+            {
                 None
             } else {
                 Some(cloud_app_manifest_for_iac(&entry, tenant_id)?)
@@ -663,6 +705,41 @@ fn validate_build_runner_backend_availability(
             ));
         }
     }
+    Ok(())
+}
+
+async fn preflight_internal_service_refs(
+    api: &ApiClient,
+    environment: &str,
+    plans: &[AppApplyPlan],
+) -> Result<()> {
+    let refs = plans
+        .iter()
+        .flat_map(|plan| {
+            plan.env_plan.internal_service_refs.iter().map(|reference| {
+                InternalServiceRefsPreflightEntry {
+                    app_name: plan.name.clone(),
+                    env_var_name: reference.key.clone(),
+                    internal_service_app: reference.app_name.clone(),
+                    field: reference.field.clone(),
+                }
+            })
+        })
+        .collect::<Vec<_>>();
+    if refs.is_empty() {
+        return Ok(());
+    }
+    let response: InternalServiceRefsPreflightResponse = api
+        .post(
+            "/v1/internal-service-refs/preflight",
+            &InternalServiceRefsPreflightRequest {
+                environment: manifest_environment_key(environment).to_string(),
+                pr_number: None,
+                refs,
+            },
+        )
+        .await?;
+    let _checked = response.checked;
     Ok(())
 }
 
@@ -1519,6 +1596,38 @@ spec:
     }
 
     #[test]
+    fn plan_env_vars_collects_internal_service_refs_for_preflight() {
+        let entry = json!({
+            "name": "fieldadmin",
+            "envVars": [
+                {
+                    "name": "TACHYON_FIELD_API_URL",
+                    "valueFrom": {
+                        "internalService": {
+                            "appName": "tachyon-field-api",
+                            "field": "url"
+                        }
+                    }
+                }
+            ]
+        });
+
+        let plan = plan_env_vars(&entry, "production").unwrap();
+
+        assert!(plan.plain.is_empty());
+        assert!(plan.secret_refs.is_empty());
+        assert!(plan.server_managed_credentials.is_empty());
+        assert_eq!(
+            plan.internal_service_refs,
+            vec![InternalServiceRefPlan {
+                key: "TACHYON_FIELD_API_URL".to_string(),
+                app_name: "tachyon-field-api".to_string(),
+                field: Some("url".to_string()),
+            }]
+        );
+    }
+
+    #[test]
     fn select_app_entries_rejects_duplicate_app_names_across_documents() {
         let (_tmp, path) = write_manifest(
             r#"
@@ -1593,8 +1702,16 @@ pub(crate) fn plan_env_vars(entry: &Value, environment: &str) -> Result<EnvPlan>
                         });
                     continue;
                 }
+                if let Some((app_name, field)) = internal_service_ref(value_from)? {
+                    plan.internal_service_refs.push(InternalServiceRefPlan {
+                        key: key.to_string(),
+                        app_name,
+                        field,
+                    });
+                    continue;
+                }
                 return Err(anyhow!(
-                    "credential env var {key} supports valueFrom.secret, valueFrom.databaseRef, valueFrom.oauth2ClientRef, or valueFrom.storageRef"
+                    "credential env var {key} supports valueFrom.secret, valueFrom.databaseRef, valueFrom.oauth2ClientRef, valueFrom.storageRef, or valueFrom.internalService"
                 ));
             } else {
                 plan.plain.push(SetEnvVarEntry {
@@ -1749,6 +1866,25 @@ fn server_managed_credential_source(value_from: &Value) -> Option<ServerManagedC
         return Some(ServerManagedCredentialSource::Storage);
     }
     None
+}
+
+fn internal_service_ref(value_from: &Value) -> Result<Option<(String, Option<String>)>> {
+    let Some(reference) = value_from.get("internalService") else {
+        return Ok(None);
+    };
+    let app_name = reference
+        .get("appName")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| anyhow!("valueFrom.internalService.appName is required"))?;
+    let field = reference
+        .get("field")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string);
+    Ok(Some((app_name.to_string(), field)))
 }
 
 pub(super) fn cloud_app_manifest_for_iac(entry: &Value, tenant_id: &str) -> Result<Value> {

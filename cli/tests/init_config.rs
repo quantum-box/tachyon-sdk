@@ -129,8 +129,12 @@ fn start_collecting_apply_server() -> (String, mpsc::Receiver<Vec<String>>, thre
                         r#"{"apps":[]}"#
                     } else if req.starts_with("GET /v1/build-runner-backends ") {
                         build_runner_backend_availability_body()
+                    } else if req.starts_with("POST /v1/internal-service-refs/preflight ") {
+                        r#"{"checked":1}"#
                     } else if req.starts_with("POST /v1/compute/apps ") {
                         r#"{"id":"app_created","name":"valid-app","repository_url":"https://github.com/quantum-box/erp","repository_owner":"quantum-box","repository_name":"erp","default_branch":"main","framework":"next_js","deployment_target":"cloud_run"}"#
+                    } else if req.starts_with("POST /v1/graphql ") {
+                        r#"{"data":{"saveManifest":{"kind":"CloudApp"},"applyManifest":{"success":true}}}"#
                     } else {
                         r#"{"error":"unexpected request"}"#
                     };
@@ -138,6 +142,57 @@ fn start_collecting_apply_server() -> (String, mpsc::Receiver<Vec<String>>, thre
                         "HTTP/1.1 500 Internal Server Error"
                     } else {
                         "HTTP/1.1 200 OK"
+                    };
+                    let response = format!(
+                        "{status}\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+                        body.len(),
+                        body
+                    );
+                    stream.write_all(response.as_bytes()).unwrap();
+                }
+                Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
+                    if Instant::now() >= deadline {
+                        tx.send(requests).unwrap();
+                        return;
+                    }
+                    thread::sleep(Duration::from_millis(10));
+                }
+                Err(err) => panic!("accept apply request: {err}"),
+            }
+        }
+    });
+    (url, rx, handle)
+}
+
+fn start_internal_service_preflight_error_server(
+) -> (String, mpsc::Receiver<Vec<String>>, thread::JoinHandle<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    let (tx, rx) = mpsc::channel();
+    let handle = thread::spawn(move || {
+        let deadline = Instant::now() + Duration::from_millis(800);
+        let mut requests = Vec::new();
+        loop {
+            match listener.accept() {
+                Ok((mut stream, _)) => {
+                    let mut buf = [0_u8; 8192];
+                    let n = stream.read(&mut buf).unwrap();
+                    let req = String::from_utf8_lossy(&buf[..n]).to_string();
+                    requests.push(req.clone());
+
+                    let (status, body) = if req.starts_with("GET /v1/build-runner-backends ") {
+                        ("HTTP/1.1 200 OK", build_runner_backend_availability_body())
+                    } else if req.starts_with("POST /v1/internal-service-refs/preflight ") {
+                        (
+                            "HTTP/1.1 400 Bad Request",
+                            r#"{"error":"internalService preflight failed: env var fieldadmin:TACHYON_FIELD_API_URL references missing internalService app tachyon-field-api in production"}"#,
+                        )
+                    } else {
+                        (
+                            "HTTP/1.1 500 Internal Server Error",
+                            r#"{"error":"unexpected request"}"#,
+                        )
                     };
                     let response = format!(
                         "{status}\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
@@ -830,6 +885,90 @@ spec:
     );
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("app entry invalid-app is missing repository"));
+}
+
+#[test]
+fn compute_apps_apply_preflights_internal_service_refs_before_mutation() {
+    let tmp = TempDir::new().unwrap();
+    let manifest = tmp.path().join("tachyon.yml");
+    fs::write(
+        &manifest,
+        r#"
+apiVersion: apps.tachy.one/v1alpha
+kind: CloudApps
+metadata:
+  name: fieldadmin
+spec:
+  apps:
+    - name: fieldadmin
+      repository:
+        url: https://github.com/quantum-box/tachyonfield
+        owner: quantum-box
+        name: tachyonfield
+      envVars:
+        - name: TACHYON_FIELD_API_URL
+          valueFrom:
+            internalService:
+              appName: tachyon-field-api
+"#,
+    )
+    .unwrap();
+    let (api_url, rx, handle) = start_internal_service_preflight_error_server();
+
+    let mut cmd = isolated_command(tmp.path());
+    let output = cmd
+        .current_dir(tmp.path())
+        .env("TACHYON_API_URL", api_url)
+        .env("TACHYON_API_KEY", "test-token")
+        .env("TACHYON_TENANT_ID", "tn_01hjryxysgey07h5jz5wagqj0m")
+        .args([
+            "compute",
+            "apps",
+            "apply",
+            "-f",
+            manifest.to_str().unwrap(),
+            "--environment",
+            "production",
+            "--change-control-token",
+            "dummy-approved-token",
+        ])
+        .output()
+        .expect("run compute apps apply");
+
+    assert!(
+        !output.status.success(),
+        "apply unexpectedly succeeded\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let requests = rx.recv_timeout(Duration::from_secs(2)).unwrap();
+    handle.join().unwrap();
+
+    let runner_preflight = requests
+        .iter()
+        .position(|request| request.starts_with("GET /v1/build-runner-backends "));
+    let internal_service_preflight = requests
+        .iter()
+        .position(|request| request.starts_with("POST /v1/internal-service-refs/preflight "));
+    let create_app = requests
+        .iter()
+        .position(|request| request.starts_with("POST /v1/compute/apps "));
+
+    assert!(runner_preflight.is_some(), "requests: {requests:#?}");
+    let internal_service_preflight =
+        internal_service_preflight.expect("missing internalService preflight");
+    assert!(
+        create_app.is_none(),
+        "preflight failure must not mutate: {requests:#?}"
+    );
+    assert!(requests[internal_service_preflight].contains("TACHYON_FIELD_API_URL"));
+    assert!(requests[internal_service_preflight].contains("tachyon-field-api"));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("POST /v1/internal-service-refs/preflight failed"));
+    assert!(stderr.contains("internalService preflight failed"));
+    assert!(stderr.contains("tachyon-field-api"));
+    assert!(!stderr.contains("dummy-approved-token"));
 }
 
 #[test]
