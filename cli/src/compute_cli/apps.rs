@@ -691,6 +691,7 @@ fn cloud_apps_entries(value: &Value) -> Result<Vec<Value>> {
         if let Some(tenant_id) = tenant_id.clone() {
             entry_obj.insert(DOCUMENT_TENANT_ID_KEY.to_string(), tenant_id);
         }
+        validate_cloud_app_entry_runner_backend(&entry)?;
         entries.push(entry);
     }
     Ok(entries)
@@ -710,7 +711,54 @@ fn cloud_app_entry(value: &Value) -> Result<Value> {
     if let Some(tenant_id) = metadata.get("tenantId").cloned() {
         entry_obj.insert(DOCUMENT_TENANT_ID_KEY.to_string(), tenant_id);
     }
+    validate_cloud_app_entry_runner_backend(&entry)?;
     Ok(entry)
+}
+
+fn validate_cloud_app_entry_runner_backend(entry: &Value) -> Result<()> {
+    let name = entry
+        .get("name")
+        .and_then(Value::as_str)
+        .unwrap_or("<unnamed>");
+    validate_build_runner_backend_at(
+        entry.get("build"),
+        &format!("app {name} build.runnerBackend"),
+    )?;
+    if let Some(environments) = entry.get("environments").and_then(Value::as_object) {
+        for environment in ["preview", "staging", "production"] {
+            let Some(overlay) = environments.get(environment) else {
+                continue;
+            };
+            validate_build_runner_backend_at(
+                overlay.get("build"),
+                &format!("app {name} environments.{environment}.build.runnerBackend"),
+            )?;
+        }
+    }
+    Ok(())
+}
+
+fn validate_build_runner_backend_at(build: Option<&Value>, path: &str) -> Result<()> {
+    let Some(build) = build else {
+        return Ok(());
+    };
+    let Some(runner_backend) = build.get("runnerBackend") else {
+        return Ok(());
+    };
+    let value = runner_backend
+        .as_str()
+        .ok_or_else(|| anyhow!("{path} must be a string"))?;
+    parse_build_runner_backend(value).with_context(|| format!("invalid {path}"))?;
+    Ok(())
+}
+
+fn parse_build_runner_backend(value: &str) -> Result<&'static str> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "codebuild" | "aws_codebuild" | "aws-codebuild" => Ok("codebuild"),
+        "kubernetes_kata" | "kubernetes-kata" | "k8s_kata" | "k8s-kata" | "hetzner_k3s_kata"
+        | "hetzner-k3s-kata" => Ok("kubernetes_kata"),
+        other => Err(anyhow!("unsupported build runner backend: {other}")),
+    }
 }
 
 struct OAuth2ClientDependency {
@@ -1239,6 +1287,56 @@ spec:
 
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0]["name"], "field");
+    }
+
+    #[test]
+    fn load_cloud_apps_manifest_accepts_allowed_runner_backend() {
+        let (_tmp, path) = write_manifest(
+            r#"
+apiVersion: apps.tachy.one/v1alpha
+kind: CloudApps
+spec:
+  apps:
+    - name: field
+      repository:
+        url: https://github.com/quantum-box/tachyonfield
+        owner: quantum-box
+        name: tachyonfield
+      build:
+        runnerBackend: kubernetes_kata
+"#,
+        );
+
+        let manifest = load_cloud_apps_manifest(&path).unwrap();
+        let entries = select_app_entries(&manifest, Some("field")).unwrap();
+        let body = app_entry_to_api_body(&entries[0]).unwrap();
+
+        assert_eq!(body["name"], "field");
+    }
+
+    #[test]
+    fn load_cloud_apps_manifest_rejects_unknown_runner_backend() {
+        let (_tmp, path) = write_manifest(
+            r#"
+apiVersion: apps.tachy.one/v1alpha
+kind: CloudApps
+spec:
+  apps:
+    - name: field
+      repository:
+        url: https://github.com/quantum-box/tachyonfield
+        owner: quantum-box
+        name: tachyonfield
+      environments:
+        production:
+          build:
+            runnerBackend: local_shell
+"#,
+        );
+
+        let error = load_cloud_apps_manifest(&path).unwrap_err().to_string();
+
+        assert!(error.contains("invalid app field environments.production.build.runnerBackend"));
     }
 
     #[test]
