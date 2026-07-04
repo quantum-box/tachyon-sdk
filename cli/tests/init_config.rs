@@ -35,6 +35,10 @@ fn write_project_config(dir: &Path, name: &str, tenant_id: &str) {
     .unwrap();
 }
 
+fn build_runner_backend_availability_body() -> &'static str {
+    r#"{"default_backend":null,"backends":[{"backend":"codebuild","available":true},{"backend":"kubernetes_kata","available":true}]}"#
+}
+
 fn start_compute_server() -> (String, mpsc::Receiver<String>, thread::JoinHandle<()>) {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let url = format!("http://{}", listener.local_addr().unwrap());
@@ -68,7 +72,7 @@ fn start_apply_server() -> (String, mpsc::Receiver<String>, thread::JoinHandle<(
     let url = format!("http://{}", listener.local_addr().unwrap());
     let (tx, rx) = mpsc::channel();
     let handle = thread::spawn(move || {
-        for _ in 0..4 {
+        for _ in 0..5 {
             let (mut stream, _) = listener.accept().unwrap();
             let mut buf = [0_u8; 8192];
             let n = stream.read(&mut buf).unwrap();
@@ -77,6 +81,8 @@ fn start_apply_server() -> (String, mpsc::Receiver<String>, thread::JoinHandle<(
 
             let body = if req.starts_with("GET /v1/compute/apps ") {
                 r#"{"apps":[]}"#
+            } else if req.starts_with("GET /v1/build-runner-backends ") {
+                build_runner_backend_availability_body()
             } else if req.starts_with("POST /v1/compute/apps ") {
                 r#"{"id":"app_created","name":"bakuure-api","repository_url":"https://github.com/quantum-box/erp","repository_owner":"quantum-box","repository_name":"erp","default_branch":"main","framework":"cargo_lambda","deployment_target":"lambda","root_directory":"apps/bakuure-api","docker_context":".","build_command":"cargo lambda build --package bakuure-api --bin lambda-bakuure-api --release --arm64","buildspec_strategy":"repo:.codebuild/bakuure_api_lambda_buildspec.yml"}"#
             } else if req.starts_with("PUT /v1/compute/apps/app_created/env ") {
@@ -121,6 +127,8 @@ fn start_collecting_apply_server() -> (String, mpsc::Receiver<Vec<String>>, thre
 
                     let body = if req.starts_with("GET /v1/compute/apps ") {
                         r#"{"apps":[]}"#
+                    } else if req.starts_with("GET /v1/build-runner-backends ") {
+                        build_runner_backend_availability_body()
                     } else if req.starts_with("POST /v1/compute/apps ") {
                         r#"{"id":"app_created","name":"valid-app","repository_url":"https://github.com/quantum-box/erp","repository_owner":"quantum-box","repository_name":"erp","default_branch":"main","framework":"next_js","deployment_target":"cloud_run"}"#
                     } else {
@@ -157,7 +165,7 @@ fn start_apply_graphql_error_server() -> (String, mpsc::Receiver<String>, thread
     let url = format!("http://{}", listener.local_addr().unwrap());
     let (tx, rx) = mpsc::channel();
     let handle = thread::spawn(move || {
-        for _ in 0..5 {
+        for _ in 0..6 {
             let (mut stream, _) = listener.accept().unwrap();
             let mut buf = [0_u8; 8192];
             let n = stream.read(&mut buf).unwrap();
@@ -167,6 +175,12 @@ fn start_apply_graphql_error_server() -> (String, mpsc::Receiver<String>, thread
             let mut should_stop = false;
             let (status, content_type, body) = if req.starts_with("GET /v1/compute/apps ") {
                 ("HTTP/1.1 200 OK", "application/json", r#"{"apps":[]}"#)
+            } else if req.starts_with("GET /v1/build-runner-backends ") {
+                (
+                    "HTTP/1.1 200 OK",
+                    "application/json",
+                    build_runner_backend_availability_body(),
+                )
             } else if req.starts_with("POST /v1/compute/apps ") {
                 (
                     "HTTP/1.1 200 OK",
@@ -519,16 +533,18 @@ spec:
     let second = rx.recv().unwrap();
     let third = rx.recv().unwrap();
     let fourth = rx.recv().unwrap();
+    let fifth = rx.recv().unwrap();
     handle.join().unwrap();
 
-    assert!(first.starts_with("GET /v1/compute/apps "));
-    assert!(second.starts_with("POST /v1/compute/apps "));
-    assert!(second.contains("\"root_directory\":\"apps/bakuure-api\""));
-    assert!(second.contains("\"docker_context\":\".\""));
-    assert!(!second.contains("mysql://"));
-    assert!(third.starts_with("PUT /v1/compute/apps/app_created/env "));
-    assert!(third.contains("\"key\":\"ENVIRONMENT\""));
-    assert!(fourth.starts_with("GET /v1/compute/apps/app_created/env "));
+    assert!(first.starts_with("GET /v1/build-runner-backends "));
+    assert!(second.starts_with("GET /v1/compute/apps "));
+    assert!(third.starts_with("POST /v1/compute/apps "));
+    assert!(third.contains("\"root_directory\":\"apps/bakuure-api\""));
+    assert!(third.contains("\"docker_context\":\".\""));
+    assert!(!third.contains("mysql://"));
+    assert!(fourth.starts_with("PUT /v1/compute/apps/app_created/env "));
+    assert!(fourth.contains("\"key\":\"ENVIRONMENT\""));
+    assert!(fifth.starts_with("GET /v1/compute/apps/app_created/env "));
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("CREATED bakuure-api (app_created)"));
     assert!(stdout.contains("Environment: sandbox"));
@@ -740,12 +756,14 @@ spec:
     let second = rx.recv().unwrap();
     let third = rx.recv().unwrap();
     let fourth = rx.recv().unwrap();
+    let fifth = rx.recv().unwrap();
     handle.join().unwrap();
 
-    assert!(first.starts_with("GET /v1/compute/apps "));
-    assert!(second.starts_with("POST /v1/compute/apps "));
-    assert!(third.starts_with("PUT /v1/compute/apps/app_created/env "));
-    assert!(fourth.starts_with("GET /v1/compute/apps/app_created/env "));
+    assert!(first.starts_with("GET /v1/build-runner-backends "));
+    assert!(second.starts_with("GET /v1/compute/apps "));
+    assert!(third.starts_with("POST /v1/compute/apps "));
+    assert!(fourth.starts_with("PUT /v1/compute/apps/app_created/env "));
+    assert!(fifth.starts_with("GET /v1/compute/apps/app_created/env "));
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("=== Cloud Apps Manifest Apply ==="));
     assert!(stdout.contains("CREATED bakuure-api (app_created)"));
@@ -878,6 +896,7 @@ spec:
     );
 
     let _list = rx.recv().unwrap();
+    let _availability = rx.recv().unwrap();
     let _create = rx.recv().unwrap();
     let graphql = rx.recv().unwrap();
     handle.join().unwrap();

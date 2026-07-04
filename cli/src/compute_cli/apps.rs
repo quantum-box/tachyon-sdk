@@ -291,6 +291,19 @@ struct AppApplyPlan {
     env_plan: EnvPlan,
     iac_manifest: Option<Value>,
     sentry_plan: Option<SentryIntegrationPlan>,
+    runner_backend: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct BuildRunnerBackendAvailabilityResponse {
+    default_backend: Option<String>,
+    backends: Vec<BuildRunnerBackendStatusResponse>,
+}
+
+#[derive(Debug, Deserialize)]
+struct BuildRunnerBackendStatusResponse {
+    backend: String,
+    available: bool,
 }
 
 #[derive(Debug, Default)]
@@ -455,6 +468,7 @@ pub(crate) async fn run_apps_apply_manifest(input: AppsApplyManifestInput<'_>) -
 
     let entries = select_app_entries(manifest, selected_app)?;
     let plans = build_app_apply_plans(entries, tenant_id, environment)?;
+    preflight_build_runner_backends(api, &plans).await?;
     if plans.iter().any(|plan| plan.sentry_plan.is_some()) {
         validate_sentry_integration(api).await?;
     }
@@ -602,15 +616,83 @@ fn build_app_apply_plans(
                 Some(cloud_app_manifest_for_iac(&entry, tenant_id)?)
             };
             let sentry_plan = plan_sentry_integration(&entry)?;
+            let runner_backend = effective_build_runner_backend(&entry, environment)?;
             Ok(AppApplyPlan {
                 name,
                 body,
                 env_plan,
                 iac_manifest,
                 sentry_plan,
+                runner_backend,
             })
         })
         .collect()
+}
+
+async fn preflight_build_runner_backends(api: &ApiClient, plans: &[AppApplyPlan]) -> Result<()> {
+    if plans.is_empty() {
+        return Ok(());
+    }
+    let availability: BuildRunnerBackendAvailabilityResponse =
+        api.get("/v1/build-runner-backends").await?;
+    validate_build_runner_backend_availability(plans, &availability)
+}
+
+fn validate_build_runner_backend_availability(
+    plans: &[AppApplyPlan],
+    availability: &BuildRunnerBackendAvailabilityResponse,
+) -> Result<()> {
+    for plan in plans {
+        let selected = plan
+            .runner_backend
+            .as_deref()
+            .or(availability.default_backend.as_deref());
+        let Some(selected) = selected else {
+            continue;
+        };
+        let available = availability
+            .backends
+            .iter()
+            .find(|backend| backend.backend == selected)
+            .is_some_and(|backend| backend.available);
+        if !available {
+            return Err(anyhow!(
+                "build runner backend preflight failed for app {}: runnerBackend={} is selected but the control plane reports it is not available",
+                plan.name,
+                selected
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn effective_build_runner_backend(entry: &Value, environment: &str) -> Result<Option<String>> {
+    let environment = manifest_environment_key(environment);
+    let environment_backend = entry
+        .get("environments")
+        .and_then(Value::as_object)
+        .and_then(|environments| environments.get(environment))
+        .and_then(|overlay| overlay.get("build"))
+        .and_then(|build| build.get("runnerBackend"))
+        .and_then(Value::as_str);
+    let default_backend = entry
+        .get("build")
+        .and_then(|build| build.get("runnerBackend"))
+        .and_then(Value::as_str);
+    environment_backend
+        .or(default_backend)
+        .map(parse_build_runner_backend)
+        .transpose()
+        .map(|backend| backend.map(ToString::to_string))
+}
+
+fn manifest_environment_key(environment: &str) -> &str {
+    match environment.trim().to_ascii_lowercase().as_str() {
+        "production" | "prod" => "production",
+        "preview" => "preview",
+        "staging" | "stage" => "staging",
+        _ => environment,
+    }
 }
 
 pub(crate) fn load_cloud_apps_manifest(path: &Path) -> Result<Value> {
@@ -691,6 +773,7 @@ fn cloud_apps_entries(value: &Value) -> Result<Vec<Value>> {
         if let Some(tenant_id) = tenant_id.clone() {
             entry_obj.insert(DOCUMENT_TENANT_ID_KEY.to_string(), tenant_id);
         }
+        validate_cloud_app_entry_runner_backend(&entry)?;
         entries.push(entry);
     }
     Ok(entries)
@@ -710,7 +793,54 @@ fn cloud_app_entry(value: &Value) -> Result<Value> {
     if let Some(tenant_id) = metadata.get("tenantId").cloned() {
         entry_obj.insert(DOCUMENT_TENANT_ID_KEY.to_string(), tenant_id);
     }
+    validate_cloud_app_entry_runner_backend(&entry)?;
     Ok(entry)
+}
+
+fn validate_cloud_app_entry_runner_backend(entry: &Value) -> Result<()> {
+    let name = entry
+        .get("name")
+        .and_then(Value::as_str)
+        .unwrap_or("<unnamed>");
+    validate_build_runner_backend_at(
+        entry.get("build"),
+        &format!("app {name} build.runnerBackend"),
+    )?;
+    if let Some(environments) = entry.get("environments").and_then(Value::as_object) {
+        for environment in ["preview", "staging", "production"] {
+            let Some(overlay) = environments.get(environment) else {
+                continue;
+            };
+            validate_build_runner_backend_at(
+                overlay.get("build"),
+                &format!("app {name} environments.{environment}.build.runnerBackend"),
+            )?;
+        }
+    }
+    Ok(())
+}
+
+fn validate_build_runner_backend_at(build: Option<&Value>, path: &str) -> Result<()> {
+    let Some(build) = build else {
+        return Ok(());
+    };
+    let Some(runner_backend) = build.get("runnerBackend") else {
+        return Ok(());
+    };
+    let value = runner_backend
+        .as_str()
+        .ok_or_else(|| anyhow!("{path} must be a string"))?;
+    parse_build_runner_backend(value).with_context(|| format!("invalid {path}"))?;
+    Ok(())
+}
+
+fn parse_build_runner_backend(value: &str) -> Result<&'static str> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "codebuild" | "aws_codebuild" | "aws-codebuild" => Ok("codebuild"),
+        "kubernetes_kata" | "kubernetes-kata" | "k8s_kata" | "k8s-kata" | "hetzner_k3s_kata"
+        | "hetzner-k3s-kata" => Ok("kubernetes_kata"),
+        other => Err(anyhow!("unsupported build runner backend: {other}")),
+    }
 }
 
 struct OAuth2ClientDependency {
@@ -1239,6 +1369,153 @@ spec:
 
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0]["name"], "field");
+    }
+
+    #[test]
+    fn load_cloud_apps_manifest_accepts_allowed_runner_backend() {
+        let (_tmp, path) = write_manifest(
+            r#"
+apiVersion: apps.tachy.one/v1alpha
+kind: CloudApps
+spec:
+  apps:
+    - name: field
+      repository:
+        url: https://github.com/quantum-box/tachyonfield
+        owner: quantum-box
+        name: tachyonfield
+      build:
+        runnerBackend: kubernetes_kata
+"#,
+        );
+
+        let manifest = load_cloud_apps_manifest(&path).unwrap();
+        let entries = select_app_entries(&manifest, Some("field")).unwrap();
+        let body = app_entry_to_api_body(&entries[0]).unwrap();
+
+        assert_eq!(body["name"], "field");
+    }
+
+    #[test]
+    fn load_cloud_apps_manifest_rejects_unknown_runner_backend() {
+        let (_tmp, path) = write_manifest(
+            r#"
+apiVersion: apps.tachy.one/v1alpha
+kind: CloudApps
+spec:
+  apps:
+    - name: field
+      repository:
+        url: https://github.com/quantum-box/tachyonfield
+        owner: quantum-box
+        name: tachyonfield
+      environments:
+        production:
+          build:
+            runnerBackend: local_shell
+"#,
+        );
+
+        let error = load_cloud_apps_manifest(&path).unwrap_err().to_string();
+
+        assert!(error.contains("invalid app field environments.production.build.runnerBackend"));
+    }
+
+    #[test]
+    fn effective_build_runner_backend_prefers_environment_overlay() {
+        let entry = json!({
+            "name": "field",
+            "build": {
+                "runnerBackend": "codebuild"
+            },
+            "environments": {
+                "production": {
+                    "build": {
+                        "runnerBackend": "kubernetes_kata"
+                    }
+                }
+            }
+        });
+
+        let backend = effective_build_runner_backend(&entry, "prod").unwrap();
+
+        assert_eq!(backend.as_deref(), Some("kubernetes_kata"));
+    }
+
+    #[test]
+    fn build_runner_backend_preflight_rejects_unavailable_manifest_backend() {
+        let plans = vec![AppApplyPlan {
+            name: "field".to_string(),
+            body: json!({}),
+            env_plan: EnvPlan::default(),
+            iac_manifest: None,
+            sentry_plan: None,
+            runner_backend: Some("kubernetes_kata".to_string()),
+        }];
+        let availability = BuildRunnerBackendAvailabilityResponse {
+            default_backend: None,
+            backends: vec![
+                BuildRunnerBackendStatusResponse {
+                    backend: "codebuild".to_string(),
+                    available: true,
+                },
+                BuildRunnerBackendStatusResponse {
+                    backend: "kubernetes_kata".to_string(),
+                    available: false,
+                },
+            ],
+        };
+
+        let error = validate_build_runner_backend_availability(&plans, &availability)
+            .unwrap_err()
+            .to_string();
+
+        assert!(error.contains("build runner backend preflight failed"));
+        assert!(error.contains("field"));
+        assert!(error.contains("runnerBackend=kubernetes_kata"));
+    }
+
+    #[test]
+    fn build_runner_backend_preflight_uses_server_default_backend() {
+        let plans = vec![AppApplyPlan {
+            name: "field".to_string(),
+            body: json!({}),
+            env_plan: EnvPlan::default(),
+            iac_manifest: None,
+            sentry_plan: None,
+            runner_backend: None,
+        }];
+        let availability = BuildRunnerBackendAvailabilityResponse {
+            default_backend: Some("kubernetes_kata".to_string()),
+            backends: vec![BuildRunnerBackendStatusResponse {
+                backend: "kubernetes_kata".to_string(),
+                available: false,
+            }],
+        };
+
+        let error = validate_build_runner_backend_availability(&plans, &availability)
+            .unwrap_err()
+            .to_string();
+
+        assert!(error.contains("runnerBackend=kubernetes_kata"));
+    }
+
+    #[test]
+    fn build_runner_backend_preflight_allows_provider_default_without_server_default() {
+        let plans = vec![AppApplyPlan {
+            name: "field".to_string(),
+            body: json!({}),
+            env_plan: EnvPlan::default(),
+            iac_manifest: None,
+            sentry_plan: None,
+            runner_backend: None,
+        }];
+        let availability = BuildRunnerBackendAvailabilityResponse {
+            default_backend: None,
+            backends: vec![],
+        };
+
+        validate_build_runner_backend_availability(&plans, &availability).unwrap();
     }
 
     #[test]
