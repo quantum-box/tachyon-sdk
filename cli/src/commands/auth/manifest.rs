@@ -388,6 +388,17 @@ fn parse_tachyon_yml_root(raw: &str, path: &Path) -> Result<TachyonYmlRoot> {
     TachyonYmlRoot::deserialize(first_doc).with_context(|| format!("parse {}", path.display()))
 }
 
+pub(crate) fn parse_manifest_document_value(value: serde_yaml::Value) -> Result<AuthManifest> {
+    if let Ok(root) = serde_yaml::from_value::<TachyonYmlRoot>(value.clone()) {
+        if let Some(auth) = root.auth {
+            if let Some(manifest) = auth.manifest {
+                return parse_manifest_value(manifest);
+            }
+        }
+    }
+    parse_manifest_value(value)
+}
+
 fn parse_manifest_value(value: serde_yaml::Value) -> Result<AuthManifest> {
     if let Some(mapping) = value.as_mapping() {
         if mapping.contains_key("actions") || mapping.contains_key("policies") {
@@ -440,7 +451,7 @@ fn parse_k8s_documents(documents: Vec<serde_yaml::Value>) -> Result<AuthManifest
                 });
             }
             other => {
-                return Err(anyhow!("unsupported auth manifest kind '{}'", other));
+                return Err(anyhow!("unsupported auth manifest kind '{other}'"));
             }
         }
     }
@@ -508,7 +519,7 @@ pub fn merge_manifests(manifests: Vec<LoadedManifest>) -> AuthManifest {
 pub fn validate_manifest(manifest: &AuthManifest) -> Result<()> {
     for action in &manifest.actions {
         if action.context.is_empty() {
-            return Err(anyhow!("action missing context: {:?}", action));
+            return Err(anyhow!("action missing context: {action:?}"));
         }
         if action.name.is_empty() {
             return Err(anyhow!(
@@ -841,9 +852,8 @@ pub(crate) fn print_apply_result(result: &ApplyResult) {
 
     println!();
     println!(
-        "Applied: {} action(s) created, {} skipped, {} error(s); \
-         {} policy(ies) created, {} skipped, {} error(s).",
-        a_created, a_skipped, a_errors, p_created, p_skipped, p_errors
+        "Applied: {a_created} action(s) created, {a_skipped} skipped, {a_errors} error(s); \
+         {p_created} policy(ies) created, {p_skipped} skipped, {p_errors} error(s)."
     );
 
     if result.prune_skipped > 0 {

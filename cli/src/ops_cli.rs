@@ -978,6 +978,10 @@ async fn resolve_mentions(mentions: &[String], bot_token: Option<&str>) -> Resul
         if mention.is_empty() {
             continue;
         }
+        if let Some(broadcast) = normalize_slack_broadcast_mention(mention) {
+            resolved.push(broadcast.to_string());
+            continue;
+        }
         if mention.contains('@') && !mention.starts_with("<@") {
             let token = resolve_slack_bot_token(bot_token)?;
             resolved.push(slack_lookup_user_id_by_email(&token, mention).await?);
@@ -1005,6 +1009,14 @@ fn resolve_slack_bot_token(explicit: Option<&str>) -> Result<String> {
                 "Slack Bot token is required. Pass --bot-token or set TACHYON_SLACK_BOT_TOKEN or SLACK_BOT_TOKEN."
             )
         })
+}
+
+fn normalize_slack_broadcast_mention(input: &str) -> Option<&'static str> {
+    match input.trim().to_ascii_lowercase().as_str() {
+        "here" | "<!here>" => Some("<!here>"),
+        "channel" | "<!channel>" => Some("<!channel>"),
+        _ => None,
+    }
 }
 
 async fn slack_users_list(bot_token: &str) -> Result<SlackUsersListResponse> {
@@ -1234,6 +1246,15 @@ mod tests {
         assert_eq!(normalize_slack_user_id(" U123 "), "U123");
         assert_eq!(normalize_slack_user_id("<@U123>"), "U123");
         assert_eq!(normalize_slack_user_id("<@U123|taka>"), "U123");
+    }
+
+    #[tokio::test]
+    async fn resolves_slack_broadcast_mentions_without_bot_token() {
+        let mentions = resolve_mentions(&["here".to_string(), "channel".to_string()], None)
+            .await
+            .unwrap();
+
+        assert_eq!(mentions, vec!["<!here>", "<!channel>"]);
     }
 
     #[test]

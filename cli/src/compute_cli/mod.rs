@@ -136,8 +136,8 @@ pub use local::PagesApp;
 pub use scaling::ScalingCommand;
 
 pub(crate) use apps::{
-    app_entry_to_api_body, load_cloud_apps_manifest, plan_env_vars, run_apps_apply,
-    select_app_entries,
+    app_entry_to_api_body, normalize_cloud_apps_document, plan_env_vars, run_apps_apply,
+    run_apps_apply_manifest, select_app_entries, AppsApplyManifestInput,
 };
 pub(crate) use env::validate_secret_key;
 
@@ -185,7 +185,7 @@ fn is_success_build_status(status: &str) -> bool {
 }
 
 fn is_http_not_found_error(err: &anyhow::Error) -> bool {
-    err.to_string().contains("status=404 Not Found")
+    crate::client::http_error_status(err) == Some(reqwest::StatusCode::NOT_FOUND)
 }
 
 fn print_agent_event(event: &AgentBuildEvent<'_>) -> Result<()> {

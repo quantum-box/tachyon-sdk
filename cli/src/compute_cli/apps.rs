@@ -413,17 +413,54 @@ pub(crate) async fn run_apps_apply(
     change_control_token: Option<&str>,
     dry_run: bool,
 ) -> Result<()> {
+    let manifest = load_cloud_apps_manifest(file)?;
+    let manifest_label = file.display().to_string();
+    run_apps_apply_manifest(AppsApplyManifestInput {
+        api,
+        tenant_id,
+        manifest: &manifest,
+        manifest_label: &manifest_label,
+        selected_app,
+        environment,
+        change_control_token,
+        dry_run,
+    })
+    .await
+}
+
+pub(crate) struct AppsApplyManifestInput<'a> {
+    pub(crate) api: &'a ApiClient,
+    pub(crate) tenant_id: &'a str,
+    pub(crate) manifest: &'a Value,
+    pub(crate) manifest_label: &'a str,
+    pub(crate) selected_app: Option<&'a str>,
+    pub(crate) environment: &'a str,
+    pub(crate) change_control_token: Option<&'a str>,
+    pub(crate) dry_run: bool,
+}
+
+pub(crate) async fn run_apps_apply_manifest(input: AppsApplyManifestInput<'_>) -> Result<()> {
+    let AppsApplyManifestInput {
+        api,
+        tenant_id,
+        manifest,
+        manifest_label,
+        selected_app,
+        environment,
+        change_control_token,
+        dry_run,
+    } = input;
+
     require_production_apply_approval(environment, change_control_token, dry_run)?;
 
-    let manifest = load_cloud_apps_manifest(file)?;
-    let entries = select_app_entries(&manifest, selected_app)?;
+    let entries = select_app_entries(manifest, selected_app)?;
     let plans = build_app_apply_plans(entries, tenant_id, environment)?;
     if plans.iter().any(|plan| plan.sentry_plan.is_some()) {
         validate_sentry_integration(api).await?;
     }
     let live: ListAppsResponse = api.get("/v1/compute/apps").await?;
 
-    println!("Manifest:    {}", file.display());
+    println!("Manifest:    {manifest_label}");
     println!("Environment: {environment}");
     println!("Mode:        {}", if dry_run { "dry-run" } else { "apply" });
     println!();
@@ -464,7 +501,7 @@ pub(crate) async fn run_apps_apply(
         };
         println!("{label} {} ({app_id})", plan.name);
         println!("  environment: {environment}");
-        println!("  manifest:    {}", file.display());
+        println!("  manifest:    {manifest_label}");
         if changed_fields.is_empty() {
             println!("  changed:     <none>");
         } else {
@@ -784,6 +821,27 @@ fn find_oauth2_client_dependency<'a>(
             "OAuth2Client dependency {name} is ambiguous across manifest documents"
         )),
     }
+}
+
+pub(crate) fn normalize_cloud_apps_document(value: &Value) -> Result<Option<Value>> {
+    let apps = match value.get("kind").and_then(Value::as_str) {
+        Some("CloudApps") => cloud_apps_entries(value)?,
+        Some("CloudApp") => vec![cloud_app_entry(value)?],
+        _ => return Ok(None),
+    };
+    let name = value
+        .get("metadata")
+        .and_then(|metadata| metadata.get("name"))
+        .and_then(Value::as_str)
+        .unwrap_or("cloud-apps");
+    Ok(Some(json!({
+        "apiVersion": "apps.tachy.one/v1alpha",
+        "kind": "CloudApps",
+        "metadata": {
+            "name": name,
+        },
+        "spec": { "apps": apps }
+    })))
 }
 
 pub(crate) fn select_app_entries(manifest: &Value, app: Option<&str>) -> Result<Vec<Value>> {

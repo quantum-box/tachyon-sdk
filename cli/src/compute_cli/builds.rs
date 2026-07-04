@@ -592,7 +592,7 @@ pub(super) async fn run_builds_logs(
             })?;
         }
         if !is_success_build_status(&build.status) {
-            return Err(anyhow!("build {} failed", resolved_build_id));
+            return Err(anyhow!("build {resolved_build_id} failed"));
         }
     }
 
@@ -656,7 +656,7 @@ pub(super) async fn run_builds_watch(
                         error_message: Some("watch timed out"),
                     })?;
                 }
-                return Err(anyhow!("build {} watch timed out", resolved_build_id));
+                return Err(anyhow!("build {resolved_build_id} watch timed out"));
             }
         }
 
@@ -722,12 +722,11 @@ pub(super) async fn run_builds_watch(
                     error_message: build.error_message.as_deref(),
                 })?;
             } else if exit_code == 0 {
-                println!("Build {} completed successfully.", resolved_build_id);
+                println!("Build {resolved_build_id} completed successfully.");
             }
             if exit_code != 0 {
                 return Err(anyhow!(
-                    "build {} finished with status {}",
-                    resolved_build_id,
+                    "build {resolved_build_id} finished with status {}",
                     build.status
                 ));
             }
@@ -1184,7 +1183,7 @@ pub(super) fn run_builds_reproduce(
 
     let invocation = build_reproduce::build_invocation(&config, &spec, source_dir, image_override);
 
-    eprintln!("=== reproduce build {} ===", build_id);
+    eprintln!("=== reproduce build {build_id} ===");
     eprintln!("  config build_id: {}", config.build_id);
     eprintln!("  image:           {}", invocation.image);
     eprintln!("  source:          {}", invocation.source_dir.display());
