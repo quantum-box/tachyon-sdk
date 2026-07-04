@@ -291,6 +291,19 @@ struct AppApplyPlan {
     env_plan: EnvPlan,
     iac_manifest: Option<Value>,
     sentry_plan: Option<SentryIntegrationPlan>,
+    runner_backend: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct BuildRunnerBackendAvailabilityResponse {
+    default_backend: Option<String>,
+    backends: Vec<BuildRunnerBackendStatusResponse>,
+}
+
+#[derive(Debug, Deserialize)]
+struct BuildRunnerBackendStatusResponse {
+    backend: String,
+    available: bool,
 }
 
 #[derive(Debug, Default)]
@@ -418,6 +431,7 @@ pub(crate) async fn run_apps_apply(
     let manifest = load_cloud_apps_manifest(file)?;
     let entries = select_app_entries(&manifest, selected_app)?;
     let plans = build_app_apply_plans(entries, tenant_id, environment)?;
+    preflight_build_runner_backends(api, &plans).await?;
     if plans.iter().any(|plan| plan.sentry_plan.is_some()) {
         validate_sentry_integration(api).await?;
     }
@@ -565,15 +579,83 @@ fn build_app_apply_plans(
                 Some(cloud_app_manifest_for_iac(&entry, tenant_id)?)
             };
             let sentry_plan = plan_sentry_integration(&entry)?;
+            let runner_backend = effective_build_runner_backend(&entry, environment)?;
             Ok(AppApplyPlan {
                 name,
                 body,
                 env_plan,
                 iac_manifest,
                 sentry_plan,
+                runner_backend,
             })
         })
         .collect()
+}
+
+async fn preflight_build_runner_backends(api: &ApiClient, plans: &[AppApplyPlan]) -> Result<()> {
+    if plans.is_empty() {
+        return Ok(());
+    }
+    let availability: BuildRunnerBackendAvailabilityResponse =
+        api.get("/v1/build-runner-backends").await?;
+    validate_build_runner_backend_availability(plans, &availability)
+}
+
+fn validate_build_runner_backend_availability(
+    plans: &[AppApplyPlan],
+    availability: &BuildRunnerBackendAvailabilityResponse,
+) -> Result<()> {
+    for plan in plans {
+        let selected = plan
+            .runner_backend
+            .as_deref()
+            .or(availability.default_backend.as_deref());
+        let Some(selected) = selected else {
+            continue;
+        };
+        let available = availability
+            .backends
+            .iter()
+            .find(|backend| backend.backend == selected)
+            .is_some_and(|backend| backend.available);
+        if !available {
+            return Err(anyhow!(
+                "build runner backend preflight failed for app {}: runnerBackend={} is selected but the control plane reports it is not available",
+                plan.name,
+                selected
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn effective_build_runner_backend(entry: &Value, environment: &str) -> Result<Option<String>> {
+    let environment = manifest_environment_key(environment);
+    let environment_backend = entry
+        .get("environments")
+        .and_then(Value::as_object)
+        .and_then(|environments| environments.get(environment))
+        .and_then(|overlay| overlay.get("build"))
+        .and_then(|build| build.get("runnerBackend"))
+        .and_then(Value::as_str);
+    let default_backend = entry
+        .get("build")
+        .and_then(|build| build.get("runnerBackend"))
+        .and_then(Value::as_str);
+    environment_backend
+        .or(default_backend)
+        .map(parse_build_runner_backend)
+        .transpose()
+        .map(|backend| backend.map(ToString::to_string))
+}
+
+fn manifest_environment_key(environment: &str) -> &str {
+    match environment.trim().to_ascii_lowercase().as_str() {
+        "production" | "prod" => "production",
+        "preview" => "preview",
+        "staging" | "stage" => "staging",
+        _ => environment,
+    }
 }
 
 pub(crate) fn load_cloud_apps_manifest(path: &Path) -> Result<Value> {
@@ -1279,6 +1361,103 @@ spec:
         let error = load_cloud_apps_manifest(&path).unwrap_err().to_string();
 
         assert!(error.contains("invalid app field environments.production.build.runnerBackend"));
+    }
+
+    #[test]
+    fn effective_build_runner_backend_prefers_environment_overlay() {
+        let entry = json!({
+            "name": "field",
+            "build": {
+                "runnerBackend": "codebuild"
+            },
+            "environments": {
+                "production": {
+                    "build": {
+                        "runnerBackend": "kubernetes_kata"
+                    }
+                }
+            }
+        });
+
+        let backend = effective_build_runner_backend(&entry, "prod").unwrap();
+
+        assert_eq!(backend.as_deref(), Some("kubernetes_kata"));
+    }
+
+    #[test]
+    fn build_runner_backend_preflight_rejects_unavailable_manifest_backend() {
+        let plans = vec![AppApplyPlan {
+            name: "field".to_string(),
+            body: json!({}),
+            env_plan: EnvPlan::default(),
+            iac_manifest: None,
+            sentry_plan: None,
+            runner_backend: Some("kubernetes_kata".to_string()),
+        }];
+        let availability = BuildRunnerBackendAvailabilityResponse {
+            default_backend: None,
+            backends: vec![
+                BuildRunnerBackendStatusResponse {
+                    backend: "codebuild".to_string(),
+                    available: true,
+                },
+                BuildRunnerBackendStatusResponse {
+                    backend: "kubernetes_kata".to_string(),
+                    available: false,
+                },
+            ],
+        };
+
+        let error = validate_build_runner_backend_availability(&plans, &availability)
+            .unwrap_err()
+            .to_string();
+
+        assert!(error.contains("build runner backend preflight failed"));
+        assert!(error.contains("field"));
+        assert!(error.contains("runnerBackend=kubernetes_kata"));
+    }
+
+    #[test]
+    fn build_runner_backend_preflight_uses_server_default_backend() {
+        let plans = vec![AppApplyPlan {
+            name: "field".to_string(),
+            body: json!({}),
+            env_plan: EnvPlan::default(),
+            iac_manifest: None,
+            sentry_plan: None,
+            runner_backend: None,
+        }];
+        let availability = BuildRunnerBackendAvailabilityResponse {
+            default_backend: Some("kubernetes_kata".to_string()),
+            backends: vec![BuildRunnerBackendStatusResponse {
+                backend: "kubernetes_kata".to_string(),
+                available: false,
+            }],
+        };
+
+        let error = validate_build_runner_backend_availability(&plans, &availability)
+            .unwrap_err()
+            .to_string();
+
+        assert!(error.contains("runnerBackend=kubernetes_kata"));
+    }
+
+    #[test]
+    fn build_runner_backend_preflight_allows_provider_default_without_server_default() {
+        let plans = vec![AppApplyPlan {
+            name: "field".to_string(),
+            body: json!({}),
+            env_plan: EnvPlan::default(),
+            iac_manifest: None,
+            sentry_plan: None,
+            runner_backend: None,
+        }];
+        let availability = BuildRunnerBackendAvailabilityResponse {
+            default_backend: None,
+            backends: vec![],
+        };
+
+        validate_build_runner_backend_availability(&plans, &availability).unwrap();
     }
 
     #[test]
