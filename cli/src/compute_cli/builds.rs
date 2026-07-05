@@ -162,6 +162,37 @@ pub(super) struct BuildResponse {
     pub(super) created_at: Option<String>,
     #[serde(default)]
     pub(super) updated_at: Option<String>,
+    #[serde(default)]
+    pub(super) job_run: Option<BuildJobRunResponse>,
+    #[serde(default)]
+    pub(super) stuck: Option<BuildStuckResponse>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub(super) struct BuildJobRunResponse {
+    pub(super) job_run_id: String,
+    #[serde(default)]
+    pub(super) status: Option<String>,
+    pub(super) phase: String,
+    #[serde(default)]
+    pub(super) runner_id: Option<String>,
+    #[serde(default)]
+    pub(super) claimed_at: Option<String>,
+    #[serde(default)]
+    pub(super) started_at: Option<String>,
+    #[serde(default)]
+    pub(super) finished_at: Option<String>,
+    #[serde(default)]
+    pub(super) queued_elapsed_secs: Option<i64>,
+    #[serde(default)]
+    pub(super) running_elapsed_secs: Option<i64>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub(super) struct BuildStuckResponse {
+    pub(super) reason: String,
+    pub(super) threshold_secs: i64,
+    pub(super) elapsed_secs: i64,
 }
 
 #[derive(Debug, Deserialize)]
@@ -230,18 +261,19 @@ pub(super) async fn run_builds_list(
     }
     let builds = &resp.builds[..resp.builds.len().min(limit)];
     println!(
-        "{:<26}  {:<11}  {:<20}  {:<8}  {:<19}",
-        "BUILD ID", "STATUS", "BRANCH", "COMMIT", "CREATED AT"
+        "{:<26}  {:<11}  {:<24}  {:<20}  {:<8}  {:<19}",
+        "BUILD ID", "STATUS", "EXECUTION", "BRANCH", "COMMIT", "CREATED AT"
     );
     println!(
-        "{:-<26}  {:-<11}  {:-<20}  {:-<8}  {:-<19}",
-        "", "", "", "", ""
+        "{:-<26}  {:-<11}  {:-<24}  {:-<20}  {:-<8}  {:-<19}",
+        "", "", "", "", "", ""
     );
     for build in builds {
         println!(
-            "{:<26}  {:<11}  {:<20}  {:<8}  {:<19}",
+            "{:<26}  {:<11}  {:<24}  {:<20}  {:<8}  {:<19}",
             build.id,
             build.status,
+            truncate(build_execution_label(build).as_deref().unwrap_or("-"), 24),
             truncate(build.source_branch.as_deref().unwrap_or("-"), 20),
             truncate_sha(build.commit_sha.as_deref().unwrap_or("-")),
             build
@@ -305,6 +337,7 @@ pub(super) async fn run_builds_get(api: &ApiClient, build_id: &str, json: bool) 
     if let Some(err) = &build.error_message {
         println!("Error:    {err}");
     }
+    print_build_job_run_diagnostics(&build);
     println!(
         "Created:  {}",
         build
@@ -606,6 +639,85 @@ fn build_log_lines_signature(lines: &[BuildLogLineResponse]) -> Vec<(i64, String
         .collect()
 }
 
+fn print_build_job_run_diagnostics(build: &BuildResponse) {
+    let Some(execution) = build_execution_label(build) else {
+        return;
+    };
+    println!("Execution: {execution}");
+
+    if let Some(job_run) = &build.job_run {
+        println!("JobRun:   {}", job_run.job_run_id);
+        println!(
+            "Phase:    {} ({})",
+            job_run.phase,
+            job_run.status.as_deref().unwrap_or("missing")
+        );
+        println!("Runner:   {}", job_run.runner_id.as_deref().unwrap_or("-"));
+        if let Some(seconds) = job_run.queued_elapsed_secs {
+            println!("Queue:    {}", format_build_seconds(seconds));
+        }
+        if let Some(seconds) = job_run.running_elapsed_secs {
+            println!("Running:  {}", format_build_seconds(seconds));
+        }
+    }
+
+    if let Some(stuck) = &build.stuck {
+        println!(
+            "Stuck:    {} for {} (threshold {})",
+            stuck_reason_label(stuck.reason.as_str()),
+            format_build_seconds(stuck.elapsed_secs),
+            format_build_seconds(stuck.threshold_secs)
+        );
+    }
+}
+
+fn build_execution_label(build: &BuildResponse) -> Option<String> {
+    if let Some(job_run) = &build.job_run {
+        return Some(phase_label(job_run.phase.as_str()).to_string());
+    }
+    build
+        .stuck
+        .as_ref()
+        .map(|stuck| stuck_reason_label(stuck.reason.as_str()).to_string())
+}
+
+fn phase_label(phase: &str) -> &str {
+    match phase {
+        "waiting_for_runner" => "Waiting for runner",
+        "claimed_waiting_for_start" => "Runner claimed",
+        "running_on_runner" => "Running on runner",
+        "finalizing_deployment" => "Finalizing deployment",
+        "completed" => "JobRun completed",
+        "job_run_missing" => "JobRun missing",
+        other => other,
+    }
+}
+
+fn stuck_reason_label(reason: &str) -> &str {
+    match reason {
+        "dispatch_not_started" => "Dispatch not started",
+        "never_claimed" => "Runner not claimed",
+        "claimed_job_run" => "Claimed JobRun is still active",
+        "finalizing_deployment" => "Finalizing deployment",
+        "job_run_missing" => "JobRun missing",
+        "job_run_unknown" => "Unknown JobRun state",
+        other => other,
+    }
+}
+
+fn format_build_seconds(seconds: i64) -> String {
+    if seconds < 60 {
+        return format!("{}s", seconds.max(0));
+    }
+    let minutes = seconds / 60;
+    let remainder = seconds % 60;
+    if remainder == 0 {
+        format!("{minutes}m")
+    } else {
+        format!("{minutes}m {remainder}s")
+    }
+}
+
 fn build_logs_follow_interval() -> Duration {
     std::env::var("TACHYON_COMPUTE_BUILD_LOGS_FOLLOW_INTERVAL_MS")
         .ok()
@@ -644,6 +756,7 @@ pub(super) async fn run_builds_watch(
     let timeout = timeout_secs.map(Duration::from_secs);
     let mut next_token: Option<String> = None;
     let mut last_status: Option<String> = None;
+    let mut last_execution: Option<String> = None;
 
     loop {
         if let Some(timeout) = timeout {
@@ -673,6 +786,15 @@ pub(super) async fn run_builds_watch(
                 println!("Build {}: {}", resolved_build_id, build.status);
             }
             last_status = Some(build.status.clone());
+        }
+        if !agent {
+            let execution = build_execution_label(&build);
+            if execution.is_some() && execution != last_execution {
+                if let Some(execution) = execution.as_deref() {
+                    println!("Execution: {execution}");
+                }
+                last_execution = execution;
+            }
         }
 
         if !no_logs {
@@ -1206,4 +1328,83 @@ pub(super) fn run_builds_reproduce(
         return Err(anyhow!("reproduce build exited with code {exit_code}"));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn build_with_job_run(
+        phase: &str,
+        status: Option<&str>,
+        stuck: Option<BuildStuckResponse>,
+    ) -> BuildResponse {
+        BuildResponse {
+            id: "bld_test".to_string(),
+            app_id: "app_test".to_string(),
+            trigger: Some("manual".to_string()),
+            source_branch: Some("main".to_string()),
+            commit_sha: Some("0123456789abcdef".to_string()),
+            commit_message: None,
+            pr_number: None,
+            status: "building".to_string(),
+            duration_secs: None,
+            error_message: None,
+            created_at: None,
+            updated_at: None,
+            job_run: Some(BuildJobRunResponse {
+                job_run_id: "jr_test".to_string(),
+                status: status.map(ToString::to_string),
+                phase: phase.to_string(),
+                runner_id: None,
+                claimed_at: None,
+                started_at: None,
+                finished_at: None,
+                queued_elapsed_secs: Some(901),
+                running_elapsed_secs: None,
+            }),
+            stuck,
+        }
+    }
+
+    #[test]
+    fn build_execution_label_prefers_job_run_phase() {
+        let build = build_with_job_run(
+            "waiting_for_runner",
+            Some("pending"),
+            Some(BuildStuckResponse {
+                reason: "never_claimed".to_string(),
+                threshold_secs: 900,
+                elapsed_secs: 901,
+            }),
+        );
+
+        assert_eq!(
+            build_execution_label(&build).as_deref(),
+            Some("Waiting for runner")
+        );
+    }
+
+    #[test]
+    fn build_execution_label_uses_stuck_reason_without_job_run() {
+        let mut build = build_with_job_run("waiting_for_runner", None, None);
+        build.job_run = None;
+        build.stuck = Some(BuildStuckResponse {
+            reason: "never_claimed".to_string(),
+            threshold_secs: 900,
+            elapsed_secs: 901,
+        });
+
+        assert_eq!(
+            build_execution_label(&build).as_deref(),
+            Some("Runner not claimed")
+        );
+    }
+
+    #[test]
+    fn format_build_seconds_matches_console_labels() {
+        assert_eq!(format_build_seconds(59), "59s");
+        assert_eq!(format_build_seconds(60), "1m");
+        assert_eq!(format_build_seconds(901), "15m 1s");
+    }
 }
