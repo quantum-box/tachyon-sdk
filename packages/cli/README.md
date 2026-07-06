@@ -17,8 +17,8 @@ tc --version
 
 During `postinstall`, the package downloads the matching native binary from
 the `quantum-box/tachyon-sdk` GitHub Release. The npm package version matches
-the CLI release version, so `@tachyon-sdk/cli@0.6.12` downloads
-`tachyon-cli-v0.6.12`.
+the CLI release version, so `@tachyon-sdk/cli@0.6.13` downloads
+`tachyon-cli-v0.6.13`.
 
 Supported platforms:
 
@@ -37,9 +37,21 @@ The npm installer uses these optional environment variables:
 | --- | --- |
 | `TACHYON_CLI_SKIP_DOWNLOAD=1` | Skip binary download during install. The wrapper will try again on first run. |
 | `TACHYON_CLI_VERSION` | Override the version used to build the default release tag. |
-| `TACHYON_CLI_TAG` | Override the release tag, for example `tachyon-cli-v0.6.12`. |
+| `TACHYON_CLI_TAG` | Override the release tag, for example `tachyon-cli-v0.6.13`. |
 | `TACHYON_CLI_REPOSITORY` | Override the GitHub repository, default `quantum-box/tachyon-sdk`. |
 | `TACHYON_CLI_DOWNLOAD_URL` | Override the full `.tar.gz` download URL. |
+
+## Cloud App internalService Support
+
+`@tachyon-sdk/cli@0.6.13` is the first release line that can apply Cloud App
+manifests with `envVars[].valueFrom.internalService`. The CLI collects those
+references, calls the control-plane preflight endpoint before app mutations,
+and then lets the server-side manifest apply path persist the unresolved
+reference for deploy-time resolution.
+
+CLI `0.6.12` does not support this field. Run `tachyon self-update` or install
+`@tachyon-sdk/cli@0.6.13` before applying manifests that depend on internal
+Cloud App service URLs.
 
 ## Alternative Install
 
