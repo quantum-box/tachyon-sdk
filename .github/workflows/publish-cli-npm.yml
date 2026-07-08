@@ -4,12 +4,21 @@ on:
   release:
     types:
       - published
+  workflow_run:
+    workflows:
+      - Auto Release CLI
+      - Release CLI
+    types:
+      - completed
   workflow_dispatch:
 
 jobs:
   publish:
     name: Publish
-    if: github.event_name == 'workflow_dispatch' || startsWith(github.event.release.tag_name, 'tachyon-cli-v')
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'release' && startsWith(github.event.release.tag_name, 'tachyon-cli-v')) ||
+      (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success')
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -17,6 +26,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
 
       - uses: actions/setup-node@v4
         with:
@@ -35,6 +46,20 @@ jobs:
             echo "release tag ${{ github.event.release.tag_name }} does not match package version ${PKG_VERSION}" >&2
             exit 1
           fi
+
+      - name: Verify GitHub release exists for package version
+        if: github.event_name != 'release'
+        run: |
+          PKG_VERSION=$(node -p "require('./package.json').version")
+          gh release view "tachyon-cli-v${PKG_VERSION}" --json tagName,assets --jq '
+            if (.assets | length) == 0 then
+              error("release has no assets")
+            else
+              .tagName
+            end
+          '
+        env:
+          GH_TOKEN: ${{ github.token }}
 
       - name: Check if already published
         id: check
