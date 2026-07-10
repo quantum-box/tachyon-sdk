@@ -239,8 +239,8 @@ async fn clone_repository(
 
     let mut clone = Command::new("git");
     clone.arg("clone").arg("--depth").arg("1");
-    if !workload.source.branch.trim().is_empty() {
-        clone.arg("--branch").arg(&workload.source.branch);
+    if let Some(branch) = initial_clone_branch(&workload.source) {
+        clone.arg("--branch").arg(branch);
     }
     clone
         .arg(&workload.source.repository_url)
@@ -249,8 +249,7 @@ async fn clone_repository(
         .envs(env);
     run_command("git clone", clone).await?;
 
-    let commit = workload.source.commit_sha.trim();
-    if !commit.is_empty() && commit != "HEAD" {
+    if let Some(commit) = requested_commit(&workload.source) {
         let mut fetch = Command::new("git");
         fetch
             .arg("fetch")
@@ -274,6 +273,20 @@ async fn clone_repository(
     }
 
     Ok(())
+}
+
+fn requested_commit(source: &BuildWorkloadSource) -> Option<&str> {
+    let commit = source.commit_sha.trim();
+    (!commit.is_empty() && commit != "HEAD").then_some(commit)
+}
+
+fn initial_clone_branch(source: &BuildWorkloadSource) -> Option<&str> {
+    if requested_commit(source).is_some() {
+        return None;
+    }
+
+    let branch = source.branch.trim();
+    (!branch.is_empty()).then_some(branch)
 }
 
 fn workspace_dir(workload: &BuildWorkloadSpec, checkout_dir: &Path) -> PathBuf {
@@ -1306,6 +1319,23 @@ mod tests {
     fn truncate_output_keeps_short_values_unchanged() {
         let value = "short output";
         assert_eq!(truncate_output(value), value);
+    }
+
+    #[test]
+    fn pinned_commit_does_not_require_source_branch_for_initial_clone() {
+        let workload = test_workload(None);
+
+        assert_eq!(requested_commit(&workload.source), Some("abc"));
+        assert_eq!(initial_clone_branch(&workload.source), None);
+    }
+
+    #[test]
+    fn unpinned_source_uses_branch_for_initial_clone() {
+        let mut workload = test_workload(None);
+        workload.source.commit_sha = "HEAD".to_string();
+
+        assert_eq!(requested_commit(&workload.source), None);
+        assert_eq!(initial_clone_branch(&workload.source), Some("feature/demo"));
     }
 
     #[test]
