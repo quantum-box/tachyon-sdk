@@ -116,14 +116,12 @@ mod tests {
                             ops_cli::NotifyCommand::Send {
                                 text,
                                 mentions,
-                                bot_token,
                                 json,
                             },
                     },
             }) => {
                 assert_eq!(text, "hello");
                 assert!(mentions.is_empty());
-                assert!(bot_token.is_none());
                 assert!(!json);
             }
             _ => panic!("expected ops slack send command"),
@@ -154,14 +152,12 @@ mod tests {
                             ops_cli::NotifyCommand::Send {
                                 text,
                                 mentions,
-                                bot_token,
                                 json,
                             },
                     },
             }) => {
                 assert_eq!(text, "hello");
                 assert_eq!(mentions, ["U123", "user@example.com"]);
-                assert!(bot_token.is_none());
                 assert!(!json);
             }
             _ => panic!("expected ops notify send command"),

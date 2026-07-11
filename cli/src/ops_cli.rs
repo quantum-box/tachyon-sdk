@@ -166,12 +166,9 @@ pub enum NotifyCommand {
         /// Notification text to send
         #[arg(long)]
         text: String,
-        /// Slack user ID or email to mention. Can be specified multiple times.
+        /// Slack mention, raw Slack token, or friendly alias. Can be specified multiple times.
         #[arg(long = "mention")]
         mentions: Vec<String>,
-        /// Slack Bot token used for email lookups
-        #[arg(long = "bot-token", env = "TACHYON_SLACK_BOT_TOKEN")]
-        bot_token: Option<String>,
         /// Print the API response as JSON
         #[arg(long)]
         json: bool,
@@ -353,15 +350,6 @@ struct SlackUsersListResponse {
     error: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     response_metadata: Option<SlackResponseMetadata>,
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-struct SlackLookupByEmailResponse {
-    ok: bool,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    user: Option<SlackUser>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    error: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -1044,10 +1032,9 @@ async fn run_notify_send(
     api: &ApiClient,
     text: &str,
     mentions: &[String],
-    bot_token: Option<&str>,
     json: bool,
 ) -> Result<()> {
-    let mentions = resolve_mentions(mentions, bot_token).await?;
+    let mentions = normalize_mentions(mentions)?;
     let response: SendNotificationResponse = api
         .post(
             "/v1/chat/send",
@@ -1293,27 +1280,6 @@ fn print_sentry_issue(issue: &SentryIssueResponse) {
     );
 }
 
-async fn resolve_mentions(mentions: &[String], bot_token: Option<&str>) -> Result<Vec<String>> {
-    let mut resolved = Vec::with_capacity(mentions.len());
-    for mention in mentions {
-        let mention = mention.trim();
-        if mention.is_empty() {
-            continue;
-        }
-        if let Some(broadcast) = normalize_slack_broadcast_mention(mention) {
-            resolved.push(broadcast.to_string());
-            continue;
-        }
-        if mention.contains('@') && !mention.starts_with("<@") {
-            let token = resolve_slack_bot_token(bot_token)?;
-            resolved.push(slack_lookup_user_id_by_email(&token, mention).await?);
-        } else {
-            resolved.push(normalize_slack_user_id(mention).to_string());
-        }
-    }
-    Ok(resolved)
-}
-
 fn resolve_slack_bot_token(explicit: Option<&str>) -> Result<String> {
     if let Some(token) = explicit.map(str::trim).filter(|token| !token.is_empty()) {
         return Ok(token.to_string());
@@ -1331,14 +1297,6 @@ fn resolve_slack_bot_token(explicit: Option<&str>) -> Result<String> {
                 "Slack Bot token is required. Pass --bot-token or set TACHYON_SLACK_BOT_TOKEN or SLACK_BOT_TOKEN."
             )
         })
-}
-
-fn normalize_slack_broadcast_mention(input: &str) -> Option<&'static str> {
-    match input.trim().to_ascii_lowercase().as_str() {
-        "here" | "<!here>" => Some("<!here>"),
-        "channel" | "<!channel>" => Some("<!channel>"),
-        _ => None,
-    }
 }
 
 async fn slack_users_list(bot_token: &str) -> Result<SlackUsersListResponse> {
@@ -1391,46 +1349,101 @@ async fn slack_users_list(bot_token: &str) -> Result<SlackUsersListResponse> {
     })
 }
 
-async fn slack_lookup_user_id_by_email(bot_token: &str, email: &str) -> Result<String> {
-    let response = reqwest::Client::new()
-        .get("https://slack.com/api/users.lookupByEmail")
-        .bearer_auth(bot_token)
-        .query(&[("email", email)])
-        .send()
-        .await
-        .with_context(|| format!("GET Slack users.lookupByEmail for {email}"))?;
-    let status = response.status();
-    if !status.is_success() {
-        bail!("Slack users.lookupByEmail returned HTTP {status}");
+fn normalize_mentions(mentions: &[String]) -> Result<Vec<String>> {
+    let mut resolved = Vec::with_capacity(mentions.len());
+    let mut seen = std::collections::HashSet::new();
+
+    for mention in mentions {
+        let mention = normalize_mention(mention)?;
+        if seen.insert(mention.clone()) {
+            resolved.push(mention);
+        }
     }
-    let body = response
-        .json::<SlackLookupByEmailResponse>()
-        .await
-        .context("parse Slack users.lookupByEmail response")?;
-    if !body.ok {
-        bail!(
-            "Slack users.lookupByEmail failed for {email}: {}",
-            body.error.unwrap_or_else(|| "unknown_error".to_string())
-        );
-    }
-    body.user
-        .map(|user| user.id)
-        .ok_or_else(|| anyhow!("Slack users.lookupByEmail omitted user for {email}"))
+
+    Ok(resolved)
 }
 
-fn normalize_slack_user_id(input: &str) -> &str {
+fn normalize_mention(input: &str) -> Result<String> {
     let trimmed = input.trim();
-    if let Some(value) = trimmed
+    if trimmed.is_empty() {
+        bail!("Slack mention cannot be empty");
+    }
+    if trimmed.chars().any(char::is_control) {
+        bail!("Slack mention contains control characters");
+    }
+
+    if let Some(token) = normalize_broadcast_mention(trimmed)? {
+        return Ok(token);
+    }
+    if let Some(token) = normalize_user_mention(trimmed)? {
+        return Ok(token);
+    }
+    if let Some(token) = normalize_user_group_mention(trimmed)? {
+        return Ok(token);
+    }
+    if trimmed.starts_with('<') || trimmed.ends_with('>') {
+        bail!("Malformed Slack mention: {trimmed}");
+    }
+
+    Ok(trimmed.to_string())
+}
+
+fn normalize_broadcast_mention(input: &str) -> Result<Option<String>> {
+    match input.to_ascii_lowercase().as_str() {
+        "here" | "@here" | "<!here>" => Ok(Some("<!here>".to_string())),
+        "channel" | "@channel" | "<!channel>" => Ok(Some("<!channel>".to_string())),
+        _ => Ok(None),
+    }
+}
+
+fn normalize_user_mention(input: &str) -> Result<Option<String>> {
+    if let Some(value) = input
         .strip_prefix("<@")
         .and_then(|value| value.strip_suffix('>'))
     {
-        return value
+        let user_id = value
             .split_once('|')
             .map(|(id, _)| id)
             .unwrap_or(value)
             .trim();
+        if !(user_id.starts_with('U') || user_id.starts_with('W'))
+            || !user_id.chars().all(|c| c.is_ascii_alphanumeric())
+        {
+            bail!("Slack user mention must use a Slack user ID");
+        }
+        return Ok(Some(format!("<@{user_id}>")));
     }
-    trimmed
+
+    if input.chars().all(|c| c.is_ascii_alphanumeric())
+        && (input.starts_with('U') || input.starts_with('W'))
+    {
+        return Ok(Some(format!("<@{input}>")));
+    }
+
+    Ok(None)
+}
+
+fn normalize_user_group_mention(input: &str) -> Result<Option<String>> {
+    if let Some(value) = input
+        .strip_prefix("<!subteam^")
+        .and_then(|value| value.strip_suffix('>'))
+    {
+        let group_id = value
+            .split_once('|')
+            .map(|(id, _)| id)
+            .unwrap_or(value)
+            .trim();
+        if !group_id.starts_with('S') || !group_id.chars().all(|c| c.is_ascii_alphanumeric()) {
+            bail!("Slack user group mention must use a Slack user group ID");
+        }
+        return Ok(Some(format!("<!subteam^{group_id}>")));
+    }
+
+    if input.chars().all(|c| c.is_ascii_alphanumeric()) && input.starts_with('S') {
+        return Ok(Some(format!("<!subteam^{input}>")));
+    }
+
+    Ok(None)
 }
 
 fn slack_user_display_name(user: &SlackUser) -> &str {
@@ -1519,9 +1532,8 @@ pub async fn run(
             NotifyCommand::Send {
                 text,
                 mentions,
-                bot_token,
                 json,
-            } => run_notify_send(&api, text, mentions, bot_token.as_deref(), *json).await,
+            } => run_notify_send(&api, text, mentions, *json).await,
             NotifyCommand::Users { bot_token, json } => {
                 run_notify_users(bot_token.as_deref(), *json).await
             }
@@ -1594,19 +1606,32 @@ mod tests {
     }
 
     #[test]
-    fn normalizes_slack_user_mentions() {
-        assert_eq!(normalize_slack_user_id(" U123 "), "U123");
-        assert_eq!(normalize_slack_user_id("<@U123>"), "U123");
-        assert_eq!(normalize_slack_user_id("<@U123|taka>"), "U123");
-    }
-
-    #[tokio::test]
-    async fn resolves_slack_broadcast_mentions_without_bot_token() {
-        let mentions = resolve_mentions(&["here".to_string(), "channel".to_string()], None)
-            .await
-            .unwrap();
+    fn normalizes_slack_broadcast_mentions_without_bot_token() {
+        let mentions = normalize_mentions(&["here".to_string(), "channel".to_string()]).unwrap();
 
         assert_eq!(mentions, vec!["<!here>", "<!channel>"]);
+    }
+
+    #[test]
+    fn normalizes_slack_mentions_and_dedupes() {
+        let mentions = normalize_mentions(&[
+            "CEO".to_string(),
+            "<@U123|taka>".to_string(),
+            "U123".to_string(),
+            "here".to_string(),
+        ])
+        .unwrap();
+
+        assert_eq!(mentions, vec!["CEO", "<@U123>", "<!here>"]);
+    }
+
+    #[test]
+    fn rejects_malformed_slack_mentions() {
+        let err = normalize_mentions(&["<@CEO>".to_string()]).unwrap_err();
+
+        assert!(err
+            .to_string()
+            .contains("Slack user mention must use a Slack user ID"));
     }
 
     #[test]
