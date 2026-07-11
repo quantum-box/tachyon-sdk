@@ -166,16 +166,7 @@ mod tests {
 
     #[test]
     fn parses_ops_notify_users_command() {
-        let cli = Cli::try_parse_from([
-            "tachyon",
-            "ops",
-            "notify",
-            "users",
-            "--bot-token",
-            "xoxb-test",
-            "--json",
-        ])
-        .unwrap();
+        let cli = Cli::try_parse_from(["tachyon", "ops", "notify", "users", "--json"]).unwrap();
 
         match cli.command {
             Commands::Ops(ops_cli::OpsArgs {
@@ -184,7 +175,7 @@ mod tests {
                         command: ops_cli::NotifyCommand::Users { bot_token, json },
                     },
             }) => {
-                assert_eq!(bot_token.as_deref(), Some("xoxb-test"));
+                assert!(bot_token.is_none());
                 assert!(json);
             }
             _ => panic!("expected ops notify users command"),

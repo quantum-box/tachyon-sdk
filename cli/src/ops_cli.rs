@@ -233,10 +233,10 @@ pub enum NotifyCommand {
         #[arg(long)]
         json: bool,
     },
-    /// List Slack users visible to the configured Slack Bot token
+    /// List Slack users through the tenant's saved Slack connection
     Users {
-        /// Slack Bot token used for users.list
-        #[arg(long = "bot-token", env = "TACHYON_SLACK_BOT_TOKEN")]
+        /// Deprecated and ignored; the server uses the tenant connection
+        #[arg(long = "bot-token")]
         bot_token: Option<String>,
         /// Print the API response as JSON
         #[arg(long)]
@@ -439,43 +439,17 @@ struct SendNotificationResponse {
 }
 
 #[derive(Debug, Deserialize, Serialize)]
-struct SlackUsersListResponse {
-    ok: bool,
-    #[serde(default)]
-    members: Vec<SlackUser>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    error: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    response_metadata: Option<SlackResponseMetadata>,
+struct ListSlackUsersResponse {
+    users: Vec<SlackUser>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
 struct SlackUser {
     id: String,
-    #[serde(default)]
     name: Option<String>,
-    #[serde(default)]
-    deleted: bool,
-    #[serde(default)]
-    is_bot: bool,
-    #[serde(default)]
-    profile: SlackUserProfile,
-}
-
-#[derive(Debug, Default, Deserialize, Serialize)]
-struct SlackUserProfile {
-    #[serde(default)]
     email: Option<String>,
-    #[serde(default)]
     display_name: Option<String>,
-    #[serde(default)]
     real_name: Option<String>,
-}
-
-#[derive(Debug, Default, Deserialize, Serialize)]
-struct SlackResponseMetadata {
-    #[serde(default)]
-    next_cursor: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -1292,30 +1266,24 @@ async fn run_notify_send(
     Ok(())
 }
 
-async fn run_notify_users(bot_token: Option<&str>, json: bool) -> Result<()> {
-    let token = resolve_slack_bot_token(bot_token)?;
-    let response = slack_users_list(&token).await?;
+async fn run_notify_users(api: &ApiClient, json: bool) -> Result<()> {
+    let response: ListSlackUsersResponse = api.get("/v1/chat/users").await?;
     if json {
         return print_json(&response);
     }
 
-    let users = response
-        .members
-        .iter()
-        .filter(|user| !user.deleted && !user.is_bot)
-        .collect::<Vec<_>>();
-    if users.is_empty() {
+    if response.users.is_empty() {
         println!("No Slack users found.");
         return Ok(());
     }
 
     println!("{:<14}  {:<36}  DISPLAY NAME", "USER ID", "EMAIL");
     println!("{:-<14}  {:-<36}  {:-<24}", "", "", "");
-    for user in users {
+    for user in &response.users {
         println!(
             "{:<14}  {:<36}  {}",
             user.id,
-            truncate(user.profile.email.as_deref().unwrap_or("-"), 36),
+            truncate(user.email.as_deref().unwrap_or("-"), 36),
             slack_user_display_name(user),
         );
     }
@@ -1517,75 +1485,6 @@ fn print_sentry_issue(issue: &SentryIssueResponse) {
     );
 }
 
-fn resolve_slack_bot_token(explicit: Option<&str>) -> Result<String> {
-    if let Some(token) = explicit.map(str::trim).filter(|token| !token.is_empty()) {
-        return Ok(token.to_string());
-    }
-    ["TACHYON_SLACK_BOT_TOKEN", "SLACK_BOT_TOKEN"]
-        .iter()
-        .find_map(|name| {
-            std::env::var(name)
-                .ok()
-                .map(|token| token.trim().to_string())
-                .filter(|token| !token.is_empty())
-        })
-        .ok_or_else(|| {
-            anyhow!(
-                "Slack Bot token is required. Pass --bot-token or set TACHYON_SLACK_BOT_TOKEN or SLACK_BOT_TOKEN."
-            )
-        })
-}
-
-async fn slack_users_list(bot_token: &str) -> Result<SlackUsersListResponse> {
-    let client = reqwest::Client::new();
-    let mut members = Vec::new();
-    let mut cursor: Option<String> = None;
-
-    loop {
-        let mut request = client
-            .get("https://slack.com/api/users.list")
-            .bearer_auth(bot_token)
-            .query(&[("limit", "200")]);
-        if let Some(cursor) = cursor.as_deref().filter(|value| !value.is_empty()) {
-            request = request.query(&[("cursor", cursor)]);
-        }
-
-        let response = request.send().await.context("GET Slack users.list")?;
-        let status = response.status();
-        if !status.is_success() {
-            bail!("Slack users.list returned HTTP {status}");
-        }
-        let mut body = response
-            .json::<SlackUsersListResponse>()
-            .await
-            .context("parse Slack users.list response")?;
-        if !body.ok {
-            bail!(
-                "Slack users.list failed: {}",
-                body.error
-                    .clone()
-                    .unwrap_or_else(|| "unknown_error".to_string())
-            );
-        }
-
-        members.append(&mut body.members);
-        cursor = body
-            .response_metadata
-            .and_then(|metadata| metadata.next_cursor)
-            .filter(|value| !value.is_empty());
-        if cursor.is_none() {
-            break;
-        }
-    }
-
-    Ok(SlackUsersListResponse {
-        ok: true,
-        members,
-        error: None,
-        response_metadata: None,
-    })
-}
-
 fn normalize_mentions(mentions: &[String]) -> Result<Vec<String>> {
     let mut resolved = Vec::with_capacity(mentions.len());
     let mut seen = std::collections::HashSet::new();
@@ -1684,16 +1583,10 @@ fn normalize_user_group_mention(input: &str) -> Result<Option<String>> {
 }
 
 fn slack_user_display_name(user: &SlackUser) -> &str {
-    user.profile
-        .display_name
+    user.display_name
         .as_deref()
         .filter(|value| !value.is_empty())
-        .or_else(|| {
-            user.profile
-                .real_name
-                .as_deref()
-                .filter(|value| !value.is_empty())
-        })
+        .or_else(|| user.real_name.as_deref().filter(|value| !value.is_empty()))
         .or(user.name.as_deref())
         .unwrap_or("-")
 }
@@ -1812,9 +1705,7 @@ pub async fn run(
                 mentions,
                 json,
             } => run_notify_send(&api, text, mentions, *json).await,
-            NotifyCommand::Users { bot_token, json } => {
-                run_notify_users(bot_token.as_deref(), *json).await
-            }
+            NotifyCommand::Users { bot_token: _, json } => run_notify_users(&api, *json).await,
         },
         OpsCommand::Sentry { command } => match command {
             SentryCommand::Issues { command } => match command {
@@ -1917,16 +1808,30 @@ mod tests {
         let user = SlackUser {
             id: "U123".to_string(),
             name: Some("fallback".to_string()),
-            deleted: false,
-            is_bot: false,
-            profile: SlackUserProfile {
-                email: Some("user@example.com".to_string()),
-                display_name: Some("display".to_string()),
-                real_name: Some("real".to_string()),
-            },
+            email: Some("user@example.com".to_string()),
+            display_name: Some("display".to_string()),
+            real_name: Some("real".to_string()),
         };
 
         assert_eq!(slack_user_display_name(&user), "display");
+    }
+
+    #[test]
+    fn deserializes_tenant_slack_users_response() {
+        let response: ListSlackUsersResponse = serde_json::from_value(json!({
+            "users": [{
+                "id": "U123",
+                "name": "taka",
+                "email": "taka@example.com",
+                "display_name": "Taka",
+                "real_name": "Takanori Fukuyama"
+            }]
+        }))
+        .unwrap();
+
+        assert_eq!(response.users.len(), 1);
+        assert_eq!(response.users[0].id, "U123");
+        assert_eq!(response.users[0].email.as_deref(), Some("taka@example.com"));
     }
 
     #[test]
