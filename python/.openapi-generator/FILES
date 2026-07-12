@@ -33,6 +33,7 @@ docs/AgentProtocolMode.md
 docs/AgentSessionEntry.md
 docs/AgentSource.md
 docs/AgentStatusResponse.md
+docs/AllowedTenantResponse.md
 docs/ApiKeyListResponse.md
 docs/ApiKeyResponse.md
 docs/Ask.md
@@ -65,6 +66,8 @@ docs/ChatroomNameGeneration.md
 docs/ChatroomsChatroomIdMessagesGetResponse.md
 docs/CheckPolicyForResourceRequest.md
 docs/CheckPolicyForResourceResponse.md
+docs/CheckTenantsPolicyRequest.md
+docs/CheckTenantsPolicyResponse.md
 docs/CheckoutRequest.md
 docs/CheckoutResponse.md
 docs/Choice.md
@@ -305,6 +308,7 @@ tachyon_sdk/models/agent_protocol_mode.py
 tachyon_sdk/models/agent_session_entry.py
 tachyon_sdk/models/agent_source.py
 tachyon_sdk/models/agent_status_response.py
+tachyon_sdk/models/allowed_tenant_response.py
 tachyon_sdk/models/api_key_list_response.py
 tachyon_sdk/models/api_key_response.py
 tachyon_sdk/models/ask.py
@@ -324,6 +328,8 @@ tachyon_sdk/models/chatroom_name_generation.py
 tachyon_sdk/models/chatrooms_chatroom_id_messages_get_response.py
 tachyon_sdk/models/check_policy_for_resource_request.py
 tachyon_sdk/models/check_policy_for_resource_response.py
+tachyon_sdk/models/check_tenants_policy_request.py
+tachyon_sdk/models/check_tenants_policy_response.py
 tachyon_sdk/models/checkout_request.py
 tachyon_sdk/models/checkout_response.py
 tachyon_sdk/models/choice.py

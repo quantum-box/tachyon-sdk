@@ -13,6 +13,18 @@ use crate::{apis::ResponseContent, models};
 use reqwest;
 use serde::{de::Error as _, Deserialize, Serialize};
 
+/// struct for typed errors of method [`check_policies_for_tenants`]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum CheckPoliciesForTenantsError {
+    Status400(),
+    Status401(),
+    Status403(),
+    Status500(),
+    Status503(),
+    UnknownValue(serde_json::Value),
+}
+
 /// struct for typed errors of method [`check_policy_for_resource`]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(untagged)]
@@ -72,6 +84,66 @@ pub enum UpdatePolicyError {
     Status403(),
     Status404(),
     UnknownValue(serde_json::Value),
+}
+
+pub async fn check_policies_for_tenants(
+    configuration: &configuration::Configuration,
+    check_tenants_policy_request: models::CheckTenantsPolicyRequest,
+) -> Result<
+    models::CheckTenantsPolicyResponse,
+    Error<CheckPoliciesForTenantsError>,
+> {
+    let uri_str = format!(
+        "{}/v1/auth/policies/check-tenants",
+        configuration.base_path
+    );
+    let mut req_builder = configuration
+        .client
+        .request(reqwest::Method::POST, &uri_str);
+
+    if let Some(ref user_agent) = configuration.user_agent {
+        req_builder = req_builder
+            .header(reqwest::header::USER_AGENT, user_agent.clone());
+    }
+    req_builder = req_builder.json(&check_tenants_policy_request);
+
+    let req = req_builder.build()?;
+    let resp = configuration.client.execute(req).await?;
+    let status = resp.status();
+    let content_type = resp
+        .headers()
+        .get("content-type")
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or("application/octet-stream");
+    let content_type = ContentType::from(content_type);
+
+    if !status.is_client_error() && !status.is_server_error() {
+        let content = resp.text().await?;
+        match content_type {
+            ContentType::Json => {
+                serde_json::from_str(&content).map_err(Error::from)
+            }
+            ContentType::Text => Err(Error::from(
+                serde_json::Error::custom(
+                    "Received `text/plain` content type response that cannot be converted to `models::CheckTenantsPolicyResponse`",
+                ),
+            )),
+            ContentType::Unsupported(unknown_type) => Err(Error::from(
+                serde_json::Error::custom(format!(
+                    "Received `{unknown_type}` content type response that cannot be converted to `models::CheckTenantsPolicyResponse`"
+                )),
+            )),
+        }
+    } else {
+        let content = resp.text().await?;
+        let entity: Option<CheckPoliciesForTenantsError> =
+            serde_json::from_str(&content).ok();
+        Err(Error::ResponseError(ResponseContent {
+            status,
+            content,
+            entity,
+        }))
+    }
 }
 
 pub async fn check_policy_for_resource(

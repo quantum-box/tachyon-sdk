@@ -83,6 +83,7 @@ All URIs are relative to *http://localhost*
 *AuthOperatorsApi* | [**findOperatorsByUser**](docs/AuthOperatorsApi.md#findoperatorsbyuser) | **GET** /v1/auth/operators/by-user | Find operators accessible to a user under a platform
 *AuthOperatorsApi* | [**getOperatorByAlias**](docs/AuthOperatorsApi.md#getoperatorbyalias) | **GET** /v1/auth/operators/by-alias | Get an operator by alias within a platform
 *AuthOperatorsApi* | [**getOperatorById**](docs/AuthOperatorsApi.md#getoperatorbyid) | **GET** /v1/auth/operators/{id} | Get an operator by ID
+*AuthPoliciesApi* | [**checkPoliciesForTenants**](docs/AuthPoliciesApi.md#checkpoliciesfortenants) | **POST** /v1/auth/policies/check-tenants | Evaluate one policy action across the authenticated user\&#39;s tenant scopes.
 *AuthPoliciesApi* | [**checkPolicyForResource**](docs/AuthPoliciesApi.md#checkpolicyforresourceoperation) | **POST** /v1/auth/policies/check-for-resource | Check permission for a specific resource
 *AuthPoliciesApi* | [**evaluatePoliciesBatch**](docs/AuthPoliciesApi.md#evaluatepoliciesbatchoperation) | **POST** /v1/auth/policies/check | Evaluate multiple policy actions in batch
 *AuthPoliciesApi* | [**getPolicy**](docs/AuthPoliciesApi.md#getpolicy) | **GET** /v1/auth/policies/{id} | Get a policy by ID
@@ -102,14 +103,14 @@ All URIs are relative to *http://localhost*
 *AuthUserPoliciesApi* | [**findUserPolicyMappings**](docs/AuthUserPoliciesApi.md#finduserpolicymappings) | **GET** /v1/auth/user-policy-mappings | Find user policy mappings by resource scope
 *AuthUserPoliciesApi* | [**listUserPolicies**](docs/AuthUserPoliciesApi.md#listuserpolicies) | **GET** /v1/auth/users/{user_id}/policies | List policies attached to a user
 *AuthUsersApi* | [**addUserToTenant**](docs/AuthUsersApi.md#addusertotenantoperation) | **POST** /v1/auth/users/{user_id}/tenants | Add a user to a tenant (grant tenant access)
-*AuthUsersApi* | [**createUser**](docs/AuthUsersApi.md#createuseroperation) | **POST** /auth/v1beta/users | 
+*AuthUsersApi* | [**createUser**](docs/AuthUsersApi.md#createuseroperation) | **POST** /auth/v1beta/users |
 *AuthUsersApi* | [**findUserByUsername**](docs/AuthUsersApi.md#finduserbyusername) | **GET** /v1/auth/users/search/by-username | Find a user by username
 *AuthUsersApi* | [**getUser**](docs/AuthUsersApi.md#getuser) | **GET** /v1/auth/users/{id} | Get a user by ID
 *AuthUsersApi* | [**inviteUser**](docs/AuthUsersApi.md#inviteuseroperation) | **POST** /v1/auth/users/invite | Invite a user to a tenant
 *AuthUsersApi* | [**listUsers**](docs/AuthUsersApi.md#listusers) | **GET** /v1/auth/users | List all users in an operator
 *AuthUsersApi* | [**updateUserRole**](docs/AuthUsersApi.md#updateuserroleoperation) | **PUT** /v1/auth/users/{user_id}/role | Update a user\&#39;s role in a specific tenant
-*AuthVerifyApi* | [**signInWithPlatform**](docs/AuthVerifyApi.md#signinwithplatformoperation) | **POST** /auth/v1beta/sign-in-with-platform | 
-*AuthVerifyApi* | [**verify**](docs/AuthVerifyApi.md#verifyoperation) | **POST** /auth/v1beta/verify | 
+*AuthVerifyApi* | [**signInWithPlatform**](docs/AuthVerifyApi.md#signinwithplatformoperation) | **POST** /auth/v1beta/sign-in-with-platform |
+*AuthVerifyApi* | [**verify**](docs/AuthVerifyApi.md#verifyoperation) | **POST** /auth/v1beta/verify |
 *CRMObjectMappingsApi* | [**createObjectMapping**](docs/CRMObjectMappingsApi.md#createobjectmappingoperation) | **POST** /v1/crm/object-mappings | Create an object mapping
 *CRMObjectMappingsApi* | [**getObjectMappings**](docs/CRMObjectMappingsApi.md#getobjectmappings) | **GET** /v1/crm/object-mappings | Get object mappings by entity ID and object name
 *ChatApi* | [**chatCompletion**](docs/ChatApi.md#chatcompletionoperation) | **POST** /v1/llms/chat/completions | Create a chat completion
@@ -188,6 +189,7 @@ All URIs are relative to *http://localhost*
 - [AgentSessionEntry](docs/AgentSessionEntry.md)
 - [AgentSource](docs/AgentSource.md)
 - [AgentStatusResponse](docs/AgentStatusResponse.md)
+- [AllowedTenantResponse](docs/AllowedTenantResponse.md)
 - [ApiKeyListResponse](docs/ApiKeyListResponse.md)
 - [ApiKeyResponse](docs/ApiKeyResponse.md)
 - [Ask](docs/Ask.md)
@@ -207,6 +209,8 @@ All URIs are relative to *http://localhost*
 - [ChatroomsChatroomIdMessagesGetResponse](docs/ChatroomsChatroomIdMessagesGetResponse.md)
 - [CheckPolicyForResourceRequest](docs/CheckPolicyForResourceRequest.md)
 - [CheckPolicyForResourceResponse](docs/CheckPolicyForResourceResponse.md)
+- [CheckTenantsPolicyRequest](docs/CheckTenantsPolicyRequest.md)
+- [CheckTenantsPolicyResponse](docs/CheckTenantsPolicyResponse.md)
 - [CheckoutRequest](docs/CheckoutRequest.md)
 - [CheckoutResponse](docs/CheckoutResponse.md)
 - [Choice](docs/Choice.md)
