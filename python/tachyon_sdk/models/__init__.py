@@ -42,6 +42,7 @@ from tachyon_sdk.models.agent_protocol_mode import AgentProtocolMode
 from tachyon_sdk.models.agent_session_entry import AgentSessionEntry
 from tachyon_sdk.models.agent_source import AgentSource
 from tachyon_sdk.models.agent_status_response import AgentStatusResponse
+from tachyon_sdk.models.allowed_tenant_response import AllowedTenantResponse
 from tachyon_sdk.models.api_key_list_response import ApiKeyListResponse
 from tachyon_sdk.models.api_key_response import ApiKeyResponse
 from tachyon_sdk.models.ask import Ask
@@ -61,6 +62,8 @@ from tachyon_sdk.models.chatroom_name_generation import ChatroomNameGeneration
 from tachyon_sdk.models.chatrooms_chatroom_id_messages_get_response import ChatroomsChatroomIdMessagesGetResponse
 from tachyon_sdk.models.check_policy_for_resource_request import CheckPolicyForResourceRequest
 from tachyon_sdk.models.check_policy_for_resource_response import CheckPolicyForResourceResponse
+from tachyon_sdk.models.check_tenants_policy_request import CheckTenantsPolicyRequest
+from tachyon_sdk.models.check_tenants_policy_response import CheckTenantsPolicyResponse
 from tachyon_sdk.models.checkout_request import CheckoutRequest
 from tachyon_sdk.models.checkout_response import CheckoutResponse
 from tachyon_sdk.models.choice import Choice

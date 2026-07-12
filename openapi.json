@@ -5501,6 +5501,52 @@
                     }
                 }
             }
+        },
+        "/v1/auth/policies/check-tenants": {
+            "post": {
+                "tags": [
+                    "Auth - Policies"
+                ],
+                "summary": "Evaluate one policy action across the authenticated user's tenant scopes.",
+                "operationId": "check_policies_for_tenants",
+                "requestBody": {
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/CheckTenantsPolicyRequest"
+                            }
+                        }
+                    },
+                    "required": true
+                },
+                "responses": {
+                    "200": {
+                        "description": "Allowed tenants",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/CheckTenantsPolicyResponse"
+                                }
+                            }
+                        }
+                    },
+                    "400": {
+                        "description": "Invalid request"
+                    },
+                    "401": {
+                        "description": "Unauthenticated"
+                    },
+                    "403": {
+                        "description": "Subject type is not allowed"
+                    },
+                    "500": {
+                        "description": "Policy evaluation failed"
+                    },
+                    "503": {
+                        "description": "Policy evaluation unavailable"
+                    }
+                }
+            }
         }
     },
     "components": {
@@ -11450,6 +11496,83 @@
                             "null"
                         ],
                         "description": "Policy description"
+                    }
+                }
+            },
+            "AllowedTenantResponse": {
+                "type": "object",
+                "description": "Allowed tenant metadata. Denied tenants and policy internals are omitted.",
+                "required": [
+                    "tenantId",
+                    "name",
+                    "alias",
+                    "rootTenantId",
+                    "executionMode"
+                ],
+                "properties": {
+                    "alias": {
+                        "type": "string"
+                    },
+                    "executionMode": {
+                        "type": "string"
+                    },
+                    "name": {
+                        "type": "string"
+                    },
+                    "parentTenantId": {
+                        "type": [
+                            "string",
+                            "null"
+                        ]
+                    },
+                    "rootTenantId": {
+                        "type": "string"
+                    },
+                    "tenantId": {
+                        "type": "string"
+                    }
+                }
+            },
+            "CheckTenantsPolicyRequest": {
+                "type": "object",
+                "description": "Request to evaluate one action across multiple tenant scopes.",
+                "required": [
+                    "action",
+                    "platformId"
+                ],
+                "properties": {
+                    "action": {
+                        "type": "string"
+                    },
+                    "platformId": {
+                        "type": "string"
+                    },
+                    "tenantIds": {
+                        "type": [
+                            "array",
+                            "null"
+                        ],
+                        "items": {
+                            "type": "string"
+                        },
+                        "maxItems": 500,
+                        "minItems": 1
+                    }
+                },
+                "additionalProperties": false
+            },
+            "CheckTenantsPolicyResponse": {
+                "type": "object",
+                "description": "Response for tenant-bulk policy evaluation.",
+                "required": [
+                    "allowedTenants"
+                ],
+                "properties": {
+                    "allowedTenants": {
+                        "type": "array",
+                        "items": {
+                            "$ref": "#/components/schemas/AllowedTenantResponse"
+                        }
                     }
                 }
             }

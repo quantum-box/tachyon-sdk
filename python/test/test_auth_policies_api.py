@@ -26,6 +26,13 @@ class TestAuthPoliciesApi(unittest.TestCase):
     def tearDown(self) -> None:
         pass
 
+    def test_check_policies_for_tenants(self) -> None:
+        """Test case for check_policies_for_tenants.
+
+        Evaluate one policy action across the authenticated user's tenant scopes.
+        """
+        pass
+
     def test_evaluate_policies_batch(self) -> None:
         """Test case for evaluate_policies_batch
 

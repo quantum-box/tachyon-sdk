@@ -4,6 +4,7 @@ All URIs are relative to *http://localhost*
 
 Method | HTTP request | Description
 ------------- | ------------- | -------------
+[**check_policies_for_tenants**](AuthPoliciesApi.md#check_policies_for_tenants) | **POST** /v1/auth/policies/check-tenants | Evaluate one policy action across the authenticated user&#39;s tenant scopes.
 [**check_policy_for_resource**](AuthPoliciesApi.md#check_policy_for_resource) | **POST** /v1/auth/policies/check-for-resource | Check permission for a specific resource
 [**evaluate_policies_batch**](AuthPoliciesApi.md#evaluate_policies_batch) | **POST** /v1/auth/policies/check | Evaluate multiple policy actions in batch
 [**get_policy**](AuthPoliciesApi.md#get_policy) | **GET** /v1/auth/policies/{id} | Get a policy by ID
@@ -12,6 +13,78 @@ Method | HTTP request | Description
 [**register_policy**](AuthPoliciesApi.md#register_policy) | **POST** /v1/auth/policies | Register a custom policy
 [**update_policy**](AuthPoliciesApi.md#update_policy) | **PATCH** /v1/auth/policies/{id} | Update a custom policy
 
+
+# **check_policies_for_tenants**
+> CheckTenantsPolicyResponse check_policies_for_tenants(check_tenants_policy_request)
+
+Evaluate one policy action across the authenticated user's tenant scopes.
+
+### Example
+
+
+```python
+import tachyon_sdk
+from tachyon_sdk.models.check_tenants_policy_request import CheckTenantsPolicyRequest
+from tachyon_sdk.models.check_tenants_policy_response import CheckTenantsPolicyResponse
+from tachyon_sdk.rest import ApiException
+from pprint import pprint
+
+# Defining the host is optional and defaults to http://localhost
+# See configuration.py for a list of all supported configuration parameters.
+configuration = tachyon_sdk.Configuration(
+    host = "http://localhost"
+)
+
+
+# Enter a context with an instance of the API client
+with tachyon_sdk.ApiClient(configuration) as api_client:
+    # Create an instance of the API class
+    api_instance = tachyon_sdk.AuthPoliciesApi(api_client)
+    check_tenants_policy_request = tachyon_sdk.CheckTenantsPolicyRequest() # CheckTenantsPolicyRequest |
+
+    try:
+        # Evaluate one policy action across the authenticated user's tenant scopes.
+        api_response = api_instance.check_policies_for_tenants(check_tenants_policy_request)
+        print("The response of AuthPoliciesApi->check_policies_for_tenants:\n")
+        pprint(api_response)
+    except Exception as e:
+        print("Exception when calling AuthPoliciesApi->check_policies_for_tenants: %s\n" % e)
+```
+
+
+
+### Parameters
+
+
+Name | Type | Description  | Notes
+------------- | ------------- | ------------- | -------------
+ **check_tenants_policy_request** | [**CheckTenantsPolicyRequest**](CheckTenantsPolicyRequest.md)|  |
+
+### Return type
+
+[**CheckTenantsPolicyResponse**](CheckTenantsPolicyResponse.md)
+
+### Authorization
+
+No authorization required
+
+### HTTP request headers
+
+ - **Content-Type**: application/json
+ - **Accept**: application/json
+
+### HTTP response details
+
+| Status code | Description | Response headers |
+|-------------|-------------|------------------|
+**200** | Allowed tenants |  -  |
+**400** | Invalid request |  -  |
+**401** | Unauthenticated |  -  |
+**403** | Subject type is not allowed |  -  |
+**500** | Policy evaluation failed |  -  |
+**503** | Policy evaluation unavailable |  -  |
+
+[[Back to top]](#) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to Model list]](../README.md#documentation-for-models) [[Back to README]](../README.md)
 
 # **check_policy_for_resource**
 > CheckPolicyForResourceResponse check_policy_for_resource(check_policy_for_resource_request)

@@ -4,6 +4,7 @@ All URIs are relative to *http://localhost*
 
 | Method | HTTP request | Description |
 |------------- | ------------- | -------------|
+| [**checkPoliciesForTenants**](AuthPoliciesApi.md#checkpoliciesfortenants) | **POST** /v1/auth/policies/check-tenants | Evaluate one policy action across the authenticated user\&#39;s tenant scopes. |
 | [**checkPolicyForResource**](AuthPoliciesApi.md#checkpolicyforresourceoperation) | **POST** /v1/auth/policies/check-for-resource | Check permission for a specific resource |
 | [**evaluatePoliciesBatch**](AuthPoliciesApi.md#evaluatepoliciesbatchoperation) | **POST** /v1/auth/policies/check | Evaluate multiple policy actions in batch |
 | [**getPolicy**](AuthPoliciesApi.md#getpolicy) | **GET** /v1/auth/policies/{id} | Get a policy by ID |
@@ -12,6 +13,76 @@ All URIs are relative to *http://localhost*
 | [**registerPolicy**](AuthPoliciesApi.md#registerpolicyoperation) | **POST** /v1/auth/policies | Register a custom policy |
 | [**updatePolicy**](AuthPoliciesApi.md#updatepolicyoperation) | **PATCH** /v1/auth/policies/{id} | Update a custom policy |
 
+
+
+## checkPoliciesForTenants
+
+> CheckTenantsPolicyResponse checkPoliciesForTenants(checkTenantsPolicyRequest)
+
+Evaluate one policy action across the authenticated user\&#39;s tenant scopes.
+
+### Example
+
+```ts
+import {
+  Configuration,
+  AuthPoliciesApi,
+} from '@tachyon/sdk';
+import type { CheckPoliciesForTenantsRequest } from '@tachyon/sdk';
+
+async function example() {
+  console.log("🚀 Testing @tachyon/sdk SDK...");
+  const api = new AuthPoliciesApi();
+
+  const body = {
+    // CheckTenantsPolicyRequest
+    checkTenantsPolicyRequest: ...,
+  } satisfies CheckPoliciesForTenantsRequest;
+
+  try {
+    const data = await api.checkPoliciesForTenants(body);
+    console.log(data);
+  } catch (error) {
+    console.error(error);
+  }
+}
+
+// Run the test
+example().catch(console.error);
+```
+
+### Parameters
+
+
+| Name | Type | Description  | Notes |
+|------------- | ------------- | ------------- | -------------|
+| **checkTenantsPolicyRequest** | [CheckTenantsPolicyRequest](CheckTenantsPolicyRequest.md) |  | |
+
+### Return type
+
+[**CheckTenantsPolicyResponse**](CheckTenantsPolicyResponse.md)
+
+### Authorization
+
+No authorization required
+
+### HTTP request headers
+
+- **Content-Type**: `application/json`
+- **Accept**: `application/json`
+
+
+### HTTP response details
+| Status code | Description | Response headers |
+|-------------|-------------|------------------|
+| **200** | Allowed tenants |  -  |
+| **400** | Invalid request |  -  |
+| **401** | Unauthenticated |  -  |
+| **403** | Subject type is not allowed |  -  |
+| **500** | Policy evaluation failed |  -  |
+| **503** | Policy evaluation unavailable |  -  |
+
+[[Back to top]](#) [[Back to API list]](../README.md#api-endpoints) [[Back to Model list]](../README.md#models) [[Back to README]](../README.md)
 
 
 ## checkPolicyForResource

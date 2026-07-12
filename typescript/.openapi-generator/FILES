@@ -31,6 +31,7 @@ docs/AgentProtocolMode.md
 docs/AgentSessionEntry.md
 docs/AgentSource.md
 docs/AgentStatusResponse.md
+docs/AllowedTenantResponse.md
 docs/ApiKeyListResponse.md
 docs/ApiKeyResponse.md
 docs/Ask.md
@@ -63,6 +64,8 @@ docs/ChatroomNameGeneration.md
 docs/ChatroomsChatroomIdMessagesGetResponse.md
 docs/CheckPolicyForResourceRequest.md
 docs/CheckPolicyForResourceResponse.md
+docs/CheckTenantsPolicyRequest.md
+docs/CheckTenantsPolicyResponse.md
 docs/CheckoutRequest.md
 docs/CheckoutResponse.md
 docs/Choice.md
@@ -294,6 +297,7 @@ src/models/AgentProtocolMode.ts
 src/models/AgentSessionEntry.ts
 src/models/AgentSource.ts
 src/models/AgentStatusResponse.ts
+src/models/AllowedTenantResponse.ts
 src/models/ApiKeyListResponse.ts
 src/models/ApiKeyResponse.ts
 src/models/Ask.ts
@@ -313,6 +317,8 @@ src/models/ChatroomNameGeneration.ts
 src/models/ChatroomsChatroomIdMessagesGetResponse.ts
 src/models/CheckPolicyForResourceRequest.ts
 src/models/CheckPolicyForResourceResponse.ts
+src/models/CheckTenantsPolicyRequest.ts
+src/models/CheckTenantsPolicyResponse.ts
 src/models/CheckoutRequest.ts
 src/models/CheckoutResponse.ts
 src/models/Choice.ts
