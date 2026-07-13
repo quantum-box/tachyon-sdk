@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
     collections::BTreeMap,
+    ffi::OsStr,
     path::{Path, PathBuf},
     process::Stdio,
     time::Instant,
@@ -481,6 +482,7 @@ const LAMBDA_UPLOAD_URL_ENV: &str = "TACHYON_LAMBDA_ARTIFACT_UPLOAD_URL";
 /// `s3://bucket/key` path reported back in the completion
 /// callback so `CreateDeployment` can locate the artifact.
 const LAMBDA_ARTIFACT_PATH_ENV: &str = "TACHYON_LAMBDA_ARTIFACT_PATH";
+const CARGO_TARGET_DIR_ENV: &str = "CARGO_TARGET_DIR";
 
 fn is_rust_lambda(workload: &BuildWorkloadSpec) -> bool {
     let framework = workload.framework.as_deref();
@@ -507,7 +509,9 @@ async fn run_lambda_package_and_upload(
     let upload_url = env_value(env, LAMBDA_UPLOAD_URL_ENV)
         .ok_or_else(|| anyhow!("{LAMBDA_UPLOAD_URL_ENV} is required for Lambda artifact upload"))?;
 
-    let (archive, source) = package_lambda_archive_for_workload(workload, app_dir)?;
+    let inherited_target_dir = std::env::var_os(CARGO_TARGET_DIR_ENV);
+    let target_dir = cargo_target_dir(app_dir, env, inherited_target_dir.as_deref());
+    let (archive, source) = package_lambda_archive_for_workload(workload, app_dir, &target_dir)?;
     let size = archive.len();
     tracing::info!(%source, size_bytes = size, "uploading Lambda artifact");
 
@@ -529,11 +533,34 @@ async fn run_lambda_package_and_upload(
 fn package_lambda_archive_for_workload(
     workload: &BuildWorkloadSpec,
     app_dir: &Path,
+    cargo_target_dir: &Path,
 ) -> Result<(Vec<u8>, String)> {
     if is_rust_lambda(workload) {
-        return package_rust_lambda_archive(workload, app_dir);
+        return package_rust_lambda_archive(workload, app_dir, cargo_target_dir);
     }
     package_lambda_archive(app_dir)
+}
+
+fn cargo_target_dir(
+    app_dir: &Path,
+    env: &BTreeMap<String, String>,
+    inherited_target_dir: Option<&OsStr>,
+) -> PathBuf {
+    let configured = env
+        .get(CARGO_TARGET_DIR_ENV)
+        .map(OsStr::new)
+        .or(inherited_target_dir)
+        .filter(|value| !value.is_empty());
+    let Some(configured) = configured else {
+        return app_dir.join("target");
+    };
+
+    let configured = PathBuf::from(configured);
+    if configured.is_absolute() {
+        configured
+    } else {
+        app_dir.join(configured)
+    }
 }
 
 fn package_lambda_archive(app_dir: &Path) -> Result<(Vec<u8>, String)> {
@@ -555,20 +582,24 @@ fn package_lambda_archive(app_dir: &Path) -> Result<(Vec<u8>, String)> {
 fn package_rust_lambda_archive(
     workload: &BuildWorkloadSpec,
     app_dir: &Path,
+    cargo_target_dir: &Path,
 ) -> Result<(Vec<u8>, String)> {
     let bootstrap = if workload.framework.as_deref() == Some("rust_server") {
-        rust_server_bootstrap_path(workload, app_dir)?
+        rust_server_bootstrap_path(workload, app_dir, cargo_target_dir)?
     } else {
-        cargo_lambda_bootstrap_path(workload, app_dir)?
+        cargo_lambda_bootstrap_path(workload, app_dir, cargo_target_dir)?
     };
     let bytes = zip_bootstrap_file(&bootstrap)?;
     Ok((bytes, format!("{}", bootstrap.display())))
 }
 
-fn rust_server_bootstrap_path(workload: &BuildWorkloadSpec, app_dir: &Path) -> Result<PathBuf> {
+fn rust_server_bootstrap_path(
+    workload: &BuildWorkloadSpec,
+    app_dir: &Path,
+    cargo_target_dir: &Path,
+) -> Result<PathBuf> {
     let package_name = rust_binary_name(workload, app_dir)?;
-    let binary = app_dir
-        .join("target")
+    let binary = cargo_target_dir
         .join("aarch64-unknown-linux-gnu")
         .join("release")
         .join(&package_name);
@@ -577,13 +608,17 @@ fn rust_server_bootstrap_path(workload: &BuildWorkloadSpec, app_dir: &Path) -> R
     }
     Err(anyhow!(
         "rust_server Lambda binary not found at {}; ensure the build command \
-         produced target/aarch64-unknown-linux-gnu/release/{}",
+         produced the configured Cargo target artifact for {}",
         binary.display(),
         package_name
     ))
 }
 
-fn cargo_lambda_bootstrap_path(workload: &BuildWorkloadSpec, app_dir: &Path) -> Result<PathBuf> {
+fn cargo_lambda_bootstrap_path(
+    workload: &BuildWorkloadSpec,
+    app_dir: &Path,
+    cargo_target_dir: &Path,
+) -> Result<PathBuf> {
     let explicit_name = workload
         .commands
         .build
@@ -591,21 +626,9 @@ fn cargo_lambda_bootstrap_path(workload: &BuildWorkloadSpec, app_dir: &Path) -> 
         .and_then(cargo_lambda_bootstrap_name);
     let mut candidates = Vec::new();
     if let Some(name) = explicit_name {
-        candidates.push(
-            app_dir
-                .join("target")
-                .join("lambda")
-                .join(name)
-                .join("bootstrap"),
-        );
+        candidates.push(cargo_target_dir.join("lambda").join(name).join("bootstrap"));
     } else if let Ok(name) = rust_binary_name(workload, app_dir) {
-        candidates.push(
-            app_dir
-                .join("target")
-                .join("lambda")
-                .join(name)
-                .join("bootstrap"),
-        );
+        candidates.push(cargo_target_dir.join("lambda").join(name).join("bootstrap"));
     }
 
     for candidate in &candidates {
@@ -614,7 +637,7 @@ fn cargo_lambda_bootstrap_path(workload: &BuildWorkloadSpec, app_dir: &Path) -> 
         }
     }
 
-    let lambda_dir = app_dir.join("target").join("lambda");
+    let lambda_dir = cargo_target_dir.join("lambda");
     let mut discovered = Vec::new();
     if lambda_dir.is_dir() {
         for entry in std::fs::read_dir(&lambda_dir)
@@ -635,10 +658,10 @@ fn cargo_lambda_bootstrap_path(workload: &BuildWorkloadSpec, app_dir: &Path) -> 
     let expected = candidates
         .first()
         .map(|path| path.display().to_string())
-        .unwrap_or_else(|| format!("{}/target/lambda/<name>/bootstrap", app_dir.display()));
+        .unwrap_or_else(|| format!("{}/lambda/<name>/bootstrap", cargo_target_dir.display()));
     Err(anyhow!(
         "cargo-lambda bootstrap not found; expected {expected}. Ensure the \
-         build command ran cargo lambda build and produced target/lambda/<name>/bootstrap"
+         build command ran cargo lambda build and produced the configured Cargo target artifact"
     ))
 }
 
@@ -1387,11 +1410,17 @@ mod tests {
     }
 
     #[test]
-    fn package_lambda_archive_for_cargo_lambda_zips_bootstrap() {
+    fn package_cargo_lambda_archive_uses_configured_target_dir() {
         let temp = tempfile::tempdir().unwrap();
-        let bootstrap = temp
-            .path()
-            .join("target")
+        let app_dir = temp.path().join("app");
+        std::fs::create_dir_all(&app_dir).unwrap();
+        let configured_target_dir = temp.path().join("cache").join("target");
+        let target_dir = cargo_target_dir(
+            &app_dir,
+            &BTreeMap::new(),
+            Some(configured_target_dir.as_os_str()),
+        );
+        let bootstrap = target_dir
             .join("lambda")
             .join("lambda-field-api")
             .join("bootstrap");
@@ -1405,7 +1434,8 @@ mod tests {
                 .to_string(),
         );
 
-        let (bytes, source) = package_lambda_archive_for_workload(&workload, temp.path()).unwrap();
+        let (bytes, source) =
+            package_lambda_archive_for_workload(&workload, &app_dir, &target_dir).unwrap();
         assert_eq!(source, bootstrap.display().to_string());
 
         let mut archive = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
@@ -1417,11 +1447,11 @@ mod tests {
     }
 
     #[test]
-    fn package_lambda_archive_for_cargo_lambda_uses_package_flag() {
+    fn package_cargo_lambda_archive_falls_back_to_app_target_dir() {
         let temp = tempfile::tempdir().unwrap();
-        let bootstrap = temp
-            .path()
-            .join("target")
+        let target_dir = cargo_target_dir(temp.path(), &BTreeMap::new(), None);
+        assert_eq!(target_dir, temp.path().join("target"));
+        let bootstrap = target_dir
             .join("lambda")
             .join("tachyon-field-api")
             .join("bootstrap");
@@ -1433,7 +1463,8 @@ mod tests {
         workload.commands.build =
             Some("cargo lambda build --package tachyon-field-api --release --arm64".to_string());
 
-        let (bytes, _) = package_lambda_archive_for_workload(&workload, temp.path()).unwrap();
+        let (bytes, _) =
+            package_lambda_archive_for_workload(&workload, temp.path(), &target_dir).unwrap();
         let mut archive = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
         assert!(archive.by_name("bootstrap").is_ok());
     }
@@ -1476,6 +1507,10 @@ mod tests {
             name: LAMBDA_UPLOAD_URL_ENV.to_string(),
             value: upload_url,
         });
+        workload.env.push(BuildWorkloadEnvVar {
+            name: CARGO_TARGET_DIR_ENV.to_string(),
+            value: temp.path().join("target").display().to_string(),
+        });
         let env = workload_env(&workload);
 
         let output = run_lambda_package_and_upload(&workload, temp.path(), &env)
@@ -1493,11 +1528,11 @@ mod tests {
     }
 
     #[test]
-    fn package_lambda_archive_for_rust_server_zips_release_binary() {
+    fn package_rust_server_archive_falls_back_to_app_target_dir() {
         let temp = tempfile::tempdir().unwrap();
-        let binary = temp
-            .path()
-            .join("target")
+        let target_dir = cargo_target_dir(temp.path(), &BTreeMap::new(), None);
+        assert_eq!(target_dir, temp.path().join("target"));
+        let binary = target_dir
             .join("aarch64-unknown-linux-gnu")
             .join("release")
             .join("starter-api");
@@ -1511,7 +1546,40 @@ mod tests {
                 .to_string(),
         );
 
-        let (bytes, source) = package_lambda_archive_for_workload(&workload, temp.path()).unwrap();
+        let (bytes, source) =
+            package_lambda_archive_for_workload(&workload, temp.path(), &target_dir).unwrap();
+        assert_eq!(source, binary.display().to_string());
+        let mut archive = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
+        assert!(archive.by_name("bootstrap").is_ok());
+    }
+
+    #[test]
+    fn package_rust_server_archive_uses_configured_target_dir() {
+        let temp = tempfile::tempdir().unwrap();
+        let app_dir = temp.path().join("app");
+        std::fs::create_dir_all(&app_dir).unwrap();
+        let configured_target_dir = temp.path().join("cache").join("target");
+        let target_dir = cargo_target_dir(
+            &app_dir,
+            &BTreeMap::new(),
+            Some(configured_target_dir.as_os_str()),
+        );
+        let binary = target_dir
+            .join("aarch64-unknown-linux-gnu")
+            .join("release")
+            .join("starter-api");
+        std::fs::create_dir_all(binary.parent().unwrap()).unwrap();
+        std::fs::write(&binary, b"starter api binary").unwrap();
+
+        let mut workload = test_workload(Some("lambda"));
+        workload.framework = Some("rust_server".to_string());
+        workload.commands.build = Some(
+            "cargo build --package starter-api --release --target aarch64-unknown-linux-gnu"
+                .to_string(),
+        );
+
+        let (bytes, source) =
+            package_lambda_archive_for_workload(&workload, &app_dir, &target_dir).unwrap();
         assert_eq!(source, binary.display().to_string());
         let mut archive = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
         assert!(archive.by_name("bootstrap").is_ok());
