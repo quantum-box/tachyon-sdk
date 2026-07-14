@@ -1,5 +1,6 @@
 use anyhow::{anyhow, Context, Result};
 use clap::{Args, Subcommand};
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use tachyon_sdk::apis::configuration::Configuration;
@@ -61,7 +62,7 @@ pub enum ManifestCommand {
 
 /// Top-level auth manifest.  Can appear embedded inside tachyon.yml under
 /// `auth.manifest`, or as a standalone `.tachyon/manifests/**/*.yml` file.
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, JsonSchema)]
 pub struct AuthManifest {
     #[serde(default)]
     pub actions: Vec<ActionSpec>,
@@ -69,7 +70,7 @@ pub struct AuthManifest {
     pub policies: Vec<PolicySpec>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema)]
 pub struct ActionSpec {
     pub context: String,
     pub name: String,
@@ -85,7 +86,7 @@ impl ActionSpec {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema)]
 pub struct PolicySpec {
     pub name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -120,13 +121,13 @@ impl PolicySpec {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema)]
 pub struct PolicyActionSpec {
     pub action: String,
     pub effect: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema)]
 pub struct PolicyActionPatternSpec {
     pub context_pattern: String,
     pub name_pattern: String,
