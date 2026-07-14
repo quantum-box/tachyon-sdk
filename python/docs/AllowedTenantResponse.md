@@ -6,12 +6,12 @@ Allowed tenant metadata. Denied tenants and policy internals are omitted.
 
 Name | Type | Description | Notes
 ------------ | ------------- | ------------- | -------------
-**alias** | **str** |  |
-**execution_mode** | **str** |  |
-**name** | **str** |  |
-**parent_tenant_id** | **str** |  | [optional]
-**root_tenant_id** | **str** |  |
-**tenant_id** | **str** |  |
+**alias** | **str** |  | 
+**execution_mode** | **str** |  | 
+**name** | **str** |  | 
+**parent_tenant_id** | **str** |  | [optional] 
+**root_tenant_id** | **str** |  | 
+**tenant_id** | **str** |  | 
 
 ## Example
 
@@ -31,3 +31,5 @@ allowed_tenant_response_dict = allowed_tenant_response_instance.to_dict()
 allowed_tenant_response_from_dict = AllowedTenantResponse.from_dict(allowed_tenant_response_dict)
 ```
 [[Back to Model list]](../README.md#documentation-for-models) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to README]](../README.md)
+
+

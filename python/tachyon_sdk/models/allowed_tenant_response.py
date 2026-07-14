@@ -98,3 +98,5 @@ class AllowedTenantResponse(BaseModel):
             "tenantId": obj.get("tenantId")
         })
         return _obj
+
+

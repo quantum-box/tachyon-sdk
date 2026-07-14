@@ -6,9 +6,9 @@ Request to evaluate one action across multiple tenant scopes.
 
 Name | Type | Description | Notes
 ------------ | ------------- | ------------- | -------------
-**action** | **str** |  |
-**platform_id** | **str** |  |
-**tenant_ids** | **List[str]** |  | [optional]
+**action** | **str** |  | 
+**platform_id** | **str** |  | 
+**tenant_ids** | **List[str]** |  | [optional] 
 
 ## Example
 
@@ -28,3 +28,5 @@ check_tenants_policy_request_dict = check_tenants_policy_request_instance.to_dic
 check_tenants_policy_request_from_dict = CheckTenantsPolicyRequest.from_dict(check_tenants_policy_request_dict)
 ```
 [[Back to Model list]](../README.md#documentation-for-models) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to README]](../README.md)
+
+

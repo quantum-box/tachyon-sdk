@@ -8,11 +8,11 @@ Name | Type | Description | Notes
 ------------ | ------------- | ------------- | -------------
 **action_patterns** | [**List[PolicyActionPatternRequest]**](PolicyActionPatternRequest.md) |  | [optional] [default to []]
 **actions** | [**List[PolicyActionRequest]**](PolicyActionRequest.md) |  | [optional] [default to []]
-**description** | **str** | Policy description | [optional]
+**description** | **str** | Policy description | [optional] 
 **var_global** | **bool** |  | [optional] [default to False]
 **is_system** | **bool** |  | [optional] [default to False]
-**name** | **str** | Policy name |
-**tenant_id** | **str** | Tenant ID | [optional]
+**name** | **str** | Policy name | 
+**tenant_id** | **str** | Tenant ID | [optional] 
 
 ## Example
 

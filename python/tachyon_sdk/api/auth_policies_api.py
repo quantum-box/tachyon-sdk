@@ -1366,9 +1366,9 @@ class AuthPoliciesApi:
         # process the path parameters
         # process the query parameters
         if context is not None:
-
+            
             _query_params.append(('context', context))
-
+            
         # process the header parameters
         # process the form parameters
         # process the body parameter
