@@ -2,6 +2,7 @@ mod apply;
 mod discovery;
 mod plan;
 mod reconcile;
+mod schema;
 mod validate;
 
 use anyhow::{anyhow, Result};
@@ -25,6 +26,8 @@ pub enum ManifestCommand {
     Apply(ApplyArgs),
     /// Reconcile local manifest desired state with live resources
     Reconcile(ApplyArgs),
+    /// Print a JSON Schema for a supported manifest kind (for agents/editors)
+    Schema(schema::SchemaArgs),
 }
 
 #[derive(Debug, Clone, Args)]
@@ -75,6 +78,7 @@ pub async fn run(
     tenant_id: Option<&str>,
 ) -> Result<()> {
     match &args.command {
+        ManifestCommand::Schema(schema_args) => schema::run(schema_args),
         ManifestCommand::Validate(validate_args) => validate::run(validate_args),
         ManifestCommand::Plan(apply_args) => {
             let config = config.ok_or_else(|| anyhow!("manifest plan requires tenant context"))?;
@@ -100,6 +104,7 @@ pub async fn run(
 
 pub fn context_file(args: &ManifestArgs) -> Option<&Path> {
     match &args.command {
+        ManifestCommand::Schema(_) => None,
         ManifestCommand::Validate(args) => args.file.as_deref(),
         ManifestCommand::Plan(args)
         | ManifestCommand::Apply(args)
@@ -108,7 +113,10 @@ pub fn context_file(args: &ManifestArgs) -> Option<&Path> {
 }
 
 pub fn needs_tenant(args: &ManifestArgs) -> bool {
-    !matches!(args.command, ManifestCommand::Validate(_))
+    !matches!(
+        args.command,
+        ManifestCommand::Validate(_) | ManifestCommand::Schema(_)
+    )
 }
 
 pub async fn reconcile_alias(
