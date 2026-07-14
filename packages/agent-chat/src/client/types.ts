@@ -25,7 +25,7 @@ export type AgentChunk = {
 		| 'assistant'
 		| 'completion'
 		| 'usage'
-		| 'tool_job_started'
+		| 'coding_job_started'
 		| 'artifact'
 		| 'error'
 		| 'done'
@@ -52,8 +52,8 @@ export type AgentChunk = {
 	completion_tokens?: number
 	total_tokens?: number
 	total_cost?: number
-	// tool_job_started fields
-	job_id?: string
+	// coding_job_started fields
+	coding_job_id?: string
 	provider?: string
 	// Sub-agent metadata
 	agent?: AgentSource
@@ -294,35 +294,35 @@ export type SubmitToolResultResponse = {
 	status: 'accepted'
 }
 
-// ── Tool Jobs ───────────────────────────────────────────────────────
+// ── Coding Jobs ───────────────────────────────────────────────────────
 
-/** Tool job status */
-export type ToolJobStatus =
+/** Coding job status */
+export type CodingJobStatus =
 	| 'queued'
 	| 'running'
 	| 'succeeded'
 	| 'failed'
 	| 'cancelled'
 
-/** Tool job billing information */
-export type ToolJobBilling = {
+/** Coding job billing information */
+export type CodingJobBilling = {
 	estimated_nanodollar?: number | null
 	observed_nanodollar?: number | null
 }
 
-/** A tool job (coding agent job) */
-export type ToolJob = {
-	id: string
+/** A coding job (coding job) */
+export type CodingJob = {
+	coding_job_id: string
 	provider: string
 	prompt: string
-	status: ToolJobStatus
+	status: CodingJobStatus
 	context_paths: string[]
 	output_profile?: string | null
 	environment: Record<string, string>
 	normalized_output?: { format: string; body: unknown } | null
 	raw_events?: unknown[] | null
 	artifacts?: unknown[] | null
-	billing?: ToolJobBilling | null
+	billing?: CodingJobBilling | null
 	error_message?: string | null
 	session_id?: string | null
 	resume_session_id?: string | null
@@ -333,8 +333,8 @@ export type ToolJob = {
 	updated_at: string
 }
 
-/** Request payload for creating a tool job */
-export type CreateToolJobRequest = {
+/** Request payload for creating a coding job */
+export type CreateCodingJobRequest = {
 	provider: string
 	prompt: string
 	context_paths?: string[]
@@ -347,19 +347,19 @@ export type CreateToolJobRequest = {
 	worker_id?: string
 }
 
-/** Response from listing tool jobs */
-export type GetToolJobsResponse = {
-	jobs: ToolJob[]
+/** Response from listing coding jobs */
+export type GetCodingJobsResponse = {
+	jobs: CodingJob[]
 }
 
-/** Response from creating a tool job */
-export type CreateToolJobResponse = {
-	job: ToolJob
+/** Response from creating a coding job */
+export type CreateCodingJobResponse = {
+	job: CodingJob
 }
 
-/** Response from getting a single tool job */
-export type GetToolJobResponse = {
-	job: ToolJob
+/** Response from getting a single coding job */
+export type GetCodingJobResponse = {
+	job: CodingJob
 }
 
 // ── Tool Search ─────────────────────────────────────────────────────

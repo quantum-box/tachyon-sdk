@@ -388,8 +388,8 @@ for await (const chunk of client.streamAgent(room.chatroom.id, {
 | `getAgentProtocols(options?)`                  | List agent protocols                             |
 | `createAgentProtocol(payload)`                 | Create an agent protocol                         |
 | `getInsights()`                                | Get user insights                                |
-| `createToolJob(payload)`                       | Create a coding-agent tool job                   |
-| `streamToolJob(jobId)`                         | Stream tool job output                           |
+| `createCodingJob(payload)`                       | Create a coding-agent coding job                   |
+| `streamCodingJob(codingJobId)`                   | Stream coding job output                           |
 | `searchTools(payload)`                         | Search available MCP tools                       |
 
 ---
@@ -404,7 +404,7 @@ type AgentChunk = {
     | 'user' | 'ask' | 'thinking'
     | 'tool_call' | 'tool_call_args' | 'tool_result' | 'tool_call_pending'
     | 'say' | 'attempt_completion' | 'assistant' | 'completion'
-    | 'usage' | 'tool_job_started'
+    | 'usage' | 'coding_job_started'
   id: string
   created_at: string        // ISO 8601
   text?: string
@@ -418,8 +418,8 @@ type AgentChunk = {
   completion_tokens?: number
   total_tokens?: number
   total_cost?: number
-  // tool_job_started chunks
-  job_id?: string
+	// coding_job_started chunks
+	coding_job_id?: string
   provider?: string
 }
 ```
@@ -443,10 +443,10 @@ type ToolAccess = Array<{
 `AgentChat` · `FloatingChatPanel` · `ChatPanel` · `MessageList` · `MessageBubble` · `ChatInput` · `ModelSelector` · `ThinkingIndicator` · `ToolCallDisplay` · `ToolResultDisplay` · `UsageSummary`
 
 ### Hooks
-`useAgentChat` · `useAgentStream` · `useChatRoom` · `useSavedMemory` · `useAgentProtocols` · `useUserInsights` · `useToolJobs` · `usePersisted`
+`useAgentChat` · `useAgentStream` · `useChatRoom` · `useSavedMemory` · `useAgentProtocols` · `useUserInsights` · `useCodingJobs` · `usePersisted`
 
 ### Client & Provider
 `AgentChatClient` · `AgentChatProvider` · `useAgentChatContext`
 
 ### API factories (advanced)
-`createChatroomApi` · `createAgentApi` · `createMemoryApi` · `createProtocolApi` · `createInsightApi` · `createToolJobApi` · `createToolSearchApi`
+`createChatroomApi` · `createAgentApi` · `createMemoryApi` · `createProtocolApi` · `createInsightApi` · `createCodingJobApi` · `createToolSearchApi`

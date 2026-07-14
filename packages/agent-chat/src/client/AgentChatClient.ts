@@ -9,8 +9,8 @@ import type {
 	CreateAgentProtocolRequest,
 	CreateChatRoomResponse,
 	CreateMemoryRequest,
-	CreateToolJobRequest,
-	CreateToolJobResponse,
+	CreateCodingJobRequest,
+	CreateCodingJobResponse,
 	DeleteMessagesResponse,
 	GetAgentProtocolsOptions,
 	GetAgentProtocolsResponse,
@@ -18,8 +18,8 @@ import type {
 	GetInsightsResponse,
 	GetMemoriesResponse,
 	GetModelsOptions,
-	GetToolJobResponse,
-	GetToolJobsResponse,
+	GetCodingJobResponse,
+	GetCodingJobsResponse,
 	ModelInfo,
 	RegenerateInsightsRequest,
 	RestoreMessagesResponse,
@@ -30,7 +30,7 @@ import type {
 	SearchToolsResponse,
 	SubmitToolResultRequest,
 	SubmitToolResultResponse,
-	ToolJob,
+	CodingJob,
 	UpdateAgentProtocolRequest,
 	UserInsight,
 } from './types'
@@ -355,11 +355,11 @@ export class AgentChatClient {
 		)
 	}
 
-	// ── Tool Jobs API ────────────────────────────────────────────────
+	// ── Coding Jobs API ────────────────────────────────────────────────
 
-	async createToolJob(payload: CreateToolJobRequest): Promise<ToolJob> {
-		const data = await this.request<CreateToolJobResponse>(
-			'/v1/agent/tool-jobs',
+	async createCodingJob(payload: CreateCodingJobRequest): Promise<CodingJob> {
+		const data = await this.request<CreateCodingJobResponse>(
+			'/v1/agent/coding-jobs',
 			{
 				method: 'POST',
 				body: JSON.stringify(payload),
@@ -368,27 +368,32 @@ export class AgentChatClient {
 		return data.job
 	}
 
-	async getToolJobs(): Promise<ToolJob[]> {
-		const data = await this.request<GetToolJobsResponse>('/v1/agent/tool-jobs')
+	async getCodingJobs(): Promise<CodingJob[]> {
+		const data = await this.request<GetCodingJobsResponse>(
+			'/v1/agent/coding-jobs',
+		)
 		return data.jobs
 	}
 
-	async getToolJob(jobId: string): Promise<ToolJob> {
-		const data = await this.request<GetToolJobResponse>(
-			`/v1/agent/tool-jobs/${jobId}`,
+	async getCodingJob(codingJobId: string): Promise<CodingJob> {
+		const data = await this.request<GetCodingJobResponse>(
+			`/v1/agent/coding-jobs/${codingJobId}`,
 		)
 		return data.job
 	}
 
-	async cancelToolJob(jobId: string): Promise<ToolJob> {
-		return this.request<ToolJob>(`/v1/agent/tool-jobs/${jobId}/cancel`, {
-			method: 'POST',
-		})
+	async cancelCodingJob(codingJobId: string): Promise<CodingJob> {
+		return this.request<CodingJob>(
+			`/v1/agent/coding-jobs/${codingJobId}/cancel`,
+			{
+				method: 'POST',
+			},
+		)
 	}
 
-	async *streamToolJob(jobId: string): AsyncGenerator<AgentChunk> {
+	async *streamCodingJob(codingJobId: string): AsyncGenerator<AgentChunk> {
 		const url = this.buildUrl(
-			`/v1/agent/tool-jobs/${jobId}/stream?format=agent_chunk`,
+			`/v1/agent/coding-jobs/${codingJobId}/stream?format=agent_chunk`,
 		)
 		const response = await fetch(url, {
 			headers: {
@@ -399,7 +404,7 @@ export class AgentChatClient {
 		if (!response.ok) {
 			const body = await response.text().catch(() => '')
 			throw new Error(
-				`Tool job stream failed: ${response.status}${body ? ` - ${body}` : ''}`,
+				`Coding job stream failed: ${response.status}${body ? ` - ${body}` : ''}`,
 			)
 		}
 		yield* this.readSSEStream(response)

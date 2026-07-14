@@ -74,8 +74,8 @@ pub struct AgentChunk {
     pub total_cost: Option<f64>,
     #[serde(rename = "total_tokens")]
     pub total_tokens: i32,
-    #[serde(rename = "job_id")]
-    pub job_id: String,
+    #[serde(rename = "coding_job_id")]
+    pub coding_job_id: String,
     #[serde(rename = "provider")]
     pub provider: String,
     #[serde(
@@ -105,7 +105,7 @@ impl AgentChunk {
         completion_tokens: i32,
         prompt_tokens: i32,
         total_tokens: i32,
-        job_id: String,
+        coding_job_id: String,
         provider: String,
     ) -> AgentChunk {
         AgentChunk {
@@ -130,7 +130,7 @@ impl AgentChunk {
             prompt_tokens,
             total_cost: None,
             total_tokens,
-            job_id,
+            coding_job_id,
             provider,
             agent: None,
         }
@@ -150,12 +150,12 @@ impl AgentChunk {
     Deserialize,
 )]
 pub enum Type {
-    #[serde(rename = "tool_job_started")]
-    ToolJobStarted,
+    #[serde(rename = "coding_job_started")]
+    CodingJobStarted,
 }
 
 impl Default for Type {
     fn default() -> Type {
-        Self::ToolJobStarted
+        Self::CodingJobStarted
     }
 }

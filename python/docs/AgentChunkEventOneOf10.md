@@ -1,12 +1,12 @@
 # AgentChunkEventOneOf10
 
-Emitted when a tool job is created, before sync polling begins. Frontend can use the job_id to subscribe to the tool job's own SSE stream for real-time progress.
+Emitted when a coding job is created, before sync polling begins. Frontend can use the coding_job_id to subscribe to the coding job's own SSE stream for real-time progress.
 
 ## Properties
 
 Name | Type | Description | Notes
 ------------ | ------------- | ------------- | -------------
-**job_id** | **str** |  | 
+**coding_job_id** | **str** |  |
 **provider** | **str** |  | 
 **tool_id** | **str** |  | 
 **type** | **str** |  | 
@@ -29,5 +29,3 @@ agent_chunk_event_one_of10_dict = agent_chunk_event_one_of10_instance.to_dict()
 agent_chunk_event_one_of10_from_dict = AgentChunkEventOneOf10.from_dict(agent_chunk_event_one_of10_dict)
 ```
 [[Back to Model list]](../README.md#documentation-for-models) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to README]](../README.md)
-
-

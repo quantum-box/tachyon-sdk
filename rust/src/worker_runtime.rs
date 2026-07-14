@@ -1,4 +1,4 @@
-//! Worker runtime boundary for Tachyon Tool Jobs.
+//! Worker runtime boundary for Tachyon Coding Jobs.
 //!
 //! This module contains the stable traits and DTOs needed by a worker
 //! runtime. It intentionally avoids Tachyon server-side crates so SDK
@@ -47,7 +47,7 @@ impl fmt::Display for WorkerRuntimeError {
 
 impl std::error::Error for WorkerRuntimeError {}
 
-/// Provider selected for a Tool Job.
+/// Provider selected for a Coding Job.
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize,
 )]
@@ -55,8 +55,6 @@ impl std::error::Error for WorkerRuntimeError {}
 pub enum WorkerProviderKind {
     /// Codex CLI provider.
     Codex,
-    /// Cloud App Build provider.
-    CloudAppBuild,
     /// Claude Code CLI provider.
     ClaudeCode,
     /// Containerized Codex provider.
@@ -71,7 +69,6 @@ impl fmt::Display for WorkerProviderKind {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Codex => write!(f, "codex"),
-            Self::CloudAppBuild => write!(f, "cloud_app_build"),
             Self::ClaudeCode => write!(f, "claude_code"),
             Self::ContainerizedCodex => {
                 write!(f, "containerized_codex")
@@ -100,8 +97,8 @@ pub struct WorkerExecutorContext {
 pub struct WorkerJobPayload {
     /// Execution state ID that owns this job.
     pub execution_state_id: String,
-    /// Tool Job ID for tracking.
-    pub tool_job_id: String,
+    /// Coding Job ID for tracking.
+    pub coding_job_id: String,
     /// Provider name as received from the API or queue backend.
     pub provider: String,
     /// Prompt or task to execute.
@@ -132,8 +129,8 @@ pub enum WorkerQueuedJobStatus {
 pub struct WorkerQueuedJob {
     /// Backend-specific queue entry ID.
     pub queue_id: String,
-    /// Tool Job ID.
-    pub job_id: String,
+    /// Coding Job ID.
+    pub coding_job_id: String,
     /// Job payload.
     pub payload: WorkerJobPayload,
     /// Current queue status.
@@ -151,8 +148,8 @@ pub struct WorkerQueuedJob {
 /// Request passed to a job executor.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct WorkerJobRequest {
-    /// Tool Job ID.
-    pub job_id: String,
+    /// Coding Job ID.
+    pub coding_job_id: String,
     /// Selected provider.
     pub provider: WorkerProviderKind,
     /// Prompt or task to execute.
@@ -282,14 +279,14 @@ pub trait WorkerJobQueue: Send + Sync + fmt::Debug {
     /// Enqueue a job for immediate processing.
     async fn enqueue(
         &self,
-        job_id: &str,
+        coding_job_id: &str,
         payload: WorkerJobPayload,
     ) -> WorkerRuntimeResult<String>;
 
     /// Enqueue a job after a delay.
     async fn enqueue_with_delay(
         &self,
-        job_id: &str,
+        coding_job_id: &str,
         payload: WorkerJobPayload,
         delay: Duration,
     ) -> WorkerRuntimeResult<String>;
@@ -331,15 +328,15 @@ pub trait JobExecutor: Send + Sync + fmt::Debug {
 /// Publishes streaming events for a worker job.
 #[async_trait]
 pub trait WorkerEventPublisher: Send + Sync + fmt::Debug {
-    /// Publish an event for a specific Tool Job.
+    /// Publish an event for a specific Coding Job.
     async fn publish(
         &self,
-        job_id: &str,
+        coding_job_id: &str,
         event: WorkerStreamEvent,
     ) -> WorkerRuntimeResult<()>;
 
     /// Close event resources for a job.
-    async fn close(&self, job_id: &str) -> WorkerRuntimeResult<()>;
+    async fn close(&self, coding_job_id: &str) -> WorkerRuntimeResult<()>;
 }
 
 /// Runtime lifecycle handle for a worker process.
@@ -367,7 +364,6 @@ mod tests {
     fn worker_provider_kind_names_are_stable() {
         let cases = [
             (WorkerProviderKind::Codex, "codex"),
-            (WorkerProviderKind::CloudAppBuild, "cloud_app_build"),
             (WorkerProviderKind::ClaudeCode, "claude_code"),
             (
                 WorkerProviderKind::ContainerizedCodex,
@@ -398,10 +394,10 @@ mod tests {
         let now = Utc::now();
         let job = WorkerQueuedJob {
             queue_id: "queue-1".to_string(),
-            job_id: "job-1".to_string(),
+            coding_job_id: "job-1".to_string(),
             payload: WorkerJobPayload {
                 execution_state_id: "exec-1".to_string(),
-                tool_job_id: "job-1".to_string(),
+                coding_job_id: "job-1".to_string(),
                 provider: "codex".to_string(),
                 prompt: "Write tests".to_string(),
                 retry_count: 2,
@@ -450,7 +446,7 @@ mod tests {
 
         let result = boxed
             .execute(WorkerJobRequest {
-                job_id: "job-1".to_string(),
+                coding_job_id: "job-1".to_string(),
                 provider: WorkerProviderKind::Codex,
                 prompt: "Do work".to_string(),
                 context_paths: vec![],

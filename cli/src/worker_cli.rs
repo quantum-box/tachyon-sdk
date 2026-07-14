@@ -25,7 +25,7 @@ const UNIT_PATH: &str = "/etc/systemd/system/tachyon-worker.service";
 const ENV_DIR: &str = "/etc/tachyon";
 const ENV_PATH: &str = "/etc/tachyon/worker.env";
 const DEFAULT_PROVIDER: &str = "containerized_codex";
-const TOOL_JOB_WORKER_POLICY_ID: &str = "pol_01tooljobworkerpolicy";
+const CODING_JOB_WORKER_POLICY_ID: &str = "pol_01tooljobworkerpolicy";
 const CHILD_OUTPUT_TAIL_LIMIT_BYTES: usize = 1024 * 1024;
 
 #[derive(Args)]
@@ -230,7 +230,7 @@ async fn create_worker_api_key(
         service_account_id: None,
         service_account_name: Some(format!("{SERVICE_NAME}-{worker_id}")),
         ttl_seconds: None,
-        policy_ids: vec![TOOL_JOB_WORKER_POLICY_ID.to_string()],
+        policy_ids: vec![CODING_JOB_WORKER_POLICY_ID.to_string()],
     };
     let response: ApiKeyResponse = api
         .post(&format!("/v1/orgs/{tenant_id}/api-keys"), &request)
@@ -346,28 +346,28 @@ async fn claim_and_process_job(
     worker_id: &str,
     provider: &WorkerProvider,
 ) -> Result<bool> {
-    let response: ClaimWorkerToolJobResponse = api
+    let response: ClaimWorkerCodingJobResponse = api
         .post(
-            "/v1/agent/tool-jobs/claim",
-            &ClaimWorkerToolJobRequest {
+            "/v1/agent/coding-jobs/claim",
+            &ClaimWorkerCodingJobRequest {
                 worker_id: worker_id.to_string(),
                 provider: provider.to_string(),
             },
         )
         .await
-        .context("failed to claim worker Tool Job")?;
+        .context("failed to claim worker Coding Job")?;
 
     let Some(job) = response.job else {
         return Ok(false);
     };
 
-    println!("Claimed Tool Job: {}", job.id);
+    println!("Claimed Coding Job: {}", job.coding_job_id);
     let started_at = chrono::Utc::now();
     let result = run_containerized_codex(&job).await;
     let completed_at = chrono::Utc::now();
 
     let completion = match result {
-        Ok(output) => CompleteWorkerToolJobRequest {
+        Ok(output) => CompleteWorkerCodingJobRequest {
             worker_id: worker_id.to_string(),
             status: "SUCCEEDED".to_string(),
             result_json: Some(json!({ "output": output.result_text })),
@@ -386,7 +386,7 @@ async fn claim_and_process_job(
             has_conflicts: false,
             conflicts: Vec::new(),
         },
-        Err(error) => CompleteWorkerToolJobRequest {
+        Err(error) => CompleteWorkerCodingJobRequest {
             worker_id: worker_id.to_string(),
             status: "FAILED".to_string(),
             result_json: None,
@@ -411,24 +411,27 @@ async fn claim_and_process_job(
     };
 
     api.post::<_, serde_json::Value>(
-        &format!("/v1/agent/tool-jobs/{}/worker-complete", job.id),
+        &format!(
+            "/v1/agent/coding-jobs/{}/worker-complete",
+            job.coding_job_id
+        ),
         &completion,
     )
     .await
-    .with_context(|| format!("failed to complete Tool Job {}", job.id))?;
+    .with_context(|| format!("failed to complete Coding Job {}", job.coding_job_id))?;
 
-    println!("Completed Tool Job: {}", job.id);
+    println!("Completed Coding Job: {}", job.coding_job_id);
     Ok(true)
 }
 
-async fn run_containerized_codex(job: &WorkerToolJob) -> Result<WorkerJobOutput> {
+async fn run_containerized_codex(job: &WorkerCodingJob) -> Result<WorkerJobOutput> {
     ensure_docker_available().await?;
 
     if job.execution_mode() == WorkerExecutionMode::AppServerWs {
         return run_containerized_codex_app_server(job).await;
     }
 
-    let container_name = format!("tachyon-codex-{}", job.id.to_lowercase());
+    let container_name = format!("tachyon-codex-{}", job.coding_job_id.to_lowercase());
     let docker_args = build_codex_exec_docker_args(job, &container_name);
 
     let mut child = TokioCommand::new("docker")
@@ -567,10 +570,10 @@ fn trim_leading_utf8_continuation_bytes(bytes: &[u8]) -> &[u8] {
     &bytes[start..]
 }
 
-async fn run_containerized_codex_app_server(job: &WorkerToolJob) -> Result<WorkerJobOutput> {
+async fn run_containerized_codex_app_server(job: &WorkerCodingJob) -> Result<WorkerJobOutput> {
     let port = allocate_loopback_port()?;
     let listen_url = format!("ws://127.0.0.1:{port}");
-    let container_name = format!("tachyon-codex-{}", job.id.to_lowercase());
+    let container_name = format!("tachyon-codex-{}", job.coding_job_id.to_lowercase());
     let docker_args = build_codex_app_server_docker_args(job, &container_name, &listen_url);
     let timeout_secs = job.timeout_seconds();
 
@@ -652,7 +655,7 @@ async fn run_containerized_codex_app_server(job: &WorkerToolJob) -> Result<Worke
     })
 }
 
-fn build_codex_exec_docker_args(job: &WorkerToolJob, container_name: &str) -> Vec<String> {
+fn build_codex_exec_docker_args(job: &WorkerCodingJob, container_name: &str) -> Vec<String> {
     let image = job.container_image();
     let network = env::var("CODEX_CONTAINER_NETWORK").unwrap_or_else(|_| "bridge".to_string());
     let memory = env::var("CODEX_CONTAINER_MEMORY").unwrap_or_else(|_| "2g".to_string());
@@ -670,7 +673,7 @@ fn build_codex_exec_docker_args(job: &WorkerToolJob, container_name: &str) -> Ve
 }
 
 fn build_codex_app_server_docker_args(
-    job: &WorkerToolJob,
+    job: &WorkerCodingJob,
     container_name: &str,
     listen_url: &str,
 ) -> Vec<String> {
@@ -691,7 +694,7 @@ fn build_codex_app_server_docker_args(
 }
 
 fn base_docker_args(
-    job: &WorkerToolJob,
+    job: &WorkerCodingJob,
     container_name: &str,
     network: &str,
     workspace: &str,
@@ -705,7 +708,7 @@ fn base_docker_args(
         "--label".to_string(),
         "tachyon.worker.managed=true".to_string(),
         "--label".to_string(),
-        format!("tachyon.tool_job_id={}", job.id),
+        format!("tachyon.coding_job_id={}", job.coding_job_id),
         format!("--network={network}"),
         "-v".to_string(),
         format!("{workspace}:/workspace"),
@@ -995,19 +998,19 @@ struct ApiKeyResponse {
 }
 
 #[derive(Serialize)]
-struct ClaimWorkerToolJobRequest {
+struct ClaimWorkerCodingJobRequest {
     worker_id: String,
     provider: String,
 }
 
 #[derive(Deserialize)]
-struct ClaimWorkerToolJobResponse {
-    job: Option<WorkerToolJob>,
+struct ClaimWorkerCodingJobResponse {
+    job: Option<WorkerCodingJob>,
 }
 
 #[derive(Deserialize)]
-struct WorkerToolJob {
-    id: String,
+struct WorkerCodingJob {
+    coding_job_id: String,
     prompt: String,
     #[serde(default)]
     output_profile: Option<String>,
@@ -1046,7 +1049,7 @@ struct WorkerContainerResourceLimitsConfig {
     memory: Option<String>,
 }
 
-impl WorkerToolJob {
+impl WorkerCodingJob {
     fn execution_mode(&self) -> WorkerExecutionMode {
         let mode = self
             .container_execution
@@ -1159,7 +1162,7 @@ impl WorkerToolJob {
 }
 
 #[derive(Serialize)]
-struct CompleteWorkerToolJobRequest {
+struct CompleteWorkerCodingJobRequest {
     worker_id: String,
     status: String,
     result_json: Option<serde_json::Value>,
@@ -1202,7 +1205,7 @@ struct CodexAppServerInvocation {
 }
 
 impl CodexAppServerInvocation {
-    fn from_job(job: &WorkerToolJob) -> Self {
+    fn from_job(job: &WorkerCodingJob) -> Self {
         Self {
             prompt: job.prompt.clone(),
             resume_session_id: job.resume_session_id.clone(),
@@ -1707,9 +1710,9 @@ mod tests {
 
     #[test]
     fn deserializes_claimed_job_app_server_metadata() {
-        let response: ClaimWorkerToolJobResponse = serde_json::from_value(json!({
+        let response: ClaimWorkerCodingJobResponse = serde_json::from_value(json!({
             "job": {
-                "id": "01KVTESTAPPSERVER000000000",
+                "coding_job_id": "01KVTESTAPPSERVER000000000",
                 "prompt": "inspect",
                 "context_paths": ["/tmp"],
                 "output_profile": "gpt-5.4-mini",
@@ -1739,8 +1742,8 @@ mod tests {
     #[test]
     fn app_server_mode_builds_app_server_docker_args() {
         let workspace = TempDir::new().unwrap();
-        let job = WorkerToolJob {
-            id: "01KVTESTAPPSERVER000000000".to_string(),
+        let job = WorkerCodingJob {
+            coding_job_id: "01KVTESTAPPSERVER000000000".to_string(),
             prompt: "inspect".to_string(),
             output_profile: Some("gpt-5.4-mini".to_string()),
             context_paths: vec![workspace.path().display().to_string()],
@@ -1790,8 +1793,8 @@ mod tests {
     #[test]
     fn default_mode_keeps_codex_exec_args() {
         let workspace = TempDir::new().unwrap();
-        let job = WorkerToolJob {
-            id: "01KVTESTEXEC000000000000".to_string(),
+        let job = WorkerCodingJob {
+            coding_job_id: "01KVTESTEXEC000000000000".to_string(),
             prompt: "inspect".to_string(),
             output_profile: None,
             context_paths: vec![workspace.path().display().to_string()],

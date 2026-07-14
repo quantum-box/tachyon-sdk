@@ -35,17 +35,17 @@ class TestAgentChunkEventOneOf10(unittest.TestCase):
         model = AgentChunkEventOneOf10()
         if include_optional:
             return AgentChunkEventOneOf10(
-                job_id = '',
+                coding_job_id = '',
                 provider = '',
                 tool_id = '',
-                type = 'tool_job_started'
+                type = 'coding_job_started'
             )
         else:
             return AgentChunkEventOneOf10(
-                job_id = '',
+                coding_job_id = '',
                 provider = '',
                 tool_id = '',
-                type = 'tool_job_started',
+                type = 'coding_job_started',
         )
         """
 

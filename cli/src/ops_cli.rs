@@ -34,12 +34,7 @@ pub enum OpsCommand {
         #[command(subcommand)]
         command: ReportsCommand,
     },
-    /// Manage tool jobs (async agent tasks)
-    ToolJobs {
-        #[command(subcommand)]
-        command: ToolJobsCommand,
-    },
-    /// Run coding-agent jobs that push a branch and open a PR
+    /// Manage coding-agent jobs
     CodingJobs {
         #[command(subcommand)]
         command: CodingJobsCommand,
@@ -89,10 +84,43 @@ pub enum ReportsCommand {
 
 #[derive(Debug, Clone, Subcommand)]
 #[allow(clippy::large_enum_variant)]
-pub enum ToolJobsCommand {
-    /// Create a tool job
+pub enum CodingJobsCommand {
+    /// Run a managed Cloud Coding job.
+    Run {
+        /// Optional public HTTPS GitHub repository URL to clone.
+        #[arg(long = "repo")]
+        repository_url: Option<String>,
+        /// Repository branch to clone.
+        #[arg(long)]
+        branch: Option<String>,
+        /// Prompt to send. If omitted, stdin is read.
+        #[arg(long)]
+        prompt: Option<String>,
+        /// Existing Cloud Coding job whose Codex thread and workspace should be resumed.
+        #[arg(long)]
+        resume_coding_job_id: Option<String>,
+        /// Workload timeout in seconds (30-3600).
+        #[arg(long)]
+        timeout_seconds: Option<u32>,
+        /// Codex sandbox mode (workspace-write or read-only).
+        #[arg(long)]
+        sandbox: Option<String>,
+        /// Wait until the underlying coding job reaches a terminal status.
+        #[arg(long)]
+        wait: bool,
+        /// Maximum wait time in seconds.
+        #[arg(long, default_value_t = 1800)]
+        wait_timeout_seconds: u64,
+        /// Poll interval in seconds while waiting.
+        #[arg(long, default_value_t = 5)]
+        wait_interval_seconds: u64,
+        /// Print the API response as JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Create a coding job
     Create {
-        /// Tool job provider (codex, claude_code, cursor_agent, opencode)
+        /// Coding job provider (codex, claude_code, cursor_agent, opencode)
         #[arg(long)]
         provider: String,
         /// Prompt to send. If omitted, stdin is read.
@@ -144,76 +172,21 @@ pub enum ToolJobsCommand {
         #[arg(long)]
         json: bool,
     },
-    /// List tool jobs
+    /// List coding jobs
     List {
         #[arg(long)]
         json: bool,
     },
-    /// Get tool job details
+    /// Get coding job details
     Get {
-        job_id: String,
+        coding_job_id: String,
         #[arg(long)]
         json: bool,
     },
-    /// Cancel a tool job
-    Cancel { job_id: String },
-    /// List available tool job providers
+    /// Cancel a coding job
+    Cancel { coding_job_id: String },
+    /// List available coding job providers
     Providers {
-        #[arg(long)]
-        json: bool,
-    },
-}
-
-#[derive(Debug, Clone, Subcommand)]
-pub enum CodingJobsCommand {
-    /// Run a coding job and optionally wait for the PR URL.
-    Run {
-        /// Git repository URL to clone.
-        #[arg(long = "repo")]
-        repository_url: String,
-        /// Base branch to clone and target for the PR.
-        #[arg(long, default_value = "main")]
-        base: String,
-        /// Branch name the agent will push.
-        #[arg(long)]
-        branch: String,
-        /// Prompt to send. If omitted, stdin is read.
-        #[arg(long)]
-        prompt: Option<String>,
-        /// PR title. Defaults to the pushed branch.
-        #[arg(long = "title")]
-        pull_request_title: Option<String>,
-        /// PR body.
-        #[arg(long = "body")]
-        pull_request_body: Option<String>,
-        /// Git commit message. Defaults to the PR title or branch.
-        #[arg(long = "commit-message")]
-        git_commit_message: Option<String>,
-        /// Secret selector for the GitHub token, formatted as NAME:KEY.
-        #[arg(long = "github-token-secret")]
-        github_token_secret: String,
-        /// Optional Codex access token secret selector, formatted as NAME:KEY.
-        #[arg(long = "codex-access-token-secret")]
-        codex_access_token_secret: Option<String>,
-        /// Optional OpenAI API key secret selector, formatted as NAME:KEY.
-        #[arg(long = "openai-api-key-secret")]
-        openai_api_key_secret: Option<String>,
-        /// Codex model/output profile.
-        #[arg(long)]
-        model: Option<String>,
-        /// Container image to run.
-        #[arg(long)]
-        image: Option<String>,
-        /// Wait until the underlying tool job reaches a terminal status.
-        #[arg(long)]
-        wait: bool,
-        /// Maximum wait time in seconds.
-        #[arg(long, default_value_t = 1800)]
-        wait_timeout_seconds: u64,
-        /// Poll interval in seconds while waiting.
-        #[arg(long, default_value_t = 5)]
-        wait_interval_seconds: u64,
-        /// Print the API response as JSON.
         #[arg(long)]
         json: bool,
     },
@@ -330,8 +303,8 @@ struct ScenarioReportResponse {
 }
 
 #[derive(Debug, Deserialize, Serialize)]
-struct ToolJobResponse {
-    id: String,
+struct CodingJobResponse {
+    coding_job_id: String,
     #[serde(default)]
     provider: Option<String>,
     #[serde(default)]
@@ -357,59 +330,49 @@ struct ToolJobResponse {
 }
 
 #[derive(Debug, Deserialize, Serialize)]
-struct ToolJobListResponse {
-    jobs: Vec<ToolJobResponse>,
+struct CodingJobListResponse {
+    jobs: Vec<CodingJobResponse>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
-struct ToolJobCreatedResponse {
-    job: ToolJobResponse,
+struct CodingJobCreatedResponse {
+    job: CodingJobResponse,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
-struct ToolJobProvidersResponse {
+struct CodingJobProvidersResponse {
     providers: Vec<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
 struct CloudCodingJobCreatedResponse {
-    tool_job_id: String,
+    coding_job_id: String,
     job_run_id: String,
     worker_id: String,
     provider: String,
     execution_backend: String,
     status: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    session_pvc_claim: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
 struct CloudCodingJobCreateRequest {
     prompt: String,
-    repository_url: String,
-    branch: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    output_profile: Option<String>,
+    repository_url: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    model: Option<String>,
+    branch: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    image: Option<String>,
-    github_token_secret: SecretKeySelector,
+    resume_coding_job_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    codex_access_token_secret: Option<SecretKeySelector>,
+    timeout_seconds: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    openai_api_key_secret: Option<SecretKeySelector>,
-    git_push_branch: String,
-    git_commit_message: String,
-    metadata: Value,
-}
-
-#[derive(Debug, Clone, Serialize)]
-struct SecretKeySelector {
-    name: String,
-    key: String,
+    sandbox: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
-struct ToolJobCreateRequest {
+struct CodingJobCreateRequest {
     provider: String,
     prompt: String,
     context_paths: Vec<String>,
@@ -653,7 +616,7 @@ fn parse_environment(values: &[String]) -> Result<HashMap<String, String>> {
     Ok(environment)
 }
 
-fn build_tool_job_metadata(
+fn build_coding_job_metadata(
     provider: &str,
     cwd: Option<&str>,
     codex_mode: Option<&str>,
@@ -696,7 +659,7 @@ struct ManifestRepository<'a> {
 }
 
 #[derive(Debug)]
-struct ResolvedToolJobCwd {
+struct ResolvedCodingJobCwd {
     cwd: String,
 }
 
@@ -802,7 +765,7 @@ fn available_cloud_apps(repositories: &[ManifestRepository<'_>]) -> String {
 fn resolve_repo_cwd_from_loaded(
     loaded: &LoadedProjectConfig,
     repo_name: &str,
-) -> Result<ResolvedToolJobCwd> {
+) -> Result<ResolvedCodingJobCwd> {
     let repositories = collect_manifest_repositories(loaded)?;
     let matches = repositories
         .iter()
@@ -814,7 +777,7 @@ fn resolve_repo_cwd_from_loaded(
             loaded.path.display(),
             available_repos(&repositories)
         )),
-        1 => Ok(ResolvedToolJobCwd {
+        1 => Ok(ResolvedCodingJobCwd {
             cwd: resolve_manifest_path(&loaded.path, matches[0].local_path)
                 .display()
                 .to_string(),
@@ -831,7 +794,7 @@ fn resolve_repo_cwd_from_loaded(
             paths.sort();
             paths.dedup();
             if paths.len() == 1 {
-                Ok(ResolvedToolJobCwd {
+                Ok(ResolvedCodingJobCwd {
                     cwd: paths[0].clone(),
                 })
             } else {
@@ -848,7 +811,7 @@ fn resolve_repo_cwd_from_loaded(
 fn resolve_cloud_app_cwd_from_loaded(
     loaded: &LoadedProjectConfig,
     app_name: &str,
-) -> Result<ResolvedToolJobCwd> {
+) -> Result<ResolvedCodingJobCwd> {
     let repositories = collect_manifest_repositories(loaded)?;
     let matches = repositories
         .iter()
@@ -868,7 +831,7 @@ fn resolve_cloud_app_cwd_from_loaded(
     }
 }
 
-fn resolve_tool_job_cwd(
+fn resolve_coding_job_cwd(
     config_flag: Option<&Path>,
     cwd: Option<&str>,
     repo: Option<&str>,
@@ -906,13 +869,13 @@ fn resolve_tool_job_cwd(
     }
 }
 
-fn is_terminal_tool_job_status(status: Option<&str>) -> bool {
+fn is_terminal_coding_job_status(status: Option<&str>) -> bool {
     matches!(status, Some("succeeded" | "failed" | "cancelled"))
 }
 
-fn print_tool_job_created(job: &ToolJobResponse) {
-    println!("Tool job created.");
-    println!("Job ID:   {}", job.id);
+fn print_coding_job_created(job: &CodingJobResponse) {
+    println!("Coding job created.");
+    println!("Job ID:   {}", job.coding_job_id);
     println!("Provider: {}", job.provider.as_deref().unwrap_or("-"));
     println!("Status:   {}", job.status.as_deref().unwrap_or("-"));
     if let Some(worker_id) = &job.assigned_worker_id {
@@ -925,7 +888,7 @@ fn print_tool_job_created(job: &ToolJobResponse) {
     }
 }
 
-fn print_tool_job_final(job: &ToolJobResponse) -> Result<()> {
+fn print_coding_job_final(job: &CodingJobResponse) -> Result<()> {
     println!("Final status: {}", job.status.as_deref().unwrap_or("-"));
     if let Some(output) = &job.normalized_output {
         if let Some(text) = output.pointer("/body/text").and_then(Value::as_str) {
@@ -940,74 +903,27 @@ fn print_tool_job_final(job: &ToolJobResponse) -> Result<()> {
     Ok(())
 }
 
-fn parse_secret_selector(value: &str) -> Result<SecretKeySelector> {
-    let (name, key) = value
-        .split_once(':')
-        .ok_or_else(|| anyhow!("secret selector must be formatted as NAME:KEY"))?;
-    if name.trim().is_empty() || key.trim().is_empty() {
-        bail!("secret selector must include non-empty NAME and KEY");
-    }
-    Ok(SecretKeySelector {
-        name: name.to_string(),
-        key: key.to_string(),
-    })
-}
-
-fn extract_pull_request_url(output: &Value) -> Option<String> {
-    for pointer in [
-        "/pull_request/url",
-        "/pullRequest/url",
-        "/pr_url",
-        "/prUrl",
-        "/html_url",
-        "/body/pull_request/url",
-        "/body/pr_url",
-    ] {
-        if let Some(value) = output.pointer(pointer).and_then(Value::as_str) {
-            if is_github_pull_request_url(value) {
-                return Some(value.to_string());
-            }
-        }
-    }
-    output
-        .pointer("/body/text")
-        .and_then(Value::as_str)
-        .and_then(find_github_pull_request_url)
-}
-
-fn find_github_pull_request_url(text: &str) -> Option<String> {
-    text.split_whitespace()
-        .map(|part| {
-            part.trim_matches(|c: char| matches!(c, '"' | '\'' | ')' | ']' | '}' | ',' | '.'))
-        })
-        .find(|part| is_github_pull_request_url(part))
-        .map(ToString::to_string)
-}
-
-fn is_github_pull_request_url(value: &str) -> bool {
-    value.starts_with("https://github.com/") && value.contains("/pull/")
-}
-
-async fn wait_tool_job(
+async fn wait_coding_job(
     api: &ApiClient,
-    job_id: &str,
+    coding_job_id: &str,
     timeout_seconds: u64,
     interval_seconds: u64,
-) -> Result<ToolJobResponse> {
+) -> Result<CodingJobResponse> {
     let started_at = Instant::now();
     let timeout = Duration::from_secs(timeout_seconds);
     let interval = Duration::from_secs(interval_seconds.max(1));
 
     loop {
-        let response: ToolJobCreatedResponse =
-            api.get(&format!("/v1/agent/tool-jobs/{job_id}")).await?;
+        let response: CodingJobCreatedResponse = api
+            .get(&format!("/v1/agent/coding-jobs/{coding_job_id}"))
+            .await?;
         let job = response.job;
-        if is_terminal_tool_job_status(job.status.as_deref()) {
+        if is_terminal_coding_job_status(job.status.as_deref()) {
             return Ok(job);
         }
         if started_at.elapsed() >= timeout {
             return Err(anyhow!(
-                "timed out waiting for tool job {job_id} after {timeout_seconds}s"
+                "timed out waiting for coding job {coding_job_id} after {timeout_seconds}s"
             ));
         }
         tokio::time::sleep(interval).await;
@@ -1017,55 +933,25 @@ async fn wait_tool_job(
 #[allow(clippy::too_many_arguments)]
 async fn run_coding_jobs_run(
     api: &ApiClient,
-    repository_url: &str,
-    base: &str,
-    branch: &str,
+    repository_url: Option<&str>,
+    branch: Option<&str>,
     prompt: &Option<String>,
-    pull_request_title: Option<&str>,
-    pull_request_body: Option<&str>,
-    git_commit_message: Option<&str>,
-    github_token_secret: &str,
-    codex_access_token_secret: Option<&str>,
-    openai_api_key_secret: Option<&str>,
-    model: Option<&str>,
-    image: Option<&str>,
+    resume_coding_job_id: Option<&str>,
+    timeout_seconds: Option<u32>,
+    sandbox: Option<&str>,
     wait: bool,
     wait_timeout_seconds: u64,
     wait_interval_seconds: u64,
     json: bool,
 ) -> Result<()> {
     let prompt = read_prompt(prompt)?;
-    let title = pull_request_title.unwrap_or(branch);
     let request = CloudCodingJobCreateRequest {
         prompt,
-        repository_url: repository_url.to_string(),
-        branch: base.to_string(),
-        output_profile: model.map(ToString::to_string),
-        model: model.map(ToString::to_string),
-        image: image.map(ToString::to_string),
-        github_token_secret: parse_secret_selector(github_token_secret)?,
-        codex_access_token_secret: codex_access_token_secret
-            .map(parse_secret_selector)
-            .transpose()?,
-        openai_api_key_secret: openai_api_key_secret
-            .map(parse_secret_selector)
-            .transpose()?,
-        git_push_branch: branch.to_string(),
-        git_commit_message: git_commit_message.unwrap_or(title).to_string(),
-        metadata: json!({
-            "source": "tachyon-cli",
-            "cloud_coding": {
-                "repository_url": repository_url,
-                "base": base,
-                "branch": branch,
-                "pull_request": {
-                    "base": base,
-                    "head": branch,
-                    "title": title,
-                    "body": pull_request_body,
-                },
-            },
-        }),
+        repository_url: repository_url.map(ToString::to_string),
+        branch: branch.map(ToString::to_string),
+        resume_coding_job_id: resume_coding_job_id.map(ToString::to_string),
+        timeout_seconds,
+        sandbox: sandbox.map(ToString::to_string),
     };
 
     let created: CloudCodingJobCreatedResponse =
@@ -1075,15 +961,15 @@ async fn run_coding_jobs_run(
             return print_json(&created);
         }
         println!("Coding job created.");
-        println!("Tool job ID: {}", created.tool_job_id);
+        println!("Coding job ID: {}", created.coding_job_id);
         println!("JobRun ID:   {}", created.job_run_id);
         println!("Status:      {}", created.status);
         return Ok(());
     }
 
-    let final_job = wait_tool_job(
+    let final_job = wait_coding_job(
         api,
-        &created.tool_job_id,
+        &created.coding_job_id,
         wait_timeout_seconds,
         wait_interval_seconds,
     )
@@ -1091,23 +977,18 @@ async fn run_coding_jobs_run(
     if json {
         return print_json(&json!({
             "cloud_coding_job": created,
-            "tool_job": final_job,
+            "coding_job": final_job,
         }));
     }
     println!("Coding job created.");
-    println!("Tool job ID: {}", created.tool_job_id);
+    println!("Coding job ID: {}", created.coding_job_id);
     println!("JobRun ID:   {}", created.job_run_id);
-    print_tool_job_final(&final_job)?;
-    if let Some(output) = final_job.normalized_output.as_ref() {
-        if let Some(url) = extract_pull_request_url(output) {
-            println!("Pull request: {url}");
-        }
-    }
+    print_coding_job_final(&final_job)?;
     Ok(())
 }
 
 #[allow(clippy::too_many_arguments)]
-async fn run_tool_jobs_create(
+async fn run_coding_jobs_create(
     api: &ApiClient,
     config_flag: Option<&Path>,
     provider: &str,
@@ -1129,7 +1010,7 @@ async fn run_tool_jobs_create(
     json: bool,
 ) -> Result<()> {
     let prompt = read_prompt(prompt)?;
-    let cwd = resolve_tool_job_cwd(config_flag, cwd, repo, cloud_app)?;
+    let cwd = resolve_coding_job_cwd(config_flag, cwd, repo, cloud_app)?;
     let context_paths = if context_paths.is_empty() {
         vec![".".to_string()]
     } else {
@@ -1139,51 +1020,51 @@ async fn run_tool_jobs_create(
         Some(worker_id) => Some(resolve::resolve_worker_id(api, worker_id).await?),
         None => None,
     };
-    let request = ToolJobCreateRequest {
+    let request = CodingJobCreateRequest {
         provider: provider.to_string(),
         prompt,
         context_paths,
         output_profile: output_profile.map(ToString::to_string),
         environment: parse_environment(environment)?,
-        metadata: build_tool_job_metadata(provider, cwd.as_deref(), codex_mode)?,
+        metadata: build_coding_job_metadata(provider, cwd.as_deref(), codex_mode)?,
         resume_session_id: resume_session_id.map(ToString::to_string),
         use_worktree,
         auto_merge,
         worker_id,
     };
 
-    let created: ToolJobCreatedResponse = api.post("/v1/agent/tool-jobs", &request).await?;
+    let created: CodingJobCreatedResponse = api.post("/v1/agent/coding-jobs", &request).await?;
     if !wait {
         if json {
             return print_json(&created);
         }
-        print_tool_job_created(&created.job);
+        print_coding_job_created(&created.job);
         return Ok(());
     }
 
-    let final_job = wait_tool_job(
+    let final_job = wait_coding_job(
         api,
-        &created.job.id,
+        &created.job.coding_job_id,
         wait_timeout_seconds,
         wait_interval_seconds,
     )
     .await?;
-    let response = ToolJobCreatedResponse { job: final_job };
+    let response = CodingJobCreatedResponse { job: final_job };
     if json {
         return print_json(&response);
     }
-    print_tool_job_created(&created.job);
-    print_tool_job_final(&response.job)
+    print_coding_job_created(&created.job);
+    print_coding_job_final(&response.job)
 }
 
-async fn run_tool_jobs_list(api: &ApiClient, json: bool) -> Result<()> {
-    let response: ToolJobListResponse = api.get("/v1/agent/tool-jobs").await?;
+async fn run_coding_jobs_list(api: &ApiClient, json: bool) -> Result<()> {
+    let response: CodingJobListResponse = api.get("/v1/agent/coding-jobs").await?;
     if json {
         return print_json(&response);
     }
     let jobs = response.jobs;
     if jobs.is_empty() {
-        println!("No tool jobs found.");
+        println!("No coding jobs found.");
         return Ok(());
     }
     println!(
@@ -1197,7 +1078,7 @@ async fn run_tool_jobs_list(api: &ApiClient, json: bool) -> Result<()> {
     for j in &jobs {
         println!(
             "{:<28}  {:<16}  {:<12}  {:<20}  {}",
-            j.id,
+            j.coding_job_id,
             j.provider.as_deref().unwrap_or("-"),
             j.status.as_deref().unwrap_or("-"),
             truncate(j.tool_name.as_deref().unwrap_or("-"), 20),
@@ -1207,8 +1088,10 @@ async fn run_tool_jobs_list(api: &ApiClient, json: bool) -> Result<()> {
     Ok(())
 }
 
-async fn run_tool_jobs_get(api: &ApiClient, job_id: &str, json: bool) -> Result<()> {
-    let j: ToolJobCreatedResponse = api.get(&format!("/v1/agent/tool-jobs/{job_id}")).await?;
+async fn run_coding_jobs_get(api: &ApiClient, coding_job_id: &str, json: bool) -> Result<()> {
+    let j: CodingJobCreatedResponse = api
+        .get(&format!("/v1/agent/coding-jobs/{coding_job_id}"))
+        .await?;
     if json {
         return print_json(&j);
     }
@@ -1216,15 +1099,15 @@ async fn run_tool_jobs_get(api: &ApiClient, job_id: &str, json: bool) -> Result<
     Ok(())
 }
 
-async fn run_tool_jobs_cancel(api: &ApiClient, job_id: &str) -> Result<()> {
-    api.post_no_body(&format!("/v1/agent/tool-jobs/{job_id}/cancel"))
+async fn run_coding_jobs_cancel(api: &ApiClient, coding_job_id: &str) -> Result<()> {
+    api.post_no_body(&format!("/v1/agent/coding-jobs/{coding_job_id}/cancel"))
         .await?;
-    println!("Tool job {job_id} cancelled.");
+    println!("Coding job {coding_job_id} cancelled.");
     Ok(())
 }
 
-async fn run_tool_jobs_providers(api: &ApiClient, json: bool) -> Result<()> {
-    let response: ToolJobProvidersResponse = api.get("/v1/agent/tool-jobs/providers").await?;
+async fn run_coding_jobs_providers(api: &ApiClient, json: bool) -> Result<()> {
+    let response: CodingJobProvidersResponse = api.get("/v1/agent/coding-jobs/providers").await?;
     if json {
         return print_json(&response);
     }
@@ -1613,17 +1496,11 @@ pub async fn run(
         OpsCommand::CodingJobs { command } => match command {
             CodingJobsCommand::Run {
                 repository_url,
-                base,
                 branch,
                 prompt,
-                pull_request_title,
-                pull_request_body,
-                git_commit_message,
-                github_token_secret,
-                codex_access_token_secret,
-                openai_api_key_secret,
-                model,
-                image,
+                resume_coding_job_id,
+                timeout_seconds,
+                sandbox,
                 wait,
                 wait_timeout_seconds,
                 wait_interval_seconds,
@@ -1631,18 +1508,12 @@ pub async fn run(
             } => {
                 run_coding_jobs_run(
                     &api,
-                    repository_url,
-                    base,
-                    branch,
+                    repository_url.as_deref(),
+                    branch.as_deref(),
                     prompt,
-                    pull_request_title.as_deref(),
-                    pull_request_body.as_deref(),
-                    git_commit_message.as_deref(),
-                    github_token_secret,
-                    codex_access_token_secret.as_deref(),
-                    openai_api_key_secret.as_deref(),
-                    model.as_deref(),
-                    image.as_deref(),
+                    resume_coding_job_id.as_deref(),
+                    *timeout_seconds,
+                    sandbox.as_deref(),
                     *wait,
                     *wait_timeout_seconds,
                     *wait_interval_seconds,
@@ -1650,9 +1521,7 @@ pub async fn run(
                 )
                 .await
             }
-        },
-        OpsCommand::ToolJobs { command } => match command {
-            ToolJobsCommand::Create {
+            CodingJobsCommand::Create {
                 provider,
                 prompt,
                 context_paths,
@@ -1671,7 +1540,7 @@ pub async fn run(
                 wait_interval_seconds,
                 json,
             } => {
-                run_tool_jobs_create(
+                run_coding_jobs_create(
                     &api,
                     config_flag,
                     provider,
@@ -1694,10 +1563,15 @@ pub async fn run(
                 )
                 .await
             }
-            ToolJobsCommand::List { json } => run_tool_jobs_list(&api, *json).await,
-            ToolJobsCommand::Get { job_id, json } => run_tool_jobs_get(&api, job_id, *json).await,
-            ToolJobsCommand::Cancel { job_id } => run_tool_jobs_cancel(&api, job_id).await,
-            ToolJobsCommand::Providers { json } => run_tool_jobs_providers(&api, *json).await,
+            CodingJobsCommand::List { json } => run_coding_jobs_list(&api, *json).await,
+            CodingJobsCommand::Get {
+                coding_job_id,
+                json,
+            } => run_coding_jobs_get(&api, coding_job_id, *json).await,
+            CodingJobsCommand::Cancel { coding_job_id } => {
+                run_coding_jobs_cancel(&api, coding_job_id).await
+            }
+            CodingJobsCommand::Providers { json } => run_coding_jobs_providers(&api, *json).await,
         },
         OpsCommand::Notify { command } => match command {
             NotifyCommand::Send {

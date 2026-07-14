@@ -8,7 +8,7 @@ export { createAgentApi } from './client/agent-api'
 export { createMemoryApi } from './client/memory-api'
 export { createProtocolApi } from './client/protocol-api'
 export { createInsightApi } from './client/insight-api'
-export { createToolJobApi } from './client/tool-job-api'
+export { createCodingJobApi } from './client/coding-job-api'
 export { createToolSearchApi } from './client/tool-search-api'
 
 // Types
@@ -47,14 +47,14 @@ export type {
 	// Tool Result
 	SubmitToolResultRequest,
 	SubmitToolResultResponse,
-	// Tool Jobs
-	ToolJobStatus,
-	ToolJobBilling,
-	ToolJob,
-	CreateToolJobRequest,
-	CreateToolJobResponse,
-	GetToolJobsResponse,
-	GetToolJobResponse,
+	// Coding Jobs
+	CodingJobStatus,
+	CodingJobBilling,
+	CodingJob,
+	CreateCodingJobRequest,
+	CreateCodingJobResponse,
+	GetCodingJobsResponse,
+	GetCodingJobResponse,
 	// Tool Search
 	ToolSearchTool,
 	ToolSearchResultGroup,
@@ -81,7 +81,7 @@ export { useChatRoom } from './hooks/useChatRoom'
 export { useSavedMemory } from './hooks/useSavedMemory'
 export { useAgentProtocols } from './hooks/useAgentProtocols'
 export { useUserInsights } from './hooks/useUserInsights'
-export { useToolJobs } from './hooks/useToolJobs'
+export { useCodingJobs } from './hooks/useCodingJobs'
 export {
 	usePersisted,
 	PERSISTENCE_KEYS,
