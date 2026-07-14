@@ -462,7 +462,7 @@ enum Commands {
     Iac(iac_cli::IacArgs),
     /// Validate, plan, apply, and reconcile manifests
     Manifest(manifest::ManifestArgs),
-    /// Operations: deployment events, scenario reports, and tool jobs
+    /// Operations: deployment events, scenario reports, and coding jobs
     Ops(ops_cli::OpsArgs),
     /// Generate AI images from text prompts
     Image(image_cli::ImageArgs),

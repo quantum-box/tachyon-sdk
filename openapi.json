@@ -3608,7 +3608,7 @@
                                         "model": "google_ai/gemini-2.5-pro",
                                         "task": "Review the codebase and suggest improvements. Do not modify any files.",
                                         "tool_access": {
-                                            "coding_agent_job": false,
+                                            "coding_job": false,
                                             "command": false,
                                             "filesystem": true,
                                             "sub_agent": false,
@@ -3624,7 +3624,7 @@
                 },
                 "responses": {
                     "200": {
-                        "description": "SSE stream of AgentChunk events.\n\nEach event is sent as `event: <type>\\ndata: <json>\\n\\n`.\nThe stream ends with an `event: done` sentinel.\n\n## Event types\n| Event | Description |\n|-------|-------------|\n| `say` | Text content from the agent |\n| `thinking` | Reasoning/thinking content (may stream in chunks) |\n| `tool_call` | Agent initiates a tool call |\n| `tool_call_args` | Arguments for the tool call |\n| `tool_result` | Result of a tool execution |\n| `tool_call_pending` | Client-side tool awaiting result submission |\n| `tool_job_started` | External coding agent job started |\n| `ask` | Agent asks a follow-up question |\n| `attempt_completion` | Agent proposes task completion |\n| `user` | Echoed user message |\n| `usage` | Token usage statistics |\n| `error` | Error during execution |\n| `done` | Stream complete |",
+                        "description": "SSE stream of AgentChunk events.\n\nEach event is sent as `event: <type>\\ndata: <json>\\n\\n`.\nThe stream ends with an `event: done` sentinel.\n\n## Event types\n| Event | Description |\n|-------|-------------|\n| `say` | Text content from the agent |\n| `thinking` | Reasoning/thinking content (may stream in chunks) |\n| `tool_call` | Agent initiates a tool call |\n| `tool_call_args` | Arguments for the tool call |\n| `tool_result` | Result of a tool execution |\n| `tool_call_pending` | Client-side tool awaiting result submission |\n| `coding_job_started` | External coding job started |\n| `ask` | Agent asks a follow-up question |\n| `attempt_completion` | Agent proposes task completion |\n| `user` | Echoed user message |\n| `usage` | Token usage statistics |\n| `error` | Error during execution |\n| `done` | Stream complete |",
                         "content": {
                             "text/event-stream": {
                                 "schema": {
@@ -3729,14 +3729,14 @@
                                             "type": "tool_call_pending"
                                         }
                                     },
-                                    "ToolJobStarted": {
-                                        "summary": "External coding agent job started",
-                                        "description": "Emitted when a coding agent job (e.g. Codex, Claude Code) is dispatched. The client can subscribe to the job's own SSE stream using the `job_id`.",
+                                    "CodingJobStarted": {
+                                        "summary": "External coding job started",
+                                        "description": "Emitted when a coding job (e.g. Codex, Claude Code) is dispatched. The client can subscribe to the job's own SSE stream using the `coding_job_id`.",
                                         "value": {
-                                            "job_id": "tj_01jexample0005",
+                                            "coding_job_id": "cj_01jexample0005",
                                             "provider": "codex",
                                             "tool_id": "t_01jexample0004",
-                                            "type": "tool_job_started"
+                                            "type": "coding_job_started"
                                         }
                                     },
                                     "ToolResult": {
@@ -6010,15 +6010,15 @@
                     },
                     {
                         "type": "object",
-                        "description": "Emitted when a tool job is created, before sync polling begins.\nFrontend can use the job_id to subscribe to the tool job's\nown SSE stream for real-time progress.",
+                        "description": "Emitted when a coding job is created, before sync polling begins.\nFrontend can use the coding_job_id to subscribe to the coding job's\nown SSE stream for real-time progress.",
                         "required": [
                             "tool_id",
-                            "job_id",
+                            "coding_job_id",
                             "provider",
                             "type"
                         ],
                         "properties": {
-                            "job_id": {
+                            "coding_job_id": {
                                 "type": "string"
                             },
                             "provider": {
@@ -6030,7 +6030,7 @@
                             "type": {
                                 "type": "string",
                                 "enum": [
-                                    "tool_job_started"
+                                    "coding_job_started"
                                 ]
                             }
                         }

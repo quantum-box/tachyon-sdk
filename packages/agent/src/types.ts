@@ -12,7 +12,7 @@ export type AgentChunk = {
     | 'assistant'
     | 'completion'
     | 'usage'
-    | 'tool_job_started'
+    | 'coding_job_started'
   id: string
   text?: string
   created_at: string
@@ -34,7 +34,7 @@ export type AgentChunk = {
   completion_tokens?: number
   total_tokens?: number
   total_cost?: number
-  job_id?: string
+  coding_job_id?: string
   provider?: string
   agent?: { chatroom_id: string }
 }

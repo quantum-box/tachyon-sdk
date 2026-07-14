@@ -68,8 +68,8 @@ pub enum Type {
     AttemptCompletion,
     #[serde(rename = "usage")]
     Usage,
-    #[serde(rename = "tool_job_started")]
-    ToolJobStarted,
+    #[serde(rename = "coding_job_started")]
+    CodingJobStarted,
 }
 
 impl Default for Type {

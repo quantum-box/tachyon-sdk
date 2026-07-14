@@ -1,18 +1,18 @@
 import { useCallback, useState } from 'react'
-import type { CreateToolJobRequest, ToolJob } from '../client/types'
+import type { CreateCodingJobRequest, CodingJob } from '../client/types'
 import { useAgentChatContext } from '../providers/AgentChatProvider'
 
-export function useToolJobs() {
+export function useCodingJobs() {
 	const { client } = useAgentChatContext()
-	const [jobs, setJobs] = useState<ToolJob[]>([])
+	const [jobs, setJobs] = useState<CodingJob[]>([])
 	const [isLoading, setIsLoading] = useState(false)
 	const [error, setError] = useState<Error | null>(null)
 
-	const fetchToolJobs = useCallback(async () => {
+	const fetchCodingJobs = useCallback(async () => {
 		setIsLoading(true)
 		setError(null)
 		try {
-			const result = await client.getToolJobs()
+			const result = await client.getCodingJobs()
 			setJobs(result)
 			return result
 		} catch (e) {
@@ -24,11 +24,11 @@ export function useToolJobs() {
 		}
 	}, [client])
 
-	const createToolJob = useCallback(
-		async (payload: CreateToolJobRequest) => {
+	const createCodingJob = useCallback(
+		async (payload: CreateCodingJobRequest) => {
 			setError(null)
 			try {
-				const job = await client.createToolJob(payload)
+				const job = await client.createCodingJob(payload)
 				setJobs(prev => [...prev, job])
 				return job
 			} catch (e) {
@@ -40,12 +40,12 @@ export function useToolJobs() {
 		[client],
 	)
 
-	const cancelToolJob = useCallback(
+	const cancelCodingJob = useCallback(
 		async (id: string) => {
 			setError(null)
 			try {
-				const updated = await client.cancelToolJob(id)
-				setJobs(prev => prev.map(j => (j.id === id ? updated : j)))
+				const updated = await client.cancelCodingJob(id)
+				setJobs(prev => prev.map(j => (j.coding_job_id === id ? updated : j)))
 				return updated
 			} catch (e) {
 				const err = e instanceof Error ? e : new Error(String(e))
@@ -60,8 +60,8 @@ export function useToolJobs() {
 		jobs,
 		isLoading,
 		error,
-		fetchToolJobs,
-		createToolJob,
-		cancelToolJob,
+		fetchCodingJobs,
+		createCodingJob,
+		cancelCodingJob,
 	}
 }

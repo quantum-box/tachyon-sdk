@@ -11,8 +11,8 @@ use crate::resolve;
 
 const DEFAULT_TACHYOND_IMAGE: &str = "ghcr.io/quantum-box/tachyond:latest";
 const DEFAULT_QUIC_GATEWAY_URL: &str = "quic.n1.tachy.one:4433";
-const DEFAULT_TACHYOND_CONTAINER_NAME: &str = "tachyond-tool-job-worker";
-const TACHYOND_CONTAINER_LABEL: &str = "com.tachyon.role=tool-job-worker";
+const DEFAULT_TACHYOND_CONTAINER_NAME: &str = "tachyond-coding-job-worker";
+const TACHYOND_CONTAINER_LABEL: &str = "com.tachyon.role=coding-job-worker";
 
 #[derive(Debug, Clone, Args)]
 pub struct AgentArgs {
@@ -73,11 +73,11 @@ pub enum AgentCommand {
         #[arg(long)]
         json: bool,
     },
-    /// Run local tachyond worker for tool jobs
-    #[command(name = "tool-job", alias = "tool-jobs")]
-    ToolJob {
+    /// Run local tachyond worker for coding jobs
+    #[command(name = "coding-job", alias = "coding-jobs")]
+    CodingJob {
         #[command(subcommand)]
-        command: ToolJobCommand,
+        command: CodingJobCommand,
     },
 }
 
@@ -185,15 +185,15 @@ pub enum MemoryCommand {
 }
 
 #[derive(Debug, Clone, Subcommand)]
-pub enum ToolJobCommand {
-    /// Run tachyond locally via Docker and process tool jobs
-    Run(ToolJobRunArgs),
-    /// Stop a local tachyond tool job worker container
-    Stop(ToolJobStopArgs),
+pub enum CodingJobCommand {
+    /// Run tachyond locally via Docker and process coding jobs
+    Run(CodingJobRunArgs),
+    /// Stop a local tachyond coding job worker container
+    Stop(CodingJobStopArgs),
 }
 
 #[derive(Debug, Clone, Args)]
-pub struct ToolJobRunArgs {
+pub struct CodingJobRunArgs {
     /// Tachyond container image to run
     #[arg(long, env = "TACHYON_TACHYOND_IMAGE", default_value = DEFAULT_TACHYOND_IMAGE)]
     pub image: String,
@@ -257,7 +257,7 @@ pub struct ToolJobRunArgs {
 }
 
 #[derive(Debug, Clone, Args)]
-pub struct ToolJobStopArgs {
+pub struct CodingJobStopArgs {
     /// Tachyond container image to stop when no matching name is found
     #[arg(long, env = "TACHYON_TACHYOND_IMAGE", default_value = DEFAULT_TACHYOND_IMAGE)]
     pub image: String,
@@ -281,7 +281,7 @@ pub struct ToolJobStopArgs {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct ToolJobDockerConfig {
+struct CodingJobDockerConfig {
     image: String,
     api_url: String,
     api_key: String,
@@ -298,9 +298,9 @@ struct ToolJobDockerConfig {
     opencode_health_interval_secs: u64,
 }
 
-impl ToolJobDockerConfig {
+impl CodingJobDockerConfig {
     fn from_runtime(
-        args: &ToolJobRunArgs,
+        args: &CodingJobRunArgs,
         config: &Configuration,
         tenant_id: &str,
     ) -> Result<Self> {
@@ -346,7 +346,7 @@ impl ToolJobDockerConfig {
             // tachyond currently reads these names. Keep them until tachyond
             // accepts the Tachyon-prefixed aliases directly.
             ("TACHYON_AUTH_TOKEN", self.api_key.clone()),
-            ("TOOL_JOB_OPERATOR_ID", self.operator_id.clone()),
+            ("CODING_JOB_OPERATOR_ID", self.operator_id.clone()),
             ("QUIC_GATEWAY_ADDR", self.quic_gateway_url.clone()),
             ("RUST_LOG", self.rust_log.clone()),
             ("TACHYOND_ENABLE_OPENCODE", self.enable_opencode.to_string()),
@@ -396,7 +396,7 @@ impl ToolJobDockerConfig {
     }
 
     fn print_startup_summary(&self) {
-        println!("Starting tachyond tool job worker...");
+        println!("Starting tachyond coding job worker...");
         println!("  image: {}", self.image);
         println!(
             "  container: {}",
@@ -422,7 +422,7 @@ impl ToolJobDockerConfig {
                 "disabled"
             }
         );
-        println!("Stop with: tachyon agent tool-job stop");
+        println!("Stop with: tachyon agent coding-job stop");
         if let Some(name) = &self.name {
             println!("Logs with: docker logs -f {name}");
         }
@@ -476,7 +476,7 @@ struct AgentDiagnosticsExecutionState {
     execution_id: String,
     status: String,
     #[serde(default)]
-    pending_tool_job_id: Option<String>,
+    pending_coding_job_id: Option<String>,
     #[serde(default)]
     pending_sub_agent_execution_id: Option<String>,
     #[serde(default)]
@@ -486,7 +486,7 @@ struct AgentDiagnosticsExecutionState {
 }
 
 #[derive(Debug, Deserialize, Serialize)]
-struct AgentDiagnosticsToolJob {
+struct AgentDiagnosticsCodingJob {
     id: String,
     provider: String,
     status: String,
@@ -522,7 +522,7 @@ struct AgentDiagnosticsFlags {
     #[serde(default)]
     has_tool_result: bool,
     #[serde(default)]
-    has_tool_job_started: bool,
+    has_coding_job_started: bool,
     #[serde(default)]
     has_attempt_completion: bool,
     #[serde(default)]
@@ -563,7 +563,7 @@ struct AgentDiagnosticsResponse {
     #[serde(default)]
     flags: AgentDiagnosticsFlags,
     anomalies: Vec<AgentDiagnosticsAnomaly>,
-    related_tool_jobs: Vec<AgentDiagnosticsToolJob>,
+    related_coding_jobs: Vec<AgentDiagnosticsCodingJob>,
     execution_states: Vec<AgentDiagnosticsExecutionState>,
 }
 
@@ -739,8 +739,8 @@ fn enabled_flags(flags: &AgentDiagnosticsFlags) -> Vec<&'static str> {
     if flags.has_tool_result {
         values.push("tool_result");
     }
-    if flags.has_tool_job_started {
-        values.push("tool_job_started");
+    if flags.has_coding_job_started {
+        values.push("coding_job_started");
     }
     if flags.has_attempt_completion {
         values.push("attempt_completion");
@@ -807,8 +807,8 @@ async fn run_session_inspect(
                 "  {}  {:<12} retries={}",
                 state.execution_id, state.status, state.retry_count
             );
-            if let Some(job_id) = &state.pending_tool_job_id {
-                println!("    pending job: {job_id}");
+            if let Some(coding_job_id) = &state.pending_coding_job_id {
+                println!("    pending job: {coding_job_id}");
             }
             if let Some(execution_id) = &state.pending_sub_agent_execution_id {
                 println!("    pending sub-agent execution: {execution_id}");
@@ -825,10 +825,10 @@ async fn run_session_inspect(
         println!("  {event_type:<24} {count}");
     }
 
-    if !diagnostics.related_tool_jobs.is_empty() {
+    if !diagnostics.related_coding_jobs.is_empty() {
         println!();
-        println!("Related Tool Jobs:");
-        for job in &diagnostics.related_tool_jobs {
+        println!("Related Coding Jobs:");
+        for job in &diagnostics.related_coding_jobs {
             println!(
                 "  {}  {:<12} {:<12} raw_events={} artifacts={}",
                 job.id, job.provider, job.status, job.raw_event_count, job.artifact_count
@@ -1151,18 +1151,18 @@ async fn run_models_list(api: &ApiClient, json: bool) -> Result<()> {
     Ok(())
 }
 
-fn run_tool_job_container(
-    args: &ToolJobRunArgs,
+fn run_coding_job_container(
+    args: &CodingJobRunArgs,
     config: &Configuration,
     tenant_id: &str,
 ) -> Result<()> {
-    let docker_config = ToolJobDockerConfig::from_runtime(args, config, tenant_id)?;
-    run_tool_job_container_with_docker(&args.docker_bin, &docker_config)
+    let docker_config = CodingJobDockerConfig::from_runtime(args, config, tenant_id)?;
+    run_coding_job_container_with_docker(&args.docker_bin, &docker_config)
 }
 
-fn run_tool_job_container_with_docker(
+fn run_coding_job_container_with_docker(
     docker_bin: &str,
-    config: &ToolJobDockerConfig,
+    config: &CodingJobDockerConfig,
 ) -> Result<()> {
     config.print_startup_summary();
     let status = Command::new(docker_bin)
@@ -1174,7 +1174,7 @@ fn run_tool_job_container_with_docker(
         .map_err(|err| {
             if err.kind() == std::io::ErrorKind::NotFound {
                 anyhow!(
-                    "Docker is not installed or `{docker_bin}` is not on PATH. Install Docker and retry `tachyon agent tool-job run`."
+                    "Docker is not installed or `{docker_bin}` is not on PATH. Install Docker and retry `tachyon agent coding-job run`."
                 )
             } else {
                 anyhow!(err).context(format!("failed to start Docker via `{docker_bin}`"))
@@ -1187,11 +1187,11 @@ fn run_tool_job_container_with_docker(
     Ok(())
 }
 
-fn stop_tool_job_container(args: &ToolJobStopArgs) -> Result<()> {
-    stop_tool_job_container_with_docker(&args.docker_bin, &args.name, &args.image, args.timeout)
+fn stop_coding_job_container(args: &CodingJobStopArgs) -> Result<()> {
+    stop_coding_job_container_with_docker(&args.docker_bin, &args.name, &args.image, args.timeout)
 }
 
-fn stop_tool_job_container_with_docker(
+fn stop_coding_job_container_with_docker(
     docker_bin: &str,
     name: &str,
     image: &str,
@@ -1232,7 +1232,7 @@ fn stop_tool_job_container_with_docker(
     }
 
     if container_ids.is_empty() {
-        println!("No running tachyond tool job worker container found.");
+        println!("No running tachyond coding job worker container found.");
         return Ok(());
     }
 
@@ -1250,7 +1250,7 @@ fn stop_tool_job_container_with_docker(
         .map_err(|err| {
             if err.kind() == std::io::ErrorKind::NotFound {
                 anyhow!(
-                    "Docker is not installed or `{docker_bin}` is not on PATH. Install Docker and retry `tachyon agent tool-job stop`."
+                    "Docker is not installed or `{docker_bin}` is not on PATH. Install Docker and retry `tachyon agent coding-job stop`."
                 )
             } else {
                 anyhow!(err).context(format!("failed to stop Docker container via `{docker_bin}`"))
@@ -1272,7 +1272,7 @@ fn docker_container_ids(docker_bin: &str, filters: &[&str]) -> Result<Vec<String
         .map_err(|err| {
             if err.kind() == std::io::ErrorKind::NotFound {
                 anyhow!(
-                    "Docker is not installed or `{docker_bin}` is not on PATH. Install Docker and retry `tachyon agent tool-job stop`."
+                    "Docker is not installed or `{docker_bin}` is not on PATH. Install Docker and retry `tachyon agent coding-job stop`."
                 )
             } else {
                 anyhow!(err).context(format!("failed to inspect Docker containers via `{docker_bin}`"))
@@ -1356,15 +1356,17 @@ pub async fn run(args: &AgentArgs, config: &Configuration, tenant_id: &str) -> R
             json,
         } => run_agent_messages(&api, agent_id, session_id.as_deref(), *json).await,
         AgentCommand::Models { json } => run_models_list(&api, *json).await,
-        AgentCommand::ToolJob { command } => match command {
-            ToolJobCommand::Run(run_args) => run_tool_job_container(run_args, config, tenant_id),
-            ToolJobCommand::Stop(stop_args) => stop_tool_job_container(stop_args),
+        AgentCommand::CodingJob { command } => match command {
+            CodingJobCommand::Run(run_args) => {
+                run_coding_job_container(run_args, config, tenant_id)
+            }
+            CodingJobCommand::Stop(stop_args) => stop_coding_job_container(stop_args),
         },
     }
 }
 
 #[cfg(test)]
-mod tool_job_tests {
+mod coding_job_tests {
     use super::*;
 
     fn test_config() -> Configuration {
@@ -1374,8 +1376,8 @@ mod tool_job_tests {
         config
     }
 
-    fn run_args() -> ToolJobRunArgs {
-        ToolJobRunArgs {
+    fn run_args() -> CodingJobRunArgs {
+        CodingJobRunArgs {
             image: "ghcr.io/quantum-box/tachyond:latest".to_string(),
             quic_gateway_url: "quic.n1.tachy.one:4433".to_string(),
             docker_bin: "docker".to_string(),
@@ -1394,7 +1396,7 @@ mod tool_job_tests {
     #[test]
     fn docker_command_builder_injects_required_env() {
         let config =
-            ToolJobDockerConfig::from_runtime(&run_args(), &test_config(), "op_test").unwrap();
+            CodingJobDockerConfig::from_runtime(&run_args(), &test_config(), "op_test").unwrap();
 
         assert_eq!(config.image, DEFAULT_TACHYOND_IMAGE);
         let args = config.docker_args();
@@ -1410,7 +1412,7 @@ mod tool_job_tests {
         assert!(args.contains(&"TACHYON_OPERATOR_ID=op_test".to_string()));
         assert!(args.contains(&"TACHYON_QUIC_GATEWAY_URL=quic.n1.tachy.one:4433".to_string()));
         assert!(args.contains(&"TACHYON_AUTH_TOKEN=test-token".to_string()));
-        assert!(args.contains(&"TOOL_JOB_OPERATOR_ID=op_test".to_string()));
+        assert!(args.contains(&"CODING_JOB_OPERATOR_ID=op_test".to_string()));
         assert!(args.contains(&"QUIC_GATEWAY_ADDR=quic.n1.tachy.one:4433".to_string()));
         assert!(
             args.contains(&"RUST_LOG=warn,streaming=info,llms=info,tachyon_code=info".to_string())
@@ -1435,7 +1437,7 @@ mod tool_job_tests {
         run_args.opencode_restart_limit = 2;
         run_args.opencode_health_interval_secs = 10;
         let config =
-            ToolJobDockerConfig::from_runtime(&run_args, &test_config(), "op_test").unwrap();
+            CodingJobDockerConfig::from_runtime(&run_args, &test_config(), "op_test").unwrap();
 
         let args = config.docker_args();
         assert!(args.contains(&"TACHYOND_ENABLE_OPENCODE=true".to_string()));
@@ -1450,7 +1452,7 @@ mod tool_job_tests {
         let mut run_args = run_args();
         run_args.detach = true;
         let config =
-            ToolJobDockerConfig::from_runtime(&run_args, &test_config(), "op_test").unwrap();
+            CodingJobDockerConfig::from_runtime(&run_args, &test_config(), "op_test").unwrap();
 
         let args = config.docker_args();
         assert!(args.contains(&"--detach".to_string()));
@@ -1460,14 +1462,14 @@ mod tool_job_tests {
     fn config_resolution_requires_api_key() {
         let mut config = test_config();
         config.bearer_access_token = None;
-        let err = ToolJobDockerConfig::from_runtime(&run_args(), &config, "op_test")
+        let err = CodingJobDockerConfig::from_runtime(&run_args(), &config, "op_test")
             .expect_err("missing token should fail");
         assert!(err.to_string().contains("no Tachyon API key"));
     }
 
     #[test]
     fn config_resolution_requires_operator_id() {
-        let err = ToolJobDockerConfig::from_runtime(&run_args(), &test_config(), "")
+        let err = CodingJobDockerConfig::from_runtime(&run_args(), &test_config(), "")
             .expect_err("missing operator should fail");
         assert!(err.to_string().contains("no Tachyon operator id"));
     }
@@ -1475,8 +1477,8 @@ mod tool_job_tests {
     #[test]
     fn missing_docker_error_is_clear() {
         let docker_config =
-            ToolJobDockerConfig::from_runtime(&run_args(), &test_config(), "op_test").unwrap();
-        let err = run_tool_job_container_with_docker(
+            CodingJobDockerConfig::from_runtime(&run_args(), &test_config(), "op_test").unwrap();
+        let err = run_coding_job_container_with_docker(
             "definitely-missing-docker-for-plt-1163",
             &docker_config,
         )

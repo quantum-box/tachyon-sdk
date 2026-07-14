@@ -11,11 +11,11 @@
 use crate::models;
 use serde::{Deserialize, Serialize};
 
-/// AgentChunkEventOneOf10 : Emitted when a tool job is created, before sync polling begins. Frontend can use the job_id to subscribe to the tool job's own SSE stream for real-time progress.
+/// AgentChunkEventOneOf10 : Emitted when a coding job is created, before sync polling begins. Frontend can use the coding_job_id to subscribe to the coding job's own SSE stream for real-time progress.
 #[derive(Clone, Default, Debug, PartialEq, Serialize, Deserialize)]
 pub struct AgentChunkEventOneOf10 {
-    #[serde(rename = "job_id")]
-    pub job_id: String,
+    #[serde(rename = "coding_job_id")]
+    pub coding_job_id: String,
     #[serde(rename = "provider")]
     pub provider: String,
     #[serde(rename = "tool_id")]
@@ -25,15 +25,15 @@ pub struct AgentChunkEventOneOf10 {
 }
 
 impl AgentChunkEventOneOf10 {
-    /// Emitted when a tool job is created, before sync polling begins. Frontend can use the job_id to subscribe to the tool job's own SSE stream for real-time progress.
+    /// Emitted when a coding job is created, before sync polling begins. Frontend can use the coding_job_id to subscribe to the coding job's own SSE stream for real-time progress.
     pub fn new(
-        job_id: String,
+        coding_job_id: String,
         provider: String,
         tool_id: String,
         r#type: Type,
     ) -> AgentChunkEventOneOf10 {
         AgentChunkEventOneOf10 {
-            job_id,
+            coding_job_id,
             provider,
             tool_id,
             r#type,
@@ -54,12 +54,12 @@ impl AgentChunkEventOneOf10 {
     Deserialize,
 )]
 pub enum Type {
-    #[serde(rename = "tool_job_started")]
-    ToolJobStarted,
+    #[serde(rename = "coding_job_started")]
+    CodingJobStarted,
 }
 
 impl Default for Type {
     fn default() -> Type {
-        Self::ToolJobStarted
+        Self::CodingJobStarted
     }
 }

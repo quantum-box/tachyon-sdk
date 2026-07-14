@@ -285,7 +285,7 @@ No authorization required
 
 | Status code | Description | Response headers |
 |-------------|-------------|------------------|
-**200** | SSE stream of AgentChunk events.  Each event is sent as &#x60;event: &lt;type&gt;\\ndata: &lt;json&gt;\\n\\n&#x60;. The stream ends with an &#x60;event: done&#x60; sentinel.  ## Event types | Event | Description | |-------|-------------| | &#x60;say&#x60; | Text content from the agent | | &#x60;thinking&#x60; | Reasoning/thinking content (may stream in chunks) | | &#x60;tool_call&#x60; | Agent initiates a tool call | | &#x60;tool_call_args&#x60; | Arguments for the tool call | | &#x60;tool_result&#x60; | Result of a tool execution | | &#x60;tool_call_pending&#x60; | Client-side tool awaiting result submission | | &#x60;tool_job_started&#x60; | External coding agent job started | | &#x60;ask&#x60; | Agent asks a follow-up question | | &#x60;attempt_completion&#x60; | Agent proposes task completion | | &#x60;user&#x60; | Echoed user message | | &#x60;usage&#x60; | Token usage statistics | | &#x60;error&#x60; | Error during execution | | &#x60;done&#x60; | Stream complete | |  -  |
+**200** | SSE stream of AgentChunk events.  Each event is sent as &#x60;event: &lt;type&gt;\\ndata: &lt;json&gt;\\n\\n&#x60;. The stream ends with an &#x60;event: done&#x60; sentinel.  ## Event types | Event | Description | |-------|-------------| | &#x60;say&#x60; | Text content from the agent | | &#x60;thinking&#x60; | Reasoning/thinking content (may stream in chunks) | | &#x60;tool_call&#x60; | Agent initiates a tool call | | &#x60;tool_call_args&#x60; | Arguments for the tool call | | &#x60;tool_result&#x60; | Result of a tool execution | | &#x60;tool_call_pending&#x60; | Client-side tool awaiting result submission | | &#x60;coding_job_started&#x60; | External coding job started | | &#x60;ask&#x60; | Agent asks a follow-up question | | &#x60;attempt_completion&#x60; | Agent proposes task completion | | &#x60;user&#x60; | Echoed user message | | &#x60;usage&#x60; | Token usage statistics | | &#x60;error&#x60; | Error during execution | | &#x60;done&#x60; | Stream complete | |  -  |
 **401** | Unauthorized — missing or invalid Authorization header |  -  |
 **403** | Forbidden — operator does not have permission |  -  |
 **404** | Session not found |  -  |
@@ -829,4 +829,3 @@ No authorization required
 **404** | No pending tool call found for the given tool_id |  -  |
 
 [[Back to top]](#) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to Model list]](../README.md#documentation-for-models) [[Back to README]](../README.md)
-

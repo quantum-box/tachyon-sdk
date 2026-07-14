@@ -142,7 +142,7 @@ cancelled, and timed-out builds return non-zero so automation can stop early.
 ### Worker runtime
 
 `tachyon worker` replaces the separately distributed `tachyond` binary for
-local Tool Job workers.
+local Coding Job workers.
 
 ```sh
 # Install or refresh the tachyon CLI first
@@ -166,7 +166,7 @@ sudo tachyon worker restart
 ```
 
 The worker advertises the `containerized_codex` provider by default and uses
-Docker to execute claimed Tool Jobs. Runtime knobs are available through CLI
+Docker to execute claimed Coding Jobs. Runtime knobs are available through CLI
 flags or environment variables:
 
 | Variable | Purpose |
