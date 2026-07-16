@@ -1,4 +1,5 @@
 use anyhow::{bail, Context, Result};
+use base64::Engine as _;
 use clap::{Args, Subcommand};
 use std::path::PathBuf;
 use std::process::Command;
@@ -57,10 +58,7 @@ fn checkout(
         .env_remove("GITHUB_TOKEN")
         .env("GIT_CONFIG_COUNT", "1")
         .env("GIT_CONFIG_KEY_0", "http.https://github.com/.extraheader")
-        .env(
-            "GIT_CONFIG_VALUE_0",
-            format!("AUTHORIZATION: bearer {token}"),
-        )
+        .env("GIT_CONFIG_VALUE_0", github_authorization_header(&token))
         .arg("clone")
         .arg("--depth")
         .arg(depth.to_string());
@@ -77,6 +75,12 @@ fn checkout(
         bail!("git clone failed with {status}");
     }
     Ok(())
+}
+
+fn github_authorization_header(token: &str) -> String {
+    let credentials =
+        base64::engine::general_purpose::STANDARD.encode(format!("x-access-token:{token}"));
+    format!("AUTHORIZATION: basic {credentials}")
 }
 
 fn validate_github_repository_url(repository: &str) -> Result<()> {
@@ -110,5 +114,16 @@ mod tests {
     fn rejects_non_github_and_embedded_credentials() {
         assert!(validate_github_repository_url("https://example.com/a/b").is_err());
         assert!(validate_github_repository_url("https://token@github.com/a/b").is_err());
+    }
+
+    #[test]
+    fn uses_github_basic_auth_without_exposing_the_token() {
+        let header = github_authorization_header("installation-token");
+
+        assert_eq!(
+            header,
+            "AUTHORIZATION: basic eC1hY2Nlc3MtdG9rZW46aW5zdGFsbGF0aW9uLXRva2Vu"
+        );
+        assert!(!header.contains("installation-token"));
     }
 }
