@@ -990,6 +990,7 @@ fn enrich_oauth2_client_refs(
                 continue;
             };
             for key in [
+                "clientType",
                 "redirectUris",
                 "allowedScopes",
                 "grantTypes",
@@ -1386,6 +1387,7 @@ metadata:
   name: fieldadmin-web
   tenantId: tn_01hjjn348rn3t49zz6hvmfq67p
 spec:
+  clientType: public
   redirectUris:
     - https://fieldadmin.txcloud.app/api/auth/callback/cognito
   allowedScopes:
@@ -1407,6 +1409,7 @@ spec:
             "https://fieldadmin.txcloud.app/api/auth/callback/cognito"
         );
         assert_eq!(client_ref["allowedScopes"], json!(["openid", "profile"]));
+        assert_eq!(client_ref["clientType"], "public");
         assert_eq!(
             client_ref["grantTypes"],
             json!(["authorization_code", "password"])
@@ -1417,6 +1420,7 @@ spec:
             cloud_app_manifest_for_iac(&entries[0], "tn_01hjjn348rn3t49zz6hvmfq67p").unwrap();
         let iac_ref = &iac_manifest["spec"]["envVars"][0]["valueFrom"]["oauth2ClientRef"];
         assert_eq!(iac_ref["allowedScopes"], json!(["openid", "profile"]));
+        assert_eq!(iac_ref["clientType"], "public");
         assert!(iac_manifest["spec"].get(DOCUMENT_TENANT_ID_KEY).is_none());
     }
 
