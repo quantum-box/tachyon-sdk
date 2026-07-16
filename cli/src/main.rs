@@ -22,6 +22,7 @@ mod resolve;
 mod secret_cli;
 mod skills_cli;
 mod slack_cli;
+mod source_cli;
 mod switch_cli;
 mod tts_cli;
 mod worker_cli;
@@ -476,6 +477,8 @@ enum Commands {
     Linear(linear_cli::LinearArgs),
     /// Install bundled agent skills
     Skills(skills_cli::SkillsArgs),
+    /// Checkout source repositories for Tachyon workloads
+    Source(source_cli::SourceArgs),
     /// Convert text to speech using AI TTS models
     Tts(tts_cli::TtsArgs),
     /// Run as an MCP (Model Context Protocol) server (stdio or HTTP)
@@ -893,6 +896,7 @@ async fn run() -> Result<()> {
             linear_cli::run(args, &config, &tenant_id).await
         }
         Commands::Skills(args) => skills_cli::run(args),
+        Commands::Source(args) => source_cli::run(args),
         Commands::Tts(args) => {
             let project_config = config::loader::load(cli.config.as_deref())?;
             let tenant_arg = tenant_arg(&cli, project_config.as_ref());
