@@ -44,8 +44,8 @@ fn checkout(
     if depth == 0 {
         bail!("--depth must be greater than zero");
     }
-    let token = std::env::var("GITHUB_TOKEN")
-        .context("GITHUB_TOKEN is required for source checkout")?;
+    let token =
+        std::env::var("GITHUB_TOKEN").context("GITHUB_TOKEN is required for source checkout")?;
     if token.trim().is_empty() {
         bail!("GITHUB_TOKEN must not be empty");
     }
@@ -56,10 +56,7 @@ fn checkout(
     command
         .env_remove("GITHUB_TOKEN")
         .env("GIT_CONFIG_COUNT", "1")
-        .env(
-            "GIT_CONFIG_KEY_0",
-            "http.https://github.com/.extraheader",
-        )
+        .env("GIT_CONFIG_KEY_0", "http.https://github.com/.extraheader")
         .env(
             "GIT_CONFIG_VALUE_0",
             format!("AUTHORIZATION: bearer {token}"),
@@ -103,18 +100,15 @@ mod tests {
 
     #[test]
     fn accepts_canonical_github_https_urls() {
-        assert!(validate_github_repository_url(
-            "https://github.com/quantum-box/private-repo.git"
-        )
-        .is_ok());
+        assert!(
+            validate_github_repository_url("https://github.com/quantum-box/private-repo.git")
+                .is_ok()
+        );
     }
 
     #[test]
     fn rejects_non_github_and_embedded_credentials() {
         assert!(validate_github_repository_url("https://example.com/a/b").is_err());
-        assert!(validate_github_repository_url(
-            "https://token@github.com/a/b"
-        )
-        .is_err());
+        assert!(validate_github_repository_url("https://token@github.com/a/b").is_err());
     }
 }
