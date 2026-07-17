@@ -78,6 +78,19 @@ pub(super) struct EnvVarResponse {
     pub(super) branch: Option<String>,
     #[serde(default)]
     pub(super) is_secret: Option<bool>,
+    #[serde(default)]
+    pub(super) secret_source: Option<EnvVarSecretSourceResponse>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub(super) struct EnvVarSecretSourceResponse {
+    pub(super) source_type: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) provider: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) field: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -440,4 +453,37 @@ pub(super) async fn run_env_delete(api: &ApiClient, app_id: &str, env_id: &str) 
         .await?;
     println!("Environment variable {env_id} deleted.");
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn env_response_preserves_secret_source_metadata_in_json() {
+        let response: EnvVarResponse = serde_json::from_value(json!({
+            "id": "env_01ks18jhh1xvggktfzjx5jqsen",
+            "key": "DATABASE_URL",
+            "value": "****",
+            "target": "preview",
+            "branch": null,
+            "is_secret": true,
+            "secret_source": {
+                "source_type": "path",
+                "path": "providers/tidb_field_preview",
+                "field": "DATABASE_URL"
+            }
+        }))
+        .unwrap();
+
+        let serialized = serde_json::to_value(response).unwrap();
+        assert_eq!(serialized["secret_source"]["source_type"], "path");
+        assert_eq!(
+            serialized["secret_source"]["path"],
+            "providers/tidb_field_preview"
+        );
+        assert_eq!(serialized["secret_source"]["field"], "DATABASE_URL");
+        assert!(serialized["secret_source"].get("provider").is_none());
+    }
 }
