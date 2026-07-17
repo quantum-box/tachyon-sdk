@@ -54,6 +54,8 @@ struct BuildWorkloadCommands {
     install: Option<String>,
     build: Option<String>,
     node_version: Option<String>,
+    #[serde(default)]
+    binary: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -587,7 +589,7 @@ fn package_rust_lambda_archive(
     let bootstrap = if workload.framework.as_deref() == Some("rust_server") {
         rust_server_bootstrap_path(workload, app_dir, cargo_target_dir)?
     } else {
-        cargo_lambda_bootstrap_path(workload, app_dir, cargo_target_dir)?
+        cargo_lambda_bootstrap_path(workload, cargo_target_dir)?
     };
     let bytes = zip_bootstrap_file(&bootstrap)?;
     Ok((bytes, format!("{}", bootstrap.display())))
@@ -616,18 +618,21 @@ fn rust_server_bootstrap_path(
 
 fn cargo_lambda_bootstrap_path(
     workload: &BuildWorkloadSpec,
-    app_dir: &Path,
     cargo_target_dir: &Path,
 ) -> Result<PathBuf> {
+    let build_command = workload.commands.build.as_deref();
     let explicit_name = workload
         .commands
-        .build
+        .binary
         .as_deref()
-        .and_then(cargo_lambda_bootstrap_name);
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .map(ToString::to_string)
+        .or_else(|| build_command.and_then(cargo_lambda_bootstrap_name));
     let mut candidates = Vec::new();
-    if let Some(name) = explicit_name {
-        candidates.push(cargo_target_dir.join("lambda").join(name).join("bootstrap"));
-    } else if let Ok(name) = rust_binary_name(workload, app_dir) {
+    if build_command.is_some_and(cargo_lambda_bootstrap_is_flattened) {
+        candidates.push(cargo_target_dir.join("lambda").join("bootstrap"));
+    } else if let Some(name) = explicit_name {
         candidates.push(cargo_target_dir.join("lambda").join(name).join("bootstrap"));
     }
 
@@ -637,9 +642,13 @@ fn cargo_lambda_bootstrap_path(
         }
     }
 
-    let lambda_dir = cargo_target_dir.join("lambda");
     let mut discovered = Vec::new();
-    if lambda_dir.is_dir() {
+    let lambda_dir = cargo_target_dir.join("lambda");
+    if candidates.is_empty() && lambda_dir.is_dir() {
+        let flattened = lambda_dir.join("bootstrap");
+        if flattened.is_file() {
+            discovered.push(flattened);
+        }
         for entry in std::fs::read_dir(&lambda_dir)
             .with_context(|| format!("failed to read {}", lambda_dir.display()))?
         {
@@ -699,7 +708,49 @@ fn rust_binary_name(workload: &BuildWorkloadSpec, app_dir: &Path) -> Result<Stri
 }
 
 fn cargo_lambda_bootstrap_name(command: &str) -> Option<String> {
-    flag_value(command, "--bin").or_else(|| flag_value(command, "--package"))
+    let invocation = cargo_lambda_build_invocation(command)?;
+    flag_value(&invocation, "--bin").or_else(|| flag_value(&invocation, "--flatten"))
+}
+
+fn cargo_lambda_bootstrap_is_flattened(command: &str) -> bool {
+    cargo_lambda_build_invocation(command)
+        .is_some_and(|invocation| flag_value(&invocation, "--flatten").is_some())
+}
+
+fn cargo_lambda_build_invocation(command: &str) -> Option<String> {
+    let normalized = command.replace("\\\r\n", " ").replace("\\\n", " ");
+    for line in normalized.lines() {
+        for segment in line.split(';') {
+            let parts = segment.split_whitespace().collect::<Vec<_>>();
+            for (index, window) in parts.windows(3).enumerate() {
+                if window != ["cargo", "lambda", "build"] {
+                    continue;
+                }
+
+                let command_start = parts[..index]
+                    .iter()
+                    .rposition(|part| matches!(*part, "&&" | "||" | "|"))
+                    .map_or(0, |separator| separator + 1);
+                if !parts[command_start..index]
+                    .iter()
+                    .all(|part| *part == "env" || *part == "command" || part.contains('='))
+                {
+                    continue;
+                }
+
+                let args = parts[index + 3..]
+                    .iter()
+                    .take_while(|part| {
+                        !matches!(**part, "&&" | "||" | "|") && !part.starts_with('#')
+                    })
+                    .copied()
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                return Some(args);
+            }
+        }
+    }
+    None
 }
 
 fn flag_value(command: &str, flag: &str) -> Option<String> {
@@ -1324,6 +1375,7 @@ mod tests {
                 install: None,
                 build: Some("true".to_string()),
                 node_version: None,
+                binary: None,
             },
             env: vec![],
             artifact: BuildWorkloadArtifact {
@@ -1407,6 +1459,108 @@ mod tests {
 
         workload.commands.build = Some("yarn build".to_string());
         assert!(!is_rust_lambda(&workload));
+    }
+
+    #[test]
+    fn cargo_lambda_bootstrap_name_ignores_preceding_cargo_run_bin() {
+        let command = "cargo run --package app --bin migration_gate\n\
+                       cargo lambda build --package app --bin lambda-app --release --arm64";
+
+        assert_eq!(
+            cargo_lambda_bootstrap_name(command).as_deref(),
+            Some("lambda-app")
+        );
+    }
+
+    #[test]
+    fn cargo_lambda_bootstrap_path_prefers_explicit_binary() {
+        let temp = tempfile::tempdir().unwrap();
+        let target_dir = temp.path().join("target");
+        let explicit = target_dir
+            .join("lambda")
+            .join("manifest-binary")
+            .join("bootstrap");
+        let command_binary = target_dir
+            .join("lambda")
+            .join("command-binary")
+            .join("bootstrap");
+        std::fs::create_dir_all(explicit.parent().unwrap()).unwrap();
+        std::fs::create_dir_all(command_binary.parent().unwrap()).unwrap();
+        std::fs::write(&explicit, b"manifest binary").unwrap();
+        std::fs::write(&command_binary, b"command binary").unwrap();
+
+        let mut workload = test_workload(Some("lambda"));
+        workload.framework = Some("cargo_lambda".to_string());
+        workload.commands.binary = Some("manifest-binary".to_string());
+        workload.commands.build =
+            Some("cargo lambda build --bin command-binary --release --arm64".to_string());
+
+        assert_eq!(
+            cargo_lambda_bootstrap_path(&workload, &target_dir).unwrap(),
+            explicit
+        );
+    }
+
+    #[test]
+    fn cargo_lambda_explicit_binary_does_not_scan_other_artifacts() {
+        let temp = tempfile::tempdir().unwrap();
+        let target_dir = temp.path().join("target");
+        let other = target_dir
+            .join("lambda")
+            .join("other-binary")
+            .join("bootstrap");
+        std::fs::create_dir_all(other.parent().unwrap()).unwrap();
+        std::fs::write(&other, b"other binary").unwrap();
+
+        let mut workload = test_workload(Some("lambda"));
+        workload.framework = Some("cargo_lambda".to_string());
+        workload.commands.binary = Some("manifest-binary".to_string());
+
+        let error = cargo_lambda_bootstrap_path(&workload, &target_dir).unwrap_err();
+
+        assert!(error
+            .to_string()
+            .contains("target/lambda/manifest-binary/bootstrap"));
+    }
+
+    #[test]
+    fn cargo_lambda_bootstrap_path_honors_flatten_on_build_invocation() {
+        let temp = tempfile::tempdir().unwrap();
+        let target_dir = temp.path().join("target");
+        let bootstrap = target_dir.join("lambda").join("bootstrap");
+        std::fs::create_dir_all(bootstrap.parent().unwrap()).unwrap();
+        std::fs::write(&bootstrap, b"flattened binary").unwrap();
+
+        let mut workload = test_workload(Some("lambda"));
+        workload.framework = Some("cargo_lambda".to_string());
+        workload.commands.build = Some(
+            "cargo run --bin migration_gate && \
+             cargo lambda build --bin lambda-app --flatten lambda-app --release --arm64"
+                .to_string(),
+        );
+
+        assert_eq!(
+            cargo_lambda_bootstrap_path(&workload, &target_dir).unwrap(),
+            bootstrap
+        );
+    }
+
+    #[test]
+    fn cargo_lambda_bootstrap_path_scans_when_build_has_no_artifact_flag() {
+        let temp = tempfile::tempdir().unwrap();
+        let target_dir = temp.path().join("target");
+        let mut workload = test_workload(Some("lambda"));
+        workload.framework = Some("cargo_lambda".to_string());
+        workload.commands.build = Some(
+            "cargo run --bin migration_gate\n\
+             cargo lambda build --package app --release --arm64"
+                .to_string(),
+        );
+
+        let error = cargo_lambda_bootstrap_path(&workload, &target_dir).unwrap_err();
+
+        assert!(error.to_string().contains("target/lambda/<name>/bootstrap"));
+        assert!(!error.to_string().contains("migration_gate"));
     }
 
     #[test]
@@ -1682,6 +1836,7 @@ mod tests {
                 install: None,
                 build: Some("true".to_string()),
                 node_version: None,
+                binary: None,
             },
             env: vec![],
             artifact: BuildWorkloadArtifact {
@@ -1720,6 +1875,7 @@ mod tests {
                 install: None,
                 build: Some("true".to_string()),
                 node_version: None,
+                binary: None,
             },
             env: vec![],
             artifact: BuildWorkloadArtifact {
@@ -1940,6 +2096,7 @@ mod tests {
                 install: None,
                 build: Some("true".to_string()),
                 node_version: None,
+                binary: None,
             },
             env: vec![],
             artifact: BuildWorkloadArtifact {
@@ -1979,6 +2136,7 @@ mod tests {
                 install: None,
                 build: Some("true".to_string()),
                 node_version: None,
+                binary: None,
             },
             env: vec![],
             artifact: BuildWorkloadArtifact {
@@ -2015,6 +2173,7 @@ mod tests {
                 install: None,
                 build: Some("true".to_string()),
                 node_version: None,
+                binary: None,
             },
             env: vec![],
             artifact: BuildWorkloadArtifact {
@@ -2055,6 +2214,7 @@ mod tests {
                 install: None,
                 build: Some("true".to_string()),
                 node_version: None,
+                binary: None,
             },
             env: vec![],
             artifact: BuildWorkloadArtifact {
@@ -2092,6 +2252,7 @@ mod tests {
                 install: None,
                 build: Some("true".to_string()),
                 node_version: None,
+                binary: None,
             },
             env: vec![],
             artifact: BuildWorkloadArtifact {
