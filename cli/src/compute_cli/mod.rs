@@ -403,6 +403,9 @@ pub async fn run(
                 deployment_id,
                 json,
             } => run_deployments_get(&api, deployment_id, *json).await,
+            DeploymentsCommand::Cancel { deployment_id } => {
+                run_deployments_cancel(&api, deployment_id).await
+            }
             DeploymentsCommand::Rollback {
                 app_id,
                 deployment_id,

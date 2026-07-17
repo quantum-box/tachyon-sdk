@@ -20,6 +20,12 @@ pub enum DeploymentsCommand {
         #[arg(long)]
         json: bool,
     },
+    /// Cancel an in-flight deployment
+    Cancel {
+        /// Deployment ID to cancel
+        #[arg(long)]
+        deployment_id: String,
+    },
     /// Rollback an app to a previous deployment
     Rollback {
         /// App ID or name
@@ -170,4 +176,68 @@ pub(super) async fn run_deployments_rollback(
     println!("Rollback initiated. New deployment: {}", dep.id);
     println!("Status: {}", dep.status);
     Ok(())
+}
+
+pub(super) async fn run_deployments_cancel(api: &ApiClient, deployment_id: &str) -> Result<()> {
+    api.post_no_body(&format!("/v1/compute/deployments/{deployment_id}/cancel"))
+        .await?;
+    println!("Deployment {deployment_id} cancelled.");
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::Parser;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
+
+    const DEPLOYMENT_ID: &str = "dep_01kp4vm07tr3d4375597d15gkb";
+
+    #[derive(Debug, Parser)]
+    struct TestCli {
+        #[command(subcommand)]
+        command: DeploymentsCommand,
+    }
+
+    #[test]
+    fn parses_cancel_with_required_deployment_id() {
+        let cli =
+            TestCli::try_parse_from(["test", "cancel", "--deployment-id", DEPLOYMENT_ID]).unwrap();
+
+        assert!(matches!(
+            cli.command,
+            DeploymentsCommand::Cancel { deployment_id }
+                if deployment_id == DEPLOYMENT_ID
+        ));
+    }
+
+    #[tokio::test]
+    async fn cancel_posts_to_compute_deployment_action_path() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut buffer = vec![0; 4096];
+            let size = socket.read(&mut buffer).await.unwrap();
+            let request = String::from_utf8_lossy(&buffer[..size]).to_string();
+            socket
+                .write_all(
+                    b"HTTP/1.1 204 No Content\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                )
+                .await
+                .unwrap();
+            request
+        });
+        let mut config = Configuration::new();
+        config.base_path = format!("http://{address}");
+        let api = ApiClient::new(&config, "tn_01hjryxysgey07h5jz5wagqj0m").unwrap();
+
+        run_deployments_cancel(&api, DEPLOYMENT_ID).await.unwrap();
+
+        let request = server.await.unwrap();
+        assert!(request.starts_with(&format!(
+            "POST /v1/compute/deployments/{DEPLOYMENT_ID}/cancel HTTP/1.1"
+        )));
+    }
 }
