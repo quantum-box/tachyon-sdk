@@ -17,6 +17,7 @@ mod mcp_cli;
 mod ops_cli;
 mod org_cli;
 mod pm_cli;
+mod pm_resource_cli;
 mod reconcile_cli;
 mod resolve;
 mod secret_cli;
