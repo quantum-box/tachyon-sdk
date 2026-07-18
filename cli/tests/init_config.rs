@@ -72,7 +72,7 @@ fn start_apply_server() -> (String, mpsc::Receiver<String>, thread::JoinHandle<(
     let url = format!("http://{}", listener.local_addr().unwrap());
     let (tx, rx) = mpsc::channel();
     let handle = thread::spawn(move || {
-        for _ in 0..5 {
+        for _ in 0..8 {
             let (mut stream, _) = listener.accept().unwrap();
             let mut buf = [0_u8; 8192];
             let n = stream.read(&mut buf).unwrap();
@@ -89,6 +89,8 @@ fn start_apply_server() -> (String, mpsc::Receiver<String>, thread::JoinHandle<(
                 r#"{"env_vars":[{"id":"env_01testtesttesttesttesttest","key":"ENVIRONMENT","value":"sandbox","target":"all","is_secret":false}]}"#
             } else if req.starts_with("GET /v1/compute/apps/app_created/env ") {
                 r#"{"env_vars":[{"id":"env_secret","key":"DATABASE_URL","value":"********","target":"all","is_secret":true}]}"#
+            } else if req.starts_with("POST /v1/graphql ") {
+                r#"{"data":{"saveManifest":{"kind":"CloudApp"},"applyManifest":{"success":true}}}"#
             } else {
                 r#"{"error":"unexpected request"}"#
             };
@@ -115,11 +117,12 @@ fn start_collecting_apply_server() -> (String, mpsc::Receiver<Vec<String>>, thre
     let url = format!("http://{}", listener.local_addr().unwrap());
     let (tx, rx) = mpsc::channel();
     let handle = thread::spawn(move || {
-        let deadline = Instant::now() + Duration::from_millis(800);
+        let deadline = Instant::now() + Duration::from_secs(3);
         let mut requests = Vec::new();
         loop {
             match listener.accept() {
                 Ok((mut stream, _)) => {
+                    stream.set_nonblocking(false).unwrap();
                     let mut buf = [0_u8; 8192];
                     let n = stream.read(&mut buf).unwrap();
                     let req = String::from_utf8_lossy(&buf[..n]).to_string();
@@ -171,11 +174,12 @@ fn start_internal_service_preflight_error_server(
     let url = format!("http://{}", listener.local_addr().unwrap());
     let (tx, rx) = mpsc::channel();
     let handle = thread::spawn(move || {
-        let deadline = Instant::now() + Duration::from_millis(800);
+        let deadline = Instant::now() + Duration::from_secs(3);
         let mut requests = Vec::new();
         loop {
             match listener.accept() {
                 Ok((mut stream, _)) => {
+                    stream.set_nonblocking(false).unwrap();
                     let mut buf = [0_u8; 8192];
                     let n = stream.read(&mut buf).unwrap();
                     let req = String::from_utf8_lossy(&buf[..n]).to_string();
@@ -589,6 +593,9 @@ spec:
     let third = rx.recv().unwrap();
     let fourth = rx.recv().unwrap();
     let fifth = rx.recv().unwrap();
+    let sixth = rx.recv().unwrap();
+    let seventh = rx.recv().unwrap();
+    let eighth = rx.recv().unwrap();
     handle.join().unwrap();
 
     assert!(first.starts_with("GET /v1/build-runner-backends "));
@@ -600,9 +607,17 @@ spec:
     assert!(fourth.starts_with("PUT /v1/compute/apps/app_created/env "));
     assert!(fourth.contains("\"key\":\"ENVIRONMENT\""));
     assert!(fifth.starts_with("GET /v1/compute/apps/app_created/env "));
+    assert!(sixth.starts_with("POST /v1/graphql "));
+    assert!(sixth.contains("SaveManifest"));
+    assert!(seventh.starts_with("POST /v1/graphql "));
+    assert!(seventh.contains("ApplyManifest"));
+    assert!(eighth.starts_with("GET /v1/compute/apps/app_created/env "));
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("CREATED bakuure-api (app_created)"));
     assert!(stdout.contains("Environment: sandbox"));
+    assert!(stdout.contains("iac:         applied server-managed env refs"));
+    assert!(!stdout.contains("missing secrets:"));
+    assert!(!stdout.contains("tachyon compute env set"));
 }
 
 #[test]
@@ -658,7 +673,7 @@ spec:
         String::from_utf8_lossy(&output.stderr)
     );
 
-    let requests = rx.recv_timeout(Duration::from_secs(2)).unwrap();
+    let requests = rx.recv_timeout(Duration::from_secs(5)).unwrap();
     handle.join().unwrap();
     assert!(
         requests.is_empty(),
@@ -722,7 +737,7 @@ spec:
         String::from_utf8_lossy(&output.stderr)
     );
 
-    let requests = rx.recv_timeout(Duration::from_secs(2)).unwrap();
+    let requests = rx.recv_timeout(Duration::from_secs(5)).unwrap();
     handle.join().unwrap();
     assert!(
         requests
@@ -812,6 +827,9 @@ spec:
     let third = rx.recv().unwrap();
     let fourth = rx.recv().unwrap();
     let fifth = rx.recv().unwrap();
+    let sixth = rx.recv().unwrap();
+    let seventh = rx.recv().unwrap();
+    let eighth = rx.recv().unwrap();
     handle.join().unwrap();
 
     assert!(first.starts_with("GET /v1/build-runner-backends "));
@@ -819,6 +837,11 @@ spec:
     assert!(third.starts_with("POST /v1/compute/apps "));
     assert!(fourth.starts_with("PUT /v1/compute/apps/app_created/env "));
     assert!(fifth.starts_with("GET /v1/compute/apps/app_created/env "));
+    assert!(sixth.starts_with("POST /v1/graphql "));
+    assert!(sixth.contains("SaveManifest"));
+    assert!(seventh.starts_with("POST /v1/graphql "));
+    assert!(seventh.contains("ApplyManifest"));
+    assert!(eighth.starts_with("GET /v1/compute/apps/app_created/env "));
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("=== Cloud Apps Manifest Apply ==="));
     assert!(stdout.contains("CREATED bakuure-api (app_created)"));
@@ -876,7 +899,7 @@ spec:
         String::from_utf8_lossy(&output.stderr)
     );
 
-    let requests = rx.recv_timeout(Duration::from_secs(2)).unwrap();
+    let requests = rx.recv_timeout(Duration::from_secs(5)).unwrap();
     handle.join().unwrap();
 
     assert!(
@@ -942,7 +965,7 @@ spec:
         String::from_utf8_lossy(&output.stderr)
     );
 
-    let requests = rx.recv_timeout(Duration::from_secs(2)).unwrap();
+    let requests = rx.recv_timeout(Duration::from_secs(5)).unwrap();
     handle.join().unwrap();
 
     let runner_preflight = requests

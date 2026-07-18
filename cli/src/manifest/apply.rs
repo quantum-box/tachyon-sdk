@@ -213,9 +213,10 @@ fn validate_cloud_apps_manifest(
     environment: &str,
 ) -> Result<()> {
     let entries = compute_cli::select_app_entries(manifest, app)?;
-    for entry in &entries {
-        let _ = compute_cli::app_entry_to_api_body(entry)?;
-        let _ = compute_cli::plan_env_vars(entry, environment)?;
+    for entry in entries {
+        let entry = compute_cli::resolve_app_entry_for_environment(&entry, environment)?;
+        let _ = compute_cli::app_entry_to_api_body(&entry)?;
+        let _ = compute_cli::plan_env_vars(&entry, environment)?;
     }
     Ok(())
 }
@@ -225,4 +226,33 @@ fn load_auth_manifest_source(
 ) -> Result<auth_manifest::AuthManifest> {
     let yaml_value = serde_yaml::to_value(&source.document)?;
     auth_manifest::parse_manifest_document_value(yaml_value)
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::*;
+
+    #[test]
+    fn validates_resolved_environment_overlay_before_base_entry() {
+        let manifest = json!({
+            "spec": {
+                "apps": [{
+                    "name": "fieldadmin",
+                    "environments": {
+                        "preview": {
+                            "repository": {
+                                "url": "https://github.com/quantum-box/tachyonfield",
+                                "owner": "quantum-box",
+                                "name": "tachyonfield"
+                            }
+                        }
+                    }
+                }]
+            }
+        });
+
+        validate_cloud_apps_manifest(&manifest, Some("fieldadmin"), "preview").unwrap();
+    }
 }
