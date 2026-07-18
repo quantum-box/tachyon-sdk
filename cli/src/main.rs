@@ -17,6 +17,7 @@ mod mcp_cli;
 mod ops_cli;
 mod org_cli;
 mod pm_cli;
+mod pm_resource_cli;
 mod reconcile_cli;
 mod resolve;
 mod secret_cli;
@@ -388,10 +389,10 @@ mod tests {
             _ => panic!("expected pm issue command"),
         };
         let issue_command = match issue_cli.command {
-            Commands::Issue(pm_cli::IssueArgs { command }) => command,
+            Commands::Issue(args) => args.command,
             _ => panic!("expected top-level issue command"),
         };
-        assert_eq!(pm_command, issue_command);
+        assert_eq!(*pm_command, issue_command);
     }
 
     #[test]
@@ -412,23 +413,22 @@ mod tests {
 
         match cli.command {
             Commands::Linear(linear_cli::LinearArgs {
-                command:
-                    linear_cli::LinearCommand::Issue {
-                        command:
-                            pm_cli::IssueCommand::Create {
-                                provider,
-                                team_id,
-                                title,
-                                priority,
-                                ..
-                            },
-                    },
-            }) => {
-                assert_eq!(provider, None);
-                assert_eq!(team_id.as_deref(), Some("team_1"));
-                assert_eq!(title, "Compat issue");
-                assert_eq!(priority.as_deref(), Some("2"));
-            }
+                command: linear_cli::LinearCommand::Issue { command },
+            }) => match *command {
+                pm_cli::IssueCommand::Create {
+                    provider,
+                    team_id,
+                    title,
+                    priority,
+                    ..
+                } => {
+                    assert_eq!(provider, None);
+                    assert_eq!(team_id.as_deref(), Some("team_1"));
+                    assert_eq!(title, "Compat issue");
+                    assert_eq!(priority.as_deref(), Some("2"));
+                }
+                _ => panic!("expected linear issue create command"),
+            },
             _ => panic!("expected linear issue create command"),
         }
     }
@@ -472,7 +472,7 @@ enum Commands {
     /// Manage project-management providers and issues
     Pm(pm_cli::PmArgs),
     /// Manage issues in the default project-management provider
-    Issue(pm_cli::IssueArgs),
+    Issue(Box<pm_cli::IssueArgs>),
     /// Manage Linear issues through connected integrations
     Linear(linear_cli::LinearArgs),
     /// Install bundled agent skills

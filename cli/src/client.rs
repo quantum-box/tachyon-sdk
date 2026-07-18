@@ -373,6 +373,37 @@ impl ApiClient {
         Ok(())
     }
 
+    /// DELETE a JSON endpoint and deserialize the response.
+    pub async fn delete_json<T: DeserializeOwned>(&self, path: &str) -> Result<T> {
+        let url = format!("{}{}", self.base_url, path);
+        let resp = self
+            .client
+            .delete(&url)
+            .send()
+            .await
+            .with_context(|| format!("DELETE {url}"))?;
+        let status = resp.status();
+        if !status.is_success() {
+            if status == reqwest::StatusCode::UNAUTHORIZED {
+                if let Some(token) = self.refresh_bearer_after_401().await {
+                    let retry = self
+                        .client
+                        .delete(&url)
+                        .bearer_auth(token)
+                        .send()
+                        .await
+                        .with_context(|| format!("DELETE {url}"))?;
+                    return self.json_or_error("DELETE", path, retry).await;
+                }
+            }
+            let body = resp.text().await.unwrap_or_default();
+            return Err(self.http_error("DELETE", path, status, &body));
+        }
+        resp.json()
+            .await
+            .with_context(|| format!("parse DELETE {path}"))
+    }
+
     async fn json_or_error<T: DeserializeOwned>(
         &self,
         method: &str,
