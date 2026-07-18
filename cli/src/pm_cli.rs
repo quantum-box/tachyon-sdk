@@ -19,7 +19,7 @@ pub enum PmCommand {
     /// Manage issues in a configured project-management provider
     Issue {
         #[command(subcommand)]
-        command: IssueCommand,
+        command: Box<IssueCommand>,
     },
     /// Manage projects
     Project {

@@ -18,7 +18,7 @@ pub enum LinearCommand {
     /// Manage Linear issues
     Issue {
         #[command(subcommand)]
-        command: IssueCommand,
+        command: Box<IssueCommand>,
     },
     /// Manage Linear projects
     Project {
