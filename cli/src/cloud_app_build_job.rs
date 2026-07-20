@@ -13,7 +13,7 @@ use std::{
     ffi::OsStr,
     path::{Path, PathBuf},
     process::Stdio,
-    time::Instant,
+    time::{Duration, Instant, SystemTime},
 };
 use tokio::process::Command;
 
@@ -92,9 +92,24 @@ struct CloudBuildWebhookPayload {
     d1_migrations: Option<Vec<serde_json::Value>>,
     cache_hit: Option<bool>,
     cache_key: Option<String>,
+    cache_restored_bytes: Option<u64>,
+    cache_total_bytes: Option<u64>,
     runner_stdout: Option<String>,
     runner_stderr: Option<String>,
     runner_failure_reason: Option<String>,
+}
+
+/// Cache-usage metrics written by the builder entrypoint before the CLI
+/// runs. Missing file or fields simply mean "unknown" — the stats never
+/// affect the build outcome.
+#[derive(Debug, Default, Deserialize)]
+struct BuildCacheStats {
+    #[serde(default)]
+    cache_hit: Option<bool>,
+    #[serde(default)]
+    restored_bytes: Option<u64>,
+    #[serde(default)]
+    total_bytes: Option<u64>,
 }
 
 #[derive(Debug)]
@@ -160,6 +175,7 @@ async fn run_build(workload: &BuildWorkloadSpec) -> Result<CommandResult> {
         .context("failed to create checkout directory")?;
 
     let env = workload_env(workload);
+    send_phase_event(workload, "clone").await;
     clone_repository(workload, &checkout_dir, &env).await?;
 
     let app_dir = workspace_dir(workload, &checkout_dir);
@@ -169,6 +185,10 @@ async fn run_build(workload: &BuildWorkloadSpec) -> Result<CommandResult> {
             app_dir.display()
         ));
     }
+
+    // Artifacts produced before this instant belong to a previous build
+    // (e.g. restored from a shared cache) and must never be packaged.
+    let build_started_at = SystemTime::now();
 
     // Workers detection wins over Pages: an opennextjs build
     // (output under `.open-next`) produces a Worker module even
@@ -188,6 +208,7 @@ async fn run_build(workload: &BuildWorkloadSpec) -> Result<CommandResult> {
     };
 
     if let Some(command) = install_command(workload, &app_dir) {
+        send_phase_event(workload, "install").await;
         append_result(
             &mut combined,
             run_shell("install", &command, &app_dir, &env).await?,
@@ -196,12 +217,14 @@ async fn run_build(workload: &BuildWorkloadSpec) -> Result<CommandResult> {
 
     let build_command = build_command(workload, &app_dir)
         .ok_or_else(|| anyhow!("build command is not configured"))?;
+    send_phase_event(workload, "build").await;
     append_result(
         &mut combined,
         run_shell("build", &build_command, &app_dir, &env).await?,
     );
 
     if is_cloud_run(workload) {
+        send_phase_event(workload, "package").await;
         prepare_docker_config(&env).await?;
         append_result(
             &mut combined,
@@ -210,11 +233,13 @@ async fn run_build(workload: &BuildWorkloadSpec) -> Result<CommandResult> {
     }
 
     if is_workers {
+        send_phase_event(workload, "deploy").await;
         append_result(
             &mut combined,
             run_cloudflare_workers_deploy(workload, &app_dir, &env).await?,
         );
     } else if is_pages {
+        send_phase_event(workload, "deploy").await;
         append_result(
             &mut combined,
             run_cloudflare_pages_deploy(workload, &checkout_dir, &app_dir, &env).await?,
@@ -222,9 +247,10 @@ async fn run_build(workload: &BuildWorkloadSpec) -> Result<CommandResult> {
     }
 
     if is_lambda(workload) {
+        send_phase_event(workload, "package").await;
         append_result(
             &mut combined,
-            run_lambda_package_and_upload(workload, &app_dir, &env).await?,
+            run_lambda_package_and_upload(workload, &app_dir, &env, build_started_at).await?,
         );
     }
 
@@ -485,6 +511,13 @@ const LAMBDA_UPLOAD_URL_ENV: &str = "TACHYON_LAMBDA_ARTIFACT_UPLOAD_URL";
 /// callback so `CreateDeployment` can locate the artifact.
 const LAMBDA_ARTIFACT_PATH_ENV: &str = "TACHYON_LAMBDA_ARTIFACT_PATH";
 const CARGO_TARGET_DIR_ENV: &str = "CARGO_TARGET_DIR";
+/// JSON stats file written by the builder entrypoint before the CLI
+/// runs; forwarded to the completion webhook as cache metrics.
+const CACHE_STATS_PATH_ENV: &str = "TACHYON_CACHE_STATS_PATH";
+const DEFAULT_CACHE_STATS_PATH: &str = "/tmp/tachyon-cache-stats.json";
+/// Allowance for filesystem timestamp granularity when comparing
+/// artifact mtimes against the build start instant.
+const ARTIFACT_FRESHNESS_SKEW: Duration = Duration::from_secs(2);
 
 fn is_rust_lambda(workload: &BuildWorkloadSpec) -> bool {
     let framework = workload.framework.as_deref();
@@ -507,13 +540,15 @@ async fn run_lambda_package_and_upload(
     workload: &BuildWorkloadSpec,
     app_dir: &Path,
     env: &BTreeMap<String, String>,
+    build_started_at: SystemTime,
 ) -> Result<CommandResult> {
     let upload_url = env_value(env, LAMBDA_UPLOAD_URL_ENV)
         .ok_or_else(|| anyhow!("{LAMBDA_UPLOAD_URL_ENV} is required for Lambda artifact upload"))?;
 
     let inherited_target_dir = std::env::var_os(CARGO_TARGET_DIR_ENV);
     let target_dir = cargo_target_dir(app_dir, env, inherited_target_dir.as_deref());
-    let (archive, source) = package_lambda_archive_for_workload(workload, app_dir, &target_dir)?;
+    let (archive, source) =
+        package_lambda_archive_for_workload(workload, app_dir, &target_dir, build_started_at)?;
     let size = archive.len();
     tracing::info!(%source, size_bytes = size, "uploading Lambda artifact");
 
@@ -536,9 +571,10 @@ fn package_lambda_archive_for_workload(
     workload: &BuildWorkloadSpec,
     app_dir: &Path,
     cargo_target_dir: &Path,
+    build_started_at: SystemTime,
 ) -> Result<(Vec<u8>, String)> {
     if is_rust_lambda(workload) {
-        return package_rust_lambda_archive(workload, app_dir, cargo_target_dir);
+        return package_rust_lambda_archive(workload, app_dir, cargo_target_dir, build_started_at);
     }
     package_lambda_archive(app_dir)
 }
@@ -585,14 +621,38 @@ fn package_rust_lambda_archive(
     workload: &BuildWorkloadSpec,
     app_dir: &Path,
     cargo_target_dir: &Path,
+    build_started_at: SystemTime,
 ) -> Result<(Vec<u8>, String)> {
     let bootstrap = if workload.framework.as_deref() == Some("rust_server") {
         rust_server_bootstrap_path(workload, app_dir, cargo_target_dir)?
     } else {
         cargo_lambda_bootstrap_path(workload, cargo_target_dir)?
     };
+    ensure_fresh_rust_artifact(&bootstrap, build_started_at)?;
     let bytes = zip_bootstrap_file(&bootstrap)?;
     Ok((bytes, format!("{}", bootstrap.display())))
+}
+
+/// Refuse to package a Rust artifact that predates this build. A stale
+/// file can only come from a shared cache directory whose write failed
+/// silently — deploying it would ship the previous build's binary while
+/// reporting success (see quantum-box/tachyon-apps#6903 / #6908).
+fn ensure_fresh_rust_artifact(path: &Path, build_started_at: SystemTime) -> Result<()> {
+    let modified = std::fs::metadata(path)
+        .and_then(|meta| meta.modified())
+        .with_context(|| format!("failed to read mtime of {}", path.display()))?;
+    let threshold = build_started_at
+        .checked_sub(ARTIFACT_FRESHNESS_SKEW)
+        .unwrap_or(build_started_at);
+    if modified < threshold {
+        return Err(anyhow!(
+            "Rust Lambda artifact {} is stale (mtime predates this build's start); \
+             refusing to package a cached binary. Ensure the build command produced \
+             a fresh artifact in the Cargo target directory",
+            path.display()
+        ));
+    }
+    Ok(())
 }
 
 fn rust_server_bootstrap_path(
@@ -1304,6 +1364,7 @@ async fn send_callback(
         return Ok(());
     };
 
+    let cache_stats = load_cache_stats();
     let payload = CloudBuildWebhookPayload {
         build_id: build_id.clone(),
         status: status.to_string(),
@@ -1315,8 +1376,10 @@ async fn send_callback(
         iac_plan_output: None,
         iac_success: None,
         d1_migrations: None,
-        cache_hit: None,
+        cache_hit: cache_stats.cache_hit,
         cache_key: cache_key(Path::new("/workspace/source")),
+        cache_restored_bytes: cache_stats.restored_bytes,
+        cache_total_bytes: cache_stats.total_bytes,
         runner_stdout: output.map(|value| value.stdout.clone()),
         runner_stderr: output.map(|value| value.stderr.clone()),
         runner_failure_reason: None,
@@ -1351,6 +1414,75 @@ fn cache_key(source_dir: &Path) -> Option<String> {
         return Some(format!("{name}:sha256:{digest:x}"));
     }
     None
+}
+
+fn load_cache_stats() -> BuildCacheStats {
+    let path = std::env::var(CACHE_STATS_PATH_ENV)
+        .unwrap_or_else(|_| DEFAULT_CACHE_STATS_PATH.to_string());
+    load_cache_stats_from(Path::new(&path))
+}
+
+fn load_cache_stats_from(path: &Path) -> BuildCacheStats {
+    let Ok(bytes) = std::fs::read(path) else {
+        return BuildCacheStats::default();
+    };
+    match serde_json::from_slice(&bytes) {
+        Ok(stats) => stats,
+        Err(error) => {
+            tracing::warn!(path = %path.display(), %error, "ignoring malformed cache stats file");
+            BuildCacheStats::default()
+        }
+    }
+}
+
+/// Report a coarse build phase transition to the control plane so the
+/// build UI can show what is currently running. Strictly best-effort:
+/// any failure (older API without the endpoint, network issues) is
+/// logged at debug level and never affects the build.
+async fn send_phase_event(workload: &BuildWorkloadSpec, phase: &str) {
+    let Some(callback) = workload.callback.as_ref() else {
+        return;
+    };
+    let Some(build_id) = callback.build_id.as_ref() else {
+        return;
+    };
+    let Some(url) = phase_event_url(&callback.url) else {
+        return;
+    };
+
+    let payload = serde_json::json!({ "build_id": build_id, "phase": phase });
+    let result = reqwest::Client::new()
+        .post(&url)
+        .timeout(Duration::from_secs(5))
+        .json(&payload)
+        .send()
+        .await;
+    match result {
+        Ok(response) if !response.status().is_success() => {
+            tracing::debug!(phase, status = %response.status(), "build phase event rejected");
+        }
+        Ok(_) => {}
+        Err(error) => {
+            tracing::debug!(phase, %error, "build phase event failed");
+        }
+    }
+}
+
+/// Derive the phase-event endpoint from the completion webhook URL,
+/// preserving the auth token query string:
+/// `…/v1/webhooks/cloudbuild?token=x` → `…/v1/webhooks/cloudbuild/phase?token=x`.
+fn phase_event_url(callback_url: &str) -> Option<String> {
+    let (path, query) = match callback_url.split_once('?') {
+        Some((path, query)) => (path, Some(query)),
+        None => (callback_url, None),
+    };
+    if !path.ends_with("/cloudbuild") {
+        return None;
+    }
+    Some(match query {
+        Some(query) => format!("{path}/phase?{query}"),
+        None => format!("{path}/phase"),
+    })
 }
 
 #[cfg(test)]
@@ -1589,7 +1721,8 @@ mod tests {
         );
 
         let (bytes, source) =
-            package_lambda_archive_for_workload(&workload, &app_dir, &target_dir).unwrap();
+            package_lambda_archive_for_workload(&workload, &app_dir, &target_dir, past_instant())
+                .unwrap();
         assert_eq!(source, bootstrap.display().to_string());
 
         let mut archive = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
@@ -1617,8 +1750,13 @@ mod tests {
         workload.commands.build =
             Some("cargo lambda build --package tachyon-field-api --release --arm64".to_string());
 
-        let (bytes, _) =
-            package_lambda_archive_for_workload(&workload, temp.path(), &target_dir).unwrap();
+        let (bytes, _) = package_lambda_archive_for_workload(
+            &workload,
+            temp.path(),
+            &target_dir,
+            past_instant(),
+        )
+        .unwrap();
         let mut archive = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
         assert!(archive.by_name("bootstrap").is_ok());
     }
@@ -1667,7 +1805,7 @@ mod tests {
         });
         let env = workload_env(&workload);
 
-        let output = run_lambda_package_and_upload(&workload, temp.path(), &env)
+        let output = run_lambda_package_and_upload(&workload, temp.path(), &env, past_instant())
             .await
             .unwrap();
 
@@ -1700,8 +1838,13 @@ mod tests {
                 .to_string(),
         );
 
-        let (bytes, source) =
-            package_lambda_archive_for_workload(&workload, temp.path(), &target_dir).unwrap();
+        let (bytes, source) = package_lambda_archive_for_workload(
+            &workload,
+            temp.path(),
+            &target_dir,
+            past_instant(),
+        )
+        .unwrap();
         assert_eq!(source, binary.display().to_string());
         let mut archive = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
         assert!(archive.by_name("bootstrap").is_ok());
@@ -1733,10 +1876,126 @@ mod tests {
         );
 
         let (bytes, source) =
-            package_lambda_archive_for_workload(&workload, &app_dir, &target_dir).unwrap();
+            package_lambda_archive_for_workload(&workload, &app_dir, &target_dir, past_instant())
+                .unwrap();
         assert_eq!(source, binary.display().to_string());
         let mut archive = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
         assert!(archive.by_name("bootstrap").is_ok());
+    }
+
+    /// A build-start instant safely in the past so that fixture files
+    /// written "now" always pass the freshness guard.
+    fn past_instant() -> SystemTime {
+        SystemTime::now() - Duration::from_secs(60)
+    }
+
+    /// A build-start instant in the future, making any existing fixture
+    /// file look stale without manipulating filesystem mtimes.
+    fn future_instant() -> SystemTime {
+        SystemTime::now() + Duration::from_secs(3600)
+    }
+
+    #[test]
+    fn package_cargo_lambda_archive_rejects_stale_bootstrap() {
+        let temp = tempfile::tempdir().unwrap();
+        let target_dir = cargo_target_dir(temp.path(), &BTreeMap::new(), None);
+        let bootstrap = target_dir
+            .join("lambda")
+            .join("tachyon-field-api")
+            .join("bootstrap");
+        std::fs::create_dir_all(bootstrap.parent().unwrap()).unwrap();
+        std::fs::write(&bootstrap, b"old bootstrap").unwrap();
+
+        let mut workload = test_workload(Some("lambda"));
+        workload.framework = Some("cargo_lambda".to_string());
+        workload.commands.build =
+            Some("cargo lambda build --package tachyon-field-api --release --arm64".to_string());
+
+        let error = package_lambda_archive_for_workload(
+            &workload,
+            temp.path(),
+            &target_dir,
+            future_instant(),
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("stale"), "got: {error}");
+    }
+
+    #[test]
+    fn package_rust_server_archive_rejects_stale_binary() {
+        let temp = tempfile::tempdir().unwrap();
+        let target_dir = cargo_target_dir(temp.path(), &BTreeMap::new(), None);
+        let binary = target_dir
+            .join("aarch64-unknown-linux-gnu")
+            .join("release")
+            .join("starter-api");
+        std::fs::create_dir_all(binary.parent().unwrap()).unwrap();
+        std::fs::write(&binary, b"old binary").unwrap();
+
+        let mut workload = test_workload(Some("lambda"));
+        workload.framework = Some("rust_server".to_string());
+        workload.commands.build = Some(
+            "cargo build --package starter-api --release --target aarch64-unknown-linux-gnu"
+                .to_string(),
+        );
+
+        let error = package_lambda_archive_for_workload(
+            &workload,
+            temp.path(),
+            &target_dir,
+            future_instant(),
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("stale"), "got: {error}");
+    }
+
+    #[test]
+    fn ensure_fresh_rust_artifact_requires_existing_file() {
+        let temp = tempfile::tempdir().unwrap();
+        let missing = temp.path().join("bootstrap");
+        let error = ensure_fresh_rust_artifact(&missing, past_instant()).unwrap_err();
+        assert!(error.to_string().contains("failed to read mtime"));
+    }
+
+    #[test]
+    fn phase_event_url_appends_phase_and_keeps_token() {
+        assert_eq!(
+            phase_event_url("https://api.test/v1/webhooks/cloudbuild?token=abc").as_deref(),
+            Some("https://api.test/v1/webhooks/cloudbuild/phase?token=abc"),
+        );
+        assert_eq!(
+            phase_event_url("https://api.test/v1/webhooks/cloudbuild").as_deref(),
+            Some("https://api.test/v1/webhooks/cloudbuild/phase"),
+        );
+        assert_eq!(phase_event_url("https://api.test/v1/other"), None);
+    }
+
+    #[test]
+    fn load_cache_stats_from_reads_entrypoint_stats() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("stats.json");
+        std::fs::write(
+            &path,
+            br#"{"cache_hit":true,"restored_bytes":1234,"total_bytes":56789}"#,
+        )
+        .unwrap();
+        let stats = load_cache_stats_from(&path);
+        assert_eq!(stats.cache_hit, Some(true));
+        assert_eq!(stats.restored_bytes, Some(1234));
+        assert_eq!(stats.total_bytes, Some(56789));
+    }
+
+    #[test]
+    fn load_cache_stats_from_defaults_when_missing_or_malformed() {
+        let temp = tempfile::tempdir().unwrap();
+        let missing = load_cache_stats_from(&temp.path().join("absent.json"));
+        assert_eq!(missing.cache_hit, None);
+
+        let malformed_path = temp.path().join("broken.json");
+        std::fs::write(&malformed_path, b"not json").unwrap();
+        let malformed = load_cache_stats_from(&malformed_path);
+        assert_eq!(malformed.cache_hit, None);
+        assert_eq!(malformed.restored_bytes, None);
     }
 
     #[test]
