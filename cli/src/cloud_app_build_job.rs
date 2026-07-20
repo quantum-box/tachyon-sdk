@@ -34,6 +34,62 @@ pub struct BuildWorkloadSpec {
     callback: Option<BuildWorkloadCallback>,
     deployment_target: Option<String>,
     framework: Option<String>,
+    /// D1 migration plan resolved by the control plane.
+    ///
+    /// Optional so specs produced by control planes that predate
+    /// the field still deserialize (the builder then behaves
+    /// exactly as before: no migrations, `d1_migrations: null`).
+    #[serde(default)]
+    d1: Option<BuildWorkloadD1>,
+}
+
+/// D1 migration plan for one build.
+///
+/// IMPORTANT: every policy decision is already resolved by the
+/// control plane. The builder must NOT decide preview vs
+/// production, must NOT choose between `database_id` and
+/// `preview_database_id`, and must NOT infer the environment from
+/// the branch — it only executes what this spec says. The
+/// CodeBuild buildspec generator
+/// (`packages/compute/src/adapter/gateway/codebuild_provider.rs`
+/// in tachyon-apps) is fed by the same control-plane resolver, so
+/// the two builders cannot drift as long as neither re-derives
+/// policy locally.
+#[derive(Debug, Deserialize)]
+struct BuildWorkloadD1 {
+    /// `preview` or `production`. Reported back verbatim.
+    environment: String,
+    /// When false, a failed migration aborts the deploy.
+    auto_approve: bool,
+    #[serde(default)]
+    bindings: Vec<BuildWorkloadD1Binding>,
+}
+
+#[derive(Debug, Deserialize)]
+struct BuildWorkloadD1Binding {
+    binding_name: String,
+    /// Already resolved for `BuildWorkloadD1::environment`.
+    database_id: String,
+    /// Defaults to `migrations` when omitted.
+    #[serde(default)]
+    migrations_dir: Option<String>,
+}
+
+/// One entry of the `d1_migrations` callback array.
+///
+/// Field names must match the control plane's `D1MigrationResult`
+/// (`packages/compute/src/usecase/complete_build.rs` in
+/// tachyon-apps) exactly.
+#[derive(Debug, Serialize)]
+struct D1MigrationResult {
+    binding_name: String,
+    database_id: String,
+    environment: String,
+    status: String,
+    skip_reason: Option<String>,
+    duration_ms: Option<i32>,
+    stdout: Option<String>,
+    stderr: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -135,12 +191,25 @@ pub async fn run_from_env(spec_env: &str) -> Result<()> {
         "starting Tachyon Cloud App build job"
     );
 
-    let result = run_build(&workload).await;
+    // Owned by the caller, not by `run_build`, so migration results
+    // collected before a later failure still reach the control
+    // plane. CodeBuild reports them from a `finally` block; this is
+    // the equivalent for the error path here.
+    let mut d1_migrations: Vec<serde_json::Value> = Vec::new();
+    let result = run_build(&workload, &mut d1_migrations).await;
     let duration_secs = i32::try_from(started.elapsed().as_secs()).unwrap_or(i32::MAX);
 
     match &result {
         Ok(output) => {
-            send_callback(&workload, "SUCCESS", duration_secs, Some(output), None).await?;
+            send_callback(
+                &workload,
+                "SUCCESS",
+                duration_secs,
+                Some(output),
+                None,
+                &d1_migrations,
+            )
+            .await?;
             tracing::info!("Tachyon Cloud App build job succeeded");
             Ok(())
         }
@@ -151,6 +220,7 @@ pub async fn run_from_env(spec_env: &str) -> Result<()> {
                 duration_secs,
                 None,
                 Some(error.to_string()),
+                &d1_migrations,
             )
             .await?;
             Err(anyhow!("{error}"))
@@ -163,7 +233,10 @@ fn parse_workload_from_env(spec_env: &str) -> Result<BuildWorkloadSpec> {
     serde_json::from_str(&json).context("failed to parse build workload spec")
 }
 
-async fn run_build(workload: &BuildWorkloadSpec) -> Result<CommandResult> {
+async fn run_build(
+    workload: &BuildWorkloadSpec,
+    d1_migrations: &mut Vec<serde_json::Value>,
+) -> Result<CommandResult> {
     let checkout_dir = PathBuf::from("/workspace/source");
     if checkout_dir.exists() {
         tokio::fs::remove_dir_all(&checkout_dir)
@@ -230,6 +303,21 @@ async fn run_build(workload: &BuildWorkloadSpec) -> Result<CommandResult> {
             &mut combined,
             run_buildkit(workload, &checkout_dir, &app_dir, &env).await?,
         );
+    }
+
+    // Migrate-then-deploy, matching the CodeBuild buildspec
+    // ordering: schema changes must be live before the new code
+    // that depends on them starts serving traffic. `?` here is
+    // what enforces the non-auto-approve abort — the deploy below
+    // never runs when a migration failed.
+    if let Some(d1) = workload.d1.as_ref() {
+        if is_workers || is_pages {
+            send_phase_event(workload, "d1_migrations").await;
+            append_result(
+                &mut combined,
+                run_d1_migrations(d1, &app_dir, &env, d1_migrations).await?,
+            );
+        }
     }
 
     if is_workers {
@@ -502,6 +590,387 @@ async fn run_cloudflare_workers_deploy(
         .stderr(Stdio::piped());
 
     run_command("wrangler deploy", command).await
+}
+
+/// Default directory wrangler reads D1 migrations from.
+const DEFAULT_D1_MIGRATIONS_DIR: &str = "migrations";
+/// Wrangler config files, in the precedence order used by the
+/// CodeBuild buildspec generator.
+const WRANGLER_CONFIG_FILES: [&str; 3] = ["wrangler.toml", "wrangler.jsonc", "wrangler.json"];
+
+/// Apply D1 migrations for every binding in the control-plane
+/// resolved plan, before the deploy runs.
+///
+/// Reminder (see `BuildWorkloadD1`): no policy is decided here.
+/// `database_id` is already the right database for
+/// `d1.environment`, and `auto_approve` already encodes whether a
+/// failure is fatal. The CodeBuild buildspec generator consumes
+/// the same resolver output, so the two builders stay in sync.
+async fn run_d1_migrations(
+    d1: &BuildWorkloadD1,
+    app_dir: &Path,
+    env: &BTreeMap<String, String>,
+    collected: &mut Vec<serde_json::Value>,
+) -> Result<CommandResult> {
+    let mut combined = CommandResult {
+        stdout: String::new(),
+        stderr: String::new(),
+    };
+    let mut results: Vec<D1MigrationResult> = Vec::new();
+
+    for binding in &d1.bindings {
+        let migrations_dir = app_dir.join(d1_migrations_dir(binding));
+        if !dir_has_sql_files(&migrations_dir) {
+            tracing::info!(
+                binding = %binding.binding_name,
+                migrations_dir = %migrations_dir.display(),
+                "no migration files found, skipping D1 migrations"
+            );
+            let result = D1MigrationResult {
+                binding_name: binding.binding_name.clone(),
+                database_id: binding.database_id.clone(),
+                environment: d1.environment.clone(),
+                status: "skipped".to_string(),
+                skip_reason: Some("No migration files found".to_string()),
+                duration_ms: Some(0),
+                stdout: None,
+                stderr: None,
+            };
+            collected.push(serde_json::to_value(&result)?);
+            results.push(result);
+            continue;
+        }
+
+        inject_d1_database_id_into_app(app_dir, &binding.binding_name, &binding.database_id);
+
+        tracing::info!(
+            binding = %binding.binding_name,
+            environment = %d1.environment,
+            "running D1 migrations"
+        );
+
+        let started = Instant::now();
+        let mut command = Command::new("npx");
+        command
+            .arg("--yes")
+            .arg(WRANGLER_NPM_SPEC)
+            .arg("d1")
+            .arg("migrations")
+            .arg("apply")
+            .arg(&binding.binding_name)
+            .arg("--remote")
+            .current_dir(app_dir)
+            .envs(env)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+
+        let (succeeded, output) =
+            match run_command_capture("wrangler d1 migrations apply", command).await {
+                Ok((status, output)) => (status.success(), output),
+                // A spawn failure (npx missing, fork failure) is still a
+                // migration failure and must be reported rather than
+                // discarded, otherwise the control plane sees `null`.
+                Err(error) => (
+                    false,
+                    CommandResult {
+                        stdout: String::new(),
+                        stderr: truncate_output(&error.to_string()),
+                    },
+                ),
+            };
+        let duration_ms = i32::try_from(started.elapsed().as_millis()).unwrap_or(i32::MAX);
+
+        let result = D1MigrationResult {
+            binding_name: binding.binding_name.clone(),
+            database_id: binding.database_id.clone(),
+            environment: d1.environment.clone(),
+            status: if succeeded { "applied" } else { "failed" }.to_string(),
+            skip_reason: None,
+            duration_ms: Some(duration_ms),
+            stdout: non_empty(&output.stdout),
+            stderr: non_empty(&output.stderr),
+        };
+        if !succeeded {
+            tracing::error!(
+                binding = %binding.binding_name,
+                environment = %d1.environment,
+                "D1 migration failed"
+            );
+        }
+        collected.push(serde_json::to_value(&result)?);
+        results.push(result);
+        append_result(&mut combined, output);
+    }
+
+    if should_abort_deploy(&results, d1.auto_approve) {
+        return Err(anyhow!(
+            "D1 migration failed and auto approve is disabled; aborting deploy"
+        ));
+    }
+    if results.iter().any(|result| result.status == "failed") {
+        tracing::warn!("D1 migration failed but auto approve is enabled; continuing to deploy");
+    }
+
+    Ok(combined)
+}
+
+/// Abort the deploy only when a migration failed and the control
+/// plane did not pre-approve applying migrations unattended.
+fn should_abort_deploy(results: &[D1MigrationResult], auto_approve: bool) -> bool {
+    !auto_approve && results.iter().any(|result| result.status == "failed")
+}
+
+fn d1_migrations_dir(binding: &BuildWorkloadD1Binding) -> &str {
+    binding
+        .migrations_dir
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or(DEFAULT_D1_MIGRATIONS_DIR)
+}
+
+fn non_empty(value: &str) -> Option<String> {
+    if value.is_empty() {
+        None
+    } else {
+        Some(truncate_output(value))
+    }
+}
+
+/// `ls <dir>/*.sql`, the CodeBuild guard, expressed in Rust.
+fn dir_has_sql_files(dir: &Path) -> bool {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return false;
+    };
+    entries.flatten().any(|entry| {
+        entry
+            .path()
+            .extension()
+            .and_then(OsStr::to_str)
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("sql"))
+    })
+}
+
+/// Rewrite the app's wrangler config so the D1 binding points at
+/// the database the control plane resolved. Best effort: an app
+/// without a wrangler config is not an error (wrangler can still
+/// resolve the binding from the Pages/Workers project settings).
+fn inject_d1_database_id_into_app(app_dir: &Path, binding_name: &str, database_id: &str) {
+    let Some(path) = WRANGLER_CONFIG_FILES
+        .iter()
+        .map(|name| app_dir.join(name))
+        .find(|path| path.exists())
+    else {
+        tracing::warn!(
+            binding = %binding_name,
+            "no wrangler config found for D1 injection"
+        );
+        return;
+    };
+
+    let Ok(contents) = std::fs::read_to_string(&path) else {
+        tracing::warn!(path = %path.display(), "failed to read wrangler config for D1 injection");
+        return;
+    };
+    let is_toml = path.extension().and_then(OsStr::to_str) == Some("toml");
+    let Some(updated) = inject_d1_database_id(&contents, is_toml, binding_name, database_id) else {
+        tracing::warn!(
+            path = %path.display(),
+            binding = %binding_name,
+            "no D1 database_id placeholder to inject"
+        );
+        return;
+    };
+    if let Err(error) = std::fs::write(&path, updated) {
+        tracing::warn!(path = %path.display(), %error, "failed to write wrangler config");
+        return;
+    }
+    tracing::info!(
+        path = %path.display(),
+        binding = %binding_name,
+        "injected D1 database_id"
+    );
+}
+
+/// Pure form of the injection, mirroring the CodeBuild buildspec
+/// regexes in tachyon-apps `codebuild_provider.rs`:
+///
+/// * TOML: only a `database_id = "TODO_…"` placeholder inside the
+///   `[[d1_databases]]` block whose `binding` matches is replaced.
+/// * JSON/JSONC: the `database_id` sitting next to the matching
+///   `"binding"` in the same object is replaced regardless of its
+///   current value.
+///
+/// Returns `None` when nothing matched, so the caller can leave
+/// the file untouched.
+fn inject_d1_database_id(
+    contents: &str,
+    is_toml: bool,
+    binding_name: &str,
+    database_id: &str,
+) -> Option<String> {
+    if is_toml {
+        inject_d1_database_id_toml(contents, binding_name, database_id)
+    } else {
+        inject_d1_database_id_json(contents, binding_name, database_id)
+    }
+}
+
+fn inject_d1_database_id_toml(
+    contents: &str,
+    binding_name: &str,
+    database_id: &str,
+) -> Option<String> {
+    const HEADER: &str = "[[d1_databases]]";
+    let mut cursor = 0usize;
+    while let Some(offset) = contents[cursor..].find(HEADER) {
+        let body_start = cursor + offset + HEADER.len();
+        // `[^\[]*?` in the buildspec regex: the block ends at the
+        // next table header, so a later `[[d1_databases]]` block
+        // can never be matched through this one.
+        let body_end = contents[body_start..]
+            .find('[')
+            .map(|index| body_start + index)
+            .unwrap_or(contents.len());
+        cursor = body_end;
+
+        let body = &contents[body_start..body_end];
+        let Some(binding) = find_string_assignment(body, "binding", false, '=', 0) else {
+            continue;
+        };
+        if binding.value != binding_name {
+            continue;
+        }
+        let Some(database) = find_string_assignment(body, "database_id", false, '=', binding.end)
+        else {
+            continue;
+        };
+        if !database.value.starts_with("TODO_") {
+            continue;
+        }
+        let start = body_start + database.value_start;
+        let end = body_start + database.value_end;
+        return Some(format!(
+            "{}\"{database_id}\"{}",
+            &contents[..start],
+            &contents[end..]
+        ));
+    }
+    None
+}
+
+fn inject_d1_database_id_json(
+    contents: &str,
+    binding_name: &str,
+    database_id: &str,
+) -> Option<String> {
+    let mut cursor = 0usize;
+    while let Some(binding) = find_string_assignment(contents, "binding", true, ':', cursor) {
+        cursor = binding.end;
+        if binding.value != binding_name {
+            continue;
+        }
+        // `[^{}]*?` in the buildspec regex: stay inside the same
+        // JSON object so a sibling binding's id is never touched.
+        let limit = contents[binding.end..]
+            .find(['{', '}'])
+            .map(|index| binding.end + index)
+            .unwrap_or(contents.len());
+        let Some(database) =
+            find_string_assignment(&contents[..limit], "database_id", true, ':', binding.end)
+        else {
+            continue;
+        };
+        return Some(format!(
+            "{}\"{database_id}\"{}",
+            &contents[..database.value_start],
+            &contents[database.value_end..]
+        ));
+    }
+    None
+}
+
+/// A `key = "value"` (TOML) or `"key": "value"` (JSON) pair.
+struct StringAssignment {
+    /// Byte index of the opening quote of the value.
+    value_start: usize,
+    /// Byte index just past the closing quote of the value.
+    value_end: usize,
+    /// Same as `value_end`; where a follow-up search resumes.
+    end: usize,
+    value: String,
+}
+
+/// Minimal scanner shared by the TOML and JSON injectors.
+///
+/// Deliberately not a real parser: it must reproduce the
+/// buildspec's regex behavior, including tolerating JSONC comments
+/// and arbitrary key ordering, without pulling in a dependency.
+fn find_string_assignment(
+    haystack: &str,
+    key: &str,
+    quoted_key: bool,
+    separator: char,
+    from: usize,
+) -> Option<StringAssignment> {
+    let needle = if quoted_key {
+        format!("\"{key}\"")
+    } else {
+        key.to_string()
+    };
+    let bytes = haystack.as_bytes();
+    let mut cursor = from;
+    while let Some(offset) = haystack.get(cursor..)?.find(&needle) {
+        let key_start = cursor + offset;
+        let mut index = key_start + needle.len();
+        cursor = index;
+
+        if !quoted_key {
+            let preceded_by_word = key_start
+                .checked_sub(1)
+                .map(|previous| {
+                    let ch = bytes[previous];
+                    ch.is_ascii_alphanumeric() || ch == b'_' || ch == b'-' || ch == b'"'
+                })
+                .unwrap_or(false);
+            if preceded_by_word {
+                continue;
+            }
+        }
+
+        index = skip_whitespace(haystack, index);
+        if !haystack[index..].starts_with(separator) {
+            continue;
+        }
+        index = skip_whitespace(haystack, index + separator.len_utf8());
+        if !haystack[index..].starts_with('"') {
+            continue;
+        }
+        let value_start = index;
+        let Some(close) = haystack[value_start + 1..].find('"') else {
+            continue;
+        };
+        let value_end = value_start + 1 + close + 1;
+        return Some(StringAssignment {
+            value_start,
+            value_end,
+            end: value_end,
+            value: haystack[value_start + 1..value_end - 1].to_string(),
+        });
+    }
+    None
+}
+
+fn skip_whitespace(haystack: &str, from: usize) -> usize {
+    let mut index = from;
+    for ch in haystack[from..].chars() {
+        if ch.is_whitespace() {
+            index += ch.len_utf8();
+        } else {
+            break;
+        }
+    }
+    index
 }
 
 /// Presigned S3 PUT URL for the Lambda artifact. Injected by the
@@ -1286,7 +1755,25 @@ async fn run_shell(
     run_command(label, cmd).await
 }
 
-async fn run_command(label: &str, mut command: Command) -> Result<CommandResult> {
+async fn run_command(label: &str, command: Command) -> Result<CommandResult> {
+    let (status, result) = run_command_capture(label, command).await?;
+    if !status.success() {
+        return Err(anyhow!(
+            "{label} command failed with exit code {:?}",
+            status.code()
+        ));
+    }
+    Ok(result)
+}
+
+/// Like [`run_command`] but hands the captured output back even
+/// when the command exited non-zero. D1 migrations need the
+/// failing stderr for the completion callback, which the plain
+/// `Err` path would discard.
+async fn run_command_capture(
+    label: &str,
+    mut command: Command,
+) -> Result<(std::process::ExitStatus, CommandResult)> {
     let output = command
         .output()
         .await
@@ -1302,13 +1789,14 @@ async fn run_command(label: &str, mut command: Command) -> Result<CommandResult>
     }
 
     if !output.status.success() {
-        return Err(anyhow!(
-            "{label} command failed with exit code {:?}",
-            output.status.code()
-        ));
+        tracing::error!(
+            %label,
+            exit_code = ?output.status.code(),
+            "command failed"
+        );
     }
 
-    Ok(CommandResult { stdout, stderr })
+    Ok((output.status, CommandResult { stdout, stderr }))
 }
 
 fn append_result(target: &mut CommandResult, next: CommandResult) {
@@ -1354,6 +1842,7 @@ async fn send_callback(
     duration_secs: i32,
     output: Option<&CommandResult>,
     error_message: Option<String>,
+    d1_migrations: &[serde_json::Value],
 ) -> Result<()> {
     let Some(callback) = workload.callback.as_ref() else {
         tracing::warn!("build callback URL is not configured");
@@ -1375,7 +1864,9 @@ async fn send_callback(
         error_message,
         iac_plan_output: None,
         iac_success: None,
-        d1_migrations: None,
+        // `null` (no D1 plan in the spec) and `[]` mean different
+        // things to the control plane, so never send an empty array.
+        d1_migrations: d1_migrations_payload(d1_migrations),
         cache_hit: cache_stats.cache_hit,
         cache_key: cache_key(Path::new("/workspace/source")),
         cache_restored_bytes: cache_stats.restored_bytes,
@@ -1402,6 +1893,14 @@ async fn send_callback(
         .context("build completion callback returned error")?;
 
     Ok(())
+}
+
+fn d1_migrations_payload(results: &[serde_json::Value]) -> Option<Vec<serde_json::Value>> {
+    if results.is_empty() {
+        None
+    } else {
+        Some(results.to_vec())
+    }
 }
 
 fn cache_key(source_dir: &Path) -> Option<String> {
@@ -1519,7 +2018,271 @@ mod tests {
             callback: None,
             deployment_target: deployment_target.map(str::to_string),
             framework: Some("next_js".to_string()),
+            d1: None,
         }
+    }
+
+    fn migration_result(binding: &str, status: &str) -> D1MigrationResult {
+        D1MigrationResult {
+            binding_name: binding.to_string(),
+            database_id: "db-1".to_string(),
+            environment: "production".to_string(),
+            status: status.to_string(),
+            skip_reason: None,
+            duration_ms: Some(12),
+            stdout: None,
+            stderr: None,
+        }
+    }
+
+    fn minimal_spec_json(extra: &str) -> String {
+        format!(
+            r#"{{
+                "project_id": "app_123",
+                "source": {{
+                    "repository_url": "https://github.com/example/app",
+                    "branch": "main",
+                    "commit_sha": "abc"
+                }},
+                "workspace": {{}},
+                "commands": {{}},
+                "artifact": {{"image_name": "demo", "image_tag": "bld_1"}}
+                {extra}
+            }}"#
+        )
+    }
+
+    #[test]
+    fn spec_deserializes_with_d1_plan() {
+        let json = minimal_spec_json(
+            r#", "d1": {
+                "environment": "preview",
+                "auto_approve": false,
+                "bindings": [
+                    {"binding_name": "DB", "database_id": "uuid-1",
+                     "migrations_dir": "db/migrations"},
+                    {"binding_name": "LOGS", "database_id": "uuid-2"}
+                ]
+            }"#,
+        );
+
+        let spec: BuildWorkloadSpec = serde_json::from_str(&json).expect("spec should parse");
+        let d1 = spec.d1.expect("d1 should be present");
+        assert_eq!(d1.environment, "preview");
+        assert!(!d1.auto_approve);
+        assert_eq!(d1.bindings.len(), 2);
+        assert_eq!(d1_migrations_dir(&d1.bindings[0]), "db/migrations");
+        // Omitted migrations_dir falls back to wrangler's default.
+        assert_eq!(d1_migrations_dir(&d1.bindings[1]), "migrations");
+    }
+
+    #[test]
+    fn spec_deserializes_without_d1_plan() {
+        // Backward compatibility with control planes that predate
+        // the additive `d1` field.
+        let spec: BuildWorkloadSpec =
+            serde_json::from_str(&minimal_spec_json("")).expect("spec should parse");
+
+        assert!(spec.d1.is_none());
+    }
+
+    #[test]
+    fn toml_injection_replaces_only_the_matching_placeholder() {
+        let contents = r#"
+name = "demo"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "demo-db"
+database_id = "TODO_REPLACE_ME"
+
+[[d1_databases]]
+binding = "LOGS"
+database_name = "demo-logs"
+database_id = "TODO_REPLACE_ME"
+"#;
+
+        let updated = inject_d1_database_id(contents, true, "LOGS", "uuid-logs")
+            .expect("matching binding should be injected");
+
+        assert!(updated.contains(
+            "binding = \"DB\"\ndatabase_name = \"demo-db\"\ndatabase_id = \"TODO_REPLACE_ME\""
+        ));
+        assert!(updated.contains(
+            "binding = \"LOGS\"\ndatabase_name = \"demo-logs\"\ndatabase_id = \"uuid-logs\""
+        ));
+    }
+
+    #[test]
+    fn toml_injection_leaves_non_matching_binding_untouched() {
+        let contents = r#"
+[[d1_databases]]
+binding = "DB"
+database_id = "TODO_REPLACE_ME"
+"#;
+
+        assert!(inject_d1_database_id(contents, true, "OTHER", "uuid-1").is_none());
+    }
+
+    #[test]
+    fn toml_injection_skips_already_resolved_database_id() {
+        // The buildspec regex only matches the `TODO_` placeholder,
+        // so a hand-pinned id is never overwritten.
+        let contents = r#"
+[[d1_databases]]
+binding = "DB"
+database_id = "already-set"
+"#;
+
+        assert!(inject_d1_database_id(contents, true, "DB", "uuid-1").is_none());
+    }
+
+    #[test]
+    fn jsonc_injection_replaces_database_id_next_to_binding() {
+        let contents = r#"{
+  // Cloud App config
+  "name": "demo",
+  "d1_databases": [
+    { "binding": "DB", "database_name": "demo-db", "database_id": "placeholder" },
+    { "binding": "LOGS", "database_name": "demo-logs", "database_id": "placeholder" }
+  ]
+}"#;
+
+        let updated = inject_d1_database_id(contents, false, "LOGS", "uuid-logs")
+            .expect("matching binding should be injected");
+
+        assert!(updated.contains(
+            r#""binding": "DB", "database_name": "demo-db", "database_id": "placeholder""#
+        ));
+        assert!(updated.contains(
+            r#""binding": "LOGS", "database_name": "demo-logs", "database_id": "uuid-logs""#
+        ));
+    }
+
+    #[test]
+    fn json_injection_does_not_cross_object_boundaries() {
+        // `database_id` belongs to the next object, so the buildspec
+        // regex (which forbids `{`/`}`) must not reach it.
+        let contents = r#"{
+  "d1_databases": [
+    { "binding": "DB" },
+    { "database_id": "placeholder" }
+  ]
+}"#;
+
+        assert!(inject_d1_database_id(contents, false, "DB", "uuid-1").is_none());
+    }
+
+    #[test]
+    fn injection_without_wrangler_config_does_not_panic() {
+        let dir = tempfile::tempdir().expect("tempdir");
+
+        inject_d1_database_id_into_app(dir.path(), "DB", "uuid-1");
+
+        assert!(!dir.path().join("wrangler.toml").exists());
+    }
+
+    #[test]
+    fn injection_writes_the_first_existing_wrangler_config() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(
+            dir.path().join("wrangler.toml"),
+            "[[d1_databases]]\nbinding = \"DB\"\ndatabase_id = \"TODO_X\"\n",
+        )
+        .expect("write config");
+
+        inject_d1_database_id_into_app(dir.path(), "DB", "uuid-1");
+
+        let updated =
+            std::fs::read_to_string(dir.path().join("wrangler.toml")).expect("read config");
+        assert!(updated.contains("database_id = \"uuid-1\""));
+    }
+
+    #[test]
+    fn migrations_dir_with_sql_files_is_detected() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(dir.path().join("0001_init.sql"), "select 1;").expect("write migration");
+
+        assert!(dir_has_sql_files(dir.path()));
+    }
+
+    #[test]
+    fn empty_or_missing_migrations_dir_is_not_detected() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(dir.path().join("README.md"), "not a migration").expect("write file");
+
+        assert!(!dir_has_sql_files(dir.path()));
+        assert!(!dir_has_sql_files(&dir.path().join("does-not-exist")));
+    }
+
+    #[tokio::test]
+    async fn missing_migrations_dir_is_reported_as_skipped_without_running_wrangler() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let d1 = BuildWorkloadD1 {
+            environment: "production".to_string(),
+            auto_approve: true,
+            bindings: vec![BuildWorkloadD1Binding {
+                binding_name: "DB".to_string(),
+                database_id: "uuid-1".to_string(),
+                migrations_dir: None,
+            }],
+        };
+        let mut collected = Vec::new();
+
+        run_d1_migrations(&d1, dir.path(), &BTreeMap::new(), &mut collected)
+            .await
+            .expect("skipped migrations should not fail the build");
+
+        assert_eq!(collected.len(), 1);
+        assert_eq!(collected[0]["status"], "skipped");
+        assert_eq!(collected[0]["skip_reason"], "No migration files found");
+        assert_eq!(collected[0]["binding_name"], "DB");
+    }
+
+    #[test]
+    fn migration_result_serializes_control_plane_field_names() {
+        let value = serde_json::to_value(migration_result("DB", "applied")).expect("serialize");
+
+        let object = value.as_object().expect("object");
+        let mut keys: Vec<&str> = object.keys().map(String::as_str).collect();
+        keys.sort_unstable();
+        assert_eq!(
+            keys,
+            vec![
+                "binding_name",
+                "database_id",
+                "duration_ms",
+                "environment",
+                "skip_reason",
+                "status",
+                "stderr",
+                "stdout",
+            ]
+        );
+        assert_eq!(object["status"], "applied");
+        assert!(object["skip_reason"].is_null());
+    }
+
+    #[test]
+    fn failed_migration_aborts_deploy_only_without_auto_approve() {
+        let failed = vec![migration_result("DB", "failed")];
+        let applied = vec![migration_result("DB", "applied")];
+
+        assert!(should_abort_deploy(&failed, false));
+        assert!(!should_abort_deploy(&failed, true));
+        assert!(!should_abort_deploy(&applied, false));
+        assert!(!should_abort_deploy(&[], false));
+    }
+
+    #[test]
+    fn empty_migration_results_are_sent_as_null_not_empty_array() {
+        assert!(d1_migrations_payload(&[]).is_none());
+        assert_eq!(
+            d1_migrations_payload(&[serde_json::json!({"status": "applied"})])
+                .expect("payload")
+                .len(),
+            1
+        );
     }
 
     #[test]
@@ -2109,6 +2872,7 @@ mod tests {
             callback: None,
             deployment_target: Some("cloud_run".to_string()),
             framework: Some("docker".to_string()),
+            d1: None,
         };
 
         assert_eq!(
@@ -2148,6 +2912,7 @@ mod tests {
             callback: None,
             deployment_target: Some("cloud_run".to_string()),
             framework: Some("docker".to_string()),
+            d1: None,
         };
 
         assert_eq!(
@@ -2367,6 +3132,7 @@ mod tests {
             callback: None,
             deployment_target: Some("cloud_run".to_string()),
             framework: Some("docker".to_string()),
+            d1: None,
         };
 
         assert_eq!(
@@ -2407,6 +3173,7 @@ mod tests {
             callback: None,
             deployment_target: Some("cloud_run".to_string()),
             framework: Some("docker".to_string()),
+            d1: None,
         };
 
         assert_eq!(docker_context_path(&workload, &checkout, &app), app);
@@ -2444,6 +3211,7 @@ mod tests {
             callback: None,
             deployment_target: Some("cloud_run".to_string()),
             framework: Some("docker".to_string()),
+            d1: None,
         };
         let context = docker_context_path(&workload, &checkout, &app);
 
@@ -2485,6 +3253,7 @@ mod tests {
             callback: None,
             deployment_target: Some("cloud_run".to_string()),
             framework: Some("docker".to_string()),
+            d1: None,
         };
 
         assert_eq!(docker_context_path(&workload, &checkout, &app), checkout);
@@ -2523,6 +3292,7 @@ mod tests {
             callback: None,
             deployment_target: Some("cloud_run".to_string()),
             framework: Some("docker".to_string()),
+            d1: None,
         };
 
         assert_eq!(docker_context_path(&workload, &checkout, &app), context);
