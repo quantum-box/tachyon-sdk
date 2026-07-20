@@ -13,7 +13,7 @@ use std::{
     ffi::OsStr,
     path::{Path, PathBuf},
     process::Stdio,
-    time::Instant,
+    time::{Instant, SystemTime},
 };
 use tokio::process::Command;
 
@@ -157,7 +157,7 @@ async fn run_build(workload: &BuildWorkloadSpec) -> Result<CommandResult> {
         .await
         .context("failed to create checkout directory")?;
 
-    let env = workload_env(workload);
+    let mut env = workload_env(workload);
     clone_repository(workload, &checkout_dir, &env).await?;
 
     let app_dir = workspace_dir(workload, &checkout_dir);
@@ -167,6 +167,9 @@ async fn run_build(workload: &BuildWorkloadSpec) -> Result<CommandResult> {
             app_dir.display()
         ));
     }
+
+    prepare_isolated_rust_lambda_target(workload, &checkout_dir, &mut env).await?;
+    let build_started_at = SystemTime::now();
 
     // Workers detection wins over Pages: an opennextjs build
     // (output under `.open-next`) produces a Worker module even
@@ -222,7 +225,7 @@ async fn run_build(workload: &BuildWorkloadSpec) -> Result<CommandResult> {
     if is_lambda(workload) {
         append_result(
             &mut combined,
-            run_lambda_package_and_upload(workload, &app_dir, &env).await?,
+            run_lambda_package_and_upload(workload, &app_dir, &env, build_started_at).await?,
         );
     }
 
@@ -483,6 +486,7 @@ const LAMBDA_UPLOAD_URL_ENV: &str = "TACHYON_LAMBDA_ARTIFACT_UPLOAD_URL";
 /// callback so `CreateDeployment` can locate the artifact.
 const LAMBDA_ARTIFACT_PATH_ENV: &str = "TACHYON_LAMBDA_ARTIFACT_PATH";
 const CARGO_TARGET_DIR_ENV: &str = "CARGO_TARGET_DIR";
+const RUST_LAMBDA_TARGET_DIR: &str = ".tachyon-build/cargo-target";
 
 fn is_rust_lambda(workload: &BuildWorkloadSpec) -> bool {
     let framework = workload.framework.as_deref();
@@ -499,19 +503,56 @@ fn is_rust_lambda(workload: &BuildWorkloadSpec) -> bool {
             .is_some_and(|command| command.contains("cargo"))
 }
 
+async fn prepare_isolated_rust_lambda_target(
+    workload: &BuildWorkloadSpec,
+    checkout_dir: &Path,
+    env: &mut BTreeMap<String, String>,
+) -> Result<()> {
+    if !is_lambda(workload) || !is_rust_lambda(workload) {
+        return Ok(());
+    }
+
+    let target_dir = checkout_dir.join(RUST_LAMBDA_TARGET_DIR);
+    if target_dir.exists() {
+        tokio::fs::remove_dir_all(&target_dir)
+            .await
+            .with_context(|| {
+                format!(
+                    "failed to reset isolated Rust Lambda target directory: {}",
+                    target_dir.display()
+                )
+            })?;
+    }
+    tokio::fs::create_dir_all(&target_dir)
+        .await
+        .with_context(|| {
+            format!(
+                "failed to create isolated Rust Lambda target directory: {}",
+                target_dir.display()
+            )
+        })?;
+    env.insert(
+        CARGO_TARGET_DIR_ENV.to_string(),
+        target_dir.display().to_string(),
+    );
+    Ok(())
+}
+
 /// Package the Lambda artifact and upload it through the
 /// presigned URL.
 async fn run_lambda_package_and_upload(
     workload: &BuildWorkloadSpec,
     app_dir: &Path,
     env: &BTreeMap<String, String>,
+    build_started_at: SystemTime,
 ) -> Result<CommandResult> {
     let upload_url = env_value(env, LAMBDA_UPLOAD_URL_ENV)
         .ok_or_else(|| anyhow!("{LAMBDA_UPLOAD_URL_ENV} is required for Lambda artifact upload"))?;
 
     let inherited_target_dir = std::env::var_os(CARGO_TARGET_DIR_ENV);
     let target_dir = cargo_target_dir(app_dir, env, inherited_target_dir.as_deref());
-    let (archive, source) = package_lambda_archive_for_workload(workload, app_dir, &target_dir)?;
+    let (archive, source) =
+        package_lambda_archive_for_workload(workload, app_dir, &target_dir, build_started_at)?;
     let size = archive.len();
     tracing::info!(%source, size_bytes = size, "uploading Lambda artifact");
 
@@ -534,9 +575,10 @@ fn package_lambda_archive_for_workload(
     workload: &BuildWorkloadSpec,
     app_dir: &Path,
     cargo_target_dir: &Path,
+    build_started_at: SystemTime,
 ) -> Result<(Vec<u8>, String)> {
     if is_rust_lambda(workload) {
-        return package_rust_lambda_archive(workload, app_dir, cargo_target_dir);
+        return package_rust_lambda_archive(workload, app_dir, cargo_target_dir, build_started_at);
     }
     package_lambda_archive(app_dir)
 }
@@ -583,14 +625,43 @@ fn package_rust_lambda_archive(
     workload: &BuildWorkloadSpec,
     app_dir: &Path,
     cargo_target_dir: &Path,
+    build_started_at: SystemTime,
 ) -> Result<(Vec<u8>, String)> {
-    let bootstrap = if workload.framework.as_deref() == Some("rust_server") {
+    let is_rust_server = workload.framework.as_deref() == Some("rust_server");
+    let bootstrap = if is_rust_server {
         rust_server_bootstrap_path(workload, app_dir, cargo_target_dir)?
     } else {
         cargo_lambda_bootstrap_path(workload, app_dir, cargo_target_dir)?
     };
+    validate_artifact_freshness(
+        &bootstrap,
+        build_started_at,
+        if is_rust_server {
+            "rust_server Lambda binary"
+        } else {
+            "cargo-lambda bootstrap"
+        },
+    )?;
     let bytes = zip_bootstrap_file(&bootstrap)?;
     Ok((bytes, format!("{}", bootstrap.display())))
+}
+
+fn validate_artifact_freshness(
+    path: &Path,
+    build_started_at: SystemTime,
+    artifact_kind: &str,
+) -> Result<()> {
+    let modified = std::fs::metadata(path)
+        .with_context(|| format!("failed to inspect Lambda artifact: {}", path.display()))?
+        .modified()
+        .with_context(|| format!("failed to read Lambda artifact mtime: {}", path.display()))?;
+    if modified < build_started_at {
+        return Err(anyhow!(
+            "refusing to package stale {artifact_kind} at {}: artifact mtime predates the current build; shared or cached outputs are not valid Lambda artifacts",
+            path.display()
+        ));
+    }
+    Ok(())
 }
 
 fn rust_server_bootstrap_path(
@@ -1409,6 +1480,74 @@ mod tests {
         assert!(!is_rust_lambda(&workload));
     }
 
+    #[tokio::test]
+    async fn rust_lambda_build_resets_shared_target_to_checkout_local_target() {
+        let temp = tempfile::tempdir().unwrap();
+        let checkout_dir = temp.path().join("source");
+        let target_dir = checkout_dir.join(RUST_LAMBDA_TARGET_DIR);
+        std::fs::create_dir_all(&target_dir).unwrap();
+        std::fs::write(target_dir.join("stale-bootstrap"), b"stale").unwrap();
+        let mut env = BTreeMap::from([(
+            CARGO_TARGET_DIR_ENV.to_string(),
+            "/workspace/cache/target".to_string(),
+        )]);
+        let mut workload = test_workload(Some("lambda"));
+        workload.framework = Some("cargo_lambda".to_string());
+        workload.commands.build = Some("cargo lambda build --release".to_string());
+
+        prepare_isolated_rust_lambda_target(&workload, &checkout_dir, &mut env)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            env.get(CARGO_TARGET_DIR_ENV).map(String::as_str),
+            Some(target_dir.to_str().unwrap())
+        );
+        assert!(target_dir.is_dir());
+        assert!(!target_dir.join("stale-bootstrap").exists());
+    }
+
+    #[tokio::test]
+    async fn non_rust_lambda_keeps_configured_target_dir() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut env = BTreeMap::from([(
+            CARGO_TARGET_DIR_ENV.to_string(),
+            "/workspace/cache/target".to_string(),
+        )]);
+        let workload = test_workload(Some("lambda"));
+
+        prepare_isolated_rust_lambda_target(&workload, temp.path(), &mut env)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            env.get(CARGO_TARGET_DIR_ENV).map(String::as_str),
+            Some("/workspace/cache/target")
+        );
+    }
+
+    #[tokio::test]
+    async fn rust_cloud_run_keeps_configured_target_dir() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut env = BTreeMap::from([(
+            CARGO_TARGET_DIR_ENV.to_string(),
+            "/workspace/cache/target".to_string(),
+        )]);
+        let mut workload = test_workload(Some("cloud_run"));
+        workload.framework = Some("rust_server".to_string());
+        workload.commands.build = Some("cargo build --release".to_string());
+
+        prepare_isolated_rust_lambda_target(&workload, temp.path(), &mut env)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            env.get(CARGO_TARGET_DIR_ENV).map(String::as_str),
+            Some("/workspace/cache/target")
+        );
+        assert!(!temp.path().join(RUST_LAMBDA_TARGET_DIR).exists());
+    }
+
     #[test]
     fn package_cargo_lambda_archive_uses_configured_target_dir() {
         let temp = tempfile::tempdir().unwrap();
@@ -1434,8 +1573,13 @@ mod tests {
                 .to_string(),
         );
 
-        let (bytes, source) =
-            package_lambda_archive_for_workload(&workload, &app_dir, &target_dir).unwrap();
+        let (bytes, source) = package_lambda_archive_for_workload(
+            &workload,
+            &app_dir,
+            &target_dir,
+            SystemTime::UNIX_EPOCH,
+        )
+        .unwrap();
         assert_eq!(source, bootstrap.display().to_string());
 
         let mut archive = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
@@ -1463,8 +1607,13 @@ mod tests {
         workload.commands.build =
             Some("cargo lambda build --package tachyon-field-api --release --arm64".to_string());
 
-        let (bytes, _) =
-            package_lambda_archive_for_workload(&workload, temp.path(), &target_dir).unwrap();
+        let (bytes, _) = package_lambda_archive_for_workload(
+            &workload,
+            temp.path(),
+            &target_dir,
+            SystemTime::UNIX_EPOCH,
+        )
+        .unwrap();
         let mut archive = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
         assert!(archive.by_name("bootstrap").is_ok());
     }
@@ -1513,9 +1662,10 @@ mod tests {
         });
         let env = workload_env(&workload);
 
-        let output = run_lambda_package_and_upload(&workload, temp.path(), &env)
-            .await
-            .unwrap();
+        let output =
+            run_lambda_package_and_upload(&workload, temp.path(), &env, SystemTime::UNIX_EPOCH)
+                .await
+                .unwrap();
 
         assert!(output.stdout.contains("uploaded lambda.zip"));
         let body = uploaded.lock().unwrap().clone();
@@ -1525,6 +1675,65 @@ mod tests {
         use std::io::Read;
         entry.read_to_string(&mut contents).unwrap();
         assert_eq!(contents, "field api bootstrap");
+    }
+
+    #[tokio::test]
+    async fn run_lambda_package_and_upload_rejects_stale_cargo_lambda_bootstrap() {
+        let temp = tempfile::tempdir().unwrap();
+        let bootstrap = temp
+            .path()
+            .join("target")
+            .join("lambda")
+            .join("tachyon-field-api")
+            .join("bootstrap");
+        std::fs::create_dir_all(bootstrap.parent().unwrap()).unwrap();
+        std::fs::write(&bootstrap, b"stale field api bootstrap").unwrap();
+        let stale_mtime = std::fs::metadata(&bootstrap).unwrap().modified().unwrap();
+        let build_started_at = stale_mtime
+            .checked_add(std::time::Duration::from_secs(1))
+            .unwrap();
+
+        let uploaded = Arc::new(Mutex::new(Vec::<u8>::new()));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let upload_url = format!("http://{}/lambda.zip", listener.local_addr().unwrap());
+        let app = Router::new()
+            .route(
+                "/lambda.zip",
+                put(
+                    |State(uploaded): State<Arc<Mutex<Vec<u8>>>>, body: Bytes| async move {
+                        *uploaded.lock().unwrap() = body.to_vec();
+                        "ok"
+                    },
+                ),
+            )
+            .with_state(uploaded.clone());
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+
+        let mut workload = test_workload(Some("lambda"));
+        workload.framework = Some("cargo_lambda".to_string());
+        workload.commands.build =
+            Some("cargo lambda build --package tachyon-field-api --release --arm64".to_string());
+        workload.env.push(BuildWorkloadEnvVar {
+            name: LAMBDA_UPLOAD_URL_ENV.to_string(),
+            value: upload_url,
+        });
+        workload.env.push(BuildWorkloadEnvVar {
+            name: CARGO_TARGET_DIR_ENV.to_string(),
+            value: temp.path().join("target").display().to_string(),
+        });
+        let env = workload_env(&workload);
+
+        let error = run_lambda_package_and_upload(&workload, temp.path(), &env, build_started_at)
+            .await
+            .unwrap_err();
+
+        let message = error.to_string();
+        assert!(message.contains("refusing to package stale cargo-lambda bootstrap"));
+        assert!(message.contains(&bootstrap.display().to_string()));
+        assert!(message.contains("current build"));
+        assert!(uploaded.lock().unwrap().is_empty());
     }
 
     #[test]
@@ -1546,8 +1755,13 @@ mod tests {
                 .to_string(),
         );
 
-        let (bytes, source) =
-            package_lambda_archive_for_workload(&workload, temp.path(), &target_dir).unwrap();
+        let (bytes, source) = package_lambda_archive_for_workload(
+            &workload,
+            temp.path(),
+            &target_dir,
+            SystemTime::UNIX_EPOCH,
+        )
+        .unwrap();
         assert_eq!(source, binary.display().to_string());
         let mut archive = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
         assert!(archive.by_name("bootstrap").is_ok());
@@ -1578,8 +1792,13 @@ mod tests {
                 .to_string(),
         );
 
-        let (bytes, source) =
-            package_lambda_archive_for_workload(&workload, &app_dir, &target_dir).unwrap();
+        let (bytes, source) = package_lambda_archive_for_workload(
+            &workload,
+            &app_dir,
+            &target_dir,
+            SystemTime::UNIX_EPOCH,
+        )
+        .unwrap();
         assert_eq!(source, binary.display().to_string());
         let mut archive = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
         assert!(archive.by_name("bootstrap").is_ok());
