@@ -1,6 +1,6 @@
 {
   "name": "@tachyon-sdk/cli",
-  "version": "0.6.16",
+  "version": "0.6.17",
   "description": "Command-line interface for the Tachyon Platform",
   "license": "MIT",
   "bin": {

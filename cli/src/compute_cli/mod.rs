@@ -602,7 +602,7 @@ mod tests {
                 {
                     "name": "SENTRY_DSN",
                     "valueFrom": {
-                        "secret": "SENTRY_DSN"
+                        "secret": "sentry/dsn"
                     }
                 }
             ]
@@ -730,6 +730,54 @@ mod tests {
     }
 
     #[test]
+    fn sync_secrets_request_uses_preview_overlay_object_secret_ref() {
+        let entry = json!({
+            "name": "tachyon-field-api",
+            "envVars": [{
+                "name": "DATABASE_URL",
+                "type": "credential",
+                "valueFrom": {
+                    "databaseRef": {
+                        "name": "tidb_field_prod",
+                        "field": "url"
+                    }
+                }
+            }],
+            "environments": {
+                "preview": {
+                    "envVars": [{
+                        "name": "DATABASE_URL",
+                        "type": "credential",
+                        "valueFrom": {
+                            "secret": {
+                                "path": "providers/tidb_field_preview",
+                                "field": "DATABASE_URL"
+                            }
+                        }
+                    }]
+                }
+            }
+        });
+
+        let entry = resolve_app_entry_for_environment(&entry, "preview").unwrap();
+        let request = build_sync_secrets_request(&entry, "preview").unwrap();
+
+        assert_eq!(request.app_name, "tachyon-field-api");
+        assert_eq!(request.environment, "preview");
+        assert_eq!(request.refs.len(), 1);
+        assert_eq!(request.refs[0].key, "DATABASE_URL");
+        assert_eq!(request.refs[0].target, "preview");
+        assert_eq!(request.refs[0].source, "secretRef");
+        assert_eq!(
+            request.refs[0].source_ref,
+            json!({
+                "path": "providers/tidb_field_preview",
+                "field": "DATABASE_URL"
+            })
+        );
+    }
+
+    #[test]
     fn sync_secrets_request_enumerates_refs_in_stable_order() {
         let entry = json!({
             "name": "fieldadmin",
@@ -749,7 +797,10 @@ mod tests {
                     "name": "RESEND_API_KEY",
                     "type": "credential",
                     "valueFrom": {
-                        "secret": "prod/resend/api-key"
+                        "secret": {
+                            "path": "providers/notifications",
+                            "field": "RESEND_API_KEY"
+                        }
                     }
                 },
                 {
@@ -790,6 +841,13 @@ mod tests {
                 ("DATABASE_URL", "preview", "databaseRef"),
                 ("RESEND_API_KEY", "production", "secretRef"),
             ]
+        );
+        assert_eq!(
+            request.refs[2].source_ref,
+            json!({
+                "path": "providers/notifications",
+                "field": "RESEND_API_KEY"
+            })
         );
     }
 

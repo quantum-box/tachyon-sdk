@@ -375,11 +375,11 @@ fn start_sync_secrets_server() -> (String, mpsc::Receiver<String>, thread::JoinH
             tx.send(req.clone()).unwrap();
 
             let body = if idx == 0 && req.starts_with("GET /v1/compute/apps ") {
-                r#"{"apps":[{"id":"app_fieldadmin","name":"fieldadmin"}]}"#
+                r#"{"apps":[{"id":"app_tachyon_field_api","name":"tachyon-field-api"}]}"#
             } else if idx == 1
-                && req.starts_with("POST /v1/compute/apps/app_fieldadmin/secrets/sync ")
+                && req.starts_with("POST /v1/compute/apps/app_tachyon_field_api/secrets/sync ")
             {
-                r#"{"synced":3,"skipped":[]}"#
+                r#"{"synced":1,"skipped":[]}"#
             } else {
                 r#"{"error":"unexpected request"}"#
             };
@@ -558,7 +558,9 @@ spec:
         - name: DATABASE_URL
           type: credential
           valueFrom:
-            secret: DATABASE_URL
+            secret:
+              path: providers/tidb_bakuure
+              field: DATABASE_URL
 "#,
     )
     .unwrap();
@@ -609,6 +611,8 @@ spec:
     assert!(fifth.starts_with("GET /v1/compute/apps/app_created/env "));
     assert!(sixth.starts_with("POST /v1/graphql "));
     assert!(sixth.contains("SaveManifest"));
+    assert!(sixth.contains(r#"\"path\":\"providers/tidb_bakuure\""#));
+    assert!(sixth.contains(r#"\"field\":\"DATABASE_URL\""#));
     assert!(seventh.starts_with("POST /v1/graphql "));
     assert!(seventh.contains("ApplyManifest"));
     assert!(eighth.starts_with("GET /v1/compute/apps/app_created/env "));
@@ -793,7 +797,9 @@ spec:
         - name: DATABASE_URL
           type: credential
           valueFrom:
-            secret: DATABASE_URL
+            secret:
+              path: providers/tidb_bakuure
+              field: DATABASE_URL
 "#,
     )
     .unwrap();
@@ -1071,7 +1077,7 @@ spec:
 }
 
 #[test]
-fn compute_apps_sync_secrets_posts_manifest_refs_without_secret_values() {
+fn compute_apps_sync_secrets_resolves_preview_overlay_and_preserves_object_secret_ref() {
     let tmp = TempDir::new().unwrap();
     let manifest = tmp.path().join("tachyon.yml");
     fs::write(
@@ -1080,36 +1086,32 @@ fn compute_apps_sync_secrets_posts_manifest_refs_without_secret_values() {
 apiVersion: apps.tachy.one/v1alpha
 kind: CloudApps
 metadata:
-  name: fieldadmin
+  name: tachyon-field-api
 spec:
   apps:
-    - name: fieldadmin
+    - name: tachyon-field-api
       repository:
-        url: https://github.com/quantum-box/fieldadmin
+        url: https://github.com/quantum-box/tachyonfield
         owner: quantum-box
-        name: fieldadmin
-      framework: next_js
-      deploymentTarget: cloudflare_pages
+        name: tachyonfield
+      framework: cargo_lambda
+      deploymentTarget: lambda
       envVars:
-        - name: COGNITO_CLIENT_ID
+        - name: DATABASE_URL
           type: credential
-          target: production
           valueFrom:
-            oauth2ClientRef:
-              name: fieldadmin-login
-              field: clientId
-        - name: COGNITO_CLIENT_SECRET
-          type: credential
-          target: production
-          valueFrom:
-            oauth2ClientRef:
-              name: fieldadmin-login
-              field: clientSecret
-        - name: RESEND_API_KEY
-          type: credential
-          target: production
-          valueFrom:
-            secret: prod/resend/api-key
+            databaseRef:
+              name: tidb_field_prod
+              field: url
+      environments:
+        preview:
+          envVars:
+            - name: DATABASE_URL
+              type: credential
+              valueFrom:
+                secret:
+                  path: providers/tidb_field_preview
+                  field: DATABASE_URL
 "#,
     )
     .unwrap();
@@ -1128,7 +1130,7 @@ spec:
             "-f",
             manifest.to_str().unwrap(),
             "--environment",
-            "production",
+            "preview",
         ])
         .output()
         .expect("run compute apps sync-secrets");
@@ -1144,20 +1146,23 @@ spec:
     handle.join().unwrap();
 
     assert!(first.starts_with("GET /v1/compute/apps "));
-    assert!(second.starts_with("POST /v1/compute/apps/app_fieldadmin/secrets/sync "));
-    assert!(second.contains(r#""app_name":"fieldadmin""#));
-    assert!(second.contains(r#""environment":"production""#));
-    assert!(second.contains(r#""key":"COGNITO_CLIENT_ID""#));
-    assert!(second.contains(r#""source":"oauth2ClientRef""#));
+    assert!(second.starts_with("POST /v1/compute/apps/app_tachyon_field_api/secrets/sync "));
+    assert!(second.contains(r#""app_name":"tachyon-field-api""#));
+    assert!(second.contains(r#""environment":"preview""#));
+    assert!(second.contains(r#""key":"DATABASE_URL""#));
     assert!(second.contains(r#""source":"secretRef""#));
+    assert!(second.contains(r#""target":"preview""#));
+    assert!(second.contains(r#""path":"providers/tidb_field_preview""#));
+    assert!(second.contains(r#""field":"DATABASE_URL""#));
+    assert!(!second.contains("databaseRef"));
+    assert!(!second.contains("tidb_field_prod"));
     assert!(!second.contains("secret-value"));
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("Secret refs:"));
-    assert!(stdout.contains("COGNITO_CLIENT_ID(production; oauth2ClientRef)"));
-    assert!(stdout.contains("Synced 3 secret reference(s)."));
-    assert!(!stdout.contains("clientSecret"));
-    assert!(!stdout.contains("prod/resend/api-key"));
+    assert!(stdout.contains("DATABASE_URL(preview; secretRef)"));
+    assert!(stdout.contains("Synced 1 secret reference(s)."));
+    assert!(!stdout.contains("providers/tidb_field_preview"));
 }
 
 #[test]
