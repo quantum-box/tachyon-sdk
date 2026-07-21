@@ -1833,7 +1833,8 @@ spec:
                         "type": "credential",
                         "valueFrom": {
                             "secret": {
-                                "path": "providers/tidb_field_preview#DATABASE_URL"
+                                "path": "providers/tidb_field_preview",
+                                "field": "DATABASE_URL"
                             }
                         }
                     }]
@@ -1860,10 +1861,103 @@ spec:
             .is_none());
         assert_eq!(
             manifest["spec"]["envVars"][0]["valueFrom"]["secret"]["path"],
-            "providers/tidb_field_preview#DATABASE_URL"
+            "providers/tidb_field_preview"
+        );
+        assert_eq!(
+            manifest["spec"]["envVars"][0]["valueFrom"]["secret"]["field"],
+            "DATABASE_URL"
         );
         assert_eq!(manifest["spec"]["envVars"][0]["target"], "preview");
         assert_eq!(plan.body["root_directory"], "apps/api-preview");
+    }
+
+    #[test]
+    fn apply_plan_rejects_invalid_object_secret_fields() {
+        for (field, expected) in [
+            (json!(""), "must not be empty or contain '#'"),
+            (json!("  "), "must not be empty or contain '#'"),
+            (json!("DATABASE#URL"), "must not be empty or contain '#'"),
+            (json!(42), "must be a string"),
+        ] {
+            let entry = json!({
+                "name": "tachyon-field-api",
+                "envVars": [{
+                    "name": "DATABASE_URL",
+                    "type": "credential",
+                    "valueFrom": {
+                        "secret": {
+                            "path": "providers/tidb_field_preview",
+                            "field": field
+                        }
+                    }
+                }]
+            });
+
+            let error = plan_env_vars(&entry, "preview").unwrap_err().to_string();
+
+            assert!(error.contains(expected), "unexpected error: {error}");
+        }
+    }
+
+    #[test]
+    fn apply_plan_rejects_secret_paths_outside_server_contract() {
+        for (secret, expected) in [
+            (
+                json!({"path": "  ", "field": "DATABASE_URL"}),
+                "must not be empty, contain empty segments, or use tenant prefixes",
+            ),
+            (
+                json!({"path": "providers//tidb_field_preview", "field": "DATABASE_URL"}),
+                "must not be empty, contain empty segments, or use tenant prefixes",
+            ),
+            (
+                json!({"path": "tn_other/key", "field": "DATABASE_URL"}),
+                "must not be empty, contain empty segments, or use tenant prefixes",
+            ),
+            (
+                json!({"path": "providers/tidb/preview"}),
+                "object field is required for paths other than '<vault>/<key>'",
+            ),
+            (
+                json!("single_segment"),
+                "object field is required for paths other than '<vault>/<key>'",
+            ),
+        ] {
+            let entry = json!({
+                "name": "tachyon-field-api",
+                "envVars": [{
+                    "name": "DATABASE_URL",
+                    "type": "credential",
+                    "valueFrom": { "secret": secret }
+                }]
+            });
+
+            let error = plan_env_vars(&entry, "preview").unwrap_err().to_string();
+
+            assert!(error.contains(expected), "unexpected error: {error}");
+        }
+    }
+
+    #[test]
+    fn apply_plan_accepts_null_object_secret_field_for_two_segment_path() {
+        let entry = json!({
+            "name": "tachyon-field-api",
+            "envVars": [{
+                "name": "DATABASE_URL",
+                "type": "credential",
+                "valueFrom": {
+                    "secret": {
+                        "path": "providers/tidb_field_preview",
+                        "field": null
+                    }
+                }
+            }]
+        });
+
+        let plan = plan_env_vars(&entry, "preview").unwrap();
+
+        assert_eq!(plan.secret_refs.len(), 1);
+        assert_eq!(plan.secret_refs[0].key, "DATABASE_URL");
     }
 
     #[test]
@@ -2537,22 +2631,46 @@ fn extract_secret_ref(value_from: &Value) -> Result<Option<String>> {
     let Some(secret) = value_from.get("secret") else {
         return Ok(None);
     };
-    let path = if let Some(path) = secret.as_str() {
-        path
+    let (path, field) = if let Some(path) = secret.as_str() {
+        (path, None)
     } else if let Some(path) = secret.get("path").and_then(Value::as_str) {
-        if secret.get("field").is_some() {
-            return Err(anyhow!("valueFrom.secret.field is not supported"));
-        }
-        path
+        let field = match secret.get("field") {
+            None | Some(Value::Null) => None,
+            Some(field) => Some(
+                field
+                    .as_str()
+                    .ok_or_else(|| anyhow!("valueFrom.secret.field must be a string"))?
+                    .trim(),
+            ),
+        };
+        (path, field)
     } else {
         return Err(anyhow!(
             "valueFrom.secret must be a key string or object with path"
         ));
     };
-    if path.is_empty() {
-        return Err(anyhow!("valueFrom.secret must reference a single env key"));
+
+    let reference = path.trim();
+    let parts = reference.split('/').collect::<Vec<_>>();
+    if parts.iter().any(|part| part.is_empty()) || parts[0].starts_with("tn_") {
+        return Err(anyhow!(
+            "valueFrom.secret path must not be empty, contain empty segments, or use tenant prefixes"
+        ));
     }
-    Ok(Some(path.to_string()))
+    if field.is_none() && parts.len() != 2 {
+        return Err(anyhow!(
+            "valueFrom.secret object field is required for paths other than '<vault>/<key>'"
+        ));
+    }
+    if let Some(field) = field {
+        if field.is_empty() || field.contains('#') {
+            return Err(anyhow!(
+                "valueFrom.secret.field must not be empty or contain '#'"
+            ));
+        }
+    }
+
+    Ok(Some(reference.to_string()))
 }
 
 fn server_managed_credential_source(value_from: &Value) -> Option<ServerManagedCredentialSource> {
@@ -2702,6 +2820,7 @@ pub(crate) async fn run_apps_sync_secrets(
 
     let manifest = load_cloud_apps_manifest(file)?;
     let entry = select_single_app_entry(&manifest, selected_app)?;
+    let entry = resolve_app_entry_for_environment(&entry, environment)?;
     let app_name = entry
         .get("name")
         .and_then(Value::as_str)
