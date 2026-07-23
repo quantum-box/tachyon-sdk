@@ -24,6 +24,19 @@ curl -fsSL https://raw.githubusercontent.com/quantum-box/tachyon-sdk/main/script
 
 Installs `tachyon` to `/usr/local/bin` (or `~/.local/bin` if you lack write permission).
 
+Local development install (build from source):
+
+```sh
+sh scripts/dev-install.sh
+```
+
+Builds the CLI from the current source and installs a **real-file copy** to
+`~/.local/bin/tachyon` (or use `cargo install --path cli --force` for `~/.cargo/bin`).
+**Do not** symlink `~/.local/bin/tachyon` into `cli/target/release/` — a symlink into
+`target/` breaks when the directory is cleaned (disk cleanup / `cargo clean`) and silently
+takes down the CLI, including the CEO-escalation path and `tachyon-browser` (PLT-2636,
+2026-07-18 incident).
+
 Supported platforms:
 
 | OS | Architecture | Artifact |
