@@ -21,8 +21,26 @@ fn isolated_command(home: &Path) -> Command {
         .env_remove("TACHYON_TENANT_ID")
         .env_remove("TACHYON_PROFILE")
         .env_remove("TACHYON_CHANGE_CONTROL_APPROVAL_TOKEN")
+        .env_remove("TACHYON_CHANGE_CONTROL_VERIFICATION_KEY")
         .env_remove("TACHYON_SECRET_VALUE");
     cmd
+}
+
+/// Build a structurally valid `tcct.v1` change-control token scoped to
+/// `production` with a far-future expiry, for tests that must pass the
+/// production apply gate. No verification key is configured in these tests,
+/// so the signature segment is not checked; the gate accepts the structural
+/// token and warns that the signature is unverified (ADR 0011). This is a
+/// test fixture, not a real approval credential.
+fn production_change_control_token() -> String {
+    use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+    use base64::Engine;
+    // exp = 2100-01-01T00:00:00Z, well beyond any test run.
+    let payload = r#"{"ref":"PLT-2722-test","env":"production","exp":4102444800}"#;
+    let payload_b64 = URL_SAFE_NO_PAD.encode(payload);
+    // Signature is unchecked without a verification key; a placeholder segment
+    // keeps the token structurally well-formed.
+    format!("tcct.v1.{payload_b64}.unsigned")
 }
 
 fn write_project_config(dir: &Path, name: &str, tenant_id: &str) {
@@ -690,7 +708,10 @@ spec:
 }
 
 #[test]
-fn compute_apps_apply_allows_production_with_change_control_token() {
+fn compute_apps_apply_rejects_production_with_unstructured_token_before_api_write() {
+    // Regression for PLT-2722: a non-empty but unstructured token (the old
+    // gate accepted any non-empty string) must now be rejected before any
+    // API write.
     let tmp = TempDir::new().unwrap();
     let manifest = tmp.path().join("tachyon.yml");
     fs::write(
@@ -735,6 +756,70 @@ spec:
         .expect("run compute apps apply");
 
     assert!(
+        !output.status.success(),
+        "unstructured token unexpectedly passed the gate\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let requests = rx.recv_timeout(Duration::from_secs(5)).unwrap();
+    handle.join().unwrap();
+    assert!(
+        requests.is_empty(),
+        "approval gate must reject before any API request; requests: {requests:#?}"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("not a valid approval token"));
+    // The token value must never be echoed.
+    assert!(!stderr.contains("dummy-approved-token"));
+}
+
+#[test]
+fn compute_apps_apply_allows_production_with_change_control_token() {
+    let tmp = TempDir::new().unwrap();
+    let manifest = tmp.path().join("tachyon.yml");
+    fs::write(
+        &manifest,
+        r#"
+apiVersion: apps.tachy.one/v1alpha
+kind: CloudApps
+metadata:
+  name: valid-app
+spec:
+  apps:
+    - name: valid-app
+      repository:
+        url: https://github.com/quantum-box/tachyonfield
+        owner: quantum-box
+        name: tachyonfield
+      framework: next_js
+      deploymentTarget: cloudflare_workers
+"#,
+    )
+    .unwrap();
+    let (api_url, rx, handle) = start_collecting_apply_server();
+
+    let mut cmd = isolated_command(tmp.path());
+    let output = cmd
+        .current_dir(tmp.path())
+        .env("TACHYON_API_URL", api_url)
+        .env("TACHYON_API_KEY", "test-token")
+        .env("TACHYON_TENANT_ID", "tn_01hjryxysgey07h5jz5wagqj0m")
+        .args([
+            "compute",
+            "apps",
+            "apply",
+            "-f",
+            manifest.to_str().unwrap(),
+            "--environment",
+            "production",
+            "--change-control-token",
+            &production_change_control_token(),
+        ])
+        .output()
+        .expect("run compute apps apply");
+
+    assert!(
         output.status.success(),
         "approved production apply failed\nstdout:\n{}\nstderr:\n{}",
         String::from_utf8_lossy(&output.stdout),
@@ -758,9 +843,13 @@ spec:
     let joined_requests = requests.join("\n");
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(!joined_requests.contains("dummy-approved-token"));
-    assert!(!stdout.contains("dummy-approved-token"));
-    assert!(!stderr.contains("dummy-approved-token"));
+    let token = production_change_control_token();
+    assert!(!joined_requests.contains(&token));
+    assert!(!stdout.contains(&token));
+    assert!(!stderr.contains(&token));
+    // No verification key configured: the gate accepts the structural token
+    // but warns that the signature was not verified (ADR 0011).
+    assert!(stderr.contains("WITHOUT signature verification"));
     assert!(stdout.contains("Environment: production"));
     assert!(stdout.contains("CREATED valid-app (app_created)"));
 }
@@ -959,7 +1048,7 @@ spec:
             "--environment",
             "production",
             "--change-control-token",
-            "dummy-approved-token",
+            &production_change_control_token(),
         ])
         .output()
         .expect("run compute apps apply");
@@ -997,7 +1086,7 @@ spec:
     assert!(stderr.contains("POST /v1/internal-service-refs/preflight failed"));
     assert!(stderr.contains("internalService preflight failed"));
     assert!(stderr.contains("tachyon-field-api"));
-    assert!(!stderr.contains("dummy-approved-token"));
+    assert!(!stderr.contains(&production_change_control_token()));
 }
 
 #[test]

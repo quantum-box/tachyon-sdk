@@ -629,6 +629,20 @@ pub(crate) async fn run_apps_apply_manifest(input: AppsApplyManifestInput<'_>) -
     Ok(())
 }
 
+/// Gate production Cloud App applies behind a verifiable change-control
+/// approval token (ADR 0011).
+///
+/// This is an executor-side, fail-fast check evaluated before any API
+/// write. It is NOT an authorization boundary: a client-side check can be
+/// bypassed by editing the CLI or calling the apply API directly, so the
+/// authoritative approval enforcement must live server-side (ADR 0011
+/// Layer 1). See `change_control` module docs.
+///
+/// What this verifies (via `change_control::verify_change_control_token`):
+/// token structure, required claims, environment binding, expiry, and —
+/// when `TACHYON_CHANGE_CONTROL_VERIFICATION_KEY` is configured — the
+/// HMAC-SHA256 signature (tamper detection). It deliberately does NOT
+/// perform any network/Linear lookup and never logs the token value.
 fn require_production_apply_approval(
     environment: &str,
     change_control_token: Option<&str>,
@@ -638,16 +652,48 @@ fn require_production_apply_approval(
         return Ok(());
     }
 
-    let approved = change_control_token
+    let token = change_control_token
         .map(str::trim)
-        .is_some_and(|token| !token.is_empty());
-    if approved {
-        return Ok(());
+        .filter(|token| !token.is_empty())
+        .ok_or_else(|| {
+            anyhow!(
+                "production Cloud App apply requires change-control approval; pass --change-control-token or set TACHYON_CHANGE_CONTROL_APPROVAL_TOKEN. Use --dry-run to preview without writing."
+            )
+        })?;
+
+    // Key access (env) and clock stay in this thin wrapper; the verification
+    // logic is pure and unit-tested in the `change_control` module.
+    let verification_key = std::env::var(change_control::VERIFICATION_KEY_ENV)
+        .ok()
+        .filter(|key| !key.is_empty());
+    let now_unix = chrono::Utc::now().timestamp();
+
+    let verified = change_control::verify_change_control_token(
+        token,
+        environment,
+        verification_key.as_deref().map(str::as_bytes),
+        now_unix,
+    )?;
+
+    if verified.signature_verified {
+        eprintln!(
+            "change-control approval verified (ref: {})",
+            verified.approval_ref
+        );
+    } else {
+        // No verification key configured: the token is structurally valid,
+        // unexpired, and environment-scoped, but its signature was NOT
+        // checked. This is process enforcement only, not authorization.
+        eprintln!(
+            "warning: change-control token accepted WITHOUT signature verification \
+             (ref: {}); set {} to enforce tamper-evident approval. \
+             This check confirms an approval exists; it does not authorize the change.",
+            verified.approval_ref,
+            change_control::VERIFICATION_KEY_ENV
+        );
     }
 
-    Err(anyhow!(
-        "production Cloud App apply requires change-control approval; pass --change-control-token or set TACHYON_CHANGE_CONTROL_APPROVAL_TOKEN. Use --dry-run to preview without writing."
-    ))
+    Ok(())
 }
 
 fn is_production_environment(environment: &str) -> bool {
