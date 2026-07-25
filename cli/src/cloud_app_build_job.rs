@@ -61,7 +61,38 @@ struct BuildWorkloadCommands {
 #[derive(Debug, Deserialize)]
 struct BuildWorkloadEnvVar {
     name: String,
-    value: String,
+    #[serde(default)]
+    value: Option<String>,
+    #[serde(default)]
+    value_from: Option<String>,
+}
+
+impl BuildWorkloadEnvVar {
+    fn resolve(&self) -> Result<String> {
+        if let Some(value_from) = self.value_from.as_deref() {
+            let value_from = value_from.trim();
+            if value_from.is_empty() {
+                return Err(anyhow!(
+                    "build workload env '{}' has an empty value_from",
+                    self.name
+                ));
+            }
+            return std::env::var(value_from).map_err(|_| {
+                anyhow!(
+                    "build workload env '{}' could not resolve value_from '{}'",
+                    self.name,
+                    value_from
+                )
+            });
+        }
+
+        self.value.clone().ok_or_else(|| {
+            anyhow!(
+                "build workload env '{}' must define value or value_from",
+                self.name
+            )
+        })
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -174,7 +205,7 @@ async fn run_build(workload: &BuildWorkloadSpec) -> Result<CommandResult> {
         .await
         .context("failed to create checkout directory")?;
 
-    let env = workload_env(workload);
+    let env = workload_env(workload)?;
     send_phase_event(workload, "clone").await;
     clone_repository(workload, &checkout_dir, &env).await?;
 
@@ -328,10 +359,10 @@ fn workspace_dir(workload: &BuildWorkloadSpec, checkout_dir: &Path) -> PathBuf {
         .unwrap_or_else(|| checkout_dir.to_path_buf())
 }
 
-fn workload_env(workload: &BuildWorkloadSpec) -> BTreeMap<String, String> {
+fn workload_env(workload: &BuildWorkloadSpec) -> Result<BTreeMap<String, String>> {
     let mut env = BTreeMap::new();
     for item in &workload.env {
-        env.insert(item.name.clone(), item.value.clone());
+        env.insert(item.name.clone(), item.resolve()?);
     }
     env.insert(
         "TACHYON_PROJECT_ID".to_string(),
@@ -356,7 +387,7 @@ fn workload_env(workload: &BuildWorkloadSpec) -> BTreeMap<String, String> {
             registry.clone(),
         );
     }
-    env
+    Ok(env)
 }
 
 fn is_cloud_run(workload: &BuildWorkloadSpec) -> bool {
@@ -1340,10 +1371,11 @@ fn truncate_output(value: &str) -> String {
 /// output directory.
 fn callback_artifact_path(workload: &BuildWorkloadSpec) -> Option<String> {
     if is_lambda(workload) {
-        let env = workload_env(workload);
-        if let Some(path) = env_value(&env, LAMBDA_ARTIFACT_PATH_ENV) {
-            return Some(path.to_string());
-        }
+        return workload
+            .env
+            .iter()
+            .find(|item| item.name == LAMBDA_ARTIFACT_PATH_ENV)
+            .and_then(|item| item.resolve().ok());
     }
     workload.artifact.output_directory.clone()
 }
@@ -1543,6 +1575,86 @@ mod tests {
 
         assert_eq!(requested_commit(&workload.source), None);
         assert_eq!(initial_clone_branch(&workload.source), Some("feature/demo"));
+    }
+
+    #[test]
+    fn build_workload_env_var_deserializes_legacy_value() {
+        let item: BuildWorkloadEnvVar = serde_json::from_value(serde_json::json!({
+            "name": "PUBLIC_SETTING",
+            "value": "enabled",
+        }))
+        .unwrap();
+
+        assert_eq!(item.resolve().unwrap(), "enabled");
+    }
+
+    #[test]
+    fn workload_env_resolves_value_from_runtime() {
+        const SOURCE: &str = "TACHYON_TEST_BUILD_WORKLOAD_SOURCE";
+        std::env::set_var(SOURCE, "runtime-value");
+        let mut workload = test_workload(None);
+        workload.env.push(
+            serde_json::from_value(serde_json::json!({
+                "name": "RESOLVED_SETTING",
+                "value_from": SOURCE,
+            }))
+            .unwrap(),
+        );
+
+        let env = workload_env(&workload).unwrap();
+
+        std::env::remove_var(SOURCE);
+        assert_eq!(
+            env.get("RESOLVED_SETTING").map(String::as_str),
+            Some("runtime-value")
+        );
+    }
+
+    #[test]
+    fn value_from_takes_precedence_over_value() {
+        const SOURCE: &str = "TACHYON_TEST_BUILD_WORKLOAD_PRECEDENCE_SOURCE";
+        std::env::set_var(SOURCE, "runtime-value");
+        let item = BuildWorkloadEnvVar {
+            name: "RESOLVED_SETTING".to_string(),
+            value: Some("legacy-value".to_string()),
+            value_from: Some(SOURCE.to_string()),
+        };
+
+        let resolved = item.resolve().unwrap();
+
+        std::env::remove_var(SOURCE);
+        assert_eq!(resolved, "runtime-value");
+    }
+
+    #[test]
+    fn missing_value_from_fails_without_using_value_fallback() {
+        const SOURCE: &str = "TACHYON_TEST_BUILD_WORKLOAD_MISSING_SOURCE";
+        std::env::remove_var(SOURCE);
+        let item = BuildWorkloadEnvVar {
+            name: "RESOLVED_SETTING".to_string(),
+            value: Some("legacy-value".to_string()),
+            value_from: Some(SOURCE.to_string()),
+        };
+
+        let error = item.resolve().unwrap_err().to_string();
+
+        assert!(error.contains("RESOLVED_SETTING"));
+        assert!(error.contains(SOURCE));
+        assert!(!error.contains("legacy-value"));
+    }
+
+    #[test]
+    fn env_without_value_or_value_from_fails_closed() {
+        let item = BuildWorkloadEnvVar {
+            name: "UNCONFIGURED_SETTING".to_string(),
+            value: None,
+            value_from: None,
+        };
+
+        let error = item.resolve().unwrap_err().to_string();
+
+        assert!(error.contains("UNCONFIGURED_SETTING"));
+        assert!(error.contains("must define value or value_from"));
     }
 
     #[test]
@@ -1797,13 +1909,15 @@ mod tests {
             Some("cargo lambda build --package tachyon-field-api --release --arm64".to_string());
         workload.env.push(BuildWorkloadEnvVar {
             name: LAMBDA_UPLOAD_URL_ENV.to_string(),
-            value: upload_url,
+            value: Some(upload_url),
+            value_from: None,
         });
         workload.env.push(BuildWorkloadEnvVar {
             name: CARGO_TARGET_DIR_ENV.to_string(),
-            value: temp.path().join("target").display().to_string(),
+            value: Some(temp.path().join("target").display().to_string()),
+            value_from: None,
         });
-        let env = workload_env(&workload);
+        let env = workload_env(&workload).unwrap();
 
         let output = run_lambda_package_and_upload(&workload, temp.path(), &env, past_instant())
             .await
@@ -2040,7 +2154,8 @@ mod tests {
         let mut workload = test_workload(Some("lambda"));
         workload.env.push(BuildWorkloadEnvVar {
             name: LAMBDA_ARTIFACT_PATH_ENV.to_string(),
-            value: "s3://bucket/builds/app_123/abc/lambda.zip".to_string(),
+            value: Some("s3://bucket/builds/app_123/abc/lambda.zip".to_string()),
+            value_from: None,
         });
         assert_eq!(
             callback_artifact_path(&workload).as_deref(),
