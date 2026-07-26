@@ -139,7 +139,7 @@ pub use scaling::ScalingCommand;
 pub(crate) use apps::{
     app_entry_to_api_body, normalize_cloud_apps_document, plan_env_vars,
     resolve_app_entry_for_environment, run_apps_apply, run_apps_apply_manifest, select_app_entries,
-    validate_generated_env_target, AppsApplyManifestInput,
+    validate_generated_env_target, AppsApplyInput, AppsApplyManifestInput,
 };
 pub(crate) use env::validate_secret_key;
 
@@ -272,17 +272,19 @@ pub async fn run(
                 app,
                 environment,
                 change_control_token,
+                release_checks_only,
                 dry_run,
             } => {
-                run_apps_apply(
-                    &api,
+                run_apps_apply(AppsApplyInput {
+                    api: &api,
                     tenant_id,
                     file,
-                    app.as_deref(),
+                    selected_app: app.as_deref(),
                     environment,
-                    change_control_token.as_deref(),
-                    *dry_run,
-                )
+                    change_control_token: change_control_token.as_deref(),
+                    release_checks_only: *release_checks_only,
+                    dry_run: *dry_run,
+                })
                 .await
             }
             AppsCommand::SyncSecrets {

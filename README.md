@@ -4,7 +4,7 @@ Auto-generated multi-language API clients for the [Tachyon Platform](https://git
 
 ## CLI
 
-Latest release: **v0.6.17**
+Latest release: **v0.6.19**
 
 ### Install
 
@@ -125,6 +125,14 @@ tachyon compute preview <app-id> --branch feature/my-change
 # Re-fire a pull-request preview build
 tachyon compute preview <app-id> --pr 123
 tachyon compute builds trigger <app-id> --pr 123
+
+# Reconcile only one app's production release-check contract.
+# Production change-control approval is still required.
+tachyon compute apps apply \
+  --file tachyon.yml \
+  --app <app-name> \
+  --environment production \
+  --release-checks-only
 
 # Compact JSON Lines for coding agents
 tachyon compute builds watch --build-id <build-id> --agent
@@ -263,7 +271,7 @@ Additional domain-specific TypeScript SDKs published under the `@tachyon-sdk/*` 
 
 | Package | Version | Description |
 |---------|---------|-------------|
-| [`@tachyon-sdk/cli`](packages/cli) | `0.6.17` | Global npm installer for the Tachyon CLI |
+| [`@tachyon-sdk/cli`](packages/cli) | `0.6.19` | Global npm installer for the Tachyon CLI |
 | [`@tachyon-sdk/storekit`](packages/storekit) | `0.3.0` | Commerce SDK: auth, order management (updateStatus/cancel/refund), inventory operations |
 | [`@tachyon-sdk/agent`](packages/agent) | — | Agent runtime SDK |
 | [`@tachyon-sdk/agent-chat`](packages/agent-chat) | — | Agent chat utilities + bundled skills |

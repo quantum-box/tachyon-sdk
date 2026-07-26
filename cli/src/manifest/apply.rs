@@ -88,6 +88,7 @@ pub(crate) async fn run(
                         selected_app: args.app.as_deref(),
                         environment: &args.environment,
                         change_control_token: args.change_control_token.as_deref(),
+                        release_checks_only: false,
                         dry_run,
                     })
                     .await

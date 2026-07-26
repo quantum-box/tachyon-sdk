@@ -69,6 +69,7 @@ pub async fn run(args: &ReconcileArgs, config: &Configuration, tenant_id: &str) 
                     app: args.app.clone(),
                     environment: args.environment.clone(),
                     change_control_token: args.change_control_token.clone(),
+                    release_checks_only: false,
                     dry_run: args.dry_run,
                 },
             },
