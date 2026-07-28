@@ -551,7 +551,10 @@ pub(crate) async fn run_apps_apply_manifest(input: AppsApplyManifestInput<'_>) -
     let mut created = 0;
     let mut updated = 0;
     let mut unchanged = 0;
-    for plan in plans {
+    let total_apps = plans.len();
+    for (index, plan) in plans.into_iter().enumerate() {
+        let fully_completed = index;
+        let app_position = index + 1;
         let existing = live.apps.iter().find(|app| app.name == plan.name);
         let api_body = app_api_body_with_clears(existing, &plan.body);
         let (action, changed_fields) = classify_app_action(existing, &api_body);
@@ -559,12 +562,30 @@ pub(crate) async fn run_apps_apply_manifest(input: AppsApplyManifestInput<'_>) -
             (Some(app), ApplyAction::Update, false) => {
                 let updated: AppResponse = api
                     .patch(&format!("/v1/compute/apps/{}", app.id), &api_body)
-                    .await?;
+                    .await
+                    .with_context(|| {
+                        app_apply_failure_context(
+                            &plan.name,
+                            app_position,
+                            total_apps,
+                            fully_completed,
+                        )
+                    })?;
                 updated.id
             }
             (Some(app), _, _) => app.id.clone(),
             (None, ApplyAction::Create, false) => {
-                let created: AppResponse = api.post("/v1/compute/apps", &api_body).await?;
+                let created: AppResponse = api
+                    .post("/v1/compute/apps", &api_body)
+                    .await
+                    .with_context(|| {
+                        app_apply_failure_context(
+                            &plan.name,
+                            app_position,
+                            total_apps,
+                            fully_completed,
+                        )
+                    })?;
                 created.id
             }
             (None, _, true) => "<new app>".to_string(),
@@ -573,7 +594,11 @@ pub(crate) async fn run_apps_apply_manifest(input: AppsApplyManifestInput<'_>) -
 
         let has_iac_env_refs = plan.iac_manifest.is_some();
         let (env_changed, mut missing_secrets) =
-            apply_env_plan(api, &app_id, &plan.env_plan, dry_run).await?;
+            apply_env_plan(api, &app_id, &plan.env_plan, dry_run)
+                .await
+                .with_context(|| {
+                    app_apply_failure_context(&plan.name, app_position, total_apps, fully_completed)
+                })?;
         if has_iac_env_refs {
             if dry_run {
                 missing_secrets.clear();
@@ -581,10 +606,36 @@ pub(crate) async fn run_apps_apply_manifest(input: AppsApplyManifestInput<'_>) -
                 let manifest = plan
                     .iac_manifest
                     .as_ref()
-                    .ok_or_else(|| anyhow!("missing CloudApp IaC manifest for {}", plan.name))?;
-                apply_compute_cloud_app_manifest(api, manifest, false).await?;
+                    .ok_or_else(|| anyhow!("missing CloudApp IaC manifest for {}", plan.name))
+                    .with_context(|| {
+                        app_apply_failure_context(
+                            &plan.name,
+                            app_position,
+                            total_apps,
+                            fully_completed,
+                        )
+                    })?;
+                apply_compute_cloud_app_manifest(api, manifest, false)
+                    .await
+                    .with_context(|| {
+                        app_apply_failure_context(
+                            &plan.name,
+                            app_position,
+                            total_apps,
+                            fully_completed,
+                        )
+                    })?;
                 missing_secrets =
-                    find_missing_secret_refs(api, &app_id, &plan.env_plan.secret_refs).await?;
+                    find_missing_secret_refs(api, &app_id, &plan.env_plan.secret_refs)
+                        .await
+                        .with_context(|| {
+                            app_apply_failure_context(
+                                &plan.name,
+                                app_position,
+                                total_apps,
+                                fully_completed,
+                            )
+                        })?;
             }
         }
         match action {
@@ -663,6 +714,20 @@ pub(crate) async fn run_apps_apply_manifest(input: AppsApplyManifestInput<'_>) -
     println!();
     println!("Summary: {created} created, {updated} updated, {unchanged} unchanged");
     Ok(())
+}
+
+fn app_apply_failure_context(
+    app_name: &str,
+    app_position: usize,
+    total_apps: usize,
+    fully_completed: usize,
+) -> String {
+    let remaining = total_apps.saturating_sub(fully_completed);
+    format!(
+        "Cloud Apps apply stopped: fully completed {fully_completed}/{total_apps} apps; \
+         failed app {app_name} ({app_position}/{total_apps}) may be partially applied; \
+         remaining incomplete apps: {remaining}. Re-run the same apply command to resume safely."
+    )
 }
 
 async fn run_release_checks_only(
