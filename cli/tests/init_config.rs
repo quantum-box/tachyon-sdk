@@ -633,6 +633,7 @@ spec:
     assert!(sixth.contains(r#"\"field\":\"DATABASE_URL\""#));
     assert!(seventh.starts_with("POST /v1/graphql "));
     assert!(seventh.contains("ApplyManifest"));
+    assert!(!seventh.contains("releaseChecksOnly"));
     assert!(eighth.starts_with("GET /v1/compute/apps/app_created/env "));
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("CREATED bakuure-api (app_created)"));
@@ -852,6 +853,100 @@ spec:
     assert!(stderr.contains("WITHOUT signature verification"));
     assert!(stdout.contains("Environment: production"));
     assert!(stdout.contains("CREATED valid-app (app_created)"));
+}
+
+#[test]
+fn compute_apps_release_checks_only_skips_app_and_env_mutations() {
+    let tmp = TempDir::new().unwrap();
+    let manifest = tmp.path().join("tachyon.yml");
+    fs::write(
+        &manifest,
+        r#"
+apiVersion: apps.tachy.one/v1alpha
+kind: CloudApps
+metadata:
+  name: field
+spec:
+  apps:
+    - name: tachyon-field-api
+      repository:
+        url: https://github.com/quantum-box/tachyonfield
+        owner: quantum-box
+        name: tachyonfield
+      framework: cargo_lambda
+      deploymentTarget: lambda
+      production:
+        requiredReleaseChecks:
+          - repository: quantum-box/tachyonfield
+            name: Production deploy migration invariant
+            sameCommit: true
+      envVars:
+        - name: PUBLIC_FLAG
+          value: enabled
+        - name: DATABASE_URL
+          type: credential
+          valueFrom:
+            secret:
+              path: providers/tidb_field_production
+              field: DATABASE_URL
+"#,
+    )
+    .unwrap();
+    let (api_url, rx, handle) = start_collecting_apply_server();
+    let token = production_change_control_token();
+
+    let mut cmd = isolated_command(tmp.path());
+    let output = cmd
+        .current_dir(tmp.path())
+        .env("TACHYON_API_URL", api_url)
+        .env("TACHYON_API_KEY", "test-token")
+        .env("TACHYON_TENANT_ID", "tn_01hjryxysgey07h5jz5wagqj0m")
+        .args([
+            "compute",
+            "apps",
+            "apply",
+            "-f",
+            manifest.to_str().unwrap(),
+            "--environment",
+            "production",
+            "--change-control-token",
+            &token,
+            "--release-checks-only",
+        ])
+        .output()
+        .expect("run release-checks-only apply");
+
+    assert!(
+        output.status.success(),
+        "release-checks-only apply failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let requests = rx.recv_timeout(Duration::from_secs(5)).unwrap();
+    handle.join().unwrap();
+    assert_eq!(
+        requests.len(),
+        2,
+        "isolated apply must send only saveManifest and applyManifest: {requests:#?}"
+    );
+    assert!(requests
+        .iter()
+        .all(|request| request.starts_with("POST /v1/graphql ")));
+    assert!(requests[0].contains("saveManifest"));
+    assert!(requests[1].contains("applyManifest"));
+    assert!(requests[1].contains("releaseChecksOnly"));
+    assert!(requests[1].contains("true"));
+    let requests_joined = requests.join("\n");
+    assert!(!requests_joined.contains("/v1/compute/apps/"));
+    assert!(!requests_joined.contains("PUT /"));
+    assert!(!requests_joined.contains(&token));
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stdout.contains("Release-check contract reconciled for tachyon-field-api."));
+    assert!(!stdout.contains(&token));
+    assert!(!stderr.contains(&token));
 }
 
 #[test]

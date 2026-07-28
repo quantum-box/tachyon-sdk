@@ -47,6 +47,9 @@ pub enum AppsCommand {
             hide_env_values = true
         )]
         change_control_token: Option<String>,
+        /// Reconcile only one app's production release-check contract
+        #[arg(long)]
+        release_checks_only: bool,
         /// Preview changes without mutating Cloud Apps
         #[arg(long)]
         dry_run: bool,
@@ -445,15 +448,28 @@ struct IntegrationConnection {
     status: String,
 }
 
-pub(crate) async fn run_apps_apply(
-    api: &ApiClient,
-    tenant_id: &str,
-    file: &Path,
-    selected_app: Option<&str>,
-    environment: &str,
-    change_control_token: Option<&str>,
-    dry_run: bool,
-) -> Result<()> {
+pub(crate) struct AppsApplyInput<'a> {
+    pub(crate) api: &'a ApiClient,
+    pub(crate) tenant_id: &'a str,
+    pub(crate) file: &'a Path,
+    pub(crate) selected_app: Option<&'a str>,
+    pub(crate) environment: &'a str,
+    pub(crate) change_control_token: Option<&'a str>,
+    pub(crate) release_checks_only: bool,
+    pub(crate) dry_run: bool,
+}
+
+pub(crate) async fn run_apps_apply(input: AppsApplyInput<'_>) -> Result<()> {
+    let AppsApplyInput {
+        api,
+        tenant_id,
+        file,
+        selected_app,
+        environment,
+        change_control_token,
+        release_checks_only,
+        dry_run,
+    } = input;
     let manifest = load_cloud_apps_manifest(file)?;
     let manifest_label = file.display().to_string();
     run_apps_apply_manifest(AppsApplyManifestInput {
@@ -464,6 +480,7 @@ pub(crate) async fn run_apps_apply(
         selected_app,
         environment,
         change_control_token,
+        release_checks_only,
         dry_run,
     })
     .await
@@ -477,6 +494,7 @@ pub(crate) struct AppsApplyManifestInput<'a> {
     pub(crate) selected_app: Option<&'a str>,
     pub(crate) environment: &'a str,
     pub(crate) change_control_token: Option<&'a str>,
+    pub(crate) release_checks_only: bool,
     pub(crate) dry_run: bool,
 }
 
@@ -489,10 +507,28 @@ pub(crate) async fn run_apps_apply_manifest(input: AppsApplyManifestInput<'_>) -
         selected_app,
         environment,
         change_control_token,
+        release_checks_only,
         dry_run,
     } = input;
 
+    if release_checks_only && !is_production_environment(environment) {
+        return Err(anyhow!(
+            "--release-checks-only requires --environment production"
+        ));
+    }
     require_production_apply_approval(environment, change_control_token, dry_run)?;
+
+    if release_checks_only {
+        return run_release_checks_only(
+            api,
+            tenant_id,
+            manifest,
+            manifest_label,
+            selected_app,
+            dry_run,
+        )
+        .await;
+    }
 
     let entries = select_app_entries(manifest, selected_app)?;
     let plans = build_app_apply_plans(entries, tenant_id, environment)?;
@@ -546,7 +582,7 @@ pub(crate) async fn run_apps_apply_manifest(input: AppsApplyManifestInput<'_>) -
                     .iac_manifest
                     .as_ref()
                     .ok_or_else(|| anyhow!("missing CloudApp IaC manifest for {}", plan.name))?;
-                apply_compute_cloud_app_manifest(api, manifest).await?;
+                apply_compute_cloud_app_manifest(api, manifest, false).await?;
                 missing_secrets =
                     find_missing_secret_refs(api, &app_id, &plan.env_plan.secret_refs).await?;
             }
@@ -626,6 +662,51 @@ pub(crate) async fn run_apps_apply_manifest(input: AppsApplyManifestInput<'_>) -
 
     println!();
     println!("Summary: {created} created, {updated} updated, {unchanged} unchanged");
+    Ok(())
+}
+
+async fn run_release_checks_only(
+    api: &ApiClient,
+    tenant_id: &str,
+    manifest: &Value,
+    manifest_label: &str,
+    selected_app: Option<&str>,
+    dry_run: bool,
+) -> Result<()> {
+    let entry = select_exactly_one_app_entry(manifest, selected_app, "release-checks-only apply")?;
+    let app_name = entry
+        .get("name")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow!("app entry is missing name"))?;
+    let release_check_count = entry
+        .get("production")
+        .and_then(|production| production.get("requiredReleaseChecks"))
+        .map(|checks| {
+            checks
+                .as_array()
+                .map(Vec::len)
+                .ok_or_else(|| anyhow!("production.requiredReleaseChecks must be an array"))
+        })
+        .transpose()?
+        .unwrap_or_default();
+    let iac_manifest = cloud_app_manifest_for_iac(&entry, tenant_id)?;
+
+    println!("Manifest:       {manifest_label}");
+    println!("Environment:    production");
+    println!("App:            {app_name}");
+    println!(
+        "Mode:           {}",
+        if dry_run { "dry-run" } else { "apply" }
+    );
+    println!("Release checks: {release_check_count}");
+
+    if dry_run {
+        println!("No API request sent.");
+        return Ok(());
+    }
+
+    apply_compute_cloud_app_manifest(api, &iac_manifest, true).await?;
+    println!("Release-check contract reconciled for {app_name}.");
     Ok(())
 }
 
@@ -1334,7 +1415,11 @@ fn ensure_unique_app_names(entries: &[Value], selected_app: Option<&str>) -> Res
     ))
 }
 
-pub(super) fn select_single_app_entry(manifest: &Value, app: Option<&str>) -> Result<Value> {
+fn select_exactly_one_app_entry(
+    manifest: &Value,
+    app: Option<&str>,
+    operation: &str,
+) -> Result<Value> {
     let apps = manifest
         .get("spec")
         .and_then(|s| s.get("apps"))
@@ -1342,7 +1427,7 @@ pub(super) fn select_single_app_entry(manifest: &Value, app: Option<&str>) -> Re
         .ok_or_else(|| anyhow!("CloudApps manifest must contain spec.apps[]"))?;
     if app.is_none() && apps.len() != 1 {
         return Err(anyhow!(
-            "sync-secrets requires --app when the CloudApps manifest contains {} apps",
+            "{operation} requires --app when the CloudApps manifest contains {} apps",
             apps.len()
         ));
     }
@@ -1350,9 +1435,13 @@ pub(super) fn select_single_app_entry(manifest: &Value, app: Option<&str>) -> Re
     match entries.as_slice() {
         [entry] => Ok(entry.clone()),
         _ => Err(anyhow!(
-            "sync-secrets requires exactly one selected app; pass --app to disambiguate"
+            "{operation} requires exactly one selected app; pass --app to disambiguate"
         )),
     }
+}
+
+pub(super) fn select_single_app_entry(manifest: &Value, app: Option<&str>) -> Result<Value> {
+    select_exactly_one_app_entry(manifest, app, "sync-secrets")
 }
 
 pub(crate) fn app_entry_to_api_body(entry: &Value) -> Result<Value> {
@@ -2817,13 +2906,25 @@ async fn save_compute_cloud_app_manifest(api: &ApiClient, manifest: &Value) -> R
     Ok(())
 }
 
-async fn apply_compute_cloud_app_manifest(api: &ApiClient, manifest: &Value) -> Result<()> {
+async fn apply_compute_cloud_app_manifest(
+    api: &ApiClient,
+    manifest: &Value,
+    release_checks_only: bool,
+) -> Result<()> {
     save_compute_cloud_app_manifest(api, manifest).await?;
     let name = manifest
         .get("metadata")
         .and_then(|metadata| metadata.get("name"))
         .and_then(Value::as_str)
         .ok_or_else(|| anyhow!("CloudApp manifest is missing metadata.name"))?;
+    let mut apply_input = json!({
+        "kind": "CloudApp",
+        "name": name,
+        "dryRun": false,
+    });
+    if release_checks_only {
+        apply_input["releaseChecksOnly"] = Value::Bool(true);
+    }
     let body = json!({
         "query": r#"
           mutation ApplyManifest($input: ApplyManifestInput!) {
@@ -2831,11 +2932,7 @@ async fn apply_compute_cloud_app_manifest(api: &ApiClient, manifest: &Value) -> 
           }
         "#,
         "variables": {
-            "input": {
-                "kind": "CloudApp",
-                "name": name,
-                "dryRun": false,
-            }
+            "input": apply_input
         }
     });
     let data = graphql_request(api, body).await?;
