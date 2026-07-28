@@ -185,6 +185,121 @@ fn start_collecting_apply_server() -> (String, mpsc::Receiver<Vec<String>>, thre
     (url, rx, handle)
 }
 
+fn start_resumable_multi_app_apply_server(
+) -> (String, mpsc::Receiver<Vec<String>>, thread::JoinHandle<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    let (tx, rx) = mpsc::channel();
+    let handle = thread::spawn(move || {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let mut requests = Vec::new();
+        let mut first_created = false;
+        let mut second_created = false;
+        let mut apply_attempts = 0;
+        let mut iac_applied = false;
+
+        loop {
+            match listener.accept() {
+                Ok((mut stream, _)) => {
+                    stream.set_nonblocking(false).unwrap();
+                    let mut buf = [0_u8; 16384];
+                    let n = stream.read(&mut buf).unwrap();
+                    let req = String::from_utf8_lossy(&buf[..n]).to_string();
+                    requests.push(req.clone());
+
+                    let (status, body) = if req.starts_with("GET /v1/build-runner-backends ") {
+                        (
+                            "HTTP/1.1 200 OK",
+                            build_runner_backend_availability_body().to_string(),
+                        )
+                    } else if req.starts_with("GET /v1/compute/apps/app_second/env ") {
+                        let body = if iac_applied {
+                            r#"{"env_vars":[{"id":"env_secret","key":"DATABASE_URL","value":"********","target":"all","is_secret":true}]}"#
+                        } else {
+                            r#"{"env_vars":[]}"#
+                        };
+                        ("HTTP/1.1 200 OK", body.to_string())
+                    } else if req.starts_with("GET /v1/compute/apps ") {
+                        let body = match (first_created, second_created) {
+                            (false, false) => r#"{"apps":[]}"#,
+                            (true, false) => {
+                                r#"{"apps":[{"id":"app_first","name":"first-app","framework":"next_js","repository_url":"https://github.com/quantum-box/first-repo","repository_owner":"quantum-box","repository_name":"first-repo","default_branch":"main","deployment_target":"cloud_run"}]}"#
+                            }
+                            (true, true) => {
+                                r#"{"apps":[{"id":"app_first","name":"first-app","framework":"next_js","repository_url":"https://github.com/quantum-box/first-repo","repository_owner":"quantum-box","repository_name":"first-repo","default_branch":"main","deployment_target":"cloud_run"},{"id":"app_second","name":"second-app","framework":"next_js","repository_url":"https://github.com/quantum-box/second-repo","repository_owner":"quantum-box","repository_name":"second-repo","default_branch":"main","deployment_target":"cloud_run"}]}"#
+                            }
+                            (false, true) => unreachable!(),
+                        };
+                        ("HTTP/1.1 200 OK", body.to_string())
+                    } else if req.starts_with("POST /v1/compute/apps ")
+                        && req.contains(r#""name":"first-app""#)
+                    {
+                        first_created = true;
+                        (
+                                "HTTP/1.1 200 OK",
+                                r#"{"id":"app_first","name":"first-app","framework":"next_js","repository_url":"https://github.com/quantum-box/first-repo","repository_owner":"quantum-box","repository_name":"first-repo","default_branch":"main","deployment_target":"cloud_run"}"#.to_string(),
+                            )
+                    } else if req.starts_with("POST /v1/compute/apps ")
+                        && req.contains(r#""name":"second-app""#)
+                    {
+                        second_created = true;
+                        (
+                                "HTTP/1.1 200 OK",
+                                r#"{"id":"app_second","name":"second-app","framework":"next_js","repository_url":"https://github.com/quantum-box/second-repo","repository_owner":"quantum-box","repository_name":"second-repo","default_branch":"main","deployment_target":"cloud_run"}"#.to_string(),
+                            )
+                    } else if req.starts_with("POST /v1/graphql ") && req.contains("SaveManifest") {
+                        (
+                            "HTTP/1.1 200 OK",
+                            r#"{"data":{"saveManifest":{"kind":"CloudApp"}}}"#.to_string(),
+                        )
+                    } else if req.starts_with("POST /v1/graphql ") && req.contains("ApplyManifest")
+                    {
+                        apply_attempts += 1;
+                        if apply_attempts == 1 {
+                            (
+                                "HTTP/1.1 503 Service Unavailable",
+                                r#"{"error":"injected later app apply failure"}"#.to_string(),
+                            )
+                        } else {
+                            iac_applied = true;
+                            (
+                                "HTTP/1.1 200 OK",
+                                r#"{"data":{"applyManifest":{"success":true}}}"#.to_string(),
+                            )
+                        }
+                    } else {
+                        (
+                            "HTTP/1.1 500 Internal Server Error",
+                            r#"{"error":"unexpected request"}"#.to_string(),
+                        )
+                    };
+                    let response = format!(
+                        "{status}\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+                        body.len(),
+                        body
+                    );
+                    stream.write_all(response.as_bytes()).unwrap();
+
+                    if iac_applied && req.starts_with("GET /v1/compute/apps/app_second/env ") {
+                        tx.send(requests).unwrap();
+                        return;
+                    }
+                }
+                Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
+                    if Instant::now() >= deadline {
+                        tx.send(requests).unwrap();
+                        return;
+                    }
+                    thread::sleep(Duration::from_millis(10));
+                }
+                Err(err) => panic!("accept resumable apply request: {err}"),
+            }
+        }
+    });
+    (url, rx, handle)
+}
+
 fn start_internal_service_preflight_error_server(
 ) -> (String, mpsc::Receiver<Vec<String>>, thread::JoinHandle<()>) {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
@@ -1098,6 +1213,145 @@ spec:
     );
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("app entry invalid-app is missing repository"));
+}
+
+#[test]
+fn compute_apps_apply_reports_partial_progress_and_resumes_idempotently() {
+    let tmp = TempDir::new().unwrap();
+    let manifest = tmp.path().join("tachyon.yml");
+    fs::write(
+        &manifest,
+        r#"
+apiVersion: apps.tachy.one/v1alpha
+kind: CloudApps
+metadata:
+  name: resumable-apply
+spec:
+  apps:
+    - name: first-app
+      repository:
+        url: https://github.com/quantum-box/first-repo
+        owner: quantum-box
+        name: first-repo
+    - name: second-app
+      repository:
+        url: https://github.com/quantum-box/second-repo
+        owner: quantum-box
+        name: second-repo
+      envVars:
+        - name: DATABASE_URL
+          type: credential
+          valueFrom:
+            secret: providers/second-app-database
+"#,
+    )
+    .unwrap();
+    let (api_url, rx, handle) = start_resumable_multi_app_apply_server();
+
+    let mut first = isolated_command(tmp.path());
+    let first_output = first
+        .current_dir(tmp.path())
+        .env("TACHYON_API_URL", &api_url)
+        .env("TACHYON_API_KEY", "test-token")
+        .env("TACHYON_TENANT_ID", "tn_01hjryxysgey07h5jz5wagqj0m")
+        .args([
+            "compute",
+            "apps",
+            "apply",
+            "-f",
+            manifest.to_str().unwrap(),
+            "--environment",
+            "sandbox",
+        ])
+        .output()
+        .expect("run first compute apps apply");
+
+    assert!(
+        !first_output.status.success(),
+        "first apply unexpectedly succeeded\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&first_output.stdout),
+        String::from_utf8_lossy(&first_output.stderr)
+    );
+    let first_stdout = String::from_utf8_lossy(&first_output.stdout);
+    let first_stderr = String::from_utf8_lossy(&first_output.stderr);
+    assert!(first_stdout.contains("CREATED first-app (app_first)"));
+    assert!(!first_stdout.contains("CREATED second-app"));
+    assert!(first_stderr.contains("fully completed 1/2 apps"));
+    assert!(first_stderr.contains("failed app second-app (2/2)"));
+    assert!(first_stderr.contains("may be partially applied"));
+    assert!(first_stderr.contains("remaining incomplete apps: 1"));
+    assert!(first_stderr.contains("Re-run the same apply command to resume safely."));
+    assert!(first_stderr.contains("graphql request failed: status=503 Service Unavailable"));
+
+    let mut second = isolated_command(tmp.path());
+    let second_output = second
+        .current_dir(tmp.path())
+        .env("TACHYON_API_URL", api_url)
+        .env("TACHYON_API_KEY", "test-token")
+        .env("TACHYON_TENANT_ID", "tn_01hjryxysgey07h5jz5wagqj0m")
+        .args([
+            "compute",
+            "apps",
+            "apply",
+            "-f",
+            manifest.to_str().unwrap(),
+            "--environment",
+            "sandbox",
+        ])
+        .output()
+        .expect("resume compute apps apply");
+
+    assert!(
+        second_output.status.success(),
+        "resumed apply failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&second_output.stdout),
+        String::from_utf8_lossy(&second_output.stderr)
+    );
+    let second_stdout = String::from_utf8_lossy(&second_output.stdout);
+    assert!(second_stdout.contains("UNCHANGED first-app (app_first)"));
+    assert!(second_stdout.contains("UNCHANGED second-app (app_second)"));
+    assert!(second_stdout.contains("Summary: 0 created, 0 updated, 2 unchanged"));
+
+    let requests = rx.recv_timeout(Duration::from_secs(10)).unwrap();
+    handle.join().unwrap();
+    assert_eq!(
+        requests
+            .iter()
+            .filter(|request| {
+                request.starts_with("POST /v1/compute/apps ")
+                    && request.contains(r#""name":"first-app""#)
+            })
+            .count(),
+        1,
+        "first app must not be created again on resume: {requests:#?}"
+    );
+    assert_eq!(
+        requests
+            .iter()
+            .filter(|request| {
+                request.starts_with("POST /v1/compute/apps ")
+                    && request.contains(r#""name":"second-app""#)
+            })
+            .count(),
+        1,
+        "partially applied app must not be created again on resume: {requests:#?}"
+    );
+    assert!(
+        requests
+            .iter()
+            .all(|request| !request.starts_with("PATCH /v1/compute/apps/")),
+        "matching apps must not be patched on resume: {requests:#?}"
+    );
+    assert_eq!(
+        requests
+            .iter()
+            .filter(|request| {
+                request.starts_with("POST /v1/graphql ") && request.contains("ApplyManifest")
+            })
+            .count(),
+        2,
+        "failed applyManifest must be retried exactly once: {requests:#?}"
+    );
 }
 
 #[test]
