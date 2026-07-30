@@ -141,6 +141,12 @@ struct BuildCacheStats {
     restored_bytes: Option<u64>,
     #[serde(default)]
     total_bytes: Option<u64>,
+    #[serde(default)]
+    cache_init_seconds: Option<f64>,
+    #[serde(default)]
+    cache_restore_seconds: Option<f64>,
+    #[serde(default)]
+    cache_prune_seconds: Option<f64>,
 }
 
 #[derive(Debug)]
@@ -166,24 +172,50 @@ pub async fn run_from_env(spec_env: &str) -> Result<()> {
         "starting Tachyon Cloud App build job"
     );
 
-    let result = run_build(&workload).await;
+    let cache_stats = load_cache_stats();
+    let mut phase_durations = cache_phase_durations(&cache_stats);
+    let result = run_build(&workload, &mut phase_durations).await;
+    send_phase_durations(&workload, &phase_durations, cache_stats.cache_hit).await;
     let duration_secs = i32::try_from(started.elapsed().as_secs()).unwrap_or(i32::MAX);
 
     match &result {
         Ok(output) => {
-            send_callback(&workload, "SUCCESS", duration_secs, Some(output), None).await?;
+            let callback_started = Instant::now();
+            let callback_result =
+                send_callback(&workload, "SUCCESS", duration_secs, Some(output), None).await;
+            send_phase_durations(
+                &workload,
+                &BTreeMap::from([(
+                    "completion_callback".to_string(),
+                    callback_started.elapsed().as_secs_f64(),
+                )]),
+                cache_stats.cache_hit,
+            )
+            .await;
+            callback_result?;
             tracing::info!("Tachyon Cloud App build job succeeded");
             Ok(())
         }
         Err(error) => {
-            send_callback(
+            let callback_started = Instant::now();
+            let callback_result = send_callback(
                 &workload,
                 "FAILURE",
                 duration_secs,
                 None,
                 Some(error.to_string()),
             )
-            .await?;
+            .await;
+            send_phase_durations(
+                &workload,
+                &BTreeMap::from([(
+                    "completion_callback".to_string(),
+                    callback_started.elapsed().as_secs_f64(),
+                )]),
+                cache_stats.cache_hit,
+            )
+            .await;
+            callback_result?;
             Err(anyhow!("{error}"))
         }
     }
@@ -194,7 +226,10 @@ fn parse_workload_from_env(spec_env: &str) -> Result<BuildWorkloadSpec> {
     serde_json::from_str(&json).context("failed to parse build workload spec")
 }
 
-async fn run_build(workload: &BuildWorkloadSpec) -> Result<CommandResult> {
+async fn run_build(
+    workload: &BuildWorkloadSpec,
+    phase_durations: &mut BTreeMap<String, f64>,
+) -> Result<CommandResult> {
     let checkout_dir = PathBuf::from("/workspace/source");
     if checkout_dir.exists() {
         tokio::fs::remove_dir_all(&checkout_dir)
@@ -207,7 +242,13 @@ async fn run_build(workload: &BuildWorkloadSpec) -> Result<CommandResult> {
 
     let env = workload_env(workload)?;
     send_phase_event(workload, "clone").await;
-    clone_repository(workload, &checkout_dir, &env).await?;
+    let phase_started = Instant::now();
+    let phase_result = clone_repository(workload, &checkout_dir, &env).await;
+    phase_durations.insert(
+        "git_checkout".to_string(),
+        phase_started.elapsed().as_secs_f64(),
+    );
+    phase_result?;
 
     let app_dir = workspace_dir(workload, &checkout_dir);
     if !app_dir.exists() {
@@ -240,49 +281,63 @@ async fn run_build(workload: &BuildWorkloadSpec) -> Result<CommandResult> {
 
     if let Some(command) = install_command(workload, &app_dir) {
         send_phase_event(workload, "install").await;
-        append_result(
-            &mut combined,
-            run_shell("install", &command, &app_dir, &env).await?,
+        let phase_started = Instant::now();
+        let phase_result = run_shell("install", &command, &app_dir, &env).await;
+        phase_durations.insert(
+            "package_install".to_string(),
+            phase_started.elapsed().as_secs_f64(),
         );
+        append_result(&mut combined, phase_result?);
     }
 
     let build_command = build_command(workload, &app_dir)
         .ok_or_else(|| anyhow!("build command is not configured"))?;
     send_phase_event(workload, "build").await;
-    append_result(
-        &mut combined,
-        run_shell("build", &build_command, &app_dir, &env).await?,
+    let phase_started = Instant::now();
+    let phase_result = run_shell("build", &build_command, &app_dir, &env).await;
+    phase_durations.insert(
+        "app_build".to_string(),
+        phase_started.elapsed().as_secs_f64(),
     );
+    append_result(&mut combined, phase_result?);
 
     if is_cloud_run(workload) {
         send_phase_event(workload, "package").await;
+        let phase_started = Instant::now();
         prepare_docker_config(&env).await?;
-        append_result(
-            &mut combined,
-            run_buildkit(workload, &checkout_dir, &app_dir, &env).await?,
+        let phase_result = run_buildkit(workload, &checkout_dir, &app_dir, &env).await;
+        phase_durations.insert(
+            "artifact".to_string(),
+            phase_started.elapsed().as_secs_f64(),
         );
+        append_result(&mut combined, phase_result?);
     }
 
     if is_workers {
         send_phase_event(workload, "deploy").await;
-        append_result(
-            &mut combined,
-            run_cloudflare_workers_deploy(workload, &app_dir, &env).await?,
-        );
+        let phase_started = Instant::now();
+        let phase_result = run_cloudflare_workers_deploy(workload, &app_dir, &env).await;
+        phase_durations.insert("deploy".to_string(), phase_started.elapsed().as_secs_f64());
+        append_result(&mut combined, phase_result?);
     } else if is_pages {
         send_phase_event(workload, "deploy").await;
-        append_result(
-            &mut combined,
-            run_cloudflare_pages_deploy(workload, &checkout_dir, &app_dir, &env).await?,
-        );
+        let phase_started = Instant::now();
+        let phase_result =
+            run_cloudflare_pages_deploy(workload, &checkout_dir, &app_dir, &env).await;
+        phase_durations.insert("deploy".to_string(), phase_started.elapsed().as_secs_f64());
+        append_result(&mut combined, phase_result?);
     }
 
     if is_lambda(workload) {
         send_phase_event(workload, "package").await;
-        append_result(
-            &mut combined,
-            run_lambda_package_and_upload(workload, &app_dir, &env, build_started_at).await?,
+        let phase_started = Instant::now();
+        let phase_result =
+            run_lambda_package_and_upload(workload, &app_dir, &env, build_started_at).await;
+        phase_durations.insert(
+            "artifact".to_string(),
+            phase_started.elapsed().as_secs_f64(),
         );
+        append_result(&mut combined, phase_result?);
     }
 
     Ok(combined)
@@ -1472,6 +1527,40 @@ fn load_cache_stats_from(path: &Path) -> BuildCacheStats {
 /// any failure (older API without the endpoint, network issues) is
 /// logged at debug level and never affects the build.
 async fn send_phase_event(workload: &BuildWorkloadSpec, phase: &str) {
+    send_phase_payload(workload, Some(phase), None, None).await;
+}
+
+async fn send_phase_durations(
+    workload: &BuildWorkloadSpec,
+    durations_seconds: &BTreeMap<String, f64>,
+    cache_hit: Option<bool>,
+) {
+    if durations_seconds.is_empty() {
+        return;
+    }
+    send_phase_payload(workload, None, Some(durations_seconds), cache_hit).await;
+}
+
+fn cache_phase_durations(stats: &BuildCacheStats) -> BTreeMap<String, f64> {
+    let mut durations = BTreeMap::new();
+    for (phase, duration) in [
+        ("cache_init", stats.cache_init_seconds),
+        ("cache_restore", stats.cache_restore_seconds),
+        ("cache_prune", stats.cache_prune_seconds),
+    ] {
+        if let Some(duration_seconds) = duration {
+            durations.insert(phase.to_string(), duration_seconds);
+        }
+    }
+    durations
+}
+
+async fn send_phase_payload(
+    workload: &BuildWorkloadSpec,
+    phase: Option<&str>,
+    durations_seconds: Option<&BTreeMap<String, f64>>,
+    cache_hit: Option<bool>,
+) {
     let Some(callback) = workload.callback.as_ref() else {
         return;
     };
@@ -1482,7 +1571,12 @@ async fn send_phase_event(workload: &BuildWorkloadSpec, phase: &str) {
         return;
     };
 
-    let payload = serde_json::json!({ "build_id": build_id, "phase": phase });
+    let payload = serde_json::json!({
+        "build_id": build_id,
+        "phase": phase,
+        "durations_seconds": durations_seconds,
+        "cache_hit": cache_hit,
+    });
     let result = reqwest::Client::new()
         .post(&url)
         .timeout(Duration::from_secs(5))
@@ -1491,11 +1585,19 @@ async fn send_phase_event(workload: &BuildWorkloadSpec, phase: &str) {
         .await;
     match result {
         Ok(response) if !response.status().is_success() => {
-            tracing::debug!(phase, status = %response.status(), "build phase event rejected");
+            tracing::debug!(
+                event_kind = if phase.is_some() { "progress" } else { "durations" },
+                status = %response.status(),
+                "build phase event rejected"
+            );
         }
         Ok(_) => {}
         Err(error) => {
-            tracing::debug!(phase, %error, "build phase event failed");
+            tracing::debug!(
+                event_kind = if phase.is_some() { "progress" } else { "durations" },
+                %error,
+                "build phase event failed"
+            );
         }
     }
 }
@@ -2090,13 +2192,27 @@ mod tests {
         let path = temp.path().join("stats.json");
         std::fs::write(
             &path,
-            br#"{"cache_hit":true,"restored_bytes":1234,"total_bytes":56789}"#,
+            br#"{"cache_hit":true,"restored_bytes":1234,"total_bytes":56789,"cache_init_seconds":1.25,"cache_restore_seconds":0.75,"cache_prune_seconds":0.5}"#,
         )
         .unwrap();
         let stats = load_cache_stats_from(&path);
         assert_eq!(stats.cache_hit, Some(true));
         assert_eq!(stats.restored_bytes, Some(1234));
         assert_eq!(stats.total_bytes, Some(56789));
+        assert_eq!(stats.cache_init_seconds, Some(1.25));
+        assert_eq!(stats.cache_restore_seconds, Some(0.75));
+        assert_eq!(stats.cache_prune_seconds, Some(0.5));
+        assert_eq!(
+            cache_phase_durations(&stats)
+                .keys()
+                .cloned()
+                .collect::<Vec<_>>(),
+            vec![
+                "cache_init".to_string(),
+                "cache_prune".to_string(),
+                "cache_restore".to_string(),
+            ]
+        );
     }
 
     #[test]
