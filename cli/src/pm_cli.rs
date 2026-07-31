@@ -1,12 +1,17 @@
 //! `tachyon pm` subcommands for provider-agnostic PM operations.
 
-use anyhow::Result;
+use std::time::Duration;
+
+use anyhow::{anyhow, Result};
 use clap::{Args, Subcommand};
 use serde::{Deserialize, Serialize};
 use tachyon_sdk::apis::configuration::Configuration;
 
-use crate::client::{print_json, ApiClient};
+use crate::client::{print_json, ApiClient, HttpError};
 use crate::pm_resource_cli::{self, ResourceCommand};
+
+const LINEAR_OAUTH_RESOLUTION_OPERATION: &str = "linear_oauth_client_resolve";
+const LINEAR_RECONCILE_WAIT_TIMEOUT_SECONDS: u64 = 30 * 60;
 
 #[derive(Debug, Clone, Args, PartialEq, Eq)]
 pub struct PmArgs {
@@ -436,6 +441,39 @@ struct UpdatePmIssueResponse {
     issue: PmIssue,
 }
 
+#[derive(Debug, Deserialize)]
+struct LinearOAuthResolutionErrorResponse {
+    provider: String,
+    operation: String,
+    recovery: LinearOAuthRecoveryAction,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum LinearOAuthRecoveryAction {
+    ReconcilePending {
+        retry_after_seconds: u64,
+        reconcile_interval_seconds: u64,
+    },
+    ReconnectRequired,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ReconcilePending {
+    retry_after_seconds: u64,
+    reconcile_interval_seconds: u64,
+}
+
+#[derive(Debug, Serialize)]
+struct LinearReconcileTimeoutResponse {
+    error: &'static str,
+    provider: &'static str,
+    operation: &'static str,
+    waited_seconds: u64,
+    wait_timeout_seconds: u64,
+    message: String,
+}
+
 fn is_false(value: &bool) -> bool {
     !*value
 }
@@ -470,13 +508,90 @@ fn is_linear_provider(provider: &Option<String>) -> bool {
         .is_some_and(|provider| provider.eq_ignore_ascii_case("linear"))
 }
 
+fn linear_reconcile_pending(error: &anyhow::Error) -> Option<ReconcilePending> {
+    let http_error = error.downcast_ref::<HttpError>()?;
+    if http_error.status != reqwest::StatusCode::FAILED_DEPENDENCY {
+        return None;
+    }
+
+    let response =
+        serde_json::from_str::<LinearOAuthResolutionErrorResponse>(&http_error.body).ok()?;
+    if response.provider != "linear" || response.operation != LINEAR_OAUTH_RESOLUTION_OPERATION {
+        return None;
+    }
+
+    match response.recovery {
+        LinearOAuthRecoveryAction::ReconcilePending {
+            retry_after_seconds,
+            reconcile_interval_seconds,
+        } if reconcile_interval_seconds > 0 => Some(ReconcilePending {
+            retry_after_seconds,
+            reconcile_interval_seconds,
+        }),
+        LinearOAuthRecoveryAction::ReconcilePending { .. }
+        | LinearOAuthRecoveryAction::ReconnectRequired => None,
+    }
+}
+
+fn reconcile_delay_seconds(pending: ReconcilePending, first_wait: bool) -> u64 {
+    if first_wait {
+        pending.retry_after_seconds
+    } else {
+        pending.reconcile_interval_seconds
+    }
+}
+
 async fn run_create(
     api: &ApiClient,
     tenant_id: &str,
     request: CreatePmIssueRequest,
     json: bool,
 ) -> Result<()> {
-    let response: CreatePmIssueResponse = api.post(&issues_path(tenant_id), &request).await?;
+    let path = issues_path(tenant_id);
+    let mut first_wait = true;
+    let max_wait = Duration::from_secs(LINEAR_RECONCILE_WAIT_TIMEOUT_SECONDS);
+    let mut reconcile_wait: Option<(tokio::time::Instant, tokio::time::Instant)> = None;
+
+    let response: CreatePmIssueResponse = loop {
+        match api.post_once(&path, &request).await {
+            Ok(response) => break response,
+            Err(error) => {
+                let Some(pending) = linear_reconcile_pending(&error) else {
+                    return Err(error);
+                };
+                let delay_seconds = reconcile_delay_seconds(pending, first_wait);
+                let delay = Duration::from_secs(delay_seconds);
+                let (started_at, deadline) = *reconcile_wait.get_or_insert_with(|| {
+                    let started_at = tokio::time::Instant::now();
+                    let deadline = started_at
+                        .checked_add(max_wait)
+                        .expect("Linear reconcile wait deadline is representable");
+                    (started_at, deadline)
+                });
+                let now = tokio::time::Instant::now();
+                let waited = now.duration_since(started_at);
+                if now >= deadline {
+                    return linear_reconcile_timeout(json, waited);
+                }
+                let Some(retry_at) = now.checked_add(delay) else {
+                    return linear_reconcile_timeout(json, waited);
+                };
+                if retry_at > deadline {
+                    return linear_reconcile_timeout(json, waited);
+                }
+
+                eprintln!(
+                    "Linear OAuth reconcile is pending; retrying issue creation in \
+                     {delay_seconds} seconds (waited {} of \
+                     {LINEAR_RECONCILE_WAIT_TIMEOUT_SECONDS} seconds).",
+                    waited.as_secs()
+                );
+                tokio::time::sleep(delay).await;
+                first_wait = false;
+            }
+        }
+    };
+
     if json {
         return print_json(&response);
     }
@@ -487,6 +602,25 @@ async fn run_create(
         response.issue.url
     );
     Ok(())
+}
+
+fn linear_reconcile_timeout(json: bool, waited: Duration) -> Result<()> {
+    let message = format!(
+        "Linear OAuth reconcile is incomplete and cannot be retried within the \
+         {LINEAR_RECONCILE_WAIT_TIMEOUT_SECONDS}-second wait deadline. Check reconcile worker \
+         operation and the Linear connection state before trying again."
+    );
+    if json {
+        print_json(&LinearReconcileTimeoutResponse {
+            error: "linear_oauth_reconcile_timeout",
+            provider: "linear",
+            operation: LINEAR_OAUTH_RESOLUTION_OPERATION,
+            waited_seconds: waited.as_secs(),
+            wait_timeout_seconds: LINEAR_RECONCILE_WAIT_TIMEOUT_SECONDS,
+            message: message.clone(),
+        })?;
+    }
+    Err(anyhow!(message))
 }
 
 async fn run_list(
@@ -1132,5 +1266,16 @@ mod tests {
         assert!(is_linear_provider(&Some("Linear".to_string())));
         assert!(!is_linear_provider(&Some("jira".to_string())));
         assert!(!is_linear_provider(&None));
+    }
+
+    #[test]
+    fn uses_retry_after_for_first_wait_and_interval_for_later_waits() {
+        let pending = ReconcilePending {
+            retry_after_seconds: 17,
+            reconcile_interval_seconds: 29,
+        };
+
+        assert_eq!(reconcile_delay_seconds(pending, true), 17);
+        assert_eq!(reconcile_delay_seconds(pending, false), 29);
     }
 }
