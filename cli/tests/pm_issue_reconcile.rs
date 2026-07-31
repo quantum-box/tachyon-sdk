@@ -50,6 +50,26 @@ fn run_create(api_url: &str, home: &Path) -> Output {
         .expect("run tachyon linear issue create")
 }
 
+fn run_unassigned_create(api_url: &str, home: &Path) -> Output {
+    isolated_command(home)
+        .env("TACHYON_API_URL", api_url)
+        .args([
+            "issue",
+            "create",
+            "--provider",
+            "linear",
+            "--team",
+            "PLT",
+            "--title",
+            "Fake reconcile test issue",
+            "--delegate-id",
+            "",
+            "--json",
+        ])
+        .output()
+        .expect("run tachyon issue create with an empty delegate id")
+}
+
 fn read_request(stream: &mut std::net::TcpStream) -> String {
     let mut request = Vec::new();
     let mut buffer = [0_u8; 4_096];
@@ -197,6 +217,75 @@ fn created_issue() -> Value {
 fn finish_requests(rx: mpsc::Receiver<Vec<String>>, handle: thread::JoinHandle<()>) -> Vec<String> {
     handle.join().unwrap();
     rx.recv().unwrap()
+}
+
+fn request_body(request: &str) -> Value {
+    let (_, body) = request
+        .split_once("\r\n\r\n")
+        .expect("request contains a body");
+    serde_json::from_str(body).expect("request body is JSON")
+}
+
+#[test]
+fn issue_create_help_documents_empty_delegate_id_for_all_aliases() {
+    let temporary_home = TempDir::new().unwrap();
+    let aliases: &[&[&str]] = &[
+        &["issue", "create", "--help"],
+        &["pm", "issue", "create", "--help"],
+        &["linear", "issue", "create", "--help"],
+    ];
+
+    for args in aliases {
+        let output = isolated_command(temporary_home.path())
+            .args(*args)
+            .output()
+            .expect("render issue create help");
+        assert!(
+            output.status.success(),
+            "{} help failed:\n{}",
+            args.join(" "),
+            String::from_utf8_lossy(&output.stderr)
+        );
+
+        let help = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            help.contains("pass an empty string (`--delegate-id \"\"`)"),
+            "{} help does not document the empty value:\n{help}",
+            args.join(" ")
+        );
+        assert!(
+            help.contains("disable automatic delegation and create the issue unassigned"),
+            "{} help does not explain the effect:\n{help}",
+            args.join(" ")
+        );
+    }
+}
+
+#[test]
+fn empty_delegate_id_disables_linear_auto_delegate() {
+    let temporary_home = TempDir::new().unwrap();
+    let (api_url, rx, handle) = start_server(vec![Response::Json {
+        status: "201 Created",
+        body: created_issue(),
+    }]);
+
+    let output = run_unassigned_create(&api_url, temporary_home.path());
+    let requests = finish_requests(rx, handle);
+
+    assert!(
+        output.status.success(),
+        "issue create failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(requests.len(), 1);
+    let body = request_body(&requests[0]);
+    assert_eq!(body["delegate_id"], "");
+    assert_eq!(
+        body.get("auto_delegate_to_linear_agent"),
+        None,
+        "false is omitted from the request; the field must only be sent when auto-delegation is enabled"
+    );
 }
 
 #[test]

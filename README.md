@@ -126,6 +126,10 @@ tachyon compute preview <app-id> --branch feature/my-change
 tachyon compute preview <app-id> --pr 123
 tachyon compute builds trigger <app-id> --pr 123
 
+# Create a Linear issue without automatic delegation (leave it unassigned)
+tachyon issue create --provider linear --team PLT \
+  --title "Unassigned issue" --delegate-id ""
+
 # Reconcile only one app's production release-check contract.
 # Production change-control approval is still required.
 tachyon compute apps apply \

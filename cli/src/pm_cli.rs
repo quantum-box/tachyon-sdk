@@ -91,7 +91,9 @@ pub enum IssueCommand {
         /// Provider-specific assignee id
         #[arg(long, visible_alias = "assignee")]
         assignee_id: Option<String>,
-        /// Provider-specific delegate agent user id
+        /// Provider-specific delegate agent user id. For Linear issue creation, pass an empty
+        /// string (`--delegate-id ""`) to disable automatic delegation and create the issue
+        /// unassigned.
         #[arg(long)]
         delegate_id: Option<String>,
         /// Provider-specific label id. Can be specified multiple times.
