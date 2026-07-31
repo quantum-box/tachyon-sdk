@@ -193,6 +193,27 @@ impl ApiClient {
             .with_context(|| format!("parse POST {path}"))
     }
 
+    /// POST a JSON body exactly once and deserialize the response.
+    ///
+    /// Unlike [`Self::post`], this method never replays the request after a
+    /// 401. Use it for non-idempotent operations where the server might have
+    /// accepted the request before the client observes a failure.
+    pub async fn post_once<B: serde::Serialize, T: DeserializeOwned>(
+        &self,
+        path: &str,
+        body: &B,
+    ) -> Result<T> {
+        let url = format!("{}{}", self.base_url, path);
+        let resp = self
+            .client
+            .post(&url)
+            .json(body)
+            .send()
+            .await
+            .with_context(|| format!("POST {url}"))?;
+        self.json_or_error("POST", path, resp).await
+    }
+
     /// POST with no response body expected (returns status text).
     pub async fn post_no_body(&self, path: &str) -> Result<String> {
         let url = format!("{}{}", self.base_url, path);

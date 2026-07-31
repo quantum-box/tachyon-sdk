@@ -53,7 +53,9 @@ OAuth resolution boundary.
 The first delay comes from `retry_after_seconds`; subsequent delays use
 `reconcile_interval_seconds`. Waiting is bounded by a deterministic deadline.
 Progress is emitted to stderr, while successful `--json` output remains
-exclusively on stdout.
+exclusively on stdout. With `--json`, a deadline failure also writes a
+structured `linear_oauth_reconcile_timeout` result to stdout before the
+operational error is reported on stderr.
 
 Transport errors, success-body parse failures, `reconnect_required`, and all
 other HTTP errors return immediately without replay. A wait timeout advises
