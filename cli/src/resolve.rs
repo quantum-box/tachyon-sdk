@@ -65,6 +65,25 @@ struct ServiceAccountEntry {
     name: Option<String>,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum ServiceAccountListResponse {
+    Envelope {
+        #[serde(rename = "serviceAccounts")]
+        service_accounts: Vec<ServiceAccountEntry>,
+    },
+    Array(Vec<ServiceAccountEntry>),
+}
+
+impl ServiceAccountListResponse {
+    fn into_vec(self) -> Vec<ServiceAccountEntry> {
+        match self {
+            Self::Envelope { service_accounts } => service_accounts,
+            Self::Array(service_accounts) => service_accounts,
+        }
+    }
+}
+
 // --- Tenant ID resolution ---
 
 /// Resolve a tenant identifier (ID, alias, or name) to the operator ID.
@@ -246,12 +265,19 @@ pub async fn resolve_integration_id(api: &ApiClient, name_or_id: &str) -> Result
 // --- Service Account ID resolution ---
 
 /// Resolve a service account identifier (ID or name) to the service account ID.
-pub async fn resolve_service_account_id(api: &ApiClient, name_or_id: &str) -> Result<String> {
+pub async fn resolve_service_account_id(
+    api: &ApiClient,
+    tenant_id: &str,
+    name_or_id: &str,
+) -> Result<String> {
     if looks_like_id(name_or_id) {
         return Ok(name_or_id.to_string());
     }
 
-    let accounts: Vec<ServiceAccountEntry> = api.get("/v1/auth/service-accounts").await?;
+    let response: ServiceAccountListResponse = api
+        .get_query("/v1/auth/service-accounts", &[("operator_id", tenant_id)])
+        .await?;
+    let accounts = response.into_vec();
     let matches: Vec<_> = accounts
         .iter()
         .filter(|s| s.name.as_deref() == Some(name_or_id))

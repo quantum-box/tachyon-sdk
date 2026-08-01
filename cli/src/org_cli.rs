@@ -159,8 +159,24 @@ struct UserResponse {
     email: Option<String>,
     #[serde(default)]
     role: Option<String>,
-    #[serde(default)]
+    #[serde(default, alias = "createdAt")]
     created_at: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum UserListResponse {
+    Envelope { users: Vec<UserResponse> },
+    Array(Vec<UserResponse>),
+}
+
+impl UserListResponse {
+    fn into_vec(self) -> Vec<UserResponse> {
+        match self {
+            Self::Envelope { users } => users,
+            Self::Array(users) => users,
+        }
+    }
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -170,8 +186,27 @@ struct ServiceAccountResponse {
     name: Option<String>,
     #[serde(default)]
     description: Option<String>,
-    #[serde(default)]
+    #[serde(default, alias = "createdAt")]
     created_at: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum ServiceAccountListResponse {
+    Envelope {
+        #[serde(rename = "serviceAccounts")]
+        service_accounts: Vec<ServiceAccountResponse>,
+    },
+    Array(Vec<ServiceAccountResponse>),
+}
+
+impl ServiceAccountListResponse {
+    fn into_vec(self) -> Vec<ServiceAccountResponse> {
+        match self {
+            Self::Envelope { service_accounts } => service_accounts,
+            Self::Array(service_accounts) => service_accounts,
+        }
+    }
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -181,8 +216,27 @@ struct ApiKeyResponse {
     name: Option<String>,
     #[serde(default)]
     prefix: Option<String>,
-    #[serde(default)]
+    #[serde(default, alias = "createdAt")]
     created_at: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum ApiKeyListResponse {
+    Envelope {
+        #[serde(rename = "apiKeys")]
+        api_keys: Vec<ApiKeyResponse>,
+    },
+    Array(Vec<ApiKeyResponse>),
+}
+
+impl ApiKeyListResponse {
+    fn into_vec(self) -> Vec<ApiKeyResponse> {
+        match self {
+            Self::Envelope { api_keys } => api_keys,
+            Self::Array(api_keys) => api_keys,
+        }
+    }
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -293,8 +347,11 @@ async fn run_operators_by_alias(api: &ApiClient, alias: &str, json: bool) -> Res
     Ok(())
 }
 
-async fn run_users_list(api: &ApiClient, json: bool) -> Result<()> {
-    let users: Vec<UserResponse> = api.get("/v1/auth/users").await?;
+async fn run_users_list(api: &ApiClient, tenant_id: &str, json: bool) -> Result<()> {
+    let response: UserListResponse = api
+        .get_query("/v1/auth/users", &[("operator_id", tenant_id)])
+        .await?;
+    let users = response.into_vec();
     if json {
         return print_json(&users);
     }
@@ -396,8 +453,11 @@ async fn run_users_policies(api: &ApiClient, user_id: &str, json: bool) -> Resul
     Ok(())
 }
 
-async fn run_service_accounts_list(api: &ApiClient, json: bool) -> Result<()> {
-    let accs: Vec<ServiceAccountResponse> = api.get("/v1/auth/service-accounts").await?;
+async fn run_service_accounts_list(api: &ApiClient, tenant_id: &str, json: bool) -> Result<()> {
+    let response: ServiceAccountListResponse = api
+        .get_query("/v1/auth/service-accounts", &[("operator_id", tenant_id)])
+        .await?;
+    let accs = response.into_vec();
     if json {
         return print_json(&accs);
     }
@@ -422,8 +482,18 @@ async fn run_service_accounts_list(api: &ApiClient, json: bool) -> Result<()> {
     Ok(())
 }
 
-async fn run_service_accounts_get(api: &ApiClient, id: &str, json: bool) -> Result<()> {
-    let sa: ServiceAccountResponse = api.get(&format!("/v1/auth/service-accounts/{id}")).await?;
+async fn run_service_accounts_get(
+    api: &ApiClient,
+    tenant_id: &str,
+    id: &str,
+    json: bool,
+) -> Result<()> {
+    let sa: ServiceAccountResponse = api
+        .get_query(
+            &format!("/v1/auth/service-accounts/{id}"),
+            &[("operator_id", tenant_id)],
+        )
+        .await?;
     if json {
         return print_json(&sa);
     }
@@ -434,10 +504,19 @@ async fn run_service_accounts_get(api: &ApiClient, id: &str, json: bool) -> Resu
     Ok(())
 }
 
-async fn run_service_accounts_api_keys(api: &ApiClient, id: &str, json: bool) -> Result<()> {
-    let keys: Vec<ApiKeyResponse> = api
-        .get(&format!("/v1/auth/service-accounts/{id}/api-keys"))
+async fn run_service_accounts_api_keys(
+    api: &ApiClient,
+    tenant_id: &str,
+    id: &str,
+    json: bool,
+) -> Result<()> {
+    let response: ApiKeyListResponse = api
+        .get_query(
+            &format!("/v1/auth/service-accounts/{id}/api-keys"),
+            &[("operator_id", tenant_id)],
+        )
         .await?;
+    let keys = response.into_vec();
     if json {
         return print_json(&keys);
     }
@@ -514,7 +593,7 @@ pub async fn run(args: &OrgArgs, config: &Configuration, tenant_id: &str) -> Res
             }
         },
         OrgCommand::Users { command } => match command {
-            UsersCommand::List { json } => run_users_list(&api, *json).await,
+            UsersCommand::List { json } => run_users_list(&api, tenant_id, *json).await,
             UsersCommand::Get { user_id, json } => run_users_get(&api, user_id, *json).await,
             UsersCommand::Invite {
                 identifier,
@@ -528,20 +607,24 @@ pub async fn run(args: &OrgArgs, config: &Configuration, tenant_id: &str) -> Res
             }
         },
         OrgCommand::ServiceAccounts { command } => match command {
-            ServiceAccountsCommand::List { json } => run_service_accounts_list(&api, *json).await,
+            ServiceAccountsCommand::List { json } => {
+                run_service_accounts_list(&api, tenant_id, *json).await
+            }
             ServiceAccountsCommand::Get {
                 service_account_id,
                 json,
             } => {
-                let id = resolve::resolve_service_account_id(&api, service_account_id).await?;
-                run_service_accounts_get(&api, &id, *json).await
+                let id = resolve::resolve_service_account_id(&api, tenant_id, service_account_id)
+                    .await?;
+                run_service_accounts_get(&api, tenant_id, &id, *json).await
             }
             ServiceAccountsCommand::ApiKeys {
                 service_account_id,
                 json,
             } => {
-                let id = resolve::resolve_service_account_id(&api, service_account_id).await?;
-                run_service_accounts_api_keys(&api, &id, *json).await
+                let id = resolve::resolve_service_account_id(&api, tenant_id, service_account_id)
+                    .await?;
+                run_service_accounts_api_keys(&api, tenant_id, &id, *json).await
             }
         },
         OrgCommand::Policies { command } => match command {

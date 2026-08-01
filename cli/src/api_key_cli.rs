@@ -221,14 +221,14 @@ pub async fn run(args: &ApiKeyArgs, config: &Configuration, tenant_id: &str) -> 
             name,
             json,
         } => {
-            let id = resolve::resolve_service_account_id(&api, service_account).await?;
+            let id = resolve::resolve_service_account_id(&api, tenant_id, service_account).await?;
             run_create(&api, tenant_id, &id, name, *json).await
         }
         ApiKeyCommand::List {
             service_account,
             json,
         } => {
-            let id = resolve::resolve_service_account_id(&api, service_account).await?;
+            let id = resolve::resolve_service_account_id(&api, tenant_id, service_account).await?;
             run_list(&api, tenant_id, &id, *json).await
         }
         ApiKeyCommand::Revoke {
@@ -236,7 +236,7 @@ pub async fn run(args: &ApiKeyArgs, config: &Configuration, tenant_id: &str) -> 
             api_key_id,
             json,
         } => {
-            let id = resolve::resolve_service_account_id(&api, service_account).await?;
+            let id = resolve::resolve_service_account_id(&api, tenant_id, service_account).await?;
             run_revoke(&api, tenant_id, &id, api_key_id, *json).await
         }
     }
