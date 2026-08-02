@@ -130,6 +130,8 @@ pub enum PoliciesCommand {
         #[arg(long)]
         json: bool,
     },
+    /// Delete an unreferenced custom policy
+    Delete { policy_id: String },
     /// List available actions
     Actions {
         #[arg(long)]
@@ -556,6 +558,13 @@ async fn run_policies_get(api: &ApiClient, policy_id: &str, json: bool) -> Resul
     Ok(())
 }
 
+async fn run_policies_delete(api: &ApiClient, policy_id: &str) -> Result<()> {
+    api.delete(&format!("/v1/auth/policies/{policy_id}"))
+        .await?;
+    println!("Policy {policy_id} deleted.");
+    Ok(())
+}
+
 async fn run_policies_actions(api: &ApiClient, json: bool) -> Result<()> {
     let actions: Vec<ActionResponse> = api.get("/v1/auth/actions").await?;
     if json {
@@ -631,6 +640,7 @@ pub async fn run(args: &OrgArgs, config: &Configuration, tenant_id: &str) -> Res
             PoliciesCommand::Get { policy_id, json } => {
                 run_policies_get(&api, policy_id, *json).await
             }
+            PoliciesCommand::Delete { policy_id } => run_policies_delete(&api, policy_id).await,
             PoliciesCommand::Actions { json } => run_policies_actions(&api, *json).await,
         },
     }

@@ -289,3 +289,86 @@ fn users_list_sends_tenant_query_and_decodes_openapi_envelope() {
     assert_eq!(users.len(), 1);
     assert_eq!(users[0]["id"], "us_123456789012");
 }
+
+#[test]
+fn policies_delete_204_reports_success() {
+    let tmp = TempDir::new().unwrap();
+    let (api_url, rx, handle) = start_server(vec![MockResponse {
+        status: "204 No Content",
+        body: "",
+    }]);
+
+    let output = run_org(
+        tmp.path(),
+        api_url,
+        &["org", "policies", "delete", "pol_123456789012"],
+    );
+    assert_success(&output);
+
+    let requests = finish_requests(rx, handle);
+    assert_tenant_request(&requests[0], "DELETE /v1/auth/policies/pol_123456789012 ");
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "Policy pol_123456789012 deleted.\n"
+    );
+}
+
+#[test]
+fn policies_delete_legacy_global_403_is_not_reported_as_success() {
+    let tmp = TempDir::new().unwrap();
+    let (api_url, rx, handle) = start_server(vec![MockResponse {
+        status: "403 Forbidden",
+        body: r#"{"code":"FORBIDDEN","message":"Forbidden: Global custom policies can only be deleted by a system executor"}"#,
+    }]);
+
+    let output = run_org(
+        tmp.path(),
+        api_url,
+        &["org", "policies", "delete", "pol_legacyglobal"],
+    );
+
+    let requests = finish_requests(rx, handle);
+    assert_tenant_request(&requests[0], "DELETE /v1/auth/policies/pol_legacyglobal ");
+    assert!(!output.status.success(), "403 must fail the command");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!stdout.contains("deleted"), "stdout was:\n{stdout}");
+    assert!(stderr.contains("403 Forbidden"), "stderr was:\n{stderr}");
+    assert!(
+        stderr.contains("Global custom policies can only be deleted by a system executor"),
+        "stderr was:\n{stderr}"
+    );
+}
+
+#[test]
+fn policies_delete_referenced_409_preserves_per_reference_counts() {
+    let tmp = TempDir::new().unwrap();
+    let (api_url, rx, handle) = start_server(vec![MockResponse {
+        status: "409 Conflict",
+        body: r#"{"code":"CONFLICT","message":"Conflict: Policy is in use (userMappings=2, serviceAccountMappings=1, tenantOverrides=3); detach all references before deletion"}"#,
+    }]);
+
+    let output = run_org(
+        tmp.path(),
+        api_url,
+        &["org", "policies", "delete", "pol_referenced123"],
+    );
+
+    let requests = finish_requests(rx, handle);
+    assert_tenant_request(&requests[0], "DELETE /v1/auth/policies/pol_referenced123 ");
+    assert!(!output.status.success(), "409 must fail the command");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!stdout.contains("deleted"), "stdout was:\n{stdout}");
+    assert!(stderr.contains("409 Conflict"), "stderr was:\n{stderr}");
+    for count in [
+        "userMappings=2",
+        "serviceAccountMappings=1",
+        "tenantOverrides=3",
+    ] {
+        assert!(
+            stderr.contains(count),
+            "missing {count}; stderr was:\n{stderr}"
+        );
+    }
+}
