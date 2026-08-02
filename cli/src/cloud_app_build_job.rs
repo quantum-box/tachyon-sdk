@@ -48,9 +48,10 @@ pub struct BuildWorkloadSpec {
 /// IMPORTANT: every policy decision is already resolved by the
 /// control plane. The builder must NOT decide preview vs
 /// production, must NOT choose between `database_id` and
-/// `preview_database_id`, and must NOT infer the environment from
-/// the branch — it only executes what this spec says. The
-/// CodeBuild buildspec generator
+/// `preview_database_id`, and must NOT replace the resolved environment with
+/// its own policy. For Pages it only verifies that the provider will interpret
+/// the deployment branch as that same environment. The CodeBuild buildspec
+/// generator
 /// (`packages/compute/src/adapter/gateway/codebuild_provider.rs`
 /// in tachyon-apps) is fed by the same control-plane resolver, so
 /// the two builders cannot drift as long as neither re-derives
@@ -59,8 +60,8 @@ pub struct BuildWorkloadSpec {
 struct BuildWorkloadD1 {
     /// `preview` or `production`. Reported back verbatim.
     environment: String,
-    /// Whether execution was pre-approved by the control plane. This remains
-    /// part of the workload contract, but a failed migration always aborts.
+    /// Whether a Production deployment may continue after a failed migration.
+    /// Preview deployments always fail closed regardless of this value.
     auto_approve: bool,
     #[serde(default)]
     bindings: Vec<BuildWorkloadD1Binding>,
@@ -385,6 +386,7 @@ async fn run_build(
     // Migrate before deploying the Pages candidate. A fatal migration
     // error returns here, so the deploy command below is never started.
     if let Some(d1) = workload.d1.as_ref().filter(|_| is_pages) {
+        validate_pages_d1_environment(d1, &workload.source.branch, &env).await?;
         send_phase_event(workload, "d1_migrations").await;
         let phase_started = Instant::now();
         let phase_result = run_d1_migrations(d1, &app_dir, &env, d1_migrations).await;
@@ -400,7 +402,11 @@ async fn run_build(
         // before the candidate deploy starts. Production bindings are
         // synchronized by the control plane before the build starts.
         if d1.environment == "preview" {
-            sync_pages_preview_d1_bindings(d1, &env).await?;
+            sync_pages_preview_d1_bindings(d1, &workload.source.branch, &env).await?;
+        } else {
+            // Narrow the window in which an operator could change the Pages
+            // production branch while migrations are running.
+            validate_pages_d1_environment(d1, &workload.source.branch, &env).await?;
         }
     }
 
@@ -686,6 +692,81 @@ const DEFAULT_D1_MIGRATIONS_DIR: &str = "migrations";
 const CLOUDFLARE_API_BASE_URL: &str = "https://api.cloudflare.com/client/v4";
 const D1_MIGRATION_CONFIG_FILE: &str = ".tachyon-d1-migration.json";
 
+/// Fetch the current Pages project before making a deployment decision.
+///
+/// Direct Upload decides whether `--branch` creates a Production or Preview
+/// deployment from the project's `production_branch`. The control-plane D1
+/// plan must agree with that provider-owned setting before any database is
+/// migrated.
+#[allow(clippy::disallowed_methods)]
+async fn fetch_pages_project(env: &BTreeMap<String, String>) -> Result<serde_json::Value> {
+    let account_id = required_env(env, "CLOUDFLARE_ACCOUNT_ID")?;
+    let api_token = required_env(env, "CLOUDFLARE_API_TOKEN")?;
+    let project_name = required_env(env, "PAGES_PROJECT_NAME")?;
+    let base_url = env_value(env, "TACHYON_CLOUDFLARE_API_URL")
+        .unwrap_or(CLOUDFLARE_API_BASE_URL)
+        .trim_end_matches('/');
+    let url = format!(
+        "{base_url}/accounts/{}/pages/projects/{}",
+        urlencoding::encode(account_id),
+        urlencoding::encode(project_name)
+    );
+    let client = reqwest::Client::builder()
+        .connect_timeout(Duration::from_secs(10))
+        .timeout(Duration::from_secs(30))
+        .build()
+        .context("failed to create Cloudflare Pages project client")?;
+    let response = client
+        .get(&url)
+        .bearer_auth(api_token)
+        .send()
+        .await
+        .context("failed to fetch Cloudflare Pages project")?
+        .error_for_status()
+        .context("Cloudflare Pages project fetch failed")?;
+    let project: serde_json::Value = response
+        .json()
+        .await
+        .context("failed to decode Cloudflare Pages project")?;
+    ensure_cloudflare_success(&project, "fetch")?;
+    Ok(project)
+}
+
+async fn validate_pages_d1_environment(
+    d1: &BuildWorkloadD1,
+    source_branch: &str,
+    env: &BTreeMap<String, String>,
+) -> Result<()> {
+    let project = fetch_pages_project(env).await?;
+    ensure_pages_d1_environment(d1, source_branch, &project["result"])
+}
+
+fn ensure_pages_d1_environment(
+    d1: &BuildWorkloadD1,
+    source_branch: &str,
+    project: &serde_json::Value,
+) -> Result<()> {
+    let production_branch = project
+        .get("production_branch")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|branch| !branch.is_empty())
+        .ok_or_else(|| anyhow!("Cloudflare Pages project has no production branch"))?;
+    let actual_environment = if source_branch == production_branch {
+        "production"
+    } else {
+        "preview"
+    };
+    if d1.environment != actual_environment {
+        return Err(anyhow!(
+            "D1 environment '{}' does not match Cloudflare Pages deployment environment '{}'",
+            d1.environment,
+            actual_environment
+        ));
+    }
+    Ok(())
+}
+
 /// Synchronize the Pages Preview runtime D1 map after migration and before deploy.
 ///
 /// The GET/merge/PATCH sequence preserves unmanaged Preview D1 bindings. The
@@ -698,6 +779,7 @@ const D1_MIGRATION_CONFIG_FILE: &str = ".tachyon-d1-migration.json";
 #[allow(clippy::disallowed_methods)]
 async fn sync_pages_preview_d1_bindings(
     d1: &BuildWorkloadD1,
+    source_branch: &str,
     env: &BTreeMap<String, String>,
 ) -> Result<()> {
     if d1.bindings.is_empty() {
@@ -725,19 +807,8 @@ async fn sync_pages_preview_d1_bindings(
         .timeout(Duration::from_secs(30))
         .build()
         .context("failed to create Cloudflare Pages D1 sync client")?;
-    let project_response = client
-        .get(&url)
-        .bearer_auth(api_token)
-        .send()
-        .await
-        .context("failed to fetch Cloudflare Pages project for D1 sync")?
-        .error_for_status()
-        .context("Cloudflare Pages project fetch failed during D1 sync")?;
-    let project: serde_json::Value = project_response
-        .json()
-        .await
-        .context("failed to decode Cloudflare Pages project for D1 sync")?;
-    ensure_cloudflare_success(&project, "fetch")?;
+    let project = fetch_pages_project(env).await?;
+    ensure_pages_d1_environment(d1, source_branch, &project["result"])?;
     let d1_databases = merged_pages_preview_d1_databases(&project["result"], &d1.bindings);
 
     let patch_response = client
@@ -775,7 +846,7 @@ fn ensure_cloudflare_success(response: &serde_json::Value, operation: &str) -> R
         return Ok(());
     }
     Err(anyhow!(
-        "Cloudflare Pages D1 binding {operation} returned an unsuccessful response"
+        "Cloudflare Pages project {operation} returned an unsuccessful response"
     ))
 }
 
@@ -815,9 +886,9 @@ fn merged_pages_preview_d1_databases(
 /// resolved plan, before the deploy runs.
 ///
 /// Reminder (see `BuildWorkloadD1`): no policy is decided here.
-/// `database_id` is already the right database for
-/// `d1.environment` and the execution approval are already resolved. A
-/// Wrangler failure is never approval: any failed migration aborts deploy.
+/// `database_id` is already the right database for `d1.environment`, and
+/// `auto_approve` already encodes whether a Production migration failure is
+/// fatal. Preview always fails closed.
 async fn run_d1_migrations(
     d1: &BuildWorkloadD1,
     app_dir: &Path,
@@ -935,8 +1006,14 @@ async fn run_d1_migrations(
         append_result(&mut combined, output);
     }
 
-    if has_failed_migration(&results) {
+    if should_abort_deploy(&results, &d1.environment, d1.auto_approve) {
         return Err(anyhow!("D1 migration failed; aborting deploy"));
+    }
+    if has_failed_migration(&results) {
+        tracing::warn!(
+            environment = %d1.environment,
+            "D1 migration failed but Production auto approve is enabled; continuing to deploy"
+        );
     }
 
     Ok(combined)
@@ -944,6 +1021,14 @@ async fn run_d1_migrations(
 
 fn has_failed_migration(results: &[D1MigrationResult]) -> bool {
     results.iter().any(|result| result.status == "failed")
+}
+
+fn should_abort_deploy(
+    results: &[D1MigrationResult],
+    environment: &str,
+    auto_approve: bool,
+) -> bool {
+    has_failed_migration(results) && (environment == "preview" || !auto_approve)
 }
 
 fn d1_migrations_dir(binding: &BuildWorkloadD1Binding) -> &str {
@@ -2190,6 +2275,70 @@ mod tests {
         assert_eq!(merged["OTHER"]["id"], "other-id");
     }
 
+    #[test]
+    fn pages_d1_environment_accepts_matching_production_and_preview_branches() {
+        let project = serde_json::json!({"production_branch": "main"});
+        let production = BuildWorkloadD1 {
+            environment: "production".to_string(),
+            auto_approve: false,
+            bindings: vec![],
+        };
+        let preview = BuildWorkloadD1 {
+            environment: "preview".to_string(),
+            auto_approve: false,
+            bindings: vec![],
+        };
+
+        ensure_pages_d1_environment(&production, "main", &project)
+            .expect("production branch should match Production plan");
+        ensure_pages_d1_environment(&preview, "feature/demo", &project)
+            .expect("non-production branch should match Preview plan");
+    }
+
+    #[test]
+    fn pages_d1_environment_rejects_preview_plan_for_production_branch() {
+        let project = serde_json::json!({"production_branch": "main"});
+        let d1 = BuildWorkloadD1 {
+            environment: "preview".to_string(),
+            auto_approve: false,
+            bindings: vec![],
+        };
+
+        let error = ensure_pages_d1_environment(&d1, "main", &project)
+            .expect_err("Preview plan must not create a Production deployment");
+
+        assert!(error.to_string().contains("does not match"));
+    }
+
+    #[test]
+    fn pages_d1_environment_rejects_production_plan_for_preview_branch() {
+        let project = serde_json::json!({"production_branch": "main"});
+        let d1 = BuildWorkloadD1 {
+            environment: "production".to_string(),
+            auto_approve: true,
+            bindings: vec![],
+        };
+
+        let error = ensure_pages_d1_environment(&d1, "feature/demo", &project)
+            .expect_err("Production plan must not create a Preview deployment");
+
+        assert!(error.to_string().contains("does not match"));
+    }
+
+    #[test]
+    fn pages_d1_environment_requires_project_production_branch() {
+        let d1 = BuildWorkloadD1 {
+            environment: "preview".to_string(),
+            auto_approve: false,
+            bindings: vec![],
+        };
+
+        let error = ensure_pages_d1_environment(&d1, "feature/demo", &serde_json::json!({}))
+            .expect_err("missing provider environment must fail closed");
+
+        assert!(error.to_string().contains("no production branch"));
+    }
+
     #[tokio::test]
     async fn pages_d1_sync_patches_resolved_preview_binding() {
         use axum::{extract::State, http::HeaderMap, routing::get, Json, Router};
@@ -2210,6 +2359,7 @@ mod tests {
             Json(serde_json::json!({
                 "success": true,
                 "result": {
+                    "production_branch": "main",
                     "deployment_configs": {
                         "production": {
                             "d1_databases": {"DB": {"id": "production-id"}}
@@ -2269,7 +2419,7 @@ mod tests {
             ),
         ]);
 
-        sync_pages_preview_d1_bindings(&d1, &env)
+        sync_pages_preview_d1_bindings(&d1, "feature/demo", &env)
             .await
             .expect("runtime binding sync should succeed");
         server.abort();
@@ -2296,7 +2446,7 @@ mod tests {
             }],
         };
 
-        let error = sync_pages_preview_d1_bindings(&d1, &BTreeMap::new())
+        let error = sync_pages_preview_d1_bindings(&d1, "main", &BTreeMap::new())
             .await
             .expect_err("production must never mutate Pages config from the builder");
 
@@ -2390,13 +2540,32 @@ mod tests {
     }
 
     #[test]
-    fn failed_migration_always_aborts_deploy() {
+    fn preview_failed_migration_aborts_even_when_auto_approve_is_enabled() {
         let failed = vec![migration_result("DB", "failed")];
+
+        assert!(should_abort_deploy(&failed, "preview", true));
+    }
+
+    #[test]
+    fn production_failed_migration_continues_when_auto_approve_is_enabled() {
+        let failed = vec![migration_result("DB", "failed")];
+
+        assert!(!should_abort_deploy(&failed, "production", true));
+    }
+
+    #[test]
+    fn production_failed_migration_aborts_when_auto_approve_is_disabled() {
+        let failed = vec![migration_result("DB", "failed")];
+
+        assert!(should_abort_deploy(&failed, "production", false));
+    }
+
+    #[test]
+    fn successful_or_empty_migrations_do_not_abort_deploy() {
         let applied = vec![migration_result("DB", "applied")];
 
-        assert!(has_failed_migration(&failed));
-        assert!(!has_failed_migration(&applied));
-        assert!(!has_failed_migration(&[]));
+        assert!(!should_abort_deploy(&applied, "preview", false));
+        assert!(!should_abort_deploy(&[], "production", false));
     }
 
     #[test]
