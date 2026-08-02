@@ -85,6 +85,7 @@ All URIs are relative to *http://localhost*
 *AuthOperatorsApi* | [**getOperatorById**](docs/AuthOperatorsApi.md#getoperatorbyid) | **GET** /v1/auth/operators/{id} | Get an operator by ID
 *AuthPoliciesApi* | [**checkPoliciesForTenants**](docs/AuthPoliciesApi.md#checkpoliciesfortenants) | **POST** /v1/auth/policies/check-tenants | Evaluate one policy action across the authenticated user\&#39;s tenant scopes.
 *AuthPoliciesApi* | [**checkPolicyForResource**](docs/AuthPoliciesApi.md#checkpolicyforresourceoperation) | **POST** /v1/auth/policies/check-for-resource | Check permission for a specific resource
+*AuthPoliciesApi* | [**deletePolicy**](docs/AuthPoliciesApi.md#deletepolicy) | **DELETE** /v1/auth/policies/{id} | Delete an unreferenced custom policy.
 *AuthPoliciesApi* | [**evaluatePoliciesBatch**](docs/AuthPoliciesApi.md#evaluatepoliciesbatchoperation) | **POST** /v1/auth/policies/check | Evaluate multiple policy actions in batch
 *AuthPoliciesApi* | [**getPolicy**](docs/AuthPoliciesApi.md#getpolicy) | **GET** /v1/auth/policies/{id} | Get a policy by ID
 *AuthPoliciesApi* | [**listActions**](docs/AuthPoliciesApi.md#listactions) | **GET** /v1/auth/actions | List all registered actions

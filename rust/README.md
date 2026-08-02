@@ -57,6 +57,7 @@ Class | Method | HTTP request | Description
 *AuthOperatorsApi* | [**get_operator_by_id**](docs/AuthOperatorsApi.md#get_operator_by_id) | **GET** /v1/auth/operators/{id} | Get an operator by ID
 *AuthPoliciesApi* | [**check_policies_for_tenants**](docs/AuthPoliciesApi.md#check_policies_for_tenants) | **POST** /v1/auth/policies/check-tenants | Evaluate one policy action across the authenticated user's tenant scopes.
 *AuthPoliciesApi* | [**check_policy_for_resource**](docs/AuthPoliciesApi.md#check_policy_for_resource) | **POST** /v1/auth/policies/check-for-resource | Check permission for a specific resource
+*AuthPoliciesApi* | [**delete_policy**](docs/AuthPoliciesApi.md#delete_policy) | **DELETE** /v1/auth/policies/{id} | Delete an unreferenced custom policy.
 *AuthPoliciesApi* | [**evaluate_policies_batch**](docs/AuthPoliciesApi.md#evaluate_policies_batch) | **POST** /v1/auth/policies/check | Evaluate multiple policy actions in batch
 *AuthPoliciesApi* | [**get_policy**](docs/AuthPoliciesApi.md#get_policy) | **GET** /v1/auth/policies/{id} | Get a policy by ID
 *AuthPoliciesApi* | [**list_actions**](docs/AuthPoliciesApi.md#list_actions) | **GET** /v1/auth/actions | List all registered actions
