@@ -188,8 +188,10 @@ tachyon ops notify send --text "Release ready" \
 ```
 
 Team display names and handles are resolved through the tenant's saved Slack
-connection. Unknown, ambiguous, or disabled Teams fail before the notification
-is sent. Mentions that resolve to the same Slack target are sent only once.
+connection using exact, case-insensitive matching. The CLI never picks the
+first or closest candidate: unknown handles/IDs, ambiguous names/handles, and
+disabled Teams fail before the Slack notification is sent. Mentions that
+resolve to the same Slack target are sent only once.
 
 ### Worker runtime
 

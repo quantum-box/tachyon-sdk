@@ -1,5 +1,5 @@
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     io::{self, Read},
     path::{Path, PathBuf},
     time::{Duration, Instant},
@@ -202,7 +202,8 @@ pub enum NotifyCommand {
         /// Slack user, Team, broadcast, or configured alias. Can be repeated.
         ///
         /// Team selectors accept a display name, @handle, User Group ID (S...),
-        /// or raw Slack token (<!subteam^S...>).
+        /// or raw Slack token (<!subteam^S...>). Names and handles use exact,
+        /// case-insensitive matching; ambiguous or disabled Teams are rejected.
         #[arg(long = "mention", value_name = "MENTION")]
         mentions: Vec<String>,
         /// Print the API response as JSON
@@ -416,6 +417,19 @@ struct SlackUser {
     email: Option<String>,
     display_name: Option<String>,
     real_name: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+struct SlackUserGroup {
+    id: String,
+    name: String,
+    handle: String,
+    disabled: bool,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct ListSlackUserGroupsResponse {
+    user_groups: Vec<SlackUserGroup>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -1127,11 +1141,13 @@ async fn run_coding_jobs_providers(api: &ApiClient, json: bool) -> Result<()> {
 
 async fn run_notify_send(
     api: &ApiClient,
+    config_flag: Option<&Path>,
     text: &str,
     mentions: &[String],
     json: bool,
 ) -> Result<()> {
-    let mentions = normalize_mentions(mentions)?;
+    let configured_aliases = configured_slack_mention_aliases(config_flag)?;
+    let mentions = resolve_mentions(api, mentions, &configured_aliases).await?;
     let response: SendNotificationResponse = api
         .post(
             "/v1/chat/send",
@@ -1372,17 +1388,25 @@ fn print_sentry_issue(issue: &SentryIssueResponse) {
 }
 
 fn normalize_mentions(mentions: &[String]) -> Result<Vec<String>> {
+    let parsed = mentions
+        .iter()
+        .map(|mention| parse_mention(mention))
+        .collect::<Result<Vec<_>>>()?;
+    Ok(dedupe_parsed_mentions(parsed))
+}
+
+fn dedupe_parsed_mentions(mentions: Vec<ParsedMention>) -> Vec<String> {
     let mut resolved = Vec::with_capacity(mentions.len());
-    let mut seen = std::collections::HashSet::new();
+    let mut seen = HashSet::new();
 
     for mention in mentions {
-        let mention = parse_mention(mention)?.normalized;
+        let mention = mention.normalized;
         if seen.insert(mention.clone()) {
             resolved.push(mention);
         }
     }
 
-    Ok(resolved)
+    resolved
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1399,6 +1423,14 @@ struct ParsedMention {
     kind: MentionInputKind,
     normalized: String,
 }
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ConfiguredMentionAliasTarget {
+    UserGroup(String),
+    Other,
+}
+
+type ConfiguredMentionAliases = HashMap<String, ConfiguredMentionAliasTarget>;
 
 fn parse_mention(input: &str) -> Result<ParsedMention> {
     let trimmed = input.trim();
@@ -1446,6 +1478,197 @@ fn is_mention_handle(input: &str) -> bool {
     input
         .strip_prefix('@')
         .is_some_and(|handle| !handle.is_empty() && !handle.chars().any(char::is_whitespace))
+}
+
+fn configured_slack_mention_aliases(
+    config_flag: Option<&Path>,
+) -> Result<ConfiguredMentionAliases> {
+    let aliases = loader::load(config_flag)?
+        .and_then(|config| config.spec.chat)
+        .and_then(|chat| chat.slack)
+        .map(|slack| {
+            slack
+                .mention_aliases
+                .into_iter()
+                .filter(|entry| !entry.alias.is_empty())
+                .map(|entry| {
+                    let target = match (entry.kind.as_deref(), entry.group_id) {
+                        (Some("user_group"), Some(group_id)) => {
+                            ConfiguredMentionAliasTarget::UserGroup(group_id)
+                        }
+                        _ => ConfiguredMentionAliasTarget::Other,
+                    };
+                    (entry.alias, target)
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    Ok(aliases)
+}
+
+fn is_email_mention(input: &str) -> bool {
+    let Some((local, domain)) = input.split_once('@') else {
+        return false;
+    };
+    !local.is_empty()
+        && !domain.is_empty()
+        && !input.chars().any(char::is_whitespace)
+        && !domain.contains('@')
+}
+
+fn needs_user_group_directory(
+    mention: &ParsedMention,
+    configured_aliases: &ConfiguredMentionAliases,
+) -> bool {
+    if let Some(target) = configured_aliases.get(&mention.normalized) {
+        return matches!(target, ConfiguredMentionAliasTarget::UserGroup(_));
+    }
+
+    match mention.kind {
+        MentionInputKind::UserGroupId | MentionInputKind::Handle => true,
+        MentionInputKind::NameOrAlias => !is_email_mention(&mention.normalized),
+        MentionInputKind::Broadcast | MentionInputKind::UserId => false,
+    }
+}
+
+async fn resolve_mentions(
+    api: &ApiClient,
+    mentions: &[String],
+    configured_aliases: &ConfiguredMentionAliases,
+) -> Result<Vec<String>> {
+    let parsed = mentions
+        .iter()
+        .map(|mention| parse_mention(mention))
+        .collect::<Result<Vec<_>>>()?;
+    if !parsed
+        .iter()
+        .any(|mention| needs_user_group_directory(mention, configured_aliases))
+    {
+        return normalize_mentions(mentions);
+    }
+
+    let response: ListSlackUserGroupsResponse = api.get("/v1/chat/user-groups").await?;
+    resolve_mentions_with_user_groups(parsed, &response.user_groups, configured_aliases)
+}
+
+fn resolve_mentions_with_user_groups(
+    mentions: Vec<ParsedMention>,
+    user_groups: &[SlackUserGroup],
+    configured_aliases: &ConfiguredMentionAliases,
+) -> Result<Vec<String>> {
+    let mut resolved = Vec::with_capacity(mentions.len());
+    let mut seen = HashSet::new();
+
+    for mention in mentions {
+        let value = if let Some(target) = configured_aliases.get(&mention.normalized) {
+            if let ConfiguredMentionAliasTarget::UserGroup(group_id) = target {
+                let matches = user_groups
+                    .iter()
+                    .filter(|group| group.id == *group_id)
+                    .collect::<Vec<_>>();
+                resolve_required_user_group(
+                    "ProjectConfig alias",
+                    &format!("{} -> {group_id}", mention.normalized),
+                    matches,
+                )?;
+            }
+            mention.normalized
+        } else {
+            match mention.kind {
+                MentionInputKind::UserGroupId => {
+                    let group_id = normalized_user_group_id(&mention.normalized)
+                        .expect("normalized Slack User Group mention contains an ID");
+                    let matches = user_groups
+                        .iter()
+                        .filter(|group| group.id == group_id)
+                        .collect::<Vec<_>>();
+                    resolve_required_user_group("User Group ID", group_id, matches)?
+                }
+                MentionInputKind::Handle => {
+                    let handle = mention.normalized.trim_start_matches('@');
+                    let matches = user_groups
+                        .iter()
+                        .filter(|group| normalized_eq(&group.handle, handle))
+                        .collect::<Vec<_>>();
+                    resolve_required_user_group("handle", &mention.normalized, matches)?
+                }
+                MentionInputKind::NameOrAlias if !is_email_mention(&mention.normalized) => {
+                    let matches = user_groups
+                        .iter()
+                        .filter(|group| normalized_eq(&group.name, &mention.normalized))
+                        .collect::<Vec<_>>();
+                    if matches.is_empty() {
+                        mention.normalized
+                    } else {
+                        resolve_required_user_group("name", &mention.normalized, matches)?
+                    }
+                }
+                MentionInputKind::Broadcast
+                | MentionInputKind::UserId
+                | MentionInputKind::NameOrAlias => mention.normalized,
+            }
+        };
+
+        if seen.insert(value.clone()) {
+            resolved.push(value);
+        }
+    }
+
+    Ok(resolved)
+}
+
+fn normalized_user_group_id(mention: &str) -> Option<&str> {
+    mention
+        .strip_prefix("<!subteam^")
+        .and_then(|value| value.strip_suffix('>'))
+}
+
+fn normalized_eq(left: &str, right: &str) -> bool {
+    left.trim().to_lowercase() == right.trim().to_lowercase()
+}
+
+fn resolve_required_user_group(
+    selector_kind: &str,
+    selector: &str,
+    mut matches: Vec<&SlackUserGroup>,
+) -> Result<String> {
+    matches.sort_by(|left, right| left.id.cmp(&right.id));
+
+    match matches.as_slice() {
+        [] => bail!(
+            "Slack Team {selector_kind} '{selector}' was not found; notification was not sent"
+        ),
+        [group] if group.disabled => bail!(
+            "Slack Team '{}' (@{}, {}) is disabled; notification was not sent",
+            group.name,
+            group.handle,
+            group.id
+        ),
+        [group] => normalize_user_group_mention(&group.id)?.ok_or_else(|| {
+            anyhow!(
+                "Slack User Group API returned an invalid group ID: {}",
+                group.id
+            )
+        }),
+        groups => {
+            let candidates = groups
+                .iter()
+                .map(|group| {
+                    format!(
+                        "{} (@{}, {}, {})",
+                        group.name,
+                        group.handle,
+                        group.id,
+                        if group.disabled { "disabled" } else { "active" }
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
+            bail!(
+                "Slack Team {selector_kind} '{selector}' is ambiguous; candidates: {candidates}; use @handle or a User Group ID"
+            )
+        }
+    }
 }
 
 fn normalize_broadcast_mention(input: &str) -> Result<Option<String>> {
@@ -1627,7 +1850,7 @@ pub async fn run(
                 text,
                 mentions,
                 json,
-            } => run_notify_send(&api, text, mentions, *json).await,
+            } => run_notify_send(&api, config_flag, text, mentions, *json).await,
             NotifyCommand::Users { bot_token: _, json } => run_notify_users(&api, *json).await,
         },
         OpsCommand::Sentry { command } => match command {
@@ -1667,6 +1890,22 @@ pub async fn run(
 mod tests {
     use super::*;
     use serde_json::json;
+
+    fn user_group(id: &str, name: &str, handle: &str, disabled: bool) -> SlackUserGroup {
+        SlackUserGroup {
+            id: id.to_string(),
+            name: name.to_string(),
+            handle: handle.to_string(),
+            disabled,
+        }
+    }
+
+    fn parse_mentions(inputs: &[&str]) -> Vec<ParsedMention> {
+        inputs
+            .iter()
+            .map(|input| parse_mention(input).unwrap())
+            .collect()
+    }
 
     #[test]
     fn serializes_notification_mentions() {
@@ -1801,6 +2040,162 @@ mod tests {
                 "on-call",
             ]
         );
+    }
+
+    #[test]
+    fn resolves_team_name_handle_and_id_then_dedupes_by_group_token() {
+        let groups = vec![user_group("S123", "Platform Team", "platform-team", false)];
+        let resolved = resolve_mentions_with_user_groups(
+            parse_mentions(&[
+                "Platform Team",
+                "@PLATFORM-TEAM",
+                "S123",
+                "<!subteam^S123|platform-team>",
+                "U123",
+                "@here",
+                "on-call",
+            ]),
+            &groups,
+            &HashMap::new(),
+        )
+        .unwrap();
+
+        assert_eq!(
+            resolved,
+            vec!["<!subteam^S123>", "<@U123>", "<!here>", "on-call"]
+        );
+    }
+
+    #[test]
+    fn ambiguous_team_name_lists_every_candidate_and_fails() {
+        let groups = vec![
+            user_group("S200", "Platform", "platform-emea", false),
+            user_group("S100", "platform", "platform-apac", true),
+        ];
+        let err = resolve_mentions_with_user_groups(
+            parse_mentions(&["Platform"]),
+            &groups,
+            &HashMap::new(),
+        )
+        .unwrap_err()
+        .to_string();
+
+        assert!(err.contains("is ambiguous"));
+        assert!(err.contains("S100"));
+        assert!(err.contains("@platform-apac"));
+        assert!(err.contains("disabled"));
+        assert!(err.contains("S200"));
+        assert!(err.contains("@platform-emea"));
+        assert!(err.contains("use @handle or a User Group ID"));
+    }
+
+    #[test]
+    fn disabled_team_name_handle_and_id_fail_instead_of_succeeding_silently() {
+        let groups = vec![user_group("S123", "Former Team", "former-team", true)];
+        for input in ["Former Team", "@former-team", "<!subteam^S123>"] {
+            let err = resolve_mentions_with_user_groups(
+                parse_mentions(&[input]),
+                &groups,
+                &HashMap::new(),
+            )
+            .unwrap_err()
+            .to_string();
+
+            assert!(err.contains("Former Team"), "input: {input}, error: {err}");
+            assert!(err.contains("S123"), "input: {input}, error: {err}");
+            assert!(err.contains("is disabled"), "input: {input}, error: {err}");
+            assert!(
+                err.contains("notification was not sent"),
+                "input: {input}, error: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn unknown_team_handle_and_id_fail_before_send() {
+        for input in ["@missing-team", "S999"] {
+            let err =
+                resolve_mentions_with_user_groups(parse_mentions(&[input]), &[], &HashMap::new())
+                    .unwrap_err()
+                    .to_string();
+
+            assert!(
+                err.contains("was not found"),
+                "input: {input}, error: {err}"
+            );
+            assert!(
+                err.contains("notification was not sent"),
+                "input: {input}, error: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn unmatched_plain_names_and_emails_keep_existing_server_resolution() {
+        let resolved = resolve_mentions_with_user_groups(
+            parse_mentions(&["Taka", "taka@example.com"]),
+            &[],
+            &HashMap::new(),
+        )
+        .unwrap();
+
+        assert_eq!(resolved, vec!["Taka", "taka@example.com"]);
+    }
+
+    #[test]
+    fn configured_project_alias_takes_precedence_over_team_name() {
+        let groups = vec![user_group("S123", "on-call", "on-call-team", false)];
+        let aliases = HashMap::from([(
+            "on-call".to_string(),
+            ConfiguredMentionAliasTarget::UserGroup("S123".to_string()),
+        )]);
+        let resolved =
+            resolve_mentions_with_user_groups(parse_mentions(&["on-call"]), &groups, &aliases)
+                .unwrap();
+
+        assert_eq!(resolved, vec!["on-call"]);
+    }
+
+    #[test]
+    fn configured_project_group_alias_rejects_disabled_target() {
+        let groups = vec![user_group("S123", "Former Team", "former-team", true)];
+        let aliases = HashMap::from([(
+            "on-call".to_string(),
+            ConfiguredMentionAliasTarget::UserGroup("S123".to_string()),
+        )]);
+        let err =
+            resolve_mentions_with_user_groups(parse_mentions(&["on-call"]), &groups, &aliases)
+                .unwrap_err()
+                .to_string();
+
+        assert!(err.contains("Former Team"));
+        assert!(err.contains("is disabled"));
+        assert!(err.contains("notification was not sent"));
+    }
+
+    #[test]
+    fn deserializes_user_group_directory_contract_including_disabled() {
+        let response: ListSlackUserGroupsResponse = serde_json::from_value(json!({
+            "user_groups": [
+                {
+                    "id": "S123",
+                    "name": "Platform Team",
+                    "handle": "platform-team",
+                    "disabled": false
+                },
+                {
+                    "id": "S456",
+                    "name": "Former Team",
+                    "handle": "former-team",
+                    "disabled": true
+                }
+            ]
+        }))
+        .unwrap();
+
+        assert_eq!(response.user_groups.len(), 2);
+        assert!(!response.user_groups[0].disabled);
+        assert!(response.user_groups[1].disabled);
     }
 
     #[test]
