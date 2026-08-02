@@ -96,6 +96,9 @@ pub enum IssueCommand {
         /// unassigned.
         #[arg(long)]
         delegate_id: Option<String>,
+        /// Do not auto-delegate the issue to the Linear agent
+        #[arg(long, conflicts_with = "delegate_id")]
+        no_delegate: bool,
         /// Provider-specific label id. Can be specified multiple times.
         #[arg(long = "label-id")]
         label_ids: Vec<String>,
@@ -199,6 +202,9 @@ pub enum IssueCommand {
         /// Provider-specific delegate agent user id
         #[arg(long)]
         delegate_id: Option<String>,
+        /// Do not auto-delegate the issue to the Linear agent
+        #[arg(long, conflicts_with = "delegate_id")]
+        no_delegate: bool,
         /// Priority: urgent, high, medium, low, none, or provider alias
         #[arg(long)]
         priority: Option<String>,
@@ -508,6 +514,14 @@ fn is_linear_provider(provider: &Option<String>) -> bool {
     provider
         .as_deref()
         .is_some_and(|provider| provider.eq_ignore_ascii_case("linear"))
+}
+
+fn should_auto_delegate(
+    no_delegate: bool,
+    delegate_id: &Option<String>,
+    provider: &Option<String>,
+) -> bool {
+    !no_delegate && delegate_id.is_none() && is_linear_provider(provider)
 }
 
 fn linear_reconcile_pending(error: &anyhow::Error) -> Option<ReconcilePending> {
@@ -908,6 +922,7 @@ pub async fn run_issue(
             description,
             assignee_id,
             delegate_id,
+            no_delegate,
             label_ids,
             priority,
             project,
@@ -922,7 +937,7 @@ pub async fn run_issue(
         } => {
             let provider = provider_with_alias(provider, provider_alias);
             let auto_delegate_to_linear_agent =
-                delegate_id.is_none() && is_linear_provider(&provider);
+                should_auto_delegate(*no_delegate, delegate_id, &provider);
             run_create(
                 &api,
                 tenant_id,
@@ -1012,6 +1027,7 @@ pub async fn run_issue(
             description,
             assignee_id,
             delegate_id,
+            no_delegate,
             priority,
             label_ids,
             added_label_ids,
@@ -1026,7 +1042,7 @@ pub async fn run_issue(
         } => {
             let provider = provider_with_alias(provider, provider_alias);
             let auto_delegate_to_linear_agent =
-                delegate_id.is_none() && is_linear_provider(&provider);
+                should_auto_delegate(*no_delegate, delegate_id, &provider);
             run_update(
                 &api,
                 tenant_id,
@@ -1279,5 +1295,23 @@ mod tests {
 
         assert_eq!(reconcile_delay_seconds(pending, true), 17);
         assert_eq!(reconcile_delay_seconds(pending, false), 29);
+    }
+
+    #[test]
+    fn auto_delegates_only_without_no_delegate_flag() {
+        let linear = Some("linear".to_string());
+        assert!(should_auto_delegate(false, &None, &linear));
+        assert!(!should_auto_delegate(true, &None, &linear));
+        assert!(!should_auto_delegate(
+            false,
+            &Some("agent_user_1".to_string()),
+            &linear
+        ));
+        assert!(!should_auto_delegate(false, &None, &None));
+        assert!(!should_auto_delegate(
+            false,
+            &None,
+            &Some("jira".to_string())
+        ));
     }
 }
