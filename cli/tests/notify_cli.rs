@@ -117,3 +117,75 @@ fn notify_send_passes_email_mention_to_server() {
         })
     );
 }
+
+#[test]
+fn ops_slack_send_normalizes_mixed_mentions_and_dedupes() {
+    let temp = TempDir::new().unwrap();
+    let (api_url, rx, handle) = start_server(r#"{"accepted":true}"#);
+
+    let output = isolated_command(temp.path())
+        .env("TACHYON_API_URL", api_url)
+        .args([
+            "ops",
+            "slack",
+            "send",
+            "--text",
+            "deploy complete",
+            "--mention",
+            "<@U123|taka>",
+            "--mention",
+            "U123",
+            "--mention",
+            "@platform-team",
+            "--mention",
+            "<!subteam^S123|platform>",
+            "--mention",
+            "S123",
+            "--mention",
+            "@here",
+            "--mention",
+            "on-call",
+        ])
+        .output()
+        .expect("run tachyon ops slack send");
+
+    assert!(
+        output.status.success(),
+        "ops slack send failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    handle.join().unwrap();
+    let request = rx.recv().unwrap();
+    assert!(request.starts_with("POST /v1/chat/send "));
+    assert_eq!(
+        request_json_body(&request),
+        serde_json::json!({
+            "text": "deploy complete",
+            "mentions": [
+                "<@U123>",
+                "@platform-team",
+                "<!subteam^S123>",
+                "<!here>",
+                "on-call"
+            ]
+        })
+    );
+}
+
+#[test]
+fn notify_send_help_documents_slack_team_selectors() {
+    let temp = TempDir::new().unwrap();
+    let output = isolated_command(temp.path())
+        .args(["ops", "notify", "send", "--help"])
+        .output()
+        .expect("show tachyon ops notify send help");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("Team selectors accept a display name"));
+    assert!(stdout.contains("@handle"));
+    assert!(stdout.contains("User Group ID (S...)"));
+    assert!(stdout.contains("<!subteam^S...>"));
+}

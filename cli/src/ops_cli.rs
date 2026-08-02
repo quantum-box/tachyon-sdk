@@ -199,8 +199,11 @@ pub enum NotifyCommand {
         /// Notification text to send
         #[arg(long)]
         text: String,
-        /// Slack mention, raw Slack token, or friendly alias. Can be specified multiple times.
-        #[arg(long = "mention")]
+        /// Slack user, Team, broadcast, or configured alias. Can be repeated.
+        ///
+        /// Team selectors accept a display name, @handle, User Group ID (S...),
+        /// or raw Slack token (<!subteam^S...>).
+        #[arg(long = "mention", value_name = "MENTION")]
         mentions: Vec<String>,
         /// Print the API response as JSON
         #[arg(long)]
@@ -1373,7 +1376,7 @@ fn normalize_mentions(mentions: &[String]) -> Result<Vec<String>> {
     let mut seen = std::collections::HashSet::new();
 
     for mention in mentions {
-        let mention = normalize_mention(mention)?;
+        let mention = parse_mention(mention)?.normalized;
         if seen.insert(mention.clone()) {
             resolved.push(mention);
         }
@@ -1382,7 +1385,22 @@ fn normalize_mentions(mentions: &[String]) -> Result<Vec<String>> {
     Ok(resolved)
 }
 
-fn normalize_mention(input: &str) -> Result<String> {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MentionInputKind {
+    Broadcast,
+    UserId,
+    UserGroupId,
+    Handle,
+    NameOrAlias,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ParsedMention {
+    kind: MentionInputKind,
+    normalized: String,
+}
+
+fn parse_mention(input: &str) -> Result<ParsedMention> {
     let trimmed = input.trim();
     if trimmed.is_empty() {
         bail!("Slack mention cannot be empty");
@@ -1392,19 +1410,42 @@ fn normalize_mention(input: &str) -> Result<String> {
     }
 
     if let Some(token) = normalize_broadcast_mention(trimmed)? {
-        return Ok(token);
+        return Ok(ParsedMention {
+            kind: MentionInputKind::Broadcast,
+            normalized: token,
+        });
     }
     if let Some(token) = normalize_user_mention(trimmed)? {
-        return Ok(token);
+        return Ok(ParsedMention {
+            kind: MentionInputKind::UserId,
+            normalized: token,
+        });
     }
     if let Some(token) = normalize_user_group_mention(trimmed)? {
-        return Ok(token);
+        return Ok(ParsedMention {
+            kind: MentionInputKind::UserGroupId,
+            normalized: token,
+        });
     }
     if trimmed.starts_with('<') || trimmed.ends_with('>') {
         bail!("Malformed Slack mention: {trimmed}");
     }
 
-    Ok(trimmed.to_string())
+    let kind = if is_mention_handle(trimmed) {
+        MentionInputKind::Handle
+    } else {
+        MentionInputKind::NameOrAlias
+    };
+    Ok(ParsedMention {
+        kind,
+        normalized: trimmed.to_string(),
+    })
+}
+
+fn is_mention_handle(input: &str) -> bool {
+    input
+        .strip_prefix('@')
+        .is_some_and(|handle| !handle.is_empty() && !handle.chars().any(char::is_whitespace))
 }
 
 fn normalize_broadcast_mention(input: &str) -> Result<Option<String>> {
@@ -1452,17 +1493,25 @@ fn normalize_user_group_mention(input: &str) -> Result<Option<String>> {
             .map(|(id, _)| id)
             .unwrap_or(value)
             .trim();
-        if !group_id.starts_with('S') || !group_id.chars().all(|c| c.is_ascii_alphanumeric()) {
+        if !is_slack_user_group_id(group_id) {
             bail!("Slack user group mention must use a Slack user group ID");
         }
         return Ok(Some(format!("<!subteam^{group_id}>")));
     }
 
-    if input.chars().all(|c| c.is_ascii_alphanumeric()) && input.starts_with('S') {
+    if is_slack_user_group_id(input) {
         return Ok(Some(format!("<!subteam^{input}>")));
     }
 
     Ok(None)
+}
+
+fn is_slack_user_group_id(input: &str) -> bool {
+    input.len() > 1
+        && input.starts_with('S')
+        && input
+            .chars()
+            .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit())
 }
 
 fn slack_user_display_name(user: &SlackUser) -> &str {
@@ -1656,16 +1705,102 @@ mod tests {
     }
 
     #[test]
-    fn normalizes_slack_mentions_and_dedupes() {
+    fn parses_mention_input_forms_without_resolving_names() {
+        let cases = [
+            ("@here", MentionInputKind::Broadcast, "<!here>"),
+            ("<@U123|taka>", MentionInputKind::UserId, "<@U123>"),
+            (
+                "<!subteam^S123|platform>",
+                MentionInputKind::UserGroupId,
+                "<!subteam^S123>",
+            ),
+            ("S123", MentionInputKind::UserGroupId, "<!subteam^S123>"),
+            ("@platform-team", MentionInputKind::Handle, "@platform-team"),
+            (
+                "Platform Team",
+                MentionInputKind::NameOrAlias,
+                "Platform Team",
+            ),
+            ("CEO", MentionInputKind::NameOrAlias, "CEO"),
+            (
+                "user@example.com",
+                MentionInputKind::NameOrAlias,
+                "user@example.com",
+            ),
+        ];
+
+        for (input, kind, normalized) in cases {
+            assert_eq!(
+                parse_mention(input).unwrap(),
+                ParsedMention {
+                    kind,
+                    normalized: normalized.to_string(),
+                },
+                "input: {input}"
+            );
+        }
+    }
+
+    #[test]
+    fn treats_mixed_case_s_name_as_name_instead_of_raw_group_id() {
+        assert_eq!(
+            parse_mention("Sales").unwrap(),
+            ParsedMention {
+                kind: MentionInputKind::NameOrAlias,
+                normalized: "Sales".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn normalizes_mixed_slack_mentions_and_dedupes_by_token() {
         let mentions = normalize_mentions(&[
-            "CEO".to_string(),
             "<@U123|taka>".to_string(),
             "U123".to_string(),
+            "@platform-team".to_string(),
+            " @platform-team ".to_string(),
+            "<!subteam^S123|platform>".to_string(),
+            "S123".to_string(),
             "here".to_string(),
+            "@here".to_string(),
+            "CEO".to_string(),
+            "CEO".to_string(),
         ])
         .unwrap();
 
-        assert_eq!(mentions, vec!["CEO", "<@U123>", "<!here>"]);
+        assert_eq!(
+            mentions,
+            vec![
+                "<@U123>",
+                "@platform-team",
+                "<!subteam^S123>",
+                "<!here>",
+                "CEO",
+            ]
+        );
+    }
+
+    #[test]
+    fn preserves_existing_mention_paths() {
+        let mentions = normalize_mentions(&[
+            "U123".to_string(),
+            "@here".to_string(),
+            "@channel".to_string(),
+            "S123".to_string(),
+            "on-call".to_string(),
+        ])
+        .unwrap();
+
+        assert_eq!(
+            mentions,
+            vec![
+                "<@U123>",
+                "<!here>",
+                "<!channel>",
+                "<!subteam^S123>",
+                "on-call",
+            ]
+        );
     }
 
     #[test]
