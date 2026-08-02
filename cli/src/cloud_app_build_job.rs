@@ -34,6 +34,62 @@ pub struct BuildWorkloadSpec {
     callback: Option<BuildWorkloadCallback>,
     deployment_target: Option<String>,
     framework: Option<String>,
+    /// D1 migration plan resolved by the control plane.
+    ///
+    /// Optional so specs produced by control planes that predate
+    /// the field still deserialize (the builder then behaves
+    /// exactly as before: no migrations, `d1_migrations: null`).
+    #[serde(default)]
+    d1: Option<BuildWorkloadD1>,
+}
+
+/// D1 migration plan for one build.
+///
+/// IMPORTANT: every policy decision is already resolved by the
+/// control plane. The builder must NOT decide preview vs
+/// production, must NOT choose between `database_id` and
+/// `preview_database_id`, and must NOT infer the environment from
+/// the branch — it only executes what this spec says. The
+/// CodeBuild buildspec generator
+/// (`packages/compute/src/adapter/gateway/codebuild_provider.rs`
+/// in tachyon-apps) is fed by the same control-plane resolver, so
+/// the two builders cannot drift as long as neither re-derives
+/// policy locally.
+#[derive(Debug, Deserialize)]
+struct BuildWorkloadD1 {
+    /// `preview` or `production`. Reported back verbatim.
+    environment: String,
+    /// When false, a failed migration aborts the deploy.
+    auto_approve: bool,
+    #[serde(default)]
+    bindings: Vec<BuildWorkloadD1Binding>,
+}
+
+#[derive(Debug, Deserialize)]
+struct BuildWorkloadD1Binding {
+    binding_name: String,
+    /// Already resolved for `BuildWorkloadD1::environment`.
+    database_id: String,
+    /// Defaults to `migrations` when omitted.
+    #[serde(default)]
+    migrations_dir: Option<String>,
+}
+
+/// One entry of the `d1_migrations` callback array.
+///
+/// Field names must match the control plane's `D1MigrationResult`
+/// (`packages/compute/src/usecase/complete_build.rs` in
+/// tachyon-apps) exactly.
+#[derive(Debug, Serialize)]
+struct D1MigrationResult {
+    binding_name: String,
+    database_id: String,
+    environment: String,
+    status: String,
+    skip_reason: Option<String>,
+    duration_ms: Option<i32>,
+    stdout: Option<String>,
+    stderr: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -174,15 +230,25 @@ pub async fn run_from_env(spec_env: &str) -> Result<()> {
 
     let cache_stats = load_cache_stats();
     let mut phase_durations = cache_phase_durations(&cache_stats);
-    let result = run_build(&workload, &mut phase_durations).await;
+    // Keep migration results outside `run_build` so a failure after
+    // migration still reports the collected evidence in the callback.
+    let mut d1_migrations = Vec::new();
+    let result = run_build(&workload, &mut phase_durations, &mut d1_migrations).await;
     send_phase_durations(&workload, &phase_durations, cache_stats.cache_hit).await;
     let duration_secs = i32::try_from(started.elapsed().as_secs()).unwrap_or(i32::MAX);
 
     match &result {
         Ok(output) => {
             let callback_started = Instant::now();
-            let callback_result =
-                send_callback(&workload, "SUCCESS", duration_secs, Some(output), None).await;
+            let callback_result = send_callback(
+                &workload,
+                "SUCCESS",
+                duration_secs,
+                Some(output),
+                None,
+                &d1_migrations,
+            )
+            .await;
             send_phase_durations(
                 &workload,
                 &BTreeMap::from([(
@@ -204,6 +270,7 @@ pub async fn run_from_env(spec_env: &str) -> Result<()> {
                 duration_secs,
                 None,
                 Some(error.to_string()),
+                &d1_migrations,
             )
             .await;
             send_phase_durations(
@@ -229,6 +296,7 @@ fn parse_workload_from_env(spec_env: &str) -> Result<BuildWorkloadSpec> {
 async fn run_build(
     workload: &BuildWorkloadSpec,
     phase_durations: &mut BTreeMap<String, f64>,
+    d1_migrations: &mut Vec<serde_json::Value>,
 ) -> Result<CommandResult> {
     let checkout_dir = PathBuf::from("/workspace/source");
     if checkout_dir.exists() {
@@ -311,6 +379,28 @@ async fn run_build(
             phase_started.elapsed().as_secs_f64(),
         );
         append_result(&mut combined, phase_result?);
+    }
+
+    // Migrate before deploying the Pages candidate. A fatal migration
+    // error returns here, so the deploy command below is never started.
+    if let Some(d1) = workload.d1.as_ref().filter(|_| is_pages) {
+        send_phase_event(workload, "d1_migrations").await;
+        let phase_started = Instant::now();
+        let phase_result = run_d1_migrations(d1, &app_dir, &env, d1_migrations).await;
+        phase_durations.insert(
+            "d1_migrations".to_string(),
+            phase_started.elapsed().as_secs_f64(),
+        );
+        append_result(&mut combined, phase_result?);
+
+        // The control plane intentionally leaves the existing Preview
+        // binding in place until the new database has its schema. Make
+        // the resolved database live only after migrations complete and
+        // before the candidate deploy starts. Production bindings are
+        // synchronized by the control plane before the build starts.
+        if d1.environment == "preview" {
+            sync_pages_preview_d1_bindings(d1, &env).await?;
+        }
     }
 
     if is_workers {
@@ -588,6 +678,332 @@ async fn run_cloudflare_workers_deploy(
         .stderr(Stdio::piped());
 
     run_command("wrangler deploy", command).await
+}
+
+/// Default directory wrangler reads D1 migrations from.
+const DEFAULT_D1_MIGRATIONS_DIR: &str = "migrations";
+const CLOUDFLARE_API_BASE_URL: &str = "https://api.cloudflare.com/client/v4";
+const D1_MIGRATION_CONFIG_FILE: &str = ".tachyon-d1-migration.json";
+
+/// Synchronize the Pages Preview runtime D1 map after migration and before deploy.
+///
+/// The GET/merge/PATCH sequence preserves unmanaged Preview D1 bindings. The
+/// PATCH body deliberately contains no Production config, environment
+/// variables, or provider-managed fields. Database IDs are absent from logs
+/// and error messages.
+// tachyon-sdk is a standalone repository and cannot depend on the
+// tachyon-apps-only platform_http crate. This client still sets finite
+// connect and request timeouts explicitly.
+#[allow(clippy::disallowed_methods)]
+async fn sync_pages_preview_d1_bindings(
+    d1: &BuildWorkloadD1,
+    env: &BTreeMap<String, String>,
+) -> Result<()> {
+    if d1.bindings.is_empty() {
+        return Ok(());
+    }
+    if d1.environment != "preview" {
+        return Err(anyhow!(
+            "Pages D1 binding sync only supports the preview environment"
+        ));
+    }
+
+    let account_id = required_env(env, "CLOUDFLARE_ACCOUNT_ID")?;
+    let api_token = required_env(env, "CLOUDFLARE_API_TOKEN")?;
+    let project_name = required_env(env, "PAGES_PROJECT_NAME")?;
+    let base_url = env_value(env, "TACHYON_CLOUDFLARE_API_URL")
+        .unwrap_or(CLOUDFLARE_API_BASE_URL)
+        .trim_end_matches('/');
+    let url = format!(
+        "{base_url}/accounts/{}/pages/projects/{}",
+        urlencoding::encode(account_id),
+        urlencoding::encode(project_name)
+    );
+    let client = reqwest::Client::builder()
+        .connect_timeout(Duration::from_secs(10))
+        .timeout(Duration::from_secs(30))
+        .build()
+        .context("failed to create Cloudflare Pages D1 sync client")?;
+    let project_response = client
+        .get(&url)
+        .bearer_auth(api_token)
+        .send()
+        .await
+        .context("failed to fetch Cloudflare Pages project for D1 sync")?
+        .error_for_status()
+        .context("Cloudflare Pages project fetch failed during D1 sync")?;
+    let project: serde_json::Value = project_response
+        .json()
+        .await
+        .context("failed to decode Cloudflare Pages project for D1 sync")?;
+    ensure_cloudflare_success(&project, "fetch")?;
+    let d1_databases = merged_pages_preview_d1_databases(&project["result"], &d1.bindings);
+
+    let patch_response = client
+        .patch(&url)
+        .bearer_auth(api_token)
+        .json(&serde_json::json!({
+            "deployment_configs": {
+                "preview": {
+                    "d1_databases": d1_databases,
+                }
+            },
+        }))
+        .send()
+        .await
+        .context("failed to update Cloudflare Pages D1 bindings")?
+        .error_for_status()
+        .context("Cloudflare Pages D1 binding update failed")?;
+    let patched: serde_json::Value = patch_response
+        .json()
+        .await
+        .context("failed to decode Cloudflare Pages D1 binding update")?;
+    ensure_cloudflare_success(&patched, "update")?;
+
+    tracing::info!(
+        project_name,
+        environment = %d1.environment,
+        binding_count = d1.bindings.len(),
+        "synchronized Cloudflare Pages D1 bindings after migration"
+    );
+    Ok(())
+}
+
+fn ensure_cloudflare_success(response: &serde_json::Value, operation: &str) -> Result<()> {
+    if response.get("success").and_then(serde_json::Value::as_bool) == Some(true) {
+        return Ok(());
+    }
+    Err(anyhow!(
+        "Cloudflare Pages D1 binding {operation} returned an unsuccessful response"
+    ))
+}
+
+fn merged_pages_preview_d1_databases(
+    project: &serde_json::Value,
+    bindings: &[BuildWorkloadD1Binding],
+) -> serde_json::Map<String, serde_json::Value> {
+    let mut d1_databases = project
+        .get("deployment_configs")
+        .and_then(serde_json::Value::as_object)
+        .and_then(|configs| configs.get("preview"))
+        .and_then(serde_json::Value::as_object)
+        .and_then(|preview| preview.get("d1_databases"))
+        .and_then(serde_json::Value::as_object)
+        .cloned()
+        .unwrap_or_default();
+
+    for binding in bindings {
+        if d1_databases
+            .insert(
+                binding.binding_name.clone(),
+                serde_json::json!({ "id": binding.database_id }),
+            )
+            .is_some()
+        {
+            tracing::debug!(
+                binding = %binding.binding_name,
+                environment = "preview",
+                "replaced existing Cloudflare Pages D1 binding"
+            );
+        }
+    }
+    d1_databases
+}
+
+/// Apply D1 migrations for every binding in the control-plane
+/// resolved plan, before the deploy runs.
+///
+/// Reminder (see `BuildWorkloadD1`): no policy is decided here.
+/// `database_id` is already the right database for
+/// `d1.environment`, and `auto_approve` already encodes whether a
+/// failure is fatal. The CodeBuild buildspec generator consumes
+/// the same resolver output, so the two builders stay in sync.
+async fn run_d1_migrations(
+    d1: &BuildWorkloadD1,
+    app_dir: &Path,
+    env: &BTreeMap<String, String>,
+    collected: &mut Vec<serde_json::Value>,
+) -> Result<CommandResult> {
+    let mut combined = CommandResult {
+        stdout: String::new(),
+        stderr: String::new(),
+    };
+    let mut results: Vec<D1MigrationResult> = Vec::new();
+
+    if !matches!(d1.environment.as_str(), "preview" | "production") {
+        return Err(anyhow!("unsupported D1 environment '{}'", d1.environment));
+    }
+
+    for binding in &d1.bindings {
+        let migrations_dir = app_dir.join(d1_migrations_dir(binding));
+        if !dir_has_sql_files(&migrations_dir) {
+            tracing::info!(
+                binding = %binding.binding_name,
+                migrations_dir = %migrations_dir.display(),
+                "no migration files found, skipping D1 migrations"
+            );
+            let result = D1MigrationResult {
+                binding_name: binding.binding_name.clone(),
+                database_id: binding.database_id.clone(),
+                environment: d1.environment.clone(),
+                status: "skipped".to_string(),
+                skip_reason: Some("No migration files found".to_string()),
+                duration_ms: Some(0),
+                stdout: None,
+                stderr: None,
+            };
+            collected.push(serde_json::to_value(&result)?);
+            results.push(result);
+            continue;
+        }
+
+        // Use a Tachyon-owned config containing only the resolved binding.
+        // This avoids mutating or depending on an application's TOML/JSONC
+        // formatting and prevents Wrangler from selecting a stale source ID.
+        let migration_config = write_d1_migration_config(app_dir, binding)?;
+
+        tracing::info!(
+            binding = %binding.binding_name,
+            environment = %d1.environment,
+            "running D1 migrations"
+        );
+
+        let started = Instant::now();
+        let mut command = Command::new("npx");
+        command
+            .arg("--yes")
+            .arg(WRANGLER_NPM_SPEC)
+            .arg("d1")
+            .arg("migrations")
+            .arg("apply")
+            .arg(&binding.binding_name)
+            .arg("--remote")
+            .arg("--config")
+            .arg(&migration_config)
+            .current_dir(app_dir)
+            .envs(env)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+
+        let command_result =
+            match run_command_capture("wrangler d1 migrations apply", command).await {
+                Ok((status, output)) => (status.success(), output),
+                // A spawn failure (npx missing, fork failure) is still a
+                // migration failure and must be reported rather than
+                // discarded, otherwise the control plane sees `null`.
+                Err(error) => (
+                    false,
+                    CommandResult {
+                        stdout: String::new(),
+                        stderr: truncate_output(&error.to_string()),
+                    },
+                ),
+            };
+        if let Err(error) = std::fs::remove_file(&migration_config) {
+            tracing::warn!(
+                path = %migration_config.display(),
+                %error,
+                "failed to remove temporary D1 migration config"
+            );
+        }
+        let (succeeded, output) = command_result;
+        let duration_ms = i32::try_from(started.elapsed().as_millis()).unwrap_or(i32::MAX);
+
+        let result = D1MigrationResult {
+            binding_name: binding.binding_name.clone(),
+            database_id: binding.database_id.clone(),
+            environment: d1.environment.clone(),
+            status: if succeeded { "applied" } else { "failed" }.to_string(),
+            skip_reason: None,
+            duration_ms: Some(duration_ms),
+            stdout: non_empty(&output.stdout),
+            stderr: non_empty(&output.stderr),
+        };
+        if !succeeded {
+            tracing::error!(
+                binding = %binding.binding_name,
+                environment = %d1.environment,
+                "D1 migration failed"
+            );
+        }
+        collected.push(serde_json::to_value(&result)?);
+        results.push(result);
+        append_result(&mut combined, output);
+    }
+
+    if should_abort_deploy(&results, d1.auto_approve) {
+        return Err(anyhow!(
+            "D1 migration failed and auto approve is disabled; aborting deploy"
+        ));
+    }
+    if results.iter().any(|result| result.status == "failed") {
+        tracing::warn!("D1 migration failed but auto approve is enabled; continuing to deploy");
+    }
+
+    Ok(combined)
+}
+
+/// Abort the deploy only when a migration failed and the control
+/// plane did not pre-approve applying migrations unattended.
+fn should_abort_deploy(results: &[D1MigrationResult], auto_approve: bool) -> bool {
+    !auto_approve && results.iter().any(|result| result.status == "failed")
+}
+
+fn d1_migrations_dir(binding: &BuildWorkloadD1Binding) -> &str {
+    binding
+        .migrations_dir
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or(DEFAULT_D1_MIGRATIONS_DIR)
+}
+
+fn non_empty(value: &str) -> Option<String> {
+    if value.is_empty() {
+        None
+    } else {
+        Some(truncate_output(value))
+    }
+}
+
+/// `ls <dir>/*.sql`, the CodeBuild guard, expressed in Rust.
+fn dir_has_sql_files(dir: &Path) -> bool {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return false;
+    };
+    entries.flatten().any(|entry| {
+        entry
+            .path()
+            .extension()
+            .and_then(OsStr::to_str)
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("sql"))
+    })
+}
+
+/// Write a minimal Wrangler config for exactly one control-plane-resolved D1
+/// target. The source config remains untouched and cannot redirect the command.
+fn write_d1_migration_config(app_dir: &Path, binding: &BuildWorkloadD1Binding) -> Result<PathBuf> {
+    let path = app_dir.join(D1_MIGRATION_CONFIG_FILE);
+    if path.exists() {
+        return Err(anyhow!(
+            "temporary D1 migration config already exists at {}",
+            path.display()
+        ));
+    }
+    let config = serde_json::json!({
+        "name": "tachyon-d1-migration",
+        "compatibility_date": "2026-08-02",
+        "d1_databases": [{
+            "binding": binding.binding_name,
+            "database_name": binding.binding_name,
+            "database_id": binding.database_id,
+            "migrations_dir": d1_migrations_dir(binding),
+        }],
+    });
+    let contents = serde_json::to_vec_pretty(&config)
+        .context("failed to encode temporary D1 migration config")?;
+    std::fs::write(&path, contents).context("failed to write temporary D1 migration config")?;
+    Ok(path)
 }
 
 /// Presigned S3 PUT URL for the Lambda artifact. Injected by the
@@ -1372,7 +1788,25 @@ async fn run_shell(
     run_command(label, cmd).await
 }
 
-async fn run_command(label: &str, mut command: Command) -> Result<CommandResult> {
+async fn run_command(label: &str, command: Command) -> Result<CommandResult> {
+    let (status, result) = run_command_capture(label, command).await?;
+    if !status.success() {
+        return Err(anyhow!(
+            "{label} command failed with exit code {:?}",
+            status.code()
+        ));
+    }
+    Ok(result)
+}
+
+/// Like [`run_command`] but hands the captured output back even
+/// when the command exited non-zero. D1 migrations need the
+/// failing stderr for the completion callback, which the plain
+/// `Err` path would discard.
+async fn run_command_capture(
+    label: &str,
+    mut command: Command,
+) -> Result<(std::process::ExitStatus, CommandResult)> {
     let output = command
         .output()
         .await
@@ -1388,13 +1822,14 @@ async fn run_command(label: &str, mut command: Command) -> Result<CommandResult>
     }
 
     if !output.status.success() {
-        return Err(anyhow!(
-            "{label} command failed with exit code {:?}",
-            output.status.code()
-        ));
+        tracing::error!(
+            %label,
+            exit_code = ?output.status.code(),
+            "command failed"
+        );
     }
 
-    Ok(CommandResult { stdout, stderr })
+    Ok((output.status, CommandResult { stdout, stderr }))
 }
 
 fn append_result(target: &mut CommandResult, next: CommandResult) {
@@ -1441,6 +1876,7 @@ async fn send_callback(
     duration_secs: i32,
     output: Option<&CommandResult>,
     error_message: Option<String>,
+    d1_migrations: &[serde_json::Value],
 ) -> Result<()> {
     let Some(callback) = workload.callback.as_ref() else {
         tracing::warn!("build callback URL is not configured");
@@ -1462,7 +1898,9 @@ async fn send_callback(
         error_message,
         iac_plan_output: None,
         iac_success: None,
-        d1_migrations: None,
+        // `null` (no D1 plan in the spec) and `[]` mean different
+        // things to the control plane, so never send an empty array.
+        d1_migrations: d1_migrations_payload(d1_migrations),
         cache_hit: cache_stats.cache_hit,
         cache_key: cache_key(Path::new("/workspace/source")),
         cache_restored_bytes: cache_stats.restored_bytes,
@@ -1489,6 +1927,14 @@ async fn send_callback(
         .context("build completion callback returned error")?;
 
     Ok(())
+}
+
+fn d1_migrations_payload(results: &[serde_json::Value]) -> Option<Vec<serde_json::Value>> {
+    if results.is_empty() {
+        None
+    } else {
+        Some(results.to_vec())
+    }
 }
 
 fn cache_key(source_dir: &Path) -> Option<String> {
@@ -1653,7 +2099,319 @@ mod tests {
             callback: None,
             deployment_target: deployment_target.map(str::to_string),
             framework: Some("next_js".to_string()),
+            d1: None,
         }
+    }
+
+    fn migration_result(binding: &str, status: &str) -> D1MigrationResult {
+        D1MigrationResult {
+            binding_name: binding.to_string(),
+            database_id: "db-1".to_string(),
+            environment: "production".to_string(),
+            status: status.to_string(),
+            skip_reason: None,
+            duration_ms: Some(12),
+            stdout: None,
+            stderr: None,
+        }
+    }
+
+    fn minimal_spec_json(extra: &str) -> String {
+        format!(
+            r#"{{
+                "project_id": "app_123",
+                "source": {{
+                    "repository_url": "https://github.com/example/app",
+                    "branch": "main",
+                    "commit_sha": "abc"
+                }},
+                "workspace": {{}},
+                "commands": {{}},
+                "artifact": {{"image_name": "demo", "image_tag": "bld_1"}}
+                {extra}
+            }}"#
+        )
+    }
+
+    #[test]
+    fn spec_deserializes_with_d1_plan() {
+        let json = minimal_spec_json(
+            r#", "d1": {
+                "environment": "preview",
+                "auto_approve": false,
+                "bindings": [
+                    {"binding_name": "DB", "database_id": "uuid-1",
+                     "migrations_dir": "db/migrations"},
+                    {"binding_name": "LOGS", "database_id": "uuid-2"}
+                ]
+            }"#,
+        );
+
+        let spec: BuildWorkloadSpec = serde_json::from_str(&json).expect("spec should parse");
+        let d1 = spec.d1.expect("d1 should be present");
+        assert_eq!(d1.environment, "preview");
+        assert!(!d1.auto_approve);
+        assert_eq!(d1.bindings.len(), 2);
+        assert_eq!(d1_migrations_dir(&d1.bindings[0]), "db/migrations");
+        // Omitted migrations_dir falls back to wrangler's default.
+        assert_eq!(d1_migrations_dir(&d1.bindings[1]), "migrations");
+    }
+
+    #[test]
+    fn spec_deserializes_without_d1_plan() {
+        // Backward compatibility with control planes that predate
+        // the additive `d1` field.
+        let spec: BuildWorkloadSpec =
+            serde_json::from_str(&minimal_spec_json("")).expect("spec should parse");
+
+        assert!(spec.d1.is_none());
+    }
+
+    #[test]
+    fn pages_d1_merge_preserves_unmanaged_preview_bindings() {
+        let project = serde_json::json!({
+            "deployment_configs": {
+                "production": {
+                    "d1_databases": {"DB": {"id": "production-id"}},
+                    "compatibility_flags": ["nodejs_compat"]
+                },
+                "preview": {
+                    "env_vars": {"EXISTING": {"value": "kept", "type": "plain_text"}},
+                    "d1_databases": {"OTHER": {"id": "other-id"}}
+                }
+            }
+        });
+        let bindings = vec![BuildWorkloadD1Binding {
+            binding_name: "DB".to_string(),
+            database_id: "preview-id".to_string(),
+            migrations_dir: None,
+        }];
+
+        let merged = merged_pages_preview_d1_databases(&project, &bindings);
+
+        assert_eq!(merged["DB"]["id"], "preview-id");
+        assert_eq!(merged["OTHER"]["id"], "other-id");
+    }
+
+    #[tokio::test]
+    async fn pages_d1_sync_patches_resolved_preview_binding() {
+        use axum::{extract::State, http::HeaderMap, routing::get, Json, Router};
+        use std::sync::{Arc, Mutex};
+
+        #[derive(Clone)]
+        struct TestState {
+            patches: Arc<Mutex<Vec<serde_json::Value>>>,
+        }
+
+        async fn get_project(headers: HeaderMap) -> Json<serde_json::Value> {
+            assert_eq!(
+                headers
+                    .get("authorization")
+                    .and_then(|value| value.to_str().ok()),
+                Some("Bearer test-token")
+            );
+            Json(serde_json::json!({
+                "success": true,
+                "result": {
+                    "deployment_configs": {
+                        "production": {
+                            "d1_databases": {"DB": {"id": "production-id"}}
+                        },
+                        "preview": {
+                            "env_vars": {
+                                "EXISTING": {"value": "kept", "type": "plain_text"}
+                            }
+                        }
+                    }
+                }
+            }))
+        }
+
+        async fn patch_project(
+            State(state): State<TestState>,
+            Json(body): Json<serde_json::Value>,
+        ) -> Json<serde_json::Value> {
+            state.patches.lock().expect("patch lock").push(body);
+            Json(serde_json::json!({"success": true, "result": {}}))
+        }
+
+        let patches = Arc::new(Mutex::new(Vec::new()));
+        let state = TestState {
+            patches: patches.clone(),
+        };
+        let router = Router::new()
+            .route(
+                "/client/v4/accounts/account/pages/projects/project",
+                get(get_project).patch(patch_project),
+            )
+            .with_state(state);
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind test server");
+        let address = listener.local_addr().expect("test server address");
+        let server = tokio::spawn(async move {
+            axum::serve(listener, router).await.expect("serve test API");
+        });
+
+        let d1 = BuildWorkloadD1 {
+            environment: "preview".to_string(),
+            auto_approve: false,
+            bindings: vec![BuildWorkloadD1Binding {
+                binding_name: "DB".to_string(),
+                database_id: "preview-id".to_string(),
+                migrations_dir: None,
+            }],
+        };
+        let env = BTreeMap::from([
+            ("CLOUDFLARE_ACCOUNT_ID".to_string(), "account".to_string()),
+            ("CLOUDFLARE_API_TOKEN".to_string(), "test-token".to_string()),
+            ("PAGES_PROJECT_NAME".to_string(), "project".to_string()),
+            (
+                "TACHYON_CLOUDFLARE_API_URL".to_string(),
+                format!("http://{address}/client/v4"),
+            ),
+        ]);
+
+        sync_pages_preview_d1_bindings(&d1, &env)
+            .await
+            .expect("runtime binding sync should succeed");
+        server.abort();
+
+        let patches = patches.lock().expect("patch lock");
+        assert_eq!(patches.len(), 1);
+        assert_eq!(
+            patches[0]["deployment_configs"]["preview"]["d1_databases"]["DB"]["id"],
+            "preview-id"
+        );
+        assert!(patches[0]["deployment_configs"]["production"].is_null());
+        assert!(patches[0]["deployment_configs"]["preview"]["env_vars"].is_null());
+    }
+
+    #[tokio::test]
+    async fn pages_d1_sync_rejects_production() {
+        let d1 = BuildWorkloadD1 {
+            environment: "production".to_string(),
+            auto_approve: true,
+            bindings: vec![BuildWorkloadD1Binding {
+                binding_name: "DB".to_string(),
+                database_id: "production-id".to_string(),
+                migrations_dir: None,
+            }],
+        };
+
+        let error = sync_pages_preview_d1_bindings(&d1, &BTreeMap::new())
+            .await
+            .expect_err("production must never mutate Pages config from the builder");
+
+        assert!(error.to_string().contains("only supports the preview"));
+    }
+
+    #[test]
+    fn migration_config_uses_only_the_resolved_binding() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let binding = BuildWorkloadD1Binding {
+            binding_name: "DB".to_string(),
+            database_id: "uuid-1".to_string(),
+            migrations_dir: Some("db/migrations".to_string()),
+        };
+
+        let path = write_d1_migration_config(dir.path(), &binding)
+            .expect("temporary config should be written");
+        let value: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&path).expect("read temporary config"))
+                .expect("parse temporary config");
+
+        assert_eq!(value["d1_databases"].as_array().unwrap().len(), 1);
+        assert_eq!(value["d1_databases"][0]["binding"], "DB");
+        assert_eq!(value["d1_databases"][0]["database_id"], "uuid-1");
+        assert_eq!(value["d1_databases"][0]["migrations_dir"], "db/migrations");
+    }
+
+    #[test]
+    fn migrations_dir_with_sql_files_is_detected() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(dir.path().join("0001_init.sql"), "select 1;").expect("write migration");
+
+        assert!(dir_has_sql_files(dir.path()));
+    }
+
+    #[test]
+    fn empty_or_missing_migrations_dir_is_not_detected() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(dir.path().join("README.md"), "not a migration").expect("write file");
+
+        assert!(!dir_has_sql_files(dir.path()));
+        assert!(!dir_has_sql_files(&dir.path().join("does-not-exist")));
+    }
+
+    #[tokio::test]
+    async fn missing_migrations_dir_is_reported_as_skipped_without_running_wrangler() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let d1 = BuildWorkloadD1 {
+            environment: "production".to_string(),
+            auto_approve: true,
+            bindings: vec![BuildWorkloadD1Binding {
+                binding_name: "DB".to_string(),
+                database_id: "uuid-1".to_string(),
+                migrations_dir: None,
+            }],
+        };
+        let mut collected = Vec::new();
+
+        run_d1_migrations(&d1, dir.path(), &BTreeMap::new(), &mut collected)
+            .await
+            .expect("skipped migrations should not fail the build");
+
+        assert_eq!(collected.len(), 1);
+        assert_eq!(collected[0]["status"], "skipped");
+        assert_eq!(collected[0]["skip_reason"], "No migration files found");
+        assert_eq!(collected[0]["binding_name"], "DB");
+    }
+
+    #[test]
+    fn migration_result_serializes_control_plane_field_names() {
+        let value = serde_json::to_value(migration_result("DB", "applied")).expect("serialize");
+
+        let object = value.as_object().expect("object");
+        let mut keys: Vec<&str> = object.keys().map(String::as_str).collect();
+        keys.sort_unstable();
+        assert_eq!(
+            keys,
+            vec![
+                "binding_name",
+                "database_id",
+                "duration_ms",
+                "environment",
+                "skip_reason",
+                "status",
+                "stderr",
+                "stdout",
+            ]
+        );
+        assert_eq!(object["status"], "applied");
+        assert!(object["skip_reason"].is_null());
+    }
+
+    #[test]
+    fn failed_migration_aborts_deploy_only_without_auto_approve() {
+        let failed = vec![migration_result("DB", "failed")];
+        let applied = vec![migration_result("DB", "applied")];
+
+        assert!(should_abort_deploy(&failed, false));
+        assert!(!should_abort_deploy(&failed, true));
+        assert!(!should_abort_deploy(&applied, false));
+        assert!(!should_abort_deploy(&[], false));
+    }
+
+    #[test]
+    fn empty_migration_results_are_sent_as_null_not_empty_array() {
+        assert!(d1_migrations_payload(&[]).is_none());
+        assert_eq!(
+            d1_migrations_payload(&[serde_json::json!({"status": "applied"})])
+                .expect("payload")
+                .len(),
+            1
+        );
     }
 
     #[test]
@@ -2340,6 +3098,7 @@ mod tests {
             callback: None,
             deployment_target: Some("cloud_run".to_string()),
             framework: Some("docker".to_string()),
+            d1: None,
         };
 
         assert_eq!(
@@ -2379,6 +3138,7 @@ mod tests {
             callback: None,
             deployment_target: Some("cloud_run".to_string()),
             framework: Some("docker".to_string()),
+            d1: None,
         };
 
         assert_eq!(
@@ -2598,6 +3358,7 @@ mod tests {
             callback: None,
             deployment_target: Some("cloud_run".to_string()),
             framework: Some("docker".to_string()),
+            d1: None,
         };
 
         assert_eq!(
@@ -2638,6 +3399,7 @@ mod tests {
             callback: None,
             deployment_target: Some("cloud_run".to_string()),
             framework: Some("docker".to_string()),
+            d1: None,
         };
 
         assert_eq!(docker_context_path(&workload, &checkout, &app), app);
@@ -2675,6 +3437,7 @@ mod tests {
             callback: None,
             deployment_target: Some("cloud_run".to_string()),
             framework: Some("docker".to_string()),
+            d1: None,
         };
         let context = docker_context_path(&workload, &checkout, &app);
 
@@ -2716,6 +3479,7 @@ mod tests {
             callback: None,
             deployment_target: Some("cloud_run".to_string()),
             framework: Some("docker".to_string()),
+            d1: None,
         };
 
         assert_eq!(docker_context_path(&workload, &checkout, &app), checkout);
@@ -2754,6 +3518,7 @@ mod tests {
             callback: None,
             deployment_target: Some("cloud_run".to_string()),
             framework: Some("docker".to_string()),
+            d1: None,
         };
 
         assert_eq!(docker_context_path(&workload, &checkout, &app), context);
