@@ -44,10 +44,10 @@ class ChatCompletionRequest(BaseModel):
     response_format: Optional[ResponseFormat] = Field(default=None, description="Format to return the response in")
     stream: Optional[StrictBool] = Field(default=False, description="Whether to stream back partial progress")
     technical_level: Optional[StrictStr] = Field(default=None, description="Technical level preference")
-    temperature: Optional[Union[Annotated[float, Field(le=2, strict=True, ge=0)], Annotated[int, Field(le=2, strict=True, ge=0)]]] = Field(default=1.0, description="What sampling temperature to use, between 0 and 2")
+    temperature: Optional[Union[Annotated[float, Field(le=2, strict=True, ge=0)], Annotated[int, Field(le=2, strict=True, ge=0)]]] = Field(default=1, description="What sampling temperature to use, between 0 and 2")
     tool_choice: Optional[ToolChoice] = Field(default=None, description="Controls which (if any) function is called by the model")
     tools: Optional[List[Tool]] = Field(default=None, description="A list of tools the model may call")
-    top_p: Optional[Union[Annotated[float, Field(le=1, strict=True, ge=0)], Annotated[int, Field(le=1, strict=True, ge=0)]]] = Field(default=1.0, description="An alternative to sampling with temperature")
+    top_p: Optional[Union[Annotated[float, Field(le=1, strict=True, ge=0)], Annotated[int, Field(le=1, strict=True, ge=0)]]] = Field(default=1, description="An alternative to sampling with temperature")
     user: Optional[StrictStr] = Field(default=None, description="A unique identifier representing your end-user")
     __properties: ClassVar[List[str]] = ["communication_style", "explanation_style", "frequency_penalty", "max_completion_tokens", "memory_settings", "messages", "model", "n", "presence_penalty", "response_format", "stream", "technical_level", "temperature", "tool_choice", "tools", "top_p", "user"]
 
@@ -214,10 +214,10 @@ class ChatCompletionRequest(BaseModel):
             "response_format": ResponseFormat.from_dict(obj["response_format"]) if obj.get("response_format") is not None else None,
             "stream": obj.get("stream") if obj.get("stream") is not None else False,
             "technical_level": obj.get("technical_level"),
-            "temperature": obj.get("temperature") if obj.get("temperature") is not None else 1.0,
+            "temperature": obj.get("temperature") if obj.get("temperature") is not None else 1,
             "tool_choice": obj.get("tool_choice"),
             "tools": [Tool.from_dict(_item) for _item in obj["tools"]] if obj.get("tools") is not None else None,
-            "top_p": obj.get("top_p") if obj.get("top_p") is not None else 1.0,
+            "top_p": obj.get("top_p") if obj.get("top_p") is not None else 1,
             "user": obj.get("user")
         })
         return _obj

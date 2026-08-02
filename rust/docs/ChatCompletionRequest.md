@@ -16,10 +16,10 @@ Name | Type | Description | Notes
 **response_format** | Option<[**models::ResponseFormat**](ResponseFormat.md)> | Format to return the response in | [optional]
 **stream** | Option<**bool**> | Whether to stream back partial progress | [optional][default to false]
 **technical_level** | Option<**String**> | Technical level preference | [optional]
-**temperature** | Option<**f32**> | What sampling temperature to use, between 0 and 2 | [optional][default to 1.0]
+**temperature** | Option<**f32**> | What sampling temperature to use, between 0 and 2 | [optional][default to 1]
 **tool_choice** | Option<[**models::ToolChoice**](ToolChoice.md)> | Controls which (if any) function is called by the model | [optional]
 **tools** | Option<[**Vec<models::Tool>**](Tool.md)> | A list of tools the model may call | [optional]
-**top_p** | Option<**f32**> | An alternative to sampling with temperature | [optional][default to 1.0]
+**top_p** | Option<**f32**> | An alternative to sampling with temperature | [optional][default to 1]
 **user** | Option<**String**> | A unique identifier representing your end-user | [optional]
 
 [[Back to Model list]](../README.md#documentation-for-models) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to README]](../README.md)

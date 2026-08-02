@@ -91,3 +91,5 @@ class CheckTenantsPolicyResponse(BaseModel):
             "allowedTenants": [AllowedTenantResponse.from_dict(_item) for _item in obj["allowedTenants"]] if obj.get("allowedTenants") is not None else None
         })
         return _obj
+
+

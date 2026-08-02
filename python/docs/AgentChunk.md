@@ -27,7 +27,7 @@ Name | Type | Description | Notes
 **prompt_tokens** | **int** |  | 
 **total_cost** | **float** |  | [optional] 
 **total_tokens** | **int** |  | 
-**coding_job_id** | **str** |  |
+**coding_job_id** | **str** |  | 
 **provider** | **str** |  | 
 **agent** | [**AgentSource**](AgentSource.md) |  | [optional] 
 
@@ -49,4 +49,5 @@ agent_chunk_dict = agent_chunk_instance.to_dict()
 agent_chunk_from_dict = AgentChunk.from_dict(agent_chunk_dict)
 ```
 [[Back to Model list]](../README.md#documentation-for-models) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to README]](../README.md)
+
 
