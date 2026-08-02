@@ -59,7 +59,8 @@ pub struct BuildWorkloadSpec {
 struct BuildWorkloadD1 {
     /// `preview` or `production`. Reported back verbatim.
     environment: String,
-    /// When false, a failed migration aborts the deploy.
+    /// Whether execution was pre-approved by the control plane. This remains
+    /// part of the workload contract, but a failed migration always aborts.
     auto_approve: bool,
     #[serde(default)]
     bindings: Vec<BuildWorkloadD1Binding>,
@@ -815,9 +816,8 @@ fn merged_pages_preview_d1_databases(
 ///
 /// Reminder (see `BuildWorkloadD1`): no policy is decided here.
 /// `database_id` is already the right database for
-/// `d1.environment`, and `auto_approve` already encodes whether a
-/// failure is fatal. The CodeBuild buildspec generator consumes
-/// the same resolver output, so the two builders stay in sync.
+/// `d1.environment` and the execution approval are already resolved. A
+/// Wrangler failure is never approval: any failed migration aborts deploy.
 async fn run_d1_migrations(
     d1: &BuildWorkloadD1,
     app_dir: &Path,
@@ -833,6 +833,10 @@ async fn run_d1_migrations(
     if !matches!(d1.environment.as_str(), "preview" | "production") {
         return Err(anyhow!("unsupported D1 environment '{}'", d1.environment));
     }
+    tracing::debug!(
+        auto_approve = d1.auto_approve,
+        "using control-plane-resolved D1 migration approval"
+    );
 
     for binding in &d1.bindings {
         let migrations_dir = app_dir.join(d1_migrations_dir(binding));
@@ -931,22 +935,15 @@ async fn run_d1_migrations(
         append_result(&mut combined, output);
     }
 
-    if should_abort_deploy(&results, d1.auto_approve) {
-        return Err(anyhow!(
-            "D1 migration failed and auto approve is disabled; aborting deploy"
-        ));
-    }
-    if results.iter().any(|result| result.status == "failed") {
-        tracing::warn!("D1 migration failed but auto approve is enabled; continuing to deploy");
+    if has_failed_migration(&results) {
+        return Err(anyhow!("D1 migration failed; aborting deploy"));
     }
 
     Ok(combined)
 }
 
-/// Abort the deploy only when a migration failed and the control
-/// plane did not pre-approve applying migrations unattended.
-fn should_abort_deploy(results: &[D1MigrationResult], auto_approve: bool) -> bool {
-    !auto_approve && results.iter().any(|result| result.status == "failed")
+fn has_failed_migration(results: &[D1MigrationResult]) -> bool {
+    results.iter().any(|result| result.status == "failed")
 }
 
 fn d1_migrations_dir(binding: &BuildWorkloadD1Binding) -> &str {
@@ -2393,14 +2390,13 @@ mod tests {
     }
 
     #[test]
-    fn failed_migration_aborts_deploy_only_without_auto_approve() {
+    fn failed_migration_always_aborts_deploy() {
         let failed = vec![migration_result("DB", "failed")];
         let applied = vec![migration_result("DB", "applied")];
 
-        assert!(should_abort_deploy(&failed, false));
-        assert!(!should_abort_deploy(&failed, true));
-        assert!(!should_abort_deploy(&applied, false));
-        assert!(!should_abort_deploy(&[], false));
+        assert!(has_failed_migration(&failed));
+        assert!(!has_failed_migration(&applied));
+        assert!(!has_failed_migration(&[]));
     }
 
     #[test]
