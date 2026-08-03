@@ -4,7 +4,7 @@ Auto-generated multi-language API clients for the [Tachyon Platform](https://git
 
 ## CLI
 
-Latest release: **v0.6.24**
+Latest release: **v0.6.25**
 
 ### Install
 
@@ -94,6 +94,41 @@ on first use, with the legacy file kept for downgrade safety.
 > Phase 2 (macOS Keychain / Linux secret-service / encryption-at-rest) is
 > tracked separately. Profiles are currently plaintext JSON with `0o600` perms.
 
+### Profile-specific PM defaults
+
+Project-management defaults can be stored separately for each auth profile.
+They are written to `~/.config/tachyon/settings.json`, not to the profile's
+credentials JSON, so logging in or refreshing a token does not overwrite them.
+
+```sh
+# Human-operated profile: leave Linear issues unassigned by default
+tachyon config set pm.no_delegate true --profile admin
+
+# Agent profile: keep automatic Linear delegation and use a default team
+tachyon config set pm.no_delegate false --profile agent_app
+tachyon config set pm.default_team "Platform Team" --profile agent_app
+
+# Read all settings or one setting for a profile
+tachyon config get --profile admin
+tachyon config get pm.no_delegate --profile admin
+
+# Remove a profile default
+tachyon config unset pm.default_team --profile agent_app
+```
+
+PM defaults are resolved in this order:
+
+1. Explicit CLI flags such as `--no-delegate`, `--team`, `--team-id`, or
+   `--delegate-id`
+2. `TACHYON_PM_NO_DELEGATE` and `TACHYON_PM_DEFAULT_TEAM`
+3. The selected profile's settings
+4. Existing behavior, including the server-side tenant IaC default team
+
+`TACHYON_PM_NO_DELEGATE` accepts `true` or `false`. An explicit
+`--delegate-id` always requests that delegate even when `no_delegate` is true
+for the environment or profile. The same defaults apply to `tachyon pm issue`,
+`tachyon issue`, and `tachyon linear issue`.
+
 ### Usage
 
 ```sh
@@ -126,9 +161,9 @@ tachyon compute preview <app-id> --branch feature/my-change
 tachyon compute preview <app-id> --pr 123
 tachyon compute builds trigger <app-id> --pr 123
 
-# Create a Linear issue without automatic delegation (leave it unassigned)
+# Create a one-off Linear issue without automatic delegation
 tachyon issue create --provider linear --team PLT \
-  --title "Unassigned issue" --delegate-id ""
+  --title "Unassigned issue" --no-delegate
 
 # Reconcile only one app's production release-check contract.
 # Production change-control approval is still required.
@@ -275,7 +310,7 @@ Additional domain-specific TypeScript SDKs published under the `@tachyon-sdk/*` 
 
 | Package | Version | Description |
 |---------|---------|-------------|
-| [`@tachyon-sdk/cli`](packages/cli) | `0.6.24` | Global npm installer for the Tachyon CLI |
+| [`@tachyon-sdk/cli`](packages/cli) | `0.6.25` | Global npm installer for the Tachyon CLI |
 | [`@tachyon-sdk/storekit`](packages/storekit) | `0.3.0` | Commerce SDK: auth, order management (updateStatus/cancel/refund), inventory operations |
 | [`@tachyon-sdk/agent`](packages/agent) | — | Agent runtime SDK |
 | [`@tachyon-sdk/agent-chat`](packages/agent-chat) | — | Agent chat utilities + bundled skills |

@@ -6,6 +6,7 @@ use tachyon_sdk::apis::configuration::Configuration;
 
 use crate::pm_cli::{self, IssueCommand};
 use crate::pm_resource_cli::{self, ResourceCommand};
+use crate::settings::ResolvedPmSettings;
 
 #[derive(Debug, Clone, Args)]
 pub struct LinearArgs {
@@ -57,10 +58,15 @@ pub enum LinearCommand {
     },
 }
 
-pub async fn run(args: &LinearArgs, config: &Configuration, tenant_id: &str) -> Result<()> {
+pub async fn run(
+    args: &LinearArgs,
+    config: &Configuration,
+    tenant_id: &str,
+    pm_settings: &ResolvedPmSettings,
+) -> Result<()> {
     match &args.command {
         LinearCommand::Issue { command } => {
-            pm_cli::run_issue(command, config, tenant_id, Some("linear")).await
+            pm_cli::run_issue(command, config, tenant_id, Some("linear"), pm_settings).await
         }
         LinearCommand::Project { command } => {
             pm_resource_cli::run_resource("projects", command, config, tenant_id, Some("linear"))
