@@ -199,6 +199,35 @@ cancelled, and timed-out builds return non-zero so automation can stop early.
 > container. Phase 1 requires `--mock <path>`; the live build-config endpoint
 > (PLT-913) lands in Phase 2.
 
+### Slack notifications
+
+Use `--mention` more than once to mix Slack users, Teams (User Groups),
+broadcasts, and ProjectConfig aliases. `ops slack` is an alias for
+`ops notify`.
+
+```sh
+# Mention a Team by display name or @handle.
+tachyon ops notify send --text "Deploy complete" --mention "Platform Team"
+tachyon ops slack send --text "Incident detected" --mention @platform-team
+
+# User IDs, Team IDs, broadcasts, and configured aliases can be mixed.
+tachyon ops notify send --text "Please investigate" \
+  --mention U0123456789 \
+  --mention S0123456789 \
+  --mention @here \
+  --mention on-call
+
+# A raw Slack User Group mention token remains supported.
+tachyon ops notify send --text "Release ready" \
+  --mention '<!subteam^S0123456789>'
+```
+
+Team display names and handles are resolved through the tenant's saved Slack
+connection using exact, case-insensitive matching. The CLI never picks the
+first or closest candidate: unknown handles/IDs, ambiguous names/handles, and
+disabled Teams fail before the Slack notification is sent. Mentions that
+resolve to the same Slack target are sent only once.
+
 ### Worker runtime
 
 `tachyon worker` replaces the separately distributed `tachyond` binary for
