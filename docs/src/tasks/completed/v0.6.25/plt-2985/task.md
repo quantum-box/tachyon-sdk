@@ -86,3 +86,7 @@ Tachyon CLI の認証 profile ごとに、PM issue 操作の
 - 2026-08-02: 親worktreeの `clippy.toml` を読む通常の `cargo clippy -- -D
   warnings` はSDK既存の `reqwest::Client` 15箇所で失敗。SDK単独CI相当として
   空の `CLIPPY_CONF_DIR` を指定した同コマンドは成功した。
+- 2026-08-03: `origin/main`（CLI v0.6.24）へrebaseし、PR用patch versionを
+  v0.6.25へ更新。
+- 2026-08-03: 最終品質チェック完了後、taskdocを`completed/v0.6.25`へ
+  アーカイブ。
