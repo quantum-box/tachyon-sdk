@@ -21,6 +21,8 @@ mod pm_resource_cli;
 mod reconcile_cli;
 mod resolve;
 mod secret_cli;
+mod settings;
+mod settings_cli;
 mod skills_cli;
 mod slack_cli;
 mod source_cli;
@@ -442,6 +444,8 @@ enum Commands {
     Login(LoginArgs),
     /// Remove stored credentials (alias for `auth logout`)
     Logout(LogoutArgs),
+    /// Manage profile-specific CLI settings
+    Config(settings_cli::ConfigArgs),
     /// Manage compute apps, builds, deployments, and configuration
     Compute(compute_cli::ComputeArgs),
     /// Manage Cloud App environment variables
@@ -776,6 +780,7 @@ async fn run() -> Result<()> {
                 .unwrap_or(active.clone());
             auth::logout(&target)
         }
+        Commands::Config(args) => settings_cli::run(args, &active),
         Commands::Compute(args) => {
             let project_config = config::loader::load(cli.config.as_deref())?;
             let tenant_arg = tenant_arg(&cli, project_config.as_ref());
@@ -879,21 +884,24 @@ async fn run() -> Result<()> {
             let tenant_arg = tenant_arg(&cli, project_config.as_ref());
             let config = build_config(&cli, &active).await;
             let tenant_id = resolve::resolve_tenant_id(&config, tenant_arg, &active).await?;
-            pm_cli::run(args, &config, &tenant_id).await
+            let pm_settings = settings::resolve_pm(&active)?;
+            pm_cli::run(args, &config, &tenant_id, &pm_settings).await
         }
         Commands::Issue(args) => {
             let project_config = config::loader::load(cli.config.as_deref())?;
             let tenant_arg = tenant_arg(&cli, project_config.as_ref());
             let config = build_config(&cli, &active).await;
             let tenant_id = resolve::resolve_tenant_id(&config, tenant_arg, &active).await?;
-            pm_cli::run_top_level_issue(args, &config, &tenant_id).await
+            let pm_settings = settings::resolve_pm(&active)?;
+            pm_cli::run_top_level_issue(args, &config, &tenant_id, &pm_settings).await
         }
         Commands::Linear(args) => {
             let project_config = config::loader::load(cli.config.as_deref())?;
             let tenant_arg = tenant_arg(&cli, project_config.as_ref());
             let config = build_config(&cli, &active).await;
             let tenant_id = resolve::resolve_tenant_id(&config, tenant_arg, &active).await?;
-            linear_cli::run(args, &config, &tenant_id).await
+            let pm_settings = settings::resolve_pm(&active)?;
+            linear_cli::run(args, &config, &tenant_id, &pm_settings).await
         }
         Commands::Skills(args) => skills_cli::run(args),
         Commands::Source(args) => source_cli::run(args),

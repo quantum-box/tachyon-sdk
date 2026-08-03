@@ -29,7 +29,9 @@ fn isolated_command(home: &Path) -> Command {
         .env("TACHYON_TENANT_ID", TENANT_ID)
         .env("TACHYON_API_KEY", "fake-api-key")
         .env_remove("TACHYON_CONFIG")
-        .env_remove("TACHYON_PROFILE");
+        .env_remove("TACHYON_PROFILE")
+        .env_remove("TACHYON_PM_NO_DELEGATE")
+        .env_remove("TACHYON_PM_DEFAULT_TEAM");
     command
 }
 

@@ -9,6 +9,7 @@ use tachyon_sdk::apis::configuration::Configuration;
 
 use crate::client::{print_json, ApiClient, HttpError};
 use crate::pm_resource_cli::{self, ResourceCommand};
+use crate::settings::ResolvedPmSettings;
 
 const LINEAR_OAUTH_RESOLUTION_OPERATION: &str = "linear_oauth_client_resolve";
 const LINEAR_RECONCILE_WAIT_TIMEOUT_SECONDS: u64 = 30 * 60;
@@ -524,6 +525,23 @@ fn should_auto_delegate(
     !no_delegate && delegate_id.is_none() && is_linear_provider(provider)
 }
 
+fn effective_no_delegate(no_delegate: bool, settings: &ResolvedPmSettings) -> bool {
+    no_delegate || settings.no_delegate.unwrap_or(false)
+}
+
+fn effective_team(
+    team: &Option<String>,
+    team_id: &Option<String>,
+    settings: &ResolvedPmSettings,
+) -> Option<String> {
+    team.clone().or_else(|| {
+        team_id
+            .is_none()
+            .then(|| settings.default_team.clone())
+            .flatten()
+    })
+}
+
 fn linear_reconcile_pending(error: &anyhow::Error) -> Option<ReconcilePending> {
     let http_error = error.downcast_ref::<HttpError>()?;
     if http_error.status != reqwest::StatusCode::FAILED_DEPENDENCY {
@@ -910,6 +928,7 @@ pub async fn run_issue(
     config: &Configuration,
     tenant_id: &str,
     provider_alias: Option<&str>,
+    pm_settings: &ResolvedPmSettings,
 ) -> Result<()> {
     let api = ApiClient::new(config, tenant_id)?;
 
@@ -936,14 +955,17 @@ pub async fn run_issue(
             json,
         } => {
             let provider = provider_with_alias(provider, provider_alias);
-            let auto_delegate_to_linear_agent =
-                should_auto_delegate(*no_delegate, delegate_id, &provider);
+            let auto_delegate_to_linear_agent = should_auto_delegate(
+                effective_no_delegate(*no_delegate, pm_settings),
+                delegate_id,
+                &provider,
+            );
             run_create(
                 &api,
                 tenant_id,
                 CreatePmIssueRequest {
                     provider,
-                    team: team.clone(),
+                    team: effective_team(team, team_id, pm_settings),
                     team_id: team_id.clone(),
                     title: title.clone(),
                     description: description.clone(),
@@ -978,8 +1000,8 @@ pub async fn run_issue(
             if let Some(provider) = provider_with_alias(provider, provider_alias) {
                 query.push(("provider", provider));
             }
-            if let Some(team) = team {
-                query.push(("team", team.clone()));
+            if let Some(team) = effective_team(team, team_id, pm_settings) {
+                query.push(("team", team));
             }
             if let Some(team_id) = team_id {
                 query.push(("team_id", team_id.clone()));
@@ -1041,15 +1063,18 @@ pub async fn run_issue(
             json,
         } => {
             let provider = provider_with_alias(provider, provider_alias);
-            let auto_delegate_to_linear_agent =
-                should_auto_delegate(*no_delegate, delegate_id, &provider);
+            let auto_delegate_to_linear_agent = should_auto_delegate(
+                effective_no_delegate(*no_delegate, pm_settings),
+                delegate_id,
+                &provider,
+            );
             run_update(
                 &api,
                 tenant_id,
                 issue_id,
                 UpdatePmIssueRequest {
                     provider,
-                    team: team.clone(),
+                    team: effective_team(team, team_id, pm_settings),
                     team_id: team_id.clone(),
                     status_id: status_id.clone(),
                     status: status.clone(),
@@ -1126,9 +1151,16 @@ pub async fn run_issue(
     }
 }
 
-pub async fn run(args: &PmArgs, config: &Configuration, tenant_id: &str) -> Result<()> {
+pub async fn run(
+    args: &PmArgs,
+    config: &Configuration,
+    tenant_id: &str,
+    pm_settings: &ResolvedPmSettings,
+) -> Result<()> {
     match &args.command {
-        PmCommand::Issue { command } => run_issue(command, config, tenant_id, None).await,
+        PmCommand::Issue { command } => {
+            run_issue(command, config, tenant_id, None, pm_settings).await
+        }
         PmCommand::Project { command } => {
             pm_resource_cli::run_resource("projects", command, config, tenant_id, None).await
         }
@@ -1157,8 +1189,9 @@ pub async fn run_top_level_issue(
     args: &IssueArgs,
     config: &Configuration,
     tenant_id: &str,
+    pm_settings: &ResolvedPmSettings,
 ) -> Result<()> {
-    run_issue(&args.command, config, tenant_id, None).await
+    run_issue(&args.command, config, tenant_id, None, pm_settings).await
 }
 
 #[cfg(test)]
@@ -1313,5 +1346,42 @@ mod tests {
             &None,
             &Some("jira".to_string())
         ));
+    }
+
+    #[test]
+    fn profile_no_delegate_is_used_only_without_cli_override() {
+        let enabled = ResolvedPmSettings {
+            no_delegate: Some(true),
+            default_team: None,
+        };
+        let disabled = ResolvedPmSettings {
+            no_delegate: Some(false),
+            default_team: None,
+        };
+
+        assert!(effective_no_delegate(false, &enabled));
+        assert!(effective_no_delegate(true, &disabled));
+        assert!(!effective_no_delegate(false, &disabled));
+    }
+
+    #[test]
+    fn profile_team_fills_only_when_cli_team_fields_are_absent() {
+        let settings = ResolvedPmSettings {
+            no_delegate: None,
+            default_team: Some("Profile Team".to_string()),
+        };
+
+        assert_eq!(
+            effective_team(&None, &None, &settings).as_deref(),
+            Some("Profile Team")
+        );
+        assert_eq!(
+            effective_team(&Some("CLI Team".to_string()), &None, &settings).as_deref(),
+            Some("CLI Team")
+        );
+        assert_eq!(
+            effective_team(&None, &Some("team_cli".to_string()), &settings),
+            None
+        );
     }
 }
