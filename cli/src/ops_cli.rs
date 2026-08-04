@@ -206,6 +206,25 @@ pub enum NotifyCommand {
         /// case-insensitive matching; ambiguous or disabled Teams are rejected.
         #[arg(long = "mention", value_name = "MENTION")]
         mentions: Vec<String>,
+        /// Stable thread key. Reuse the key of an earlier notification to reply in its
+        /// Slack thread, or set a new key to make this notification repliable.
+        #[arg(long = "thread-key")]
+        thread_key: Option<String>,
+        /// Print the API response as JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// Add an emoji reaction to a notification thread
+    React {
+        /// Thread key used when the notification was sent
+        #[arg(long = "thread-key")]
+        thread_key: String,
+        /// Slack emoji name, with or without colons (e.g. eyes)
+        #[arg(long)]
+        emoji: String,
+        /// Slack ts of the message to react to. Defaults to the notification message.
+        #[arg(long)]
+        ts: Option<String>,
         /// Print the API response as JSON
         #[arg(long)]
         json: bool,
@@ -398,11 +417,36 @@ struct SendNotificationRequest {
     text: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     mentions: Vec<String>,
+    /// Stable key that threads the notification and lets replies be
+    /// collected or answered later.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    thread_key: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
 struct SendNotificationResponse {
     accepted: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    thread_key: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct AddReactionRequest {
+    thread_key: String,
+    emoji: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    ts: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct AddReactionResponse {
+    ok: bool,
+    thread_key: String,
+    channel_id: String,
+    ts: String,
+    emoji: String,
+    #[serde(default)]
+    already_reacted: bool,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -1144,6 +1188,7 @@ async fn run_notify_send(
     config_flag: Option<&Path>,
     text: &str,
     mentions: &[String],
+    thread_key: Option<&str>,
     json: bool,
 ) -> Result<()> {
     let configured_aliases = configured_slack_mention_aliases(config_flag)?;
@@ -1154,6 +1199,7 @@ async fn run_notify_send(
             &SendNotificationRequest {
                 text: text.to_string(),
                 mentions,
+                thread_key: thread_key.map(ToOwned::to_owned),
             },
         )
         .await?;
@@ -1161,10 +1207,45 @@ async fn run_notify_send(
         return print_json(&response);
     }
     if response.accepted {
-        println!("Notification accepted.");
+        match response.thread_key.as_deref() {
+            Some(key) => println!("Notification accepted (thread_key={key})."),
+            None => println!("Notification accepted."),
+        }
     } else {
         println!("Notification was not accepted.");
     }
+    Ok(())
+}
+
+async fn run_notify_react(
+    api: &ApiClient,
+    thread_key: &str,
+    emoji: &str,
+    ts: Option<&str>,
+    json: bool,
+) -> Result<()> {
+    let response: AddReactionResponse = api
+        .post(
+            "/v1/chat/reactions",
+            &AddReactionRequest {
+                thread_key: thread_key.to_string(),
+                emoji: emoji.to_string(),
+                ts: ts.map(ToOwned::to_owned),
+            },
+        )
+        .await?;
+    if json {
+        return print_json(&response);
+    }
+    let state = if response.already_reacted {
+        "already present"
+    } else {
+        "added"
+    };
+    println!(
+        ":{}: {} on {} (ts {}).",
+        response.emoji, state, response.channel_id, response.ts
+    );
     Ok(())
 }
 
@@ -1849,8 +1930,25 @@ pub async fn run(
             NotifyCommand::Send {
                 text,
                 mentions,
+                thread_key,
                 json,
-            } => run_notify_send(&api, config_flag, text, mentions, *json).await,
+            } => {
+                run_notify_send(
+                    &api,
+                    config_flag,
+                    text,
+                    mentions,
+                    thread_key.as_deref(),
+                    *json,
+                )
+                .await
+            }
+            NotifyCommand::React {
+                thread_key,
+                emoji,
+                ts,
+                json,
+            } => run_notify_react(&api, thread_key, emoji, ts.as_deref(), *json).await,
             NotifyCommand::Users { bot_token: _, json } => run_notify_users(&api, *json).await,
         },
         OpsCommand::Sentry { command } => match command {
@@ -1912,6 +2010,7 @@ mod tests {
         let request = SendNotificationRequest {
             text: "deploy complete".to_string(),
             mentions: vec!["U123".to_string(), "U456".to_string()],
+            thread_key: None,
         };
 
         assert_eq!(
@@ -1928,11 +2027,64 @@ mod tests {
         let request = SendNotificationRequest {
             text: "deploy complete".to_string(),
             mentions: Vec::new(),
+            thread_key: None,
         };
 
         assert_eq!(
             serde_json::to_value(&request).unwrap(),
             json!({ "text": "deploy complete" })
+        );
+    }
+
+    #[test]
+    fn serializes_notification_thread_key() {
+        let request = SendNotificationRequest {
+            text: "確認しました".to_string(),
+            mentions: Vec::new(),
+            thread_key: Some("deploy-1234".to_string()),
+        };
+
+        assert_eq!(
+            serde_json::to_value(&request).unwrap(),
+            json!({
+                "text": "確認しました",
+                "thread_key": "deploy-1234",
+            })
+        );
+    }
+
+    #[test]
+    fn omits_reaction_ts_when_absent() {
+        let request = AddReactionRequest {
+            thread_key: "deploy-1234".to_string(),
+            emoji: "eyes".to_string(),
+            ts: None,
+        };
+
+        assert_eq!(
+            serde_json::to_value(&request).unwrap(),
+            json!({
+                "thread_key": "deploy-1234",
+                "emoji": "eyes",
+            })
+        );
+    }
+
+    #[test]
+    fn serializes_reaction_target_ts() {
+        let request = AddReactionRequest {
+            thread_key: "deploy-1234".to_string(),
+            emoji: ":white_check_mark:".to_string(),
+            ts: Some("1754300000.000200".to_string()),
+        };
+
+        assert_eq!(
+            serde_json::to_value(&request).unwrap(),
+            json!({
+                "thread_key": "deploy-1234",
+                "emoji": ":white_check_mark:",
+                "ts": "1754300000.000200",
+            })
         );
     }
 
