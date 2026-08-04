@@ -37,10 +37,13 @@ pub enum AppsCommand {
         /// Target environment label for this apply operation
         #[arg(long, default_value = "sandbox")]
         environment: String,
-        /// Required approval token for production apply.
+        /// Change-control approval token for protected production applies.
         ///
-        /// This only gates write execution. The token is never printed or sent
-        /// to the Cloud Apps API by the CLI.
+        /// Optional for self-tenant applies (authorized server-side by
+        /// tenant permissions). Required by the server for applies to
+        /// change-control protected tenants. The token is verified
+        /// fail-fast, forwarded to the server as a dedicated header, and
+        /// never printed.
         #[arg(
             long = "change-control-token",
             env = "TACHYON_CHANGE_CONTROL_APPROVAL_TOKEN",
@@ -525,6 +528,7 @@ pub(crate) async fn run_apps_apply_manifest(input: AppsApplyManifestInput<'_>) -
             manifest,
             manifest_label,
             selected_app,
+            change_control_token,
             dry_run,
         )
         .await;
@@ -615,7 +619,7 @@ pub(crate) async fn run_apps_apply_manifest(input: AppsApplyManifestInput<'_>) -
                             fully_completed,
                         )
                     })?;
-                apply_compute_cloud_app_manifest(api, manifest, false)
+                apply_compute_cloud_app_manifest(api, manifest, false, change_control_token)
                     .await
                     .with_context(|| {
                         app_apply_failure_context(
@@ -736,6 +740,7 @@ async fn run_release_checks_only(
     manifest: &Value,
     manifest_label: &str,
     selected_app: Option<&str>,
+    change_control_token: Option<&str>,
     dry_run: bool,
 ) -> Result<()> {
     let entry = select_exactly_one_app_entry(manifest, selected_app, "release-checks-only apply")?;
@@ -770,25 +775,28 @@ async fn run_release_checks_only(
         return Ok(());
     }
 
-    apply_compute_cloud_app_manifest(api, &iac_manifest, true).await?;
+    apply_compute_cloud_app_manifest(api, &iac_manifest, true, change_control_token).await?;
     println!("Release-check contract reconciled for {app_name}.");
     Ok(())
 }
 
-/// Gate production Cloud App applies behind a verifiable change-control
-/// approval token (ADR 0011).
+/// Fail-fast verification of an optional change-control approval token
+/// for production Cloud App applies (ADR 0011 Layer 2).
 ///
-/// This is an executor-side, fail-fast check evaluated before any API
-/// write. It is NOT an authorization boundary: a client-side check can be
-/// bypassed by editing the CLI or calling the apply API directly, so the
-/// authoritative approval enforcement must live server-side (ADR 0011
-/// Layer 1). See `change_control` module docs.
+/// Since PLT-3047, a token is no longer unconditionally required for
+/// production applies: self-tenant applies are authorized server-side by
+/// the caller's `iac:ApplyManifest` / `iac:SaveManifest` permissions,
+/// and protected operations are enforced server-side (ADR 0011 Layer 1,
+/// fail closed). This client-side check therefore only:
 ///
-/// What this verifies (via `change_control::verify_change_control_token`):
-/// token structure, required claims, environment binding, expiry, and —
-/// when `TACHYON_CHANGE_CONTROL_VERIFICATION_KEY` is configured — the
-/// HMAC-SHA256 signature (tamper detection). It deliberately does NOT
-/// perform any network/Linear lookup and never logs the token value.
+/// - verifies a token *when one is provided* (structure, claims,
+///   environment binding, expiry, and — when
+///   `TACHYON_CHANGE_CONTROL_VERIFICATION_KEY` is configured — the
+///   HMAC-SHA256 signature), failing fast before any API write, and
+/// - prints a notice when no token is provided so operators of
+///   protected tenants learn about the server-side gate up front.
+///
+/// It is NOT an authorization boundary and never logs the token value.
 fn require_production_apply_approval(
     environment: &str,
     change_control_token: Option<&str>,
@@ -798,14 +806,18 @@ fn require_production_apply_approval(
         return Ok(());
     }
 
-    let token = change_control_token
+    let Some(token) = change_control_token
         .map(str::trim)
         .filter(|token| !token.is_empty())
-        .ok_or_else(|| {
-            anyhow!(
-                "production Cloud App apply requires change-control approval; pass --change-control-token or set TACHYON_CHANGE_CONTROL_APPROVAL_TOKEN. Use --dry-run to preview without writing."
-            )
-        })?;
+    else {
+        eprintln!(
+            "note: no change-control token provided; production apply is \
+             authorized server-side by your tenant permissions. Applies to \
+             change-control protected tenants will be rejected without an \
+             approval token."
+        );
+        return Ok(());
+    };
 
     // Key access (env) and clock stay in this thin wrapper; the verification
     // logic is pure and unit-tested in the `change_control` module.
@@ -829,11 +841,11 @@ fn require_production_apply_approval(
     } else {
         // No verification key configured: the token is structurally valid,
         // unexpired, and environment-scoped, but its signature was NOT
-        // checked. This is process enforcement only, not authorization.
+        // checked. The authoritative signature check happens server-side.
         eprintln!(
             "warning: change-control token accepted WITHOUT signature verification \
-             (ref: {}); set {} to enforce tamper-evident approval. \
-             This check confirms an approval exists; it does not authorize the change.",
+             (ref: {}); set {} to enforce tamper-evident approval locally. \
+             The authoritative check happens server-side.",
             verified.approval_ref,
             change_control::VERIFICATION_KEY_ENV
         );
@@ -2928,9 +2940,25 @@ pub(super) fn cloud_app_manifest_for_iac(entry: &Value, tenant_id: &str) -> Resu
     }))
 }
 
-async fn graphql_request(api: &ApiClient, body: Value) -> Result<Value> {
+/// Header carrying the change-control approval token to the server-side
+/// gate (ADR 0011 Layer 1). Sent as a header, not a GraphQL input field,
+/// so the token never lands in request-body logs.
+const CHANGE_CONTROL_TOKEN_HEADER: &str = "x-tachyon-change-control-token";
+
+async fn graphql_request_with_change_control(
+    api: &ApiClient,
+    body: Value,
+    change_control_token: Option<&str>,
+) -> Result<Value> {
     let url = format!("{}/v1/graphql", api.base_url);
-    let response = api.client.post(url).json(&body).send().await?;
+    let mut request = api.client.post(url).json(&body);
+    if let Some(token) = change_control_token
+        .map(str::trim)
+        .filter(|token| !token.is_empty())
+    {
+        request = request.header(CHANGE_CONTROL_TOKEN_HEADER, token);
+    }
+    let response = request.send().await?;
     let status = response.status();
     if !status.is_success() {
         let body = response.text().await?;
@@ -2948,7 +2976,11 @@ async fn graphql_request(api: &ApiClient, body: Value) -> Result<Value> {
         .ok_or_else(|| anyhow!("missing data in graphql response"))
 }
 
-async fn save_compute_cloud_app_manifest(api: &ApiClient, manifest: &Value) -> Result<()> {
+async fn save_compute_cloud_app_manifest(
+    api: &ApiClient,
+    manifest: &Value,
+    change_control_token: Option<&str>,
+) -> Result<()> {
     let tenant_id = manifest
         .get("metadata")
         .and_then(|metadata| metadata.get("tenantId"))
@@ -2967,7 +2999,7 @@ async fn save_compute_cloud_app_manifest(api: &ApiClient, manifest: &Value) -> R
             }
         }
     });
-    graphql_request(api, body).await?;
+    graphql_request_with_change_control(api, body, change_control_token).await?;
     Ok(())
 }
 
@@ -2975,8 +3007,9 @@ async fn apply_compute_cloud_app_manifest(
     api: &ApiClient,
     manifest: &Value,
     release_checks_only: bool,
+    change_control_token: Option<&str>,
 ) -> Result<()> {
-    save_compute_cloud_app_manifest(api, manifest).await?;
+    save_compute_cloud_app_manifest(api, manifest, change_control_token).await?;
     let name = manifest
         .get("metadata")
         .and_then(|metadata| metadata.get("name"))
@@ -3000,7 +3033,7 @@ async fn apply_compute_cloud_app_manifest(
             "input": apply_input
         }
     });
-    let data = graphql_request(api, body).await?;
+    let data = graphql_request_with_change_control(api, body, change_control_token).await?;
     ensure_apply_manifest_succeeded(&data)
 }
 

@@ -759,7 +759,9 @@ spec:
 }
 
 #[test]
-fn compute_apps_apply_rejects_production_without_change_control_token_before_api_write() {
+fn compute_apps_apply_allows_production_without_change_control_token() {
+    // PLT-3047: self-tenant production applies are authorized server-side
+    // by tenant permissions; the CLI no longer demands a token up front.
     let tmp = TempDir::new().unwrap();
     let manifest = tmp.path().join("tachyon.yml");
     fs::write(
@@ -768,19 +770,16 @@ fn compute_apps_apply_rejects_production_without_change_control_token_before_api
 apiVersion: apps.tachy.one/v1alpha
 kind: CloudApps
 metadata:
-  name: fieldadmin
+  name: valid-app
 spec:
   apps:
-    - name: fieldadmin
+    - name: valid-app
       repository:
         url: https://github.com/quantum-box/tachyonfield
         owner: quantum-box
         name: tachyonfield
       framework: next_js
       deploymentTarget: cloudflare_workers
-      envVars:
-        - name: NEXT_PUBLIC_API_URL
-          value: https://fieldadmin.txcloud.app
 "#,
     )
     .unwrap();
@@ -805,8 +804,8 @@ spec:
         .expect("run compute apps apply");
 
     assert!(
-        !output.status.success(),
-        "production apply unexpectedly succeeded\nstdout:\n{}\nstderr:\n{}",
+        output.status.success(),
+        "token-less production apply failed\nstdout:\n{}\nstderr:\n{}",
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
@@ -814,12 +813,16 @@ spec:
     let requests = rx.recv_timeout(Duration::from_secs(5)).unwrap();
     handle.join().unwrap();
     assert!(
-        requests.is_empty(),
-        "approval gate must reject before any API request; requests: {requests:#?}"
+        requests
+            .iter()
+            .any(|request| request.starts_with("POST /v1/compute/apps ")),
+        "token-less apply must reach the API; requests: {requests:#?}"
     );
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("production Cloud App apply requires change-control approval"));
-    assert!(stderr.contains("TACHYON_CHANGE_CONTROL_APPROVAL_TOKEN"));
+    // The operator is told that authorization happens server-side and
+    // that protected tenants still need an approval token.
+    assert!(stderr.contains("no change-control token provided"));
+    assert!(stderr.contains("protected"));
     assert!(!stderr.contains("test-token"));
 }
 
@@ -1055,7 +1058,17 @@ spec:
     let requests_joined = requests.join("\n");
     assert!(!requests_joined.contains("/v1/compute/apps/"));
     assert!(!requests_joined.contains("PUT /"));
-    assert!(!requests_joined.contains(&token));
+    // PLT-3047: the token now travels to the server-side gate, but only
+    // as the dedicated header — never inside the GraphQL request body.
+    let header_line = format!("x-tachyon-change-control-token: {token}");
+    assert!(
+        requests_joined.contains(&header_line),
+        "token must be forwarded as the change-control header: {requests:#?}"
+    );
+    assert!(requests.iter().all(|request| {
+        let body = request.split("\r\n\r\n").nth(1).unwrap_or("");
+        !body.contains(&token)
+    }));
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);

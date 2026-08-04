@@ -27,10 +27,12 @@ pub struct ReconcileArgs {
     #[arg(long, default_value = "sandbox")]
     pub environment: String,
 
-    /// Required approval token for production CloudApps reconcile.
+    /// Change-control approval token for protected production reconciles.
     ///
-    /// This only gates write execution. The token is never printed or sent
-    /// to the Cloud Apps API by the CLI.
+    /// Optional for self-tenant operations (authorized server-side by
+    /// tenant permissions); required by the server for change-control
+    /// protected tenants. Verified fail-fast, forwarded as a dedicated
+    /// header, and never printed.
     #[arg(
         long = "change-control-token",
         env = "TACHYON_CHANGE_CONTROL_APPROVAL_TOKEN",
