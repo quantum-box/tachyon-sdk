@@ -112,12 +112,8 @@ impl PolicySpec {
         }
     }
 
-    fn target_tenant_id<'a>(&'a self, default_tenant_id: &'a str) -> Option<&'a str> {
-        if self.global {
-            None
-        } else {
-            Some(self.namespace.as_deref().unwrap_or(default_tenant_id))
-        }
+    fn target_tenant_id<'a>(&'a self, default_tenant_id: &'a str) -> &'a str {
+        self.namespace.as_deref().unwrap_or(default_tenant_id)
     }
 }
 
@@ -189,8 +185,8 @@ struct RegisterPolicyRequest<'a> {
     #[serde(rename = "isSystem")]
     is_system: bool,
     global: bool,
-    #[serde(rename = "tenantId", skip_serializing_if = "Option::is_none")]
-    tenant_id: Option<&'a str>,
+    #[serde(rename = "tenantId")]
+    tenant_id: &'a str,
     actions: Vec<PolicyActionReq<'a>>,
     #[serde(rename = "actionPatterns")]
     action_patterns: Vec<PolicyActionPatternReq<'a>>,
@@ -441,12 +437,16 @@ fn parse_k8s_documents(documents: Vec<serde_yaml::Value>) -> Result<AuthManifest
             }
             "Policy" => {
                 let spec: K8sPolicySpec = serde_yaml::from_value(doc.spec)?;
-                let namespace = doc.metadata.namespace;
+                let namespace = doc.metadata.namespace.ok_or_else(|| {
+                    anyhow!(
+                        "Policy metadata.namespace is required; global custom policies are not supported"
+                    )
+                })?;
                 manifest.policies.push(PolicySpec {
                     name: doc.metadata.name,
                     description: spec.description,
-                    global: namespace.is_none(),
-                    namespace,
+                    global: false,
+                    namespace: Some(namespace),
                     actions: spec.actions,
                     action_patterns: spec.action_patterns,
                 });
@@ -533,10 +533,9 @@ pub fn validate_manifest(manifest: &AuthManifest) -> Result<()> {
         if policy.name.is_empty() {
             return Err(anyhow!("policy missing name"));
         }
-        if policy.global && policy.namespace.is_some() {
+        if policy.global {
             return Err(anyhow!(
-                "policy '{}': global policy cannot set namespace",
-                policy.name
+                "global custom policies are not supported; use a tenant namespace"
             ));
         }
         for pa in &policy.actions {
@@ -703,6 +702,8 @@ pub async fn apply_manifest(
     prune: bool,
     default_tenant_id: &str,
 ) -> Result<ApplyResult> {
+    validate_manifest(manifest)?;
+
     let mut action_items = Vec::new();
     let mut policy_items = Vec::new();
     let mut prune_skipped = 0usize;
@@ -743,7 +744,7 @@ pub async fn apply_manifest(
             name: &spec.name,
             description: spec.description.as_deref(),
             is_system: false,
-            global: spec.global,
+            global: false,
             tenant_id: spec.target_tenant_id(default_tenant_id),
             actions: spec
                 .actions
@@ -1231,7 +1232,7 @@ mod tests {
     }
 
     #[test]
-    fn parse_k8s_action_set_and_global_policy() {
+    fn parse_k8s_policy_without_namespace_fails() {
         let yaml = r#"
 - apiVersion: auth.tachyon.io/v1
   kind: ActionSet
@@ -1252,11 +1253,8 @@ mod tests {
         effect: allow
 "#;
         let value: serde_yaml::Value = serde_yaml::from_str(yaml).unwrap();
-        let manifest = parse_manifest_value(value).unwrap();
-        assert_eq!(manifest.actions[0].full_name(), "billing:ViewInvoices");
-        assert_eq!(manifest.policies[0].name, "BillingViewer");
-        assert!(manifest.policies[0].global);
-        assert_eq!(manifest.policies[0].target_tenant_id("tn_default"), None);
+        let error = parse_manifest_value(value).expect_err("policy namespace must be required");
+        assert!(error.to_string().contains("metadata.namespace is required"));
     }
 
     #[test]
@@ -1279,7 +1277,7 @@ spec:
         assert!(!policy.global);
         assert_eq!(
             policy.target_tenant_id("tn_default"),
-            Some("tn_01hjryxysgey07h5jz5wagqj0m")
+            "tn_01hjryxysgey07h5jz5wagqj0m"
         );
     }
 
@@ -1289,6 +1287,48 @@ spec:
             serde_yaml::from_str("actions: []\npolicies:\n  - name: FlatPolicy\n").unwrap();
         let policy = &manifest.policies[0];
         assert!(!policy.global);
-        assert_eq!(policy.target_tenant_id("tn_default"), Some("tn_default"));
+        assert_eq!(policy.target_tenant_id("tn_default"), "tn_default");
+    }
+
+    #[test]
+    fn validate_legacy_global_policy_fails() {
+        let mut manifest = sample_manifest();
+        manifest.policies[0].global = true;
+
+        let error =
+            validate_manifest(&manifest).expect_err("legacy global policy must be rejected");
+
+        assert!(error.to_string().contains("tenant namespace"));
+    }
+
+    #[tokio::test]
+    async fn apply_rejects_global_policy_before_api_request() {
+        let mut manifest = sample_manifest();
+        manifest.policies[0].global = true;
+        let configuration = tachyon_sdk::apis::configuration::Configuration::default();
+        let api = ApiClient::new(&configuration, "tn_test").unwrap();
+
+        let error = apply_manifest(&api, &manifest, false, "tn_test")
+            .await
+            .expect_err("apply must validate before sending requests");
+
+        assert!(error.to_string().contains("tenant namespace"));
+    }
+
+    #[test]
+    fn register_request_always_has_tenant_scope() {
+        let request = RegisterPolicyRequest {
+            name: "TenantPolicy",
+            description: None,
+            is_system: false,
+            global: false,
+            tenant_id: "tn_test",
+            actions: vec![],
+            action_patterns: vec![],
+        };
+
+        let value = serde_json::to_value(request).expect("serializable");
+        assert_eq!(value["global"], false);
+        assert_eq!(value["tenantId"], "tn_test");
     }
 }
