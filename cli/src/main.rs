@@ -120,12 +120,14 @@ mod tests {
                             ops_cli::NotifyCommand::Send {
                                 text,
                                 mentions,
+                                thread_key,
                                 json,
                             },
                     },
             }) => {
                 assert_eq!(text, "hello");
                 assert!(mentions.is_empty());
+                assert!(thread_key.is_none());
                 assert!(!json);
             }
             _ => panic!("expected ops slack send command"),
@@ -156,15 +158,82 @@ mod tests {
                             ops_cli::NotifyCommand::Send {
                                 text,
                                 mentions,
+                                thread_key,
                                 json,
                             },
                     },
             }) => {
                 assert_eq!(text, "hello");
                 assert_eq!(mentions, ["U123", "user@example.com"]);
+                assert!(thread_key.is_none());
                 assert!(!json);
             }
             _ => panic!("expected ops notify send command"),
+        }
+    }
+
+    #[test]
+    fn parses_ops_notify_send_thread_key() {
+        let cli = Cli::try_parse_from([
+            "tachyon",
+            "ops",
+            "slack",
+            "send",
+            "--text",
+            "確認しました",
+            "--thread-key",
+            "deploy-1234",
+        ])
+        .unwrap();
+
+        match cli.command {
+            Commands::Ops(ops_cli::OpsArgs {
+                command:
+                    ops_cli::OpsCommand::Notify {
+                        command: ops_cli::NotifyCommand::Send { thread_key, .. },
+                    },
+            }) => {
+                assert_eq!(thread_key.as_deref(), Some("deploy-1234"));
+            }
+            _ => panic!("expected ops slack send command"),
+        }
+    }
+
+    #[test]
+    fn parses_ops_notify_react_command() {
+        let cli = Cli::try_parse_from([
+            "tachyon",
+            "ops",
+            "slack",
+            "react",
+            "--thread-key",
+            "deploy-1234",
+            "--emoji",
+            "eyes",
+            "--ts",
+            "1754300000.000200",
+        ])
+        .unwrap();
+
+        match cli.command {
+            Commands::Ops(ops_cli::OpsArgs {
+                command:
+                    ops_cli::OpsCommand::Notify {
+                        command:
+                            ops_cli::NotifyCommand::React {
+                                thread_key,
+                                emoji,
+                                ts,
+                                json,
+                            },
+                    },
+            }) => {
+                assert_eq!(thread_key, "deploy-1234");
+                assert_eq!(emoji, "eyes");
+                assert_eq!(ts.as_deref(), Some("1754300000.000200"));
+                assert!(!json);
+            }
+            _ => panic!("expected ops slack react command"),
         }
     }
 
