@@ -161,6 +161,15 @@ tachyon compute preview <app-id> --branch feature/my-change
 tachyon compute preview <app-id> --pr 123
 tachyon compute builds trigger <app-id> --pr 123
 
+# Preview a compute app GitHub connection update
+tachyon compute apps update <app-id> --connection-id <connection-id>
+
+# Apply after verifying the displayed app name and current connection
+tachyon compute apps update <app-id> --connection-id <connection-id> --yes
+
+# Clear the connection (empty string semantics are preserved)
+tachyon compute apps update <app-id> --connection-id "" --yes
+
 # Create a one-off Linear issue without automatic delegation
 tachyon issue create --provider linear --team PLT \
   --title "Unassigned issue" --no-delegate
