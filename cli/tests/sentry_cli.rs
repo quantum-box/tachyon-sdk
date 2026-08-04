@@ -91,6 +91,85 @@ fn sentry_issues_list_sends_project_query_and_limit() {
 }
 
 #[test]
+fn sentry_issue_view_json_preserves_allowlisted_latest_event() {
+    let tmp = TempDir::new().unwrap();
+    let (api_url, rx, handle) = start_server(
+        r#"{
+            "id":"7651276254",
+            "shortId":"TACHYON-API-L9-1A",
+            "title":"money_path_authz_denied",
+            "latestEvent":{
+                "event_id":"event-latest",
+                "timestamp":"2026-08-04T07:33:41Z",
+                "level":"error",
+                "message":"money_path_authz_denied",
+                "tags":{
+                    "event.name":"money_path_authz_denied",
+                    "authz.money_path":"synthetic-path",
+                    "authz.action":"synthetic:Action",
+                    "authz.principal_kind":"user",
+                    "authz.principal_role":"OWNER",
+                    "authz.tenant_id":"tn_synthetic",
+                    "authz.target_id":"target_synthetic",
+                    "authz.deny_reason":"PermissionDenied",
+                    "unrelated":"SYNTHETIC_SECRET_MUST_NOT_LEAK"
+                },
+                "request":{"data":"SYNTHETIC_SECRET_MUST_NOT_LEAK"},
+                "contexts":{"secret":"SYNTHETIC_SECRET_MUST_NOT_LEAK"},
+                "extra":{"dsn":"SYNTHETIC_DSN_MUST_NOT_LEAK"}
+            }
+        }"#,
+    );
+
+    let output = isolated_command(tmp.path())
+        .env("TACHYON_API_URL", api_url)
+        .args(["ops", "sentry", "issues", "view", "7651276254", "--json"])
+        .output()
+        .expect("run tachyon ops sentry issues view");
+
+    assert!(
+        output.status.success(),
+        "sentry issue view failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    handle.join().unwrap();
+    let req = rx.recv().unwrap();
+    assert!(req.starts_with("GET /v1/ops/sentry/issues/7651276254 HTTP/1.1"));
+
+    let stdout: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(
+        stdout["latest_event"],
+        serde_json::json!({
+            "id": null,
+            "event_id": "event-latest",
+            "title": null,
+            "message": "money_path_authz_denied",
+            "timestamp": "2026-08-04T07:33:41Z",
+            "level": "error",
+            "tags": {
+                "event.name": "money_path_authz_denied",
+                "authz.money_path": "synthetic-path",
+                "authz.action": "synthetic:Action",
+                "authz.principal_kind": "user",
+                "authz.principal_role": "OWNER",
+                "authz.tenant_id": "tn_synthetic",
+                "authz.target_id": "target_synthetic",
+                "authz.deny_reason": "PermissionDenied"
+            }
+        })
+    );
+    let combined_output = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(!combined_output.contains("SYNTHETIC_SECRET_MUST_NOT_LEAK"));
+    assert!(!combined_output.contains("SYNTHETIC_DSN_MUST_NOT_LEAK"));
+}
+
+#[test]
 fn sentry_issue_assign_posts_user_body() {
     let tmp = TempDir::new().unwrap();
     let (api_url, rx, handle) = start_server(
