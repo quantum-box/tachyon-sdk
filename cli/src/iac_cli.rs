@@ -147,6 +147,15 @@ pub enum ConnectionsCommand {
     },
     /// Disconnect an integration
     Disconnect { id: String },
+    /// Set the repository allowlist on a shared GitHub connection
+    SetAllowedRepositories {
+        id: String,
+        /// owner/repo, repeatable
+        #[arg(long = "repo", required = true)]
+        repos: Vec<String>,
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 // ---- Response types ----
@@ -389,10 +398,17 @@ async fn run_integrations_get(api: &ApiClient, id: &str, json: bool) -> Result<(
 }
 
 async fn run_connections_list(api: &ApiClient, json: bool) -> Result<()> {
-    let conns: Vec<ConnectionResponse> = api.get("/v1/integrations/connections").await?;
+    // The endpoint returns `{ "connections": [...] }`, and carries fields
+    // (external_account_id, metadata) that ConnectionResponse drops. Decode
+    // loosely so `--json` shows the payload as served.
+    let raw: serde_json::Value = api.get("/v1/integrations/connections").await?;
     if json {
-        return print_json(&conns);
+        return print_json(&raw);
     }
+    let conns: Vec<ConnectionResponse> = match raw.get("connections") {
+        Some(connections) => serde_json::from_value(connections.clone())?,
+        None => serde_json::from_value(raw)?,
+    };
     if conns.is_empty() {
         println!("No connections found.");
         return Ok(());
@@ -430,6 +446,42 @@ async fn run_connections_get(api: &ApiClient, id: &str, json: bool) -> Result<()
     println!("Status:   {}", c.status.as_deref().unwrap_or("-"));
     println!("Account:  {}", c.account_name.as_deref().unwrap_or("-"));
     println!("Created:  {}", c.created_at.as_deref().unwrap_or("-"));
+    Ok(())
+}
+
+#[derive(Debug, Serialize)]
+struct SetAllowedRepositoriesRequest<'a> {
+    allowed_repositories: &'a [String],
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct SetAllowedRepositoriesResponse {
+    connection_id: String,
+    allowed_repositories: Vec<String>,
+}
+
+async fn run_connections_set_allowed_repositories(
+    api: &ApiClient,
+    id: &str,
+    repos: &[String],
+    json: bool,
+) -> Result<()> {
+    let response: SetAllowedRepositoriesResponse = api
+        .patch(
+            &format!("/v1/integrations/connections/{id}/allowed-repositories"),
+            &SetAllowedRepositoriesRequest {
+                allowed_repositories: repos,
+            },
+        )
+        .await?;
+    if json {
+        return print_json(&response);
+    }
+    println!("Connection: {}", response.connection_id);
+    println!("Allowed repositories:");
+    for repo in &response.allowed_repositories {
+        println!("  {repo}");
+    }
     Ok(())
 }
 
@@ -1052,6 +1104,9 @@ pub async fn run(args: &IacArgs, config: &Configuration, tenant_id: &str) -> Res
             ConnectionsCommand::List { json } => run_connections_list(&api, *json).await,
             ConnectionsCommand::Get { id, json } => run_connections_get(&api, id, *json).await,
             ConnectionsCommand::Disconnect { id } => run_connections_disconnect(&api, id).await,
+            ConnectionsCommand::SetAllowedRepositories { id, repos, json } => {
+                run_connections_set_allowed_repositories(&api, id, repos, *json).await
+            }
         },
     }
 }
