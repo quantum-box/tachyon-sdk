@@ -119,6 +119,13 @@ impl PolicySpec {
             Some(self.namespace.as_deref().unwrap_or(default_tenant_id))
         }
     }
+
+    /// A global policy is a system policy: it carries no tenant scope, and
+    /// `POST /v1/auth/policies` rejects a non-system request that omits
+    /// `tenantId`.
+    fn is_system(&self) -> bool {
+        self.global
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema)]
@@ -742,7 +749,7 @@ pub async fn apply_manifest(
         let req = RegisterPolicyRequest {
             name: &spec.name,
             description: spec.description.as_deref(),
-            is_system: false,
+            is_system: spec.is_system(),
             global: spec.global,
             tenant_id: spec.target_tenant_id(default_tenant_id),
             actions: spec
@@ -1257,6 +1264,42 @@ mod tests {
         assert_eq!(manifest.policies[0].name, "BillingViewer");
         assert!(manifest.policies[0].global);
         assert_eq!(manifest.policies[0].target_tenant_id("tn_default"), None);
+        assert!(manifest.policies[0].is_system());
+    }
+
+    #[test]
+    fn policy_scope_pairs_is_system_with_the_absence_of_a_tenant() {
+        // `POST /v1/auth/policies` rejects a request that is neither a system
+        // policy nor tenant-scoped, so these two must always agree. Sending
+        // `isSystem: false` for a global policy made every such policy fail
+        // with "Custom policies require a tenant scope".
+        let global = PolicySpec {
+            name: "field:admin".to_string(),
+            description: None,
+            namespace: None,
+            global: true,
+            actions: Vec::new(),
+            action_patterns: Vec::new(),
+        };
+        assert!(global.is_system());
+        assert_eq!(global.target_tenant_id("tn_default"), None);
+
+        let caller_tenant = PolicySpec {
+            global: false,
+            ..global.clone()
+        };
+        assert!(!caller_tenant.is_system());
+        assert_eq!(
+            caller_tenant.target_tenant_id("tn_default"),
+            Some("tn_default")
+        );
+
+        let namespaced = PolicySpec {
+            namespace: Some("tn_other".to_string()),
+            ..caller_tenant.clone()
+        };
+        assert!(!namespaced.is_system());
+        assert_eq!(namespaced.target_tenant_id("tn_default"), Some("tn_other"));
     }
 
     #[test]
