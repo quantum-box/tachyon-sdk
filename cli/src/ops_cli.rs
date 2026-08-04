@@ -1,5 +1,5 @@
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{BTreeMap, HashMap, HashSet},
     io::{self, Read},
     path::{Path, PathBuf},
     time::{Duration, Instant},
@@ -7,13 +7,24 @@ use std::{
 
 use anyhow::{anyhow, bail, Context, Result};
 use clap::{Args, Subcommand};
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{json, Value};
 use tachyon_sdk::apis::configuration::Configuration;
 
 use crate::client::{print_json, truncate, ApiClient};
 use crate::config::loader::{self, LoadedProjectConfig, ProjectConfig, RepositoryConfig};
 use crate::resolve;
+
+const SENTRY_EVENT_TAG_ALLOWLIST: [&str; 8] = [
+    "event.name",
+    "authz.money_path",
+    "authz.action",
+    "authz.principal_kind",
+    "authz.principal_role",
+    "authz.tenant_id",
+    "authz.target_id",
+    "authz.deny_reason",
+];
 
 #[derive(Debug, Clone, Args)]
 pub struct OpsArgs {
@@ -531,14 +542,31 @@ struct SentryAssignedTo {
 struct SentryEventResponse {
     #[serde(default)]
     id: Option<String>,
-    #[serde(default)]
+    #[serde(default, alias = "eventID")]
     event_id: Option<String>,
     #[serde(default)]
     title: Option<String>,
     #[serde(default)]
     message: Option<String>,
-    #[serde(default)]
+    #[serde(default, alias = "dateCreated", alias = "date_created")]
     timestamp: Option<String>,
+    #[serde(default)]
+    level: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_sentry_event_tags")]
+    tags: BTreeMap<String, String>,
+}
+
+fn deserialize_sentry_event_tags<'de, D>(
+    deserializer: D,
+) -> std::result::Result<BTreeMap<String, String>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let tags = BTreeMap::<String, String>::deserialize(deserializer)?;
+    Ok(tags
+        .into_iter()
+        .filter(|(key, _)| SENTRY_EVENT_TAG_ALLOWLIST.contains(&key.as_str()))
+        .collect())
 }
 
 #[derive(Debug, Serialize)]
@@ -2418,6 +2446,59 @@ mod tests {
         let bare: SentryIssueListResponse =
             serde_json::from_value(json!([{ "id": "12345", "title": "TypeError" }])).unwrap();
         assert_eq!(sentry_issue_list_items(bare).len(), 1);
+    }
+
+    #[test]
+    fn preserves_sentry_latest_event_json_contract() {
+        let response: SentryIssueResponse = serde_json::from_value(json!({
+            "id": "7651276254",
+            "latestEvent": {
+                "eventID": "event-latest",
+                "dateCreated": "2026-08-04T07:33:41Z",
+                "level": "error",
+                "message": "money_path_authz_denied",
+                "tags": {
+                    "event.name": "money_path_authz_denied",
+                    "authz.money_path": "synthetic-path",
+                    "authz.action": "synthetic:Action",
+                    "authz.principal_kind": "user",
+                    "authz.principal_role": "OWNER",
+                    "authz.tenant_id": "tn_synthetic",
+                    "authz.target_id": "target_synthetic",
+                    "authz.deny_reason": "PermissionDenied",
+                    "unrelated": "SYNTHETIC_SECRET_MUST_NOT_LEAK"
+                },
+                "request": {"data": "SYNTHETIC_SECRET_MUST_NOT_LEAK"}
+            }
+        }))
+        .unwrap();
+
+        let serialized = serde_json::to_value(response).unwrap();
+
+        assert_eq!(
+            serialized["latest_event"],
+            json!({
+                "id": null,
+                "event_id": "event-latest",
+                "title": null,
+                "message": "money_path_authz_denied",
+                "timestamp": "2026-08-04T07:33:41Z",
+                "level": "error",
+                "tags": {
+                    "event.name": "money_path_authz_denied",
+                    "authz.money_path": "synthetic-path",
+                    "authz.action": "synthetic:Action",
+                    "authz.principal_kind": "user",
+                    "authz.principal_role": "OWNER",
+                    "authz.tenant_id": "tn_synthetic",
+                    "authz.target_id": "target_synthetic",
+                    "authz.deny_reason": "PermissionDenied"
+                }
+            })
+        );
+        assert!(!serialized
+            .to_string()
+            .contains("SYNTHETIC_SECRET_MUST_NOT_LEAK"));
     }
 
     #[test]
