@@ -21,6 +21,17 @@ pub enum AppsCommand {
         #[arg(long)]
         json: bool,
     },
+    /// Update a compute app
+    Update {
+        /// App ID (must be specified explicitly)
+        app_id: String,
+        /// GitHub App connection ID; pass an empty string to clear
+        #[arg(long)]
+        connection_id: String,
+        /// Apply the update after reviewing the displayed app and connection
+        #[arg(long)]
+        yes: bool,
+    },
     /// Delete a compute app
     Delete {
         /// App ID or name
@@ -274,6 +285,73 @@ pub(super) async fn run_apps_get(api: &ApiClient, app_id: &str, json: bool) -> R
             .as_deref()
             .map(format_created_at)
             .unwrap_or_else(|| "-".to_string())
+    );
+    Ok(())
+}
+
+#[derive(Debug, Serialize)]
+struct UpdateAppRequest<'a> {
+    connection_id: &'a str,
+}
+
+fn display_current_connection(connection_id: Option<&str>) -> &str {
+    connection_id
+        .filter(|id| !id.is_empty())
+        .unwrap_or("<none>")
+}
+
+fn display_requested_connection(connection_id: &str) -> &str {
+    if connection_id.is_empty() {
+        "<clear>"
+    } else {
+        connection_id
+    }
+}
+
+pub(super) async fn run_apps_update(
+    api: &ApiClient,
+    app_id: &str,
+    connection_id: &str,
+    yes: bool,
+) -> Result<()> {
+    let app: AppResponse = api.get(&format!("/v1/compute/apps/{app_id}")).await?;
+    let current_connection = app.connection_id.as_deref().unwrap_or_default();
+
+    println!("App:                  {} ({})", app.name, app.id);
+    println!(
+        "Current connection:   {}",
+        display_current_connection(app.connection_id.as_deref())
+    );
+    println!(
+        "Requested connection: {}",
+        display_requested_connection(connection_id)
+    );
+
+    if current_connection == connection_id {
+        println!();
+        println!("No update needed; the app already has the requested connection.");
+        return Ok(());
+    }
+
+    if !yes {
+        println!();
+        println!("No changes made. Re-run with --yes after verifying the app and connection.");
+        return Ok(());
+    }
+
+    let updated: AppResponse = api
+        .patch(
+            &format!("/v1/apps/{app_id}"),
+            &UpdateAppRequest { connection_id },
+        )
+        .await?;
+
+    println!();
+    println!(
+        "Updated connection for {} ({}): {}",
+        updated.name,
+        updated.id,
+        display_current_connection(updated.connection_id.as_deref())
     );
     Ok(())
 }

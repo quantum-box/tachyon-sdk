@@ -262,6 +262,11 @@ pub async fn run(
                 let id = resolve::resolve_app_id(&api, app_id).await?;
                 run_apps_get(&api, &id, *json).await
             }
+            AppsCommand::Update {
+                app_id,
+                connection_id,
+                yes,
+            } => run_apps_update(&api, app_id, connection_id, *yes).await,
             AppsCommand::Delete { app_id } => {
                 let app_id = app_id_or_default(app_id, project_config)?;
                 let id = resolve::resolve_app_id(&api, app_id).await?;
