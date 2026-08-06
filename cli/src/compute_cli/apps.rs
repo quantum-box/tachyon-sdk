@@ -957,11 +957,13 @@ fn build_app_apply_plans(
             let env_plan = plan_env_vars(&entry, environment)?;
             let sentry_plan = plan_sentry_integration(&entry)?;
             let has_auth_config = entry.get("auth").is_some();
+            let has_resource_declarations = has_declarative_resource_declarations(&entry);
             let iac_manifest = if env_plan.secret_refs.is_empty()
                 && env_plan.server_managed_credentials.is_empty()
                 && env_plan.internal_service_refs.is_empty()
                 && sentry_plan.is_none()
                 && !has_auth_config
+                && !has_resource_declarations
             {
                 None
             } else {
@@ -993,11 +995,11 @@ fn build_app_apply_plans(
 
 /// Resolve one app entry before any plan or API write is constructed.
 ///
-/// Environment overlays replace top-level app fields, matching the typed IaC
-/// manifest behavior. Once resolved, the overlay map is removed so downstream
-/// planners cannot accidentally inspect a different environment. Env vars
-/// receive an explicit target so the server-side materializer cannot fall back
-/// to a cross-target credential.
+/// Runtime fields from the selected environment replace top-level app fields,
+/// matching the typed IaC manifest behavior. Resource declarations retain their
+/// environment scope, and the complete overlay map remains available to the
+/// server-side reconciler. Env vars receive an explicit target so the
+/// server-side materializer cannot fall back to a cross-target credential.
 pub(crate) fn resolve_app_entry_for_environment(entry: &Value, environment: &str) -> Result<Value> {
     let environment = manifest_environment_key(environment.trim());
     if environment.is_empty() {
@@ -1008,10 +1010,18 @@ pub(crate) fn resolve_app_entry_for_environment(entry: &Value, environment: &str
     let resolved_obj = resolved
         .as_object_mut()
         .ok_or_else(|| anyhow!("CloudApps app entry must be an object"))?;
-    if let Some(environments) = resolved_obj.remove("environments") {
+    let selected_overlay = if let Some(environments) = resolved_obj.get("environments") {
         let environments = environments
             .as_object()
             .ok_or_else(|| anyhow!("app environments must be an object"))?;
+        for (overlay_environment, overlay) in environments {
+            let overlay = overlay.as_object().ok_or_else(|| {
+                anyhow!(
+                    "app environment overlay environments.{overlay_environment} must be an object"
+                )
+            })?;
+            validate_environment_overlay_keys(overlay, overlay_environment)?;
+        }
         let overlay = environments.get(environment).ok_or_else(|| {
             anyhow!(
                 "app environment overlay environments.{environment} is not defined; refusing to apply the unresolved base entry"
@@ -1020,8 +1030,15 @@ pub(crate) fn resolve_app_entry_for_environment(entry: &Value, environment: &str
         let overlay = overlay.as_object().ok_or_else(|| {
             anyhow!("app environment overlay environments.{environment} must be an object")
         })?;
-        validate_environment_overlay_keys(overlay, environment)?;
-        for (key, value) in overlay {
+        Some(overlay.clone())
+    } else {
+        None
+    };
+    if let Some(overlay) = selected_overlay {
+        for (key, value) in &overlay {
+            if is_environment_resource_declaration(key) {
+                continue;
+            }
             match resolved_obj.get_mut(key) {
                 Some(base) => merge_overlay_value(base, value),
                 None => {
@@ -1064,42 +1081,79 @@ fn validate_environment_overlay_keys(
     overlay: &serde_json::Map<String, Value>,
     environment: &str,
 ) -> Result<()> {
-    const ALLOWED_KEYS: &[&str] = &[
-        "repository",
-        "rootDirectory",
-        "dockerContext",
-        "framework",
-        "deploymentTarget",
-        "versionRetention",
-        "tier",
-        "subnet",
-        "build",
-        "watchPaths",
-        "pathsIgnore",
-        "buildspecStrategy",
-        "envVars",
-        "integrations",
-        "resources",
-        "d1Databases",
-        "provisionedDatabase",
-        "r2Buckets",
-        "speedInsights",
-        "rum",
-        "middleware",
-        "auth",
-        "livenessProof",
-        "readinessProof",
-        "hooks",
-        "customDomains",
-    ];
     for key in overlay.keys() {
-        if !ALLOWED_KEYS.contains(&key.as_str()) {
+        if !ENVIRONMENT_MATERIALIZATION_KEYS.contains(&key.as_str())
+            && !is_environment_resource_declaration(key)
+        {
             return Err(anyhow!(
                 "app environment overlay environments.{environment} contains unsupported field {key}"
             ));
         }
     }
     Ok(())
+}
+
+/// Fields that describe the selected environment's build or runtime view.
+/// These are materialized onto the top-level entry for REST and env planners.
+const ENVIRONMENT_MATERIALIZATION_KEYS: &[&str] = &[
+    "repository",
+    "rootDirectory",
+    "dockerContext",
+    "framework",
+    "deploymentTarget",
+    "versionRetention",
+    "tier",
+    "subnet",
+    "build",
+    "watchPaths",
+    "pathsIgnore",
+    "buildspecStrategy",
+    "envVars",
+    "integrations",
+    "speedInsights",
+    "rum",
+    "middleware",
+    "auth",
+    "livenessProof",
+    "readinessProof",
+    "hooks",
+];
+
+/// Declarative resources whose lifecycle may span multiple environments.
+/// They must retain their original environment scope for server reconciliation.
+const ENVIRONMENT_RESOURCE_DECLARATION_KEYS: &[&str] = &[
+    "resources",
+    "d1Databases",
+    "provisionedDatabase",
+    "r2Buckets",
+    "customDomains",
+];
+
+fn is_environment_resource_declaration(key: &str) -> bool {
+    ENVIRONMENT_RESOURCE_DECLARATION_KEYS.contains(&key)
+}
+
+fn has_declarative_resource_declarations(entry: &Value) -> bool {
+    let Some(entry) = entry.as_object() else {
+        return false;
+    };
+    if entry
+        .keys()
+        .any(|key| is_environment_resource_declaration(key))
+    {
+        return true;
+    }
+    entry
+        .get("environments")
+        .and_then(Value::as_object)
+        .into_iter()
+        .flat_map(|environments| environments.values())
+        .filter_map(Value::as_object)
+        .any(|overlay| {
+            overlay
+                .keys()
+                .any(|key| is_environment_resource_declaration(key))
+        })
 }
 
 fn merge_overlay_value(base: &mut Value, overlay: &Value) {
@@ -2145,7 +2199,11 @@ spec:
         assert_eq!(plan.env_plan.secret_refs[0].key, "DATABASE_URL");
         assert_eq!(plan.env_plan.secret_refs[0].target, "preview");
         let manifest = plan.iac_manifest.as_ref().unwrap();
-        assert!(manifest["spec"].get("environments").is_none());
+        assert_eq!(
+            manifest["spec"]["environments"]["preview"]["envVars"][0]["valueFrom"]["secret"]
+                ["path"],
+            "providers/tidb_field_preview"
+        );
         assert!(manifest["spec"]["envVars"][0]["valueFrom"]
             .get("databaseRef")
             .is_none());
@@ -2159,6 +2217,128 @@ spec:
         );
         assert_eq!(manifest["spec"]["envVars"][0]["target"], "preview");
         assert_eq!(plan.body["root_directory"], "apps/api-preview");
+    }
+
+    #[test]
+    fn production_apply_preserves_preview_resource_declarations_for_iac() {
+        let entry = json!({
+            "name": "courseboard-api",
+            "repository": {
+                "url": "https://github.com/quantum-box/courseboard",
+                "owner": "quantum-box",
+                "name": "courseboard"
+            },
+            "rootDirectory": "apps/base",
+            "environments": {
+                "production": {
+                    "rootDirectory": "apps/production"
+                },
+                "preview": {
+                    "rootDirectory": "apps/preview",
+                    "resources": [{
+                        "type": "sentry",
+                        "name": "courseboard-preview",
+                        "config": { "organization": "quantum-box", "team": "platform" }
+                    }],
+                    "d1Databases": [{
+                        "binding": "DB",
+                        "databaseName": "courseboard-preview"
+                    }],
+                    "provisionedDatabase": {
+                        "provider": "tidb",
+                        "engine": "mysql",
+                        "envVar": "DATABASE_URL"
+                    },
+                    "r2Buckets": [{
+                        "binding": "ASSETS",
+                        "bucketName": "courseboard-preview"
+                    }],
+                    "customDomains": [{
+                        "hostname": "preview.courseboard.example"
+                    }]
+                }
+            }
+        });
+
+        let plans =
+            build_app_apply_plans(vec![entry], "tn_01ks18jhh1xvggktfzjx5jqsen", "production")
+                .unwrap();
+        let plan = &plans[0];
+        let spec = &plan.iac_manifest.as_ref().unwrap()["spec"];
+
+        assert_eq!(plan.body["root_directory"], "apps/production");
+        assert_eq!(spec["rootDirectory"], "apps/production");
+        assert_eq!(
+            spec["environments"]["preview"]["rootDirectory"],
+            "apps/preview"
+        );
+        for key in ENVIRONMENT_RESOURCE_DECLARATION_KEYS {
+            assert!(
+                spec["environments"]["preview"].get(key).is_some(),
+                "preview resource declaration {key} was dropped"
+            );
+            assert!(
+                spec.get(key).is_none(),
+                "preview resource declaration {key} lost its environment scope"
+            );
+        }
+        assert_eq!(spec["applyTarget"], "production");
+    }
+
+    #[test]
+    fn resource_declaration_keys_each_trigger_iac_manifest() {
+        for (key, value) in [
+            ("resources", json!([])),
+            ("d1Databases", json!([])),
+            (
+                "provisionedDatabase",
+                json!({ "provider": "tidb", "engine": "mysql" }),
+            ),
+            ("r2Buckets", json!([])),
+            ("customDomains", json!([])),
+        ] {
+            let mut preview = serde_json::Map::new();
+            preview.insert(key.to_string(), value);
+            let entry = json!({
+                "name": "resource-app",
+                "repository": {
+                    "url": "https://github.com/quantum-box/resource-app",
+                    "owner": "quantum-box",
+                    "name": "resource-app"
+                },
+                "environments": {
+                    "production": {},
+                    "preview": Value::Object(preview)
+                }
+            });
+
+            let plans =
+                build_app_apply_plans(vec![entry], "tn_01ks18jhh1xvggktfzjx5jqsen", "production")
+                    .unwrap();
+
+            assert!(
+                plans[0].iac_manifest.is_some(),
+                "resource declaration {key} did not trigger an IaC manifest"
+            );
+        }
+    }
+
+    #[test]
+    fn resolver_rejects_unsupported_keys_in_unselected_overlay() {
+        let entry = json!({
+            "name": "api",
+            "environments": {
+                "production": {},
+                "preview": { "unsupportedResource": { "enabled": true } }
+            }
+        });
+
+        let error = resolve_app_entry_for_environment(&entry, "production")
+            .unwrap_err()
+            .to_string();
+
+        assert!(error.contains("environments.preview"));
+        assert!(error.contains("unsupported field unsupportedResource"));
     }
 
     #[test]
