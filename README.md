@@ -129,6 +129,42 @@ PM defaults are resolved in this order:
 for the environment or profile. The same defaults apply to `tachyon pm issue`,
 `tachyon issue`, and `tachyon linear issue`.
 
+### IaC change-control approval and concurrent-update protection
+
+`tachyon iac apply`, `tachyon iac import-seed`, and `tachyon iac rollback`
+accept a change-control approval token through
+`TACHYON_CHANGE_CONTROL_APPROVAL_TOKEN` or `--change-control-token`. Prefer the
+environment variable so the token does not appear in shell history or process
+arguments. For example, in Bash:
+
+```bash
+read -rsp 'Change-control approval token: ' TACHYON_CHANGE_CONTROL_APPROVAL_TOKEN
+printf '\n'
+export TACHYON_CHANGE_CONTROL_APPROVAL_TOKEN
+
+tachyon iac apply --file tachyon.yml
+tachyon iac import-seed --file 003-iac-manifests.yaml
+tachyon iac rollback --kind CloudApp --name example --revision 3
+
+unset TACHYON_CHANGE_CONTROL_APPROVAL_TOKEN
+```
+
+The token is validated locally when supplied, then sent only in the
+`x-tachyon-change-control-token` request header. It is not placed in GraphQL
+variables, local IaC state, or command output. `import-seed --dry-run` sends no
+mutation and does not require a token.
+
+Before the first write, each command reads the latest saved revision for every
+target manifest and sends it as `expectedRevision`. If another writer changes a
+manifest after that preflight, the server returns a CAS conflict instead of
+overwriting the concurrent update; inspect the latest state and rerun the
+command to re-plan. Multi-manifest commands can still complete earlier writes
+before a later manifest conflicts.
+
+The token option remains optional at the CLI compatibility layer in this
+rollout stage. Commands without a token continue to use the existing
+server-side tenant and change-control policy behavior.
+
 ### Usage
 
 ```sh
