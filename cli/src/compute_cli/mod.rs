@@ -121,7 +121,7 @@ pub enum ComputeCommand {
 
 mod apps;
 mod builds;
-mod change_control;
+pub(crate) mod change_control;
 mod deployments;
 mod domains;
 mod env;

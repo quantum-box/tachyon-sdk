@@ -68,6 +68,18 @@ pub enum IacCommand {
         /// Override state file path
         #[arg(long)]
         state: Option<String>,
+        /// Change-control approval token for protected production mutations.
+        ///
+        /// Prefer TACHYON_CHANGE_CONTROL_APPROVAL_TOKEN so the token does not
+        /// appear in shell history or process arguments. Optional during the
+        /// compatibility rollout; when present, verified before API access
+        /// and forwarded only as a dedicated request header.
+        #[arg(
+            long = "change-control-token",
+            env = "TACHYON_CHANGE_CONTROL_APPROVAL_TOKEN",
+            hide_env_values = true
+        )]
+        change_control_token: Option<String>,
     },
     /// Roll back manifest to a specific revision
     Rollback {
@@ -77,6 +89,18 @@ pub enum IacCommand {
         name: String,
         #[arg(long)]
         revision: i32,
+        /// Change-control approval token for protected production mutations.
+        ///
+        /// Prefer TACHYON_CHANGE_CONTROL_APPROVAL_TOKEN so the token does not
+        /// appear in shell history or process arguments. Optional during the
+        /// compatibility rollout; when present, verified before API access
+        /// and forwarded only as a dedicated request header.
+        #[arg(
+            long = "change-control-token",
+            env = "TACHYON_CHANGE_CONTROL_APPROVAL_TOKEN",
+            hide_env_values = true
+        )]
+        change_control_token: Option<String>,
     },
     /// Import IAC manifests from 003-iac-manifests.yaml through the API
     ImportSeed {
@@ -84,6 +108,18 @@ pub enum IacCommand {
         file: String,
         #[arg(long, default_value_t = false)]
         dry_run: bool,
+        /// Change-control approval token for protected production mutations.
+        ///
+        /// Prefer TACHYON_CHANGE_CONTROL_APPROVAL_TOKEN so the token does not
+        /// appear in shell history or process arguments. Optional during the
+        /// compatibility rollout; ignored for --dry-run because no API
+        /// mutation is sent.
+        #[arg(
+            long = "change-control-token",
+            env = "TACHYON_CHANGE_CONTROL_APPROVAL_TOKEN",
+            hide_env_values = true
+        )]
+        change_control_token: Option<String>,
     },
     /// Verify drift between seed manifests and current IAC API state
     VerifySeed {
@@ -220,6 +256,19 @@ struct ManifestHistoryItem {
 struct ManifestIdentity {
     kind: String,
     name: String,
+}
+
+#[derive(Debug)]
+struct PlannedManifestWrite {
+    manifest: Value,
+    identity: ManifestIdentity,
+    expected_revision: i32,
+}
+
+#[derive(Debug)]
+struct PlannedManifestApply {
+    write: PlannedManifestWrite,
+    action: ChangeAction,
 }
 
 #[derive(Debug, Deserialize)]
@@ -706,8 +755,28 @@ fn inject_tenant_id(manifest: &Value, tenant_id: &str) -> Value {
 }
 
 async fn graphql_request(api: &ApiClient, body: Value) -> Result<Value> {
+    graphql_request_with_change_control(api, body, None).await
+}
+
+/// Header carrying the approval token to the authoritative server-side gate.
+/// Keeping it out of GraphQL variables prevents request-body logs from
+/// retaining the credential.
+const CHANGE_CONTROL_TOKEN_HEADER: &str = "x-tachyon-change-control-token";
+
+async fn graphql_request_with_change_control(
+    api: &ApiClient,
+    body: Value,
+    change_control_token: Option<&str>,
+) -> Result<Value> {
     let url = format!("{}/v1/graphql", api.base_url);
-    let response = api.client.post(url).json(&body).send().await?;
+    let mut request = api.client.post(url).json(&body);
+    if let Some(token) = change_control_token
+        .map(str::trim)
+        .filter(|token| !token.is_empty())
+    {
+        request = request.header(CHANGE_CONTROL_TOKEN_HEADER, token);
+    }
+    let response = request.send().await?;
     let status = response.status();
     let payload: Value = response.json().await?;
     if !status.is_success() {
@@ -722,6 +791,28 @@ async fn graphql_request(api: &ApiClient, body: Value) -> Result<Value> {
         .get("data")
         .cloned()
         .ok_or_else(|| anyhow!("missing data in graphql response"))
+}
+
+/// Validate an optional token before the first API request. This is only a
+/// fail-fast client check; the server remains the authorization boundary.
+fn verify_iac_change_control_token(change_control_token: Option<&str>) -> Result<()> {
+    let Some(token) = change_control_token
+        .map(str::trim)
+        .filter(|token| !token.is_empty())
+    else {
+        return Ok(());
+    };
+
+    let verification_key = std::env::var(crate::compute_cli::change_control::VERIFICATION_KEY_ENV)
+        .ok()
+        .filter(|key| !key.is_empty());
+    crate::compute_cli::change_control::verify_change_control_token(
+        token,
+        "production",
+        verification_key.as_deref().map(str::as_bytes),
+        Utc::now().timestamp(),
+    )?;
+    Ok(())
 }
 
 async fn fetch_history(
@@ -757,7 +848,22 @@ async fn fetch_history(
     Ok(serde_json::from_value(value.clone())?)
 }
 
-async fn save_manifest(api: &ApiClient, tenant_id: &str, manifest: &Value) -> Result<()> {
+async fn fetch_expected_revision(
+    api: &ApiClient,
+    tenant_id: &str,
+    identity: &ManifestIdentity,
+) -> Result<i32> {
+    let history = fetch_history(api, tenant_id, &identity.kind, &identity.name, 1).await?;
+    Ok(history.first().map(|item| item.revision).unwrap_or(0))
+}
+
+async fn save_manifest(
+    api: &ApiClient,
+    tenant_id: &str,
+    manifest: &Value,
+    expected_revision: i32,
+    change_control_token: Option<&str>,
+) -> Result<()> {
     let body = json!({
         "query": r#"
           mutation SaveManifest($input: SaveManifestInput!) {
@@ -768,14 +874,20 @@ async fn save_manifest(api: &ApiClient, tenant_id: &str, manifest: &Value) -> Re
             "input": {
                 "tenantId": tenant_id,
                 "manifest": serde_json::to_string(manifest)?,
+                "expectedRevision": expected_revision,
             }
         }
     });
-    graphql_request(api, body).await?;
+    graphql_request_with_change_control(api, body, change_control_token).await?;
     Ok(())
 }
 
-async fn apply_manifest_resource(api: &ApiClient, kind: &str, name: &str) -> Result<Value> {
+async fn apply_manifest_resource(
+    api: &ApiClient,
+    kind: &str,
+    name: &str,
+    change_control_token: Option<&str>,
+) -> Result<Value> {
     let body = json!({
         "query": r#"
           mutation ApplyManifest($input: ApplyManifestInput!) {
@@ -796,13 +908,20 @@ async fn apply_manifest_resource(api: &ApiClient, kind: &str, name: &str) -> Res
             }
         }
     });
-    let data = graphql_request(api, body).await?;
+    let data = graphql_request_with_change_control(api, body, change_control_token).await?;
     data.get("applyManifest")
         .cloned()
         .ok_or_else(|| anyhow!("applyManifest not found in response"))
 }
 
-async fn rollback_manifest(api: &ApiClient, kind: &str, name: &str, revision: i32) -> Result<()> {
+async fn rollback_manifest(
+    api: &ApiClient,
+    kind: &str,
+    name: &str,
+    revision: i32,
+    expected_revision: i32,
+    change_control_token: Option<&str>,
+) -> Result<()> {
     let body = json!({
         "query": r#"
           mutation RollbackManifest($input: RollbackManifestInput!) {
@@ -814,10 +933,11 @@ async fn rollback_manifest(api: &ApiClient, kind: &str, name: &str, revision: i3
                 "kind": kind,
                 "name": name,
                 "revision": revision,
+                "expectedRevision": expected_revision,
             }
         }
     });
-    graphql_request(api, body).await?;
+    graphql_request_with_change_control(api, body, change_control_token).await?;
     Ok(())
 }
 
@@ -918,19 +1038,52 @@ async fn run_apply(
     file: &str,
     app: Option<&str>,
     state: Option<&str>,
+    change_control_token: Option<&str>,
 ) -> Result<()> {
+    verify_iac_change_control_token(change_control_token)?;
     let state_path = state_path(state);
     let mut iac_state = load_state(&state_path)?;
     let mut manifests = load_manifest_files(file, app)?;
     sort_manifests_for_apply(&mut manifests);
+
+    // Capture every serving revision before the first write so a concurrent
+    // update after this planning window is rejected by the server-side CAS.
+    let mut planned = Vec::with_capacity(manifests.len());
     for manifest in manifests {
         let manifest = inject_tenant_id(&manifest, tenant_id);
         let identity = infer_identity(&manifest, None, None)?;
         let action = compute_change(&iac_state, &identity, &manifest);
+        let expected_revision = fetch_expected_revision(api, tenant_id, &identity).await?;
+        planned.push(PlannedManifestApply {
+            write: PlannedManifestWrite {
+                manifest,
+                identity,
+                expected_revision,
+            },
+            action,
+        });
+    }
+
+    for plan in planned {
+        let PlannedManifestWrite {
+            manifest,
+            identity,
+            expected_revision,
+        } = plan.write;
+        let action = plan.action;
         if action != ChangeAction::NoChange {
-            save_manifest(api, tenant_id, &manifest).await?;
+            save_manifest(
+                api,
+                tenant_id,
+                &manifest,
+                expected_revision,
+                change_control_token,
+            )
+            .await?;
         }
-        let result = apply_manifest_resource(api, &identity.kind, &identity.name).await?;
+        let result =
+            apply_manifest_resource(api, &identity.kind, &identity.name, change_control_token)
+                .await?;
         iac_state.upsert_resource(&identity, manifest);
         if action == ChangeAction::NoChange {
             println!(
@@ -954,6 +1107,7 @@ async fn run_import_seed(
     tenant_id: &str,
     file: &str,
     dry_run: bool,
+    change_control_token: Option<&str>,
 ) -> Result<()> {
     let manifests = load_seed_manifests(file)?;
     if dry_run {
@@ -963,13 +1117,36 @@ async fn run_import_seed(
         );
         return Ok(());
     }
-    for manifest in &manifests {
-        let manifest = inject_tenant_id(manifest, tenant_id);
+    verify_iac_change_control_token(change_control_token)?;
+
+    // Preflight the complete seed set before any mutation. Later concurrent
+    // changes are detected by each SaveManifest CAS instead of overwritten.
+    let mut planned = Vec::with_capacity(manifests.len());
+    for manifest in manifests {
+        let manifest = inject_tenant_id(&manifest, tenant_id);
         let identity = infer_identity(&manifest, None, None)?;
-        save_manifest(api, tenant_id, &manifest).await?;
+        let expected_revision = fetch_expected_revision(api, tenant_id, &identity).await?;
+        planned.push(PlannedManifestWrite {
+            manifest,
+            identity,
+            expected_revision,
+        });
+    }
+
+    let manifest_count = planned.len();
+    for plan in planned {
+        save_manifest(
+            api,
+            tenant_id,
+            &plan.manifest,
+            plan.expected_revision,
+            change_control_token,
+        )
+        .await?;
+        let identity = plan.identity;
         println!("Imported: {} / {}", identity.kind, identity.name);
     }
-    println!("Import completed: {} manifests saved.", manifests.len());
+    println!("Import completed: {manifest_count} manifests saved.");
     Ok(())
 }
 
@@ -1072,20 +1249,59 @@ pub async fn run(args: &IacArgs, config: &Configuration, tenant_id: &str) -> Res
             )
             .await
         }
-        IacCommand::Apply { file, app, state } => {
-            run_apply(&api, tenant_id, file, app.as_deref(), state.as_deref()).await
+        IacCommand::Apply {
+            file,
+            app,
+            state,
+            change_control_token,
+        } => {
+            run_apply(
+                &api,
+                tenant_id,
+                file,
+                app.as_deref(),
+                state.as_deref(),
+                change_control_token.as_deref(),
+            )
+            .await
         }
         IacCommand::Rollback {
             kind,
             name,
             revision,
+            change_control_token,
         } => {
-            rollback_manifest(&api, kind, name, *revision).await?;
+            verify_iac_change_control_token(change_control_token.as_deref())?;
+            let identity = ManifestIdentity {
+                kind: kind.clone(),
+                name: name.clone(),
+            };
+            let expected_revision = fetch_expected_revision(&api, tenant_id, &identity).await?;
+            rollback_manifest(
+                &api,
+                kind,
+                name,
+                *revision,
+                expected_revision,
+                change_control_token.as_deref(),
+            )
+            .await?;
             println!("Rollback completed: {kind} / {name} => revision {revision}");
             Ok(())
         }
-        IacCommand::ImportSeed { file, dry_run } => {
-            run_import_seed(&api, tenant_id, file, *dry_run).await
+        IacCommand::ImportSeed {
+            file,
+            dry_run,
+            change_control_token,
+        } => {
+            run_import_seed(
+                &api,
+                tenant_id,
+                file,
+                *dry_run,
+                change_control_token.as_deref(),
+            )
+            .await
         }
         IacCommand::VerifySeed { file } => run_verify_seed(&api, tenant_id, file).await,
         IacCommand::State { state } => run_state(state.as_deref()),

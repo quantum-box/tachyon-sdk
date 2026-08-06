@@ -1,4 +1,4 @@
-//! Production apply change-control token verification.
+//! Production manifest-mutation change-control token verification.
 //!
 //! See ADR 0011 (`docs/src/adr/0011-change-control-token-gate.md`).
 //!
@@ -57,7 +57,7 @@ pub(crate) struct VerifiedApproval {
     pub(crate) signature_verified: bool,
 }
 
-/// Verify a change-control token for a production apply.
+/// Verify a change-control token for a production manifest mutation.
 ///
 /// This is pure: `now_unix` (clock) and `verification_key` (env) are
 /// injected so the gate is deterministically testable and evaluated before
@@ -66,7 +66,7 @@ pub(crate) struct VerifiedApproval {
 /// What it validates:
 /// - structural form `tcct.v1.<payload>.<sig>` (rejects arbitrary strings),
 /// - decodable payload with required claims (`ref`, `env`, `exp`),
-/// - `env` claim matches the apply environment,
+/// - `env` claim matches the target environment,
 /// - `exp` is in the future (rejects expired tokens),
 /// - HMAC-SHA256 signature, *when* a verification key is configured
 ///   (rejects tampered payloads). Without a key, a structurally valid,
@@ -111,7 +111,7 @@ pub(crate) fn verify_change_control_token(
     if !env_matches(&claims.env, environment) {
         return Err(anyhow!(
             "change-control token is scoped to a different environment; \
-             it does not authorize an apply to `{environment}`"
+             it does not authorize a mutation in `{environment}`"
         ));
     }
 
