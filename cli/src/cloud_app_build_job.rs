@@ -19,6 +19,9 @@ use tokio::process::Command;
 
 const OUTPUT_CAPTURE_LIMIT: usize = 128 * 1024;
 const DOCKER_CONFIG_ENV: &str = "TACHYON_DOCKER_CONFIG_JSON";
+const TACHYON_AUTH_TOKEN_ENV: &str = "TACHYON_AUTH_TOKEN";
+const TACHYON_API_URL_ENV: &str = "TACHYON_API_URL";
+const TACHYON_TENANT_ID_ENV: &str = "TACHYON_TENANT_ID";
 const BUILDKIT_DAEMONLESS: &str = "/usr/local/bin/buildctl-daemonless.sh";
 const BUILDKIT_DOCKER_CONFIG_DIR: &str = "/workspace/.docker";
 
@@ -41,6 +44,54 @@ pub struct BuildWorkloadSpec {
     /// exactly as before: no migrations, `d1_migrations: null`).
     #[serde(default)]
     d1: Option<BuildWorkloadD1>,
+    /// Tachyon IaC (manifest plan/apply) step resolved by the
+    /// control plane.
+    ///
+    /// Optional so specs produced by control planes that predate
+    /// the field still deserialize (the builder then behaves
+    /// exactly as before: no IaC step, `iac_plan_output: null`).
+    #[serde(default)]
+    iac: Option<BuildWorkloadIac>,
+}
+
+/// Tachyon IaC step for one build.
+///
+/// IMPORTANT: like [`BuildWorkloadD1`], every policy decision is
+/// already resolved by the control plane. The builder must NOT
+/// decide plan vs apply from the branch or trigger type; it only
+/// executes the resolved operation by re-invoking the bundled
+/// tachyon CLI. The CodeBuild buildspec generator
+/// (`packages/compute/src/adapter/gateway/codebuild_provider.rs`
+/// in tachyon-apps) is fed by the same control-plane resolver
+/// (`SubmitBuildInput::resolved_iac`), so the two builders cannot
+/// drift as long as neither re-derives policy locally.
+#[derive(Debug, Deserialize)]
+struct BuildWorkloadIac {
+    /// `plan` or `apply`.
+    operation: String,
+    /// Manifest path relative to the checkout root. When absent
+    /// or missing on disk the builder falls back to the standard
+    /// candidate search (`tachyon.{environment}.{yml,yaml}` then
+    /// `tachyon.{yml,yaml}`), mirroring the CodeBuild step.
+    #[serde(default)]
+    config_path: Option<String>,
+    /// Config environment (`preview` / `production`).
+    #[serde(default)]
+    environment: Option<String>,
+    /// App entry to select in `CloudApps` manifests.
+    app_name: String,
+}
+
+/// Result of the Tachyon IaC step reported in the completion
+/// callback.
+///
+/// `None` (step skipped: no `iac` spec or no manifest in the
+/// checkout) and `Some` mean different things to the control
+/// plane — a `Some` outcome creates the "Tachyon IaC" Check Run.
+#[derive(Debug)]
+struct IacStepOutcome {
+    plan_output: String,
+    success: bool,
 }
 
 /// D1 migration plan for one build.
@@ -235,7 +286,16 @@ pub async fn run_from_env(spec_env: &str) -> Result<()> {
     // Keep migration results outside `run_build` so a failure after
     // migration still reports the collected evidence in the callback.
     let mut d1_migrations = Vec::new();
-    let result = run_build(&workload, &mut phase_durations, &mut d1_migrations).await;
+    // Same for the IaC outcome: a failed apply must still report the
+    // captured plan output and `iac_success: false`.
+    let mut iac_outcome = None;
+    let result = run_build(
+        &workload,
+        &mut phase_durations,
+        &mut d1_migrations,
+        &mut iac_outcome,
+    )
+    .await;
     send_phase_durations(&workload, &phase_durations, cache_stats.cache_hit).await;
     let duration_secs = i32::try_from(started.elapsed().as_secs()).unwrap_or(i32::MAX);
 
@@ -249,6 +309,7 @@ pub async fn run_from_env(spec_env: &str) -> Result<()> {
                 Some(output),
                 None,
                 &d1_migrations,
+                iac_outcome.as_ref(),
             )
             .await;
             send_phase_durations(
@@ -273,6 +334,7 @@ pub async fn run_from_env(spec_env: &str) -> Result<()> {
                 None,
                 Some(error.to_string()),
                 &d1_migrations,
+                iac_outcome.as_ref(),
             )
             .await;
             send_phase_durations(
@@ -299,6 +361,7 @@ async fn run_build(
     workload: &BuildWorkloadSpec,
     phase_durations: &mut BTreeMap<String, f64>,
     d1_migrations: &mut Vec<serde_json::Value>,
+    iac_outcome: &mut Option<IacStepOutcome>,
 ) -> Result<CommandResult> {
     let checkout_dir = PathBuf::from("/workspace/source");
     if checkout_dir.exists() {
@@ -437,7 +500,167 @@ async fn run_build(
         append_result(&mut combined, phase_result?);
     }
 
+    // Apply the Tachyon manifest after the deploy so control-plane
+    // state reflects the deployed candidate, matching the CodeBuild
+    // post_build ordering.
+    if let Some(iac) = workload.iac.as_ref() {
+        send_phase_event(workload, "iac").await;
+        let phase_started = Instant::now();
+        let phase_result = run_iac_step(iac, &checkout_dir, &env, iac_outcome).await;
+        phase_durations.insert("iac".to_string(), phase_started.elapsed().as_secs_f64());
+        append_result(&mut combined, phase_result?);
+    }
+
     Ok(combined)
+}
+
+/// Run the Tachyon IaC step (manifest plan/apply).
+///
+/// Mirrors the CodeBuild `generate_iac_step` semantics: a missing
+/// manifest skips the step without reporting an outcome, a missing
+/// auth token reports a WARN outcome without failing the build
+/// (fail-open, see PLT-1764), and an execution failure fails the
+/// build while still reporting the captured output through
+/// `outcome`. The bundled tachyon CLI is re-invoked as
+/// `tachyon manifest {plan|apply}`, which natively handles
+/// `CloudApps` app selection (`--app`) and environment overlays
+/// (`--environment`), so no manifest normalization happens here.
+async fn run_iac_step(
+    iac: &BuildWorkloadIac,
+    checkout_dir: &Path,
+    env: &BTreeMap<String, String>,
+    outcome: &mut Option<IacStepOutcome>,
+) -> Result<CommandResult> {
+    let operation = validate_iac_operation(&iac.operation)?;
+
+    let Some(manifest_path) = resolve_iac_manifest_path(
+        checkout_dir,
+        iac.config_path.as_deref(),
+        iac.environment.as_deref(),
+    ) else {
+        tracing::info!("no Tachyon manifest found; skipping IaC step");
+        return Ok(CommandResult {
+            stdout: String::new(),
+            stderr: String::new(),
+        });
+    };
+
+    let Some(token) = iac_env_value(env, TACHYON_AUTH_TOKEN_ENV) else {
+        let message = format!(
+            "WARN: TACHYON_AUTH_TOKEN unavailable; skipping Tachyon IaC {operation}. \
+             Build artifact upload and callback will continue."
+        );
+        tracing::warn!("{message}");
+        *outcome = Some(IacStepOutcome {
+            plan_output: message.clone(),
+            success: true,
+        });
+        return Ok(CommandResult {
+            stdout: message,
+            stderr: String::new(),
+        });
+    };
+
+    // The control plane only emits `iac` when the Tachyon API URL is
+    // configured and it injects the same URL into the workload env, so
+    // a missing value here is a plumbing bug, not a skippable state.
+    let api_url = iac_env_value(env, TACHYON_API_URL_ENV)
+        .ok_or_else(|| anyhow!("{TACHYON_API_URL_ENV} is required for the Tachyon IaC step"))?;
+
+    let exe = std::env::current_exe().context("failed to resolve the tachyon CLI executable")?;
+    let mut command = Command::new(exe);
+    command
+        .arg("manifest")
+        .arg(operation)
+        .arg("-f")
+        .arg(&manifest_path)
+        .arg("--app")
+        .arg(&iac.app_name)
+        .current_dir(checkout_dir)
+        .env(TACHYON_API_URL_ENV, &api_url)
+        // `TACHYON_API_KEY` takes precedence over profile auth, so the
+        // subprocess never touches profile credentials.
+        .env("TACHYON_API_KEY", &token);
+    if let Some(environment) = iac.environment.as_deref() {
+        command.arg("--environment").arg(environment);
+    }
+    if let Some(tenant_id) = iac_env_value(env, TACHYON_TENANT_ID_ENV) {
+        command.env(TACHYON_TENANT_ID_ENV, tenant_id);
+    }
+
+    let label = format!("tachyon manifest {operation}");
+    let (status, result) = run_command_capture(&label, command).await?;
+    let environment_label = iac.environment.as_deref().unwrap_or("default");
+    let mut plan_output = format!(
+        "Tachyon config: {}\nTachyon config environment: {environment_label}\n{}",
+        manifest_path.display(),
+        result.stdout
+    );
+    if !result.stderr.is_empty() {
+        plan_output.push_str(&result.stderr);
+    }
+    *outcome = Some(IacStepOutcome {
+        plan_output: truncate_output(&plan_output),
+        success: status.success(),
+    });
+    if !status.success() {
+        return Err(anyhow!("{label} failed with exit code {:?}", status.code()));
+    }
+    Ok(result)
+}
+
+fn validate_iac_operation(operation: &str) -> Result<&str> {
+    match operation {
+        "plan" | "apply" => Ok(operation),
+        other => Err(anyhow!("unsupported Tachyon IaC operation: {other}")),
+    }
+}
+
+/// Resolve the manifest path following the same candidate order as
+/// the CodeBuild buildspec: the control-plane-resolved path first,
+/// then `tachyon.{environment}.{yml,yaml}` and finally
+/// `tachyon.{yml,yaml}` at the checkout root.
+fn resolve_iac_manifest_path(
+    checkout_dir: &Path,
+    config_path: Option<&str>,
+    environment: Option<&str>,
+) -> Option<PathBuf> {
+    if let Some(config_path) = config_path.filter(|path| !path.is_empty()) {
+        let path = if Path::new(config_path).is_absolute() {
+            PathBuf::from(config_path)
+        } else {
+            checkout_dir.join(config_path)
+        };
+        if path.is_file() {
+            return Some(path);
+        }
+        tracing::warn!(
+            path = %path.display(),
+            "configured Tachyon manifest not found; falling back to discovery"
+        );
+    }
+
+    let mut candidates = Vec::new();
+    if let Some(environment) = environment.filter(|env| !env.is_empty()) {
+        candidates.push(format!("tachyon.{environment}.yml"));
+        candidates.push(format!("tachyon.{environment}.yaml"));
+    }
+    candidates.push("tachyon.yml".to_string());
+    candidates.push("tachyon.yaml".to_string());
+    candidates
+        .into_iter()
+        .map(|name| checkout_dir.join(name))
+        .find(|path| path.is_file())
+}
+
+/// Read a Tachyon control-plane value from the workload env map
+/// (claim-time credential mode resolves `value_from` references
+/// there) or from the container process env (plaintext mode).
+fn iac_env_value(env: &BTreeMap<String, String>, name: &str) -> Option<String> {
+    env.get(name)
+        .cloned()
+        .or_else(|| std::env::var(name).ok())
+        .filter(|value| !value.is_empty())
 }
 
 async fn clone_repository(
@@ -1959,6 +2182,7 @@ async fn send_callback(
     output: Option<&CommandResult>,
     error_message: Option<String>,
     d1_migrations: &[serde_json::Value],
+    iac: Option<&IacStepOutcome>,
 ) -> Result<()> {
     let Some(callback) = workload.callback.as_ref() else {
         tracing::warn!("build callback URL is not configured");
@@ -1978,8 +2202,11 @@ async fn send_callback(
         duration_secs: Some(duration_secs),
         codebuild_instance_type: Some("hetzner-k3s-tachyon-cli".to_string()),
         error_message,
-        iac_plan_output: None,
-        iac_success: None,
+        // `null` (step skipped) and `Some` mean different things to
+        // the control plane: a present plan output creates the
+        // "Tachyon IaC" Check Run.
+        iac_plan_output: iac.map(|outcome| outcome.plan_output.clone()),
+        iac_success: iac.map(|outcome| outcome.success),
         // `null` (no D1 plan in the spec) and `[]` mean different
         // things to the control plane, so never send an empty array.
         d1_migrations: d1_migrations_payload(d1_migrations),
@@ -2182,6 +2409,7 @@ mod tests {
             deployment_target: deployment_target.map(str::to_string),
             framework: Some("next_js".to_string()),
             d1: None,
+            iac: None,
         }
     }
 
@@ -2247,6 +2475,160 @@ mod tests {
             serde_json::from_str(&minimal_spec_json("")).expect("spec should parse");
 
         assert!(spec.d1.is_none());
+    }
+
+    #[test]
+    fn spec_deserializes_with_iac_step() {
+        let json = minimal_spec_json(
+            r#", "iac": {
+                "operation": "plan",
+                "config_path": "tachyon.yaml",
+                "environment": "preview",
+                "app_name": "demo"
+            }"#,
+        );
+
+        let spec: BuildWorkloadSpec = serde_json::from_str(&json).expect("spec should parse");
+        let iac = spec.iac.expect("iac should be present");
+        assert_eq!(iac.operation, "plan");
+        assert_eq!(iac.config_path.as_deref(), Some("tachyon.yaml"));
+        assert_eq!(iac.environment.as_deref(), Some("preview"));
+        assert_eq!(iac.app_name, "demo");
+    }
+
+    #[test]
+    fn spec_deserializes_iac_step_without_optional_fields() {
+        let json = minimal_spec_json(r#", "iac": {"operation": "apply", "app_name": "demo"}"#);
+
+        let spec: BuildWorkloadSpec = serde_json::from_str(&json).expect("spec should parse");
+        let iac = spec.iac.expect("iac should be present");
+        assert_eq!(iac.operation, "apply");
+        assert!(iac.config_path.is_none());
+        assert!(iac.environment.is_none());
+    }
+
+    #[test]
+    fn spec_deserializes_without_iac_step() {
+        // Backward compatibility with control planes that predate
+        // the additive `iac` field.
+        let spec: BuildWorkloadSpec =
+            serde_json::from_str(&minimal_spec_json("")).expect("spec should parse");
+
+        assert!(spec.iac.is_none());
+    }
+
+    #[test]
+    fn validate_iac_operation_accepts_only_plan_and_apply() {
+        assert_eq!(validate_iac_operation("plan").unwrap(), "plan");
+        assert_eq!(validate_iac_operation("apply").unwrap(), "apply");
+        let error = validate_iac_operation("destroy").unwrap_err();
+        assert!(error.to_string().contains("unsupported"), "got: {error}");
+    }
+
+    #[test]
+    fn resolve_iac_manifest_path_prefers_configured_path() {
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::write(temp.path().join("custom.yaml"), "kind: CloudApps").unwrap();
+        std::fs::write(temp.path().join("tachyon.yml"), "kind: CloudApps").unwrap();
+
+        let path = resolve_iac_manifest_path(temp.path(), Some("custom.yaml"), Some("preview"))
+            .expect("manifest");
+        assert_eq!(path, temp.path().join("custom.yaml"));
+    }
+
+    #[test]
+    fn resolve_iac_manifest_path_falls_back_when_configured_path_missing() {
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::write(temp.path().join("tachyon.preview.yml"), "kind: CloudApps").unwrap();
+        std::fs::write(temp.path().join("tachyon.yml"), "kind: CloudApps").unwrap();
+
+        // The environment-specific candidate wins over the generic one,
+        // mirroring the CodeBuild candidate order.
+        let path = resolve_iac_manifest_path(temp.path(), Some("missing.yaml"), Some("preview"))
+            .expect("manifest");
+        assert_eq!(path, temp.path().join("tachyon.preview.yml"));
+    }
+
+    #[test]
+    fn resolve_iac_manifest_path_uses_generic_candidates() {
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::write(temp.path().join("tachyon.yaml"), "kind: CloudApps").unwrap();
+
+        let path =
+            resolve_iac_manifest_path(temp.path(), None, Some("production")).expect("manifest");
+        assert_eq!(path, temp.path().join("tachyon.yaml"));
+    }
+
+    #[test]
+    fn resolve_iac_manifest_path_returns_none_without_manifest() {
+        let temp = tempfile::tempdir().unwrap();
+        assert!(resolve_iac_manifest_path(temp.path(), None, Some("preview")).is_none());
+    }
+
+    #[tokio::test]
+    async fn run_iac_step_skips_without_manifest() {
+        let temp = tempfile::tempdir().unwrap();
+        let iac = BuildWorkloadIac {
+            operation: "plan".to_string(),
+            config_path: None,
+            environment: Some("preview".to_string()),
+            app_name: "demo".to_string(),
+        };
+        let mut outcome = None;
+
+        let result = run_iac_step(&iac, temp.path(), &BTreeMap::new(), &mut outcome)
+            .await
+            .expect("skip should succeed");
+        assert!(result.stdout.is_empty());
+        // A skipped step must not report an outcome: the control plane
+        // treats a present plan output as "the step ran".
+        assert!(outcome.is_none());
+    }
+
+    #[tokio::test]
+    async fn run_iac_step_reports_warn_outcome_without_auth_token() {
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::write(temp.path().join("tachyon.yml"), "kind: CloudApps").unwrap();
+        let iac = BuildWorkloadIac {
+            operation: "apply".to_string(),
+            config_path: None,
+            environment: Some("production".to_string()),
+            app_name: "demo".to_string(),
+        };
+        let mut outcome = None;
+
+        // No TACHYON_AUTH_TOKEN in the workload env or the process env:
+        // fail-open with a WARN outcome, never a build failure.
+        let result = run_iac_step(&iac, temp.path(), &BTreeMap::new(), &mut outcome)
+            .await
+            .expect("warn skip should succeed");
+        let outcome = outcome.expect("warn outcome");
+        assert!(outcome.success);
+        assert!(
+            outcome.plan_output.contains("WARN"),
+            "got: {}",
+            outcome.plan_output
+        );
+        assert!(outcome.plan_output.contains("apply"));
+        assert!(result.stdout.contains("WARN"));
+    }
+
+    #[tokio::test]
+    async fn run_iac_step_rejects_unknown_operation() {
+        let temp = tempfile::tempdir().unwrap();
+        let iac = BuildWorkloadIac {
+            operation: "destroy".to_string(),
+            config_path: None,
+            environment: None,
+            app_name: "demo".to_string(),
+        };
+        let mut outcome = None;
+
+        let error = run_iac_step(&iac, temp.path(), &BTreeMap::new(), &mut outcome)
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("unsupported"), "got: {error}");
+        assert!(outcome.is_none());
     }
 
     #[test]
@@ -3264,6 +3646,7 @@ mod tests {
             deployment_target: Some("cloud_run".to_string()),
             framework: Some("docker".to_string()),
             d1: None,
+            iac: None,
         };
 
         assert_eq!(
@@ -3304,6 +3687,7 @@ mod tests {
             deployment_target: Some("cloud_run".to_string()),
             framework: Some("docker".to_string()),
             d1: None,
+            iac: None,
         };
 
         assert_eq!(
@@ -3524,6 +3908,7 @@ mod tests {
             deployment_target: Some("cloud_run".to_string()),
             framework: Some("docker".to_string()),
             d1: None,
+            iac: None,
         };
 
         assert_eq!(
@@ -3565,6 +3950,7 @@ mod tests {
             deployment_target: Some("cloud_run".to_string()),
             framework: Some("docker".to_string()),
             d1: None,
+            iac: None,
         };
 
         assert_eq!(docker_context_path(&workload, &checkout, &app), app);
@@ -3603,6 +3989,7 @@ mod tests {
             deployment_target: Some("cloud_run".to_string()),
             framework: Some("docker".to_string()),
             d1: None,
+            iac: None,
         };
         let context = docker_context_path(&workload, &checkout, &app);
 
@@ -3645,6 +4032,7 @@ mod tests {
             deployment_target: Some("cloud_run".to_string()),
             framework: Some("docker".to_string()),
             d1: None,
+            iac: None,
         };
 
         assert_eq!(docker_context_path(&workload, &checkout, &app), checkout);
@@ -3684,6 +4072,7 @@ mod tests {
             deployment_target: Some("cloud_run".to_string()),
             framework: Some("docker".to_string()),
             d1: None,
+            iac: None,
         };
 
         assert_eq!(docker_context_path(&workload, &checkout, &app), context);
