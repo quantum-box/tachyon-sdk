@@ -128,6 +128,45 @@ fn start_apply_server() -> (String, mpsc::Receiver<String>, thread::JoinHandle<(
     (url, rx, handle)
 }
 
+fn start_resource_apply_server() -> (String, mpsc::Receiver<String>, thread::JoinHandle<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    let (tx, rx) = mpsc::channel();
+    let handle = thread::spawn(move || {
+        for _ in 0..5 {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut buf = [0_u8; 16384];
+            let n = stream.read(&mut buf).unwrap();
+            let req = String::from_utf8_lossy(&buf[..n]).to_string();
+            tx.send(req.clone()).unwrap();
+
+            let body = if req.starts_with("GET /v1/build-runner-backends ") {
+                build_runner_backend_availability_body()
+            } else if req.starts_with("GET /v1/compute/apps ") {
+                r#"{"apps":[]}"#
+            } else if req.starts_with("POST /v1/compute/apps ") {
+                r#"{"id":"app_courseboard","name":"courseboard-api","repository_url":"https://github.com/quantum-box/courseboard","repository_owner":"quantum-box","repository_name":"courseboard","default_branch":"main","framework":"rust_server","deployment_target":"cloud_run"}"#
+            } else if req.starts_with("POST /v1/graphql ") {
+                r#"{"data":{"saveManifest":{"kind":"CloudApp"},"applyManifest":{"success":true}}}"#
+            } else {
+                r#"{"error":"unexpected request"}"#
+            };
+            let status = if body.contains("unexpected request") {
+                "HTTP/1.1 500 Internal Server Error"
+            } else {
+                "HTTP/1.1 200 OK"
+            };
+            let response = format!(
+                "{status}\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            stream.write_all(response.as_bytes()).unwrap();
+        }
+    });
+    (url, rx, handle)
+}
+
 fn start_collecting_apply_server() -> (String, mpsc::Receiver<Vec<String>>, thread::JoinHandle<()>)
 {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
@@ -824,6 +863,96 @@ spec:
     assert!(stderr.contains("no change-control token provided"));
     assert!(stderr.contains("protected"));
     assert!(!stderr.contains("test-token"));
+}
+
+#[test]
+fn production_apply_sends_preview_only_resource_declaration_to_apply_manifest() {
+    let tmp = TempDir::new().unwrap();
+    let manifest = tmp.path().join("tachyon.yml");
+    fs::write(
+        &manifest,
+        r#"
+apiVersion: apps.tachy.one/v1alpha
+kind: CloudApps
+metadata:
+  name: courseboard
+spec:
+  apps:
+    - name: courseboard-api
+      repository:
+        url: https://github.com/quantum-box/courseboard
+        owner: quantum-box
+        name: courseboard
+      framework: rust_server
+      deploymentTarget: cloud_run
+      environments:
+        production: {}
+        preview:
+          provisionedDatabase:
+            provider: tidb
+            engine: mysql
+            envVar: DATABASE_URL
+"#,
+    )
+    .unwrap();
+    let (api_url, rx, handle) = start_resource_apply_server();
+
+    let mut cmd = isolated_command(tmp.path());
+    let output = cmd
+        .current_dir(tmp.path())
+        .env("TACHYON_API_URL", api_url)
+        .env("TACHYON_API_KEY", "test-token")
+        .env("TACHYON_TENANT_ID", "tn_01hjryxysgey07h5jz5wagqj0m")
+        .args([
+            "compute",
+            "apps",
+            "apply",
+            "-f",
+            manifest.to_str().unwrap(),
+            "--environment",
+            "production",
+        ])
+        .output()
+        .expect("run production compute apps apply");
+    assert!(
+        output.status.success(),
+        "apply failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let availability = rx.recv().unwrap();
+    let list = rx.recv().unwrap();
+    let create = rx.recv().unwrap();
+    let save = rx.recv().unwrap();
+    let apply = rx.recv().unwrap();
+    handle.join().unwrap();
+
+    assert!(availability.starts_with("GET /v1/build-runner-backends "));
+    assert!(list.starts_with("GET /v1/compute/apps "));
+    assert!(create.starts_with("POST /v1/compute/apps "));
+    assert!(save.starts_with("POST /v1/graphql "));
+    assert!(save.contains("SaveManifest"));
+    let save_body = save.split_once("\r\n\r\n").unwrap().1;
+    let save_request: serde_json::Value = serde_json::from_str(save_body).unwrap();
+    let saved_manifest: serde_json::Value = serde_json::from_str(
+        save_request["variables"]["input"]["manifest"]
+            .as_str()
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        saved_manifest["spec"]["environments"]["preview"]["provisionedDatabase"]["provider"],
+        "tidb"
+    );
+    assert_eq!(
+        saved_manifest["spec"]["environments"]["preview"]["provisionedDatabase"]["envVar"],
+        "DATABASE_URL"
+    );
+    assert!(saved_manifest["spec"].get("provisionedDatabase").is_none());
+    assert_eq!(saved_manifest["spec"]["applyTarget"], "production");
+    assert!(apply.starts_with("POST /v1/graphql "));
+    assert!(apply.contains("ApplyManifest"));
 }
 
 #[test]
