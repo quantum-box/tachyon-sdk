@@ -1387,6 +1387,8 @@ mod tests {
             status: "building".to_string(),
             duration_secs: None,
             error_message: None,
+            iac_plan_output: None,
+            iac_success: None,
             created_at: None,
             updated_at: None,
             job_run: Some(BuildJobRunResponse {
@@ -1402,6 +1404,43 @@ mod tests {
             }),
             stuck,
         }
+    }
+
+    /// A build that failed in the IaC step still carries an
+    /// error_message describing a successful application build, so
+    /// the IaC fields must be deserialized and reported.
+    #[test]
+    fn build_response_deserializes_iac_fields() {
+        let build: BuildResponse = serde_json::from_str(
+            r#"{
+                "id": "bld_test",
+                "app_id": "app_test",
+                "status": "failed",
+                "error_message": "Finished `release` profile",
+                "iac_plan_output": "GLIBC_2.39 not found",
+                "iac_success": false
+            }"#,
+        )
+        .expect("build response with IaC fields must deserialize");
+
+        assert_eq!(
+            build.iac_plan_output.as_deref(),
+            Some("GLIBC_2.39 not found")
+        );
+        assert_eq!(build.iac_success, Some(false));
+    }
+
+    /// The API omits the IaC fields for builds that never ran an
+    /// IaC step, so they must stay optional.
+    #[test]
+    fn build_response_deserializes_without_iac_fields() {
+        let build: BuildResponse = serde_json::from_str(
+            r#"{"id": "bld_test", "app_id": "app_test", "status": "succeeded"}"#,
+        )
+        .expect("build response without IaC fields must deserialize");
+
+        assert!(build.iac_plan_output.is_none());
+        assert!(build.iac_success.is_none());
     }
 
     #[test]
