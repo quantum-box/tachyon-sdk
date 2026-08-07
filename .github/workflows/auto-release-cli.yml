@@ -86,6 +86,17 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
+      # The step above installs the target for `stable`, but
+      # cli/rust-toolchain.toml pins a specific channel, so that is
+      # the toolchain cargo actually uses. Install the target there
+      # too. Running inside cli/ makes rustup pick the pinned
+      # toolchain. Host targets already ship their std, which is why
+      # only the cross-libc musl targets failed with
+      # `can't find crate for core`.
+      - name: Install target for the pinned toolchain
+        working-directory: cli
+        run: rustup target add ${{ matrix.target }}
+
       # aws-lc-sys and ring compile C sources, so the musl targets
       # need a musl-aware C toolchain in addition to the Rust std.
       - name: Install musl build tools
