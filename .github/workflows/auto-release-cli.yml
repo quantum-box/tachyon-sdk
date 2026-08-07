@@ -5,6 +5,13 @@ on:
     branches: [main]
     paths:
       - 'cli/**'
+      # Also re-run when the release pipeline itself changes. A
+      # failed release leaves the version bumped but the tag
+      # missing, and without this a fix to this workflow would not
+      # re-attempt it. The check job skips when the tag already
+      # exists, so this stays idempotent.
+      - '.github/workflows/auto-release-cli.yml'
+  workflow_dispatch:
 
 permissions:
   contents: write
