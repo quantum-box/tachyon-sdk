@@ -522,9 +522,9 @@ async fn run_build(
 /// (fail-open, see PLT-1764), and an execution failure fails the
 /// build while still reporting the captured output through
 /// `outcome`. The bundled tachyon CLI is re-invoked as
-/// `tachyon manifest {plan|apply}`, which natively handles
-/// `CloudApps` app selection (`--app`) and environment overlays
-/// (`--environment`), so no manifest normalization happens here.
+/// `tachyon iac {plan|apply}`, which natively expands `CloudApps`
+/// manifests and selects the app entry (`--app`), so no manifest
+/// normalization happens here.
 async fn run_iac_step(
     iac: &BuildWorkloadIac,
     checkout_dir: &Path,
@@ -569,10 +569,19 @@ async fn run_iac_step(
 
     let exe = std::env::current_exe().context("failed to resolve the tachyon CLI executable")?;
     let mut command = Command::new(exe);
+    // `tachyon iac plan|apply` is the GraphQL save/apply-manifest
+    // route: the same server-side path the CodeBuild `tachyond`
+    // binary uses, and the only one covered by the build-scoped API
+    // key (`iac:SaveManifest` / `iac:ApplyManifest`, ADR-0044).
+    // `tachyon manifest apply` is NOT usable here - it drives the
+    // compute REST API and requires `compute:*` actions the build
+    // key deliberately does not carry (verified 403 in production,
+    // PLT-3094). The `environment` value only picks the manifest
+    // file, matching the CodeBuild step.
     command
-        .arg("manifest")
+        .arg("iac")
         .arg(operation)
-        .arg("-f")
+        .arg("--file")
         .arg(&manifest_path)
         .arg("--app")
         .arg(&iac.app_name)
@@ -581,14 +590,11 @@ async fn run_iac_step(
         // `TACHYON_API_KEY` takes precedence over profile auth, so the
         // subprocess never touches profile credentials.
         .env("TACHYON_API_KEY", &token);
-    if let Some(environment) = iac.environment.as_deref() {
-        command.arg("--environment").arg(environment);
-    }
     if let Some(tenant_id) = iac_env_value(env, TACHYON_TENANT_ID_ENV) {
         command.env(TACHYON_TENANT_ID_ENV, tenant_id);
     }
 
-    let label = format!("tachyon manifest {operation}");
+    let label = format!("tachyon iac {operation}");
     let (status, result) = run_command_capture(&label, command).await?;
     let environment_label = iac.environment.as_deref().unwrap_or("default");
     let mut plan_output = format!(
