@@ -116,13 +116,23 @@ jobs:
         working-directory: cli
         run: cargo build --release --target ${{ matrix.target }}
 
-      - name: Verify musl artifact is statically linked
+      # Assert what actually matters — the artifact must carry no
+      # libc version requirement — rather than matching one exact
+      # phrase from `file`. x86_64 musl links as "static-pie linked"
+      # while aarch64 musl reports "statically linked", so an
+      # equality check on either wording rejects a good binary.
+      - name: Verify musl artifact has no dynamic libc dependency
         if: contains(matrix.target, '-musl')
         run: |
           BIN=cli/target/${{ matrix.target }}/release/tachyon
           file "$BIN"
-          if ! file "$BIN" | grep -q 'statically linked'; then
-            echo "ERROR: $BIN is not statically linked" >&2
+          if file "$BIN" | grep -q 'dynamically linked'; then
+            echo "ERROR: $BIN is dynamically linked" >&2
+            exit 1
+          fi
+          if strings -a "$BIN" | grep -q 'GLIBC_'; then
+            echo "ERROR: $BIN references glibc versioned symbols" >&2
+            strings -a "$BIN" | grep -o 'GLIBC_[0-9.]*' | sort -u >&2
             exit 1
           fi
 
