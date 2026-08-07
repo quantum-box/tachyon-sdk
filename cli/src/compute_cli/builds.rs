@@ -158,6 +158,15 @@ pub(super) struct BuildResponse {
     pub(super) duration_secs: Option<i32>,
     #[serde(default)]
     pub(super) error_message: Option<String>,
+    /// Output of the Tachyon IaC (plan/apply) step.
+    ///
+    /// `error_message` only carries the tail of the application
+    /// build log, so an IaC failure never shows up there. This
+    /// field is the only place the IaC failure is reported.
+    #[serde(default)]
+    pub(super) iac_plan_output: Option<String>,
+    #[serde(default)]
+    pub(super) iac_success: Option<bool>,
     #[serde(default)]
     pub(super) created_at: Option<String>,
     #[serde(default)]
@@ -337,6 +346,7 @@ pub(super) async fn run_builds_get(api: &ApiClient, build_id: &str, json: bool) 
     if let Some(err) = &build.error_message {
         println!("Error:    {err}");
     }
+    print_build_iac_diagnostics(&build);
     print_build_job_run_diagnostics(&build);
     println!(
         "Created:  {}",
@@ -637,6 +647,33 @@ fn build_log_lines_signature(lines: &[BuildLogLineResponse]) -> Vec<(i64, String
         .iter()
         .map(|line| (line.timestamp, line.message.clone()))
         .collect()
+}
+
+/// Print the Tachyon IaC step result.
+///
+/// A build whose application artifact compiled fine can still fail in
+/// the IaC step. That failure is reported only here: `error_message`
+/// carries the tail of the application build log, which for such a
+/// build ends on a successful compile and hides the real cause.
+fn print_build_iac_diagnostics(build: &BuildResponse) {
+    let Some(output) = build
+        .iac_plan_output
+        .as_deref()
+        .map(str::trim)
+        .filter(|output| !output.is_empty())
+    else {
+        return;
+    };
+
+    let result = match build.iac_success {
+        Some(true) => "succeeded",
+        Some(false) => "failed",
+        None => "unknown",
+    };
+    println!("IaC:      {result}");
+    for line in output.lines() {
+        println!("          {line}");
+    }
 }
 
 fn print_build_job_run_diagnostics(build: &BuildResponse) {
@@ -1350,6 +1387,8 @@ mod tests {
             status: "building".to_string(),
             duration_secs: None,
             error_message: None,
+            iac_plan_output: None,
+            iac_success: None,
             created_at: None,
             updated_at: None,
             job_run: Some(BuildJobRunResponse {
@@ -1365,6 +1404,43 @@ mod tests {
             }),
             stuck,
         }
+    }
+
+    /// A build that failed in the IaC step still carries an
+    /// error_message describing a successful application build, so
+    /// the IaC fields must be deserialized and reported.
+    #[test]
+    fn build_response_deserializes_iac_fields() {
+        let build: BuildResponse = serde_json::from_str(
+            r#"{
+                "id": "bld_test",
+                "app_id": "app_test",
+                "status": "failed",
+                "error_message": "Finished `release` profile",
+                "iac_plan_output": "GLIBC_2.39 not found",
+                "iac_success": false
+            }"#,
+        )
+        .expect("build response with IaC fields must deserialize");
+
+        assert_eq!(
+            build.iac_plan_output.as_deref(),
+            Some("GLIBC_2.39 not found")
+        );
+        assert_eq!(build.iac_success, Some(false));
+    }
+
+    /// The API omits the IaC fields for builds that never ran an
+    /// IaC step, so they must stay optional.
+    #[test]
+    fn build_response_deserializes_without_iac_fields() {
+        let build: BuildResponse = serde_json::from_str(
+            r#"{"id": "bld_test", "app_id": "app_test", "status": "succeeded"}"#,
+        )
+        .expect("build response without IaC fields must deserialize");
+
+        assert!(build.iac_plan_output.is_none());
+        assert!(build.iac_success.is_none());
     }
 
     #[test]

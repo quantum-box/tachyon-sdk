@@ -56,6 +56,19 @@ jobs:
           - os: ubuntu-24.04-arm
             target: aarch64-unknown-linux-gnu
             artifact: tachyon-linux-arm64
+          # Statically linked musl builds. The gnu artifacts above
+          # are built on Ubuntu 24.04 and therefore require
+          # GLIBC_2.39, which makes them unusable on older images
+          # such as Amazon Linux 2023 (glibc 2.34) used by the
+          # CodeBuild Cloud App runners. Keep both: the gnu
+          # artifacts stay the default for developer installs,
+          # while build runners consume the musl ones.
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-musl
+            artifact: tachyon-linux-musl-x86_64
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-musl
+            artifact: tachyon-linux-musl-arm64
           # macos-13 Intel queues indefinitely; use GitHub's
           # current standard Intel label instead.
           - os: macos-15-intel
@@ -73,9 +86,27 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
+      # aws-lc-sys and ring compile C sources, so the musl targets
+      # need a musl-aware C toolchain in addition to the Rust std.
+      - name: Install musl build tools
+        if: contains(matrix.target, '-musl')
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y musl-tools
+
       - name: Build
         working-directory: cli
         run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Verify musl artifact is statically linked
+        if: contains(matrix.target, '-musl')
+        run: |
+          BIN=cli/target/${{ matrix.target }}/release/tachyon
+          file "$BIN"
+          if ! file "$BIN" | grep -q 'statically linked'; then
+            echo "ERROR: $BIN is not statically linked" >&2
+            exit 1
+          fi
 
       - name: Package
         shell: bash

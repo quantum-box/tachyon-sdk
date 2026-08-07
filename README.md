@@ -46,6 +46,21 @@ Supported platforms:
 | macOS | arm64 (Apple Silicon) | `tachyon-darwin-arm64.tar.gz` |
 | macOS | x86_64 (Intel) | `tachyon-darwin-x86_64.tar.gz` |
 
+The Linux artifacts above are dynamically linked against glibc and are
+built on Ubuntu 24.04, so they require GLIBC_2.39 or newer. For older
+base images — notably Amazon Linux 2023 (glibc 2.34), used by the
+CodeBuild Cloud App build runners — use the statically linked musl
+artifacts instead:
+
+| OS | Architecture | Artifact |
+|----|--------------|----------|
+| Linux (static) | x86_64 | `tachyon-linux-musl-x86_64.tar.gz` |
+| Linux (static) | arm64 | `tachyon-linux-musl-arm64.tar.gz` |
+
+Automated consumers that run the CLI inside a build image should prefer
+the musl artifacts: they carry no libc version requirement, so they do
+not break when the release runner's glibc is upgraded.
+
 If you see `Failed to fetch latest release tag` (GitHub API 403 / rate limit), pass a token:
 
 ```sh
