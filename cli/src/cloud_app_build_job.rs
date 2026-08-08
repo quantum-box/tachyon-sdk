@@ -82,16 +82,51 @@ struct BuildWorkloadIac {
     app_name: String,
 }
 
+/// Terminal outcome of the Tachyon IaC step.
+///
+/// The wire encoding must stay identical to the control plane's
+/// `IacExecutionState` (`packages/compute/domain/src/build.rs` in
+/// tachyon-apps). `expected` is deliberately absent: it is the
+/// control plane's pre-callback state and the webhook rejects it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum IacExecutionState {
+    Succeeded,
+    Failed,
+    SkippedNoManifest,
+    NotReported,
+}
+
+impl IacExecutionState {
+    /// Legacy `iac_success` companion for control planes that predate
+    /// the explicit state.
+    ///
+    /// The control plane rejects a payload whose state and
+    /// `iac_success` disagree, and every skip state is inconsistent
+    /// with either boolean, so skips must send `null`.
+    fn legacy_success(self) -> Option<bool> {
+        match self {
+            Self::Succeeded => Some(true),
+            Self::Failed | Self::NotReported => Some(false),
+            Self::SkippedNoManifest => None,
+        }
+    }
+}
+
 /// Result of the Tachyon IaC step reported in the completion
 /// callback.
 ///
-/// `None` (step skipped: no `iac` spec or no manifest in the
-/// checkout) and `Some` mean different things to the control
-/// plane — a `Some` outcome creates the "Tachyon IaC" Check Run.
+/// `None` means the build carried no `iac` spec at all, so the
+/// control plane keeps whatever state it persisted at trigger time.
+/// Once the step runs it always reports a terminal state, including
+/// the skip and not-reported cases: silence is what the control
+/// plane converts into `not_reported`, and a step that did reach a
+/// conclusion must not be indistinguishable from a builder that
+/// ignored the contract.
 #[derive(Debug)]
 struct IacStepOutcome {
     plan_output: String,
-    success: bool,
+    state: IacExecutionState,
 }
 
 /// D1 migration plan for one build.
@@ -229,6 +264,10 @@ struct CloudBuildWebhookPayload {
     error_message: Option<String>,
     iac_plan_output: Option<String>,
     iac_success: Option<bool>,
+    /// Explicit terminal IaC state. Additive: control planes that
+    /// predate it ignore the field and keep using `iac_success`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    iac_execution_state: Option<IacExecutionState>,
     d1_migrations: Option<Vec<serde_json::Value>>,
     cache_hit: Option<bool>,
     cache_key: Option<String>,
@@ -516,29 +555,49 @@ async fn run_build(
 
 /// Run the Tachyon IaC step (manifest plan/apply).
 ///
-/// Mirrors the CodeBuild `generate_iac_step` semantics: a missing
-/// manifest skips the step without reporting an outcome, a missing
-/// auth token reports a WARN outcome without failing the build
-/// (fail-open, see PLT-1764), and an execution failure fails the
-/// build while still reporting the captured output through
-/// `outcome`. The bundled tachyon CLI is re-invoked as
-/// `tachyon iac {plan|apply}`, which natively expands `CloudApps`
-/// manifests and selects the app entry (`--app`), so no manifest
-/// normalization happens here.
+/// Every exit path reports a terminal [`IacExecutionState`] through
+/// `outcome`: a missing manifest is `skipped_no_manifest`, a step
+/// that could not run at all is `not_reported`, and the CLI result
+/// maps to `succeeded` / `failed`. Anything that blocks the required
+/// step also fails the build — the control plane treats an
+/// unreported IaC outcome as a failure, so reporting success here
+/// would only hide the divergence. The bundled tachyon CLI is
+/// re-invoked as `tachyon iac {plan|apply}`, which natively expands
+/// `CloudApps` manifests and selects the app entry (`--app`), so no
+/// manifest normalization happens here.
 async fn run_iac_step(
     iac: &BuildWorkloadIac,
     checkout_dir: &Path,
     env: &BTreeMap<String, String>,
     outcome: &mut Option<IacStepOutcome>,
 ) -> Result<CommandResult> {
-    let operation = validate_iac_operation(&iac.operation)?;
+    let operation = match validate_iac_operation(&iac.operation) {
+        Ok(operation) => operation,
+        Err(error) => {
+            *outcome = Some(IacStepOutcome {
+                plan_output: error.to_string(),
+                state: IacExecutionState::NotReported,
+            });
+            return Err(error);
+        }
+    };
 
     let Some(manifest_path) = resolve_iac_manifest_path(
         checkout_dir,
         iac.config_path.as_deref(),
         iac.environment.as_deref(),
     ) else {
-        tracing::info!("no Tachyon manifest found; skipping IaC step");
+        let message =
+            "No Tachyon manifest found in the checkout; skipping the IaC step.".to_string();
+        tracing::info!("{message}");
+        // Report the skip instead of staying silent. The control
+        // plane expects an IaC outcome whenever it emitted the spec,
+        // and it turns silence into `not_reported`, which fails the
+        // build.
+        *outcome = Some(IacStepOutcome {
+            plan_output: message,
+            state: IacExecutionState::SkippedNoManifest,
+        });
         return Ok(CommandResult {
             stdout: String::new(),
             stderr: String::new(),
@@ -546,26 +605,33 @@ async fn run_iac_step(
     };
 
     let Some(token) = iac_env_value(env, TACHYON_AUTH_TOKEN_ENV) else {
+        // Fail closed. Continuing with a success outcome would record
+        // a green build whose manifest was never applied, which is
+        // exactly the silent skip that left txcloud.app routes
+        // unregistered in SOL-431.
         let message = format!(
-            "WARN: TACHYON_AUTH_TOKEN unavailable; skipping Tachyon IaC {operation}. \
-             Build artifact upload and callback will continue."
+            "{TACHYON_AUTH_TOKEN_ENV} unavailable; the required Tachyon IaC {operation} \
+             could not run."
         );
-        tracing::warn!("{message}");
+        tracing::error!("{message}");
         *outcome = Some(IacStepOutcome {
             plan_output: message.clone(),
-            success: true,
+            state: IacExecutionState::NotReported,
         });
-        return Ok(CommandResult {
-            stdout: message,
-            stderr: String::new(),
-        });
+        return Err(anyhow!("{message}"));
     };
 
     // The control plane only emits `iac` when the Tachyon API URL is
     // configured and it injects the same URL into the workload env, so
     // a missing value here is a plumbing bug, not a skippable state.
-    let api_url = iac_env_value(env, TACHYON_API_URL_ENV)
-        .ok_or_else(|| anyhow!("{TACHYON_API_URL_ENV} is required for the Tachyon IaC step"))?;
+    let Some(api_url) = iac_env_value(env, TACHYON_API_URL_ENV) else {
+        let message = format!("{TACHYON_API_URL_ENV} is required for the Tachyon IaC step");
+        *outcome = Some(IacStepOutcome {
+            plan_output: message.clone(),
+            state: IacExecutionState::NotReported,
+        });
+        return Err(anyhow!("{message}"));
+    };
 
     let exe = std::env::current_exe().context("failed to resolve the tachyon CLI executable")?;
     let mut command = Command::new(exe);
@@ -607,7 +673,11 @@ async fn run_iac_step(
     }
     *outcome = Some(IacStepOutcome {
         plan_output: truncate_output(&plan_output),
-        success: status.success(),
+        state: if status.success() {
+            IacExecutionState::Succeeded
+        } else {
+            IacExecutionState::Failed
+        },
     });
     if !status.success() {
         return Err(anyhow!("{label} failed with exit code {:?}", status.code()));
@@ -2208,11 +2278,13 @@ async fn send_callback(
         duration_secs: Some(duration_secs),
         codebuild_instance_type: Some("hetzner-k3s-tachyon-cli".to_string()),
         error_message,
-        // `null` (step skipped) and `Some` mean different things to
-        // the control plane: a present plan output creates the
-        // "Tachyon IaC" Check Run.
+        // `null` (no `iac` spec in the workload) and `Some` mean
+        // different things to the control plane, which now keys the
+        // "Tachyon IaC" Check Run off the explicit state rather than
+        // the presence of a plan output.
         iac_plan_output: iac.map(|outcome| outcome.plan_output.clone()),
-        iac_success: iac.map(|outcome| outcome.success),
+        iac_success: iac.and_then(|outcome| outcome.state.legacy_success()),
+        iac_execution_state: iac.map(|outcome| outcome.state),
         // `null` (no D1 plan in the spec) and `[]` mean different
         // things to the control plane, so never send an empty array.
         d1_migrations: d1_migrations_payload(d1_migrations),
@@ -2586,13 +2658,16 @@ mod tests {
             .await
             .expect("skip should succeed");
         assert!(result.stdout.is_empty());
-        // A skipped step must not report an outcome: the control plane
-        // treats a present plan output as "the step ran".
-        assert!(outcome.is_none());
+        // The skip is a terminal outcome, not silence: staying quiet
+        // makes the control plane record `not_reported` and fail the
+        // build.
+        let outcome = outcome.expect("skip outcome");
+        assert_eq!(outcome.state, IacExecutionState::SkippedNoManifest);
+        assert_eq!(outcome.state.legacy_success(), None);
     }
 
     #[tokio::test]
-    async fn run_iac_step_reports_warn_outcome_without_auth_token() {
+    async fn run_iac_step_fails_closed_without_auth_token() {
         let temp = tempfile::tempdir().unwrap();
         std::fs::write(temp.path().join("tachyon.yml"), "kind: CloudApps").unwrap();
         let iac = BuildWorkloadIac {
@@ -2603,20 +2678,16 @@ mod tests {
         };
         let mut outcome = None;
 
-        // No TACHYON_AUTH_TOKEN in the workload env or the process env:
-        // fail-open with a WARN outcome, never a build failure.
-        let result = run_iac_step(&iac, temp.path(), &BTreeMap::new(), &mut outcome)
+        // No TACHYON_AUTH_TOKEN in the workload env or the process env.
+        // The required step cannot run, so it must not report success.
+        let error = run_iac_step(&iac, temp.path(), &BTreeMap::new(), &mut outcome)
             .await
-            .expect("warn skip should succeed");
-        let outcome = outcome.expect("warn outcome");
-        assert!(outcome.success);
-        assert!(
-            outcome.plan_output.contains("WARN"),
-            "got: {}",
-            outcome.plan_output
-        );
+            .expect_err("a required IaC step that cannot run must fail the build");
+        assert!(error.to_string().contains(TACHYON_AUTH_TOKEN_ENV));
+        let outcome = outcome.expect("not-reported outcome");
+        assert_eq!(outcome.state, IacExecutionState::NotReported);
+        assert_eq!(outcome.state.legacy_success(), Some(false));
         assert!(outcome.plan_output.contains("apply"));
-        assert!(result.stdout.contains("WARN"));
     }
 
     #[tokio::test]
@@ -2634,7 +2705,31 @@ mod tests {
             .await
             .unwrap_err();
         assert!(error.to_string().contains("unsupported"), "got: {error}");
-        assert!(outcome.is_none());
+        let outcome = outcome.expect("not-reported outcome");
+        assert_eq!(outcome.state, IacExecutionState::NotReported);
+    }
+
+    #[test]
+    fn iac_execution_state_serializes_in_the_control_plane_encoding() {
+        let encode = |state: IacExecutionState| serde_json::to_string(&state).unwrap();
+        assert_eq!(encode(IacExecutionState::Succeeded), "\"succeeded\"");
+        assert_eq!(encode(IacExecutionState::Failed), "\"failed\"");
+        assert_eq!(
+            encode(IacExecutionState::SkippedNoManifest),
+            "\"skipped_no_manifest\""
+        );
+        assert_eq!(encode(IacExecutionState::NotReported), "\"not_reported\"");
+    }
+
+    #[test]
+    fn skipped_state_sends_no_legacy_success_flag() {
+        // The control plane rejects a payload whose explicit state and
+        // `iac_success` disagree, and it considers every skip state
+        // inconsistent with both booleans.
+        assert_eq!(IacExecutionState::SkippedNoManifest.legacy_success(), None);
+        assert_eq!(IacExecutionState::Succeeded.legacy_success(), Some(true));
+        assert_eq!(IacExecutionState::Failed.legacy_success(), Some(false));
+        assert_eq!(IacExecutionState::NotReported.legacy_success(), Some(false));
     }
 
     #[test]
