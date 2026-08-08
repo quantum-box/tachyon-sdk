@@ -154,6 +154,15 @@ pub enum IssueCommand {
         /// Include completed/canceled issues
         #[arg(long)]
         include_completed: bool,
+        /// Max issues per request (1-100, default 100)
+        #[arg(long)]
+        limit: Option<u32>,
+        /// Opaque cursor from a previous response's next_cursor
+        #[arg(long)]
+        cursor: Option<String>,
+        /// Follow pagination until every matching issue is fetched
+        #[arg(long)]
+        all: bool,
         /// Print the API response as JSON
         #[arg(long)]
         json: bool,
@@ -442,6 +451,12 @@ struct CreatePmIssueResponse {
 struct ListPmIssuesResponse {
     items: Vec<PmIssue>,
     count: usize,
+    // Defaulted so a new CLI keeps working against an API that predates
+    // pagination; it just never reports a truncation.
+    #[serde(default)]
+    has_next_page: bool,
+    #[serde(default)]
+    next_cursor: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -657,28 +672,120 @@ fn linear_reconcile_timeout(json: bool, waited: Duration) -> Result<()> {
     Err(anyhow!(message))
 }
 
+/// Safety valve for `--all` so a runaway cursor cannot hammer the API.
+const MAX_ISSUE_PAGES: usize = 100;
+
+/// How far a single `issue list` invocation should page.
+#[derive(Debug, Default)]
+struct ListPagination {
+    limit: Option<u32>,
+    cursor: Option<String>,
+    all: bool,
+}
+
 async fn run_list(
     api: &ApiClient,
     tenant_id: &str,
-    query: Vec<(&str, String)>,
+    base_query: Vec<(&str, String)>,
+    pagination: ListPagination,
     json: bool,
 ) -> Result<()> {
-    let query_refs = query
-        .iter()
-        .map(|(key, value)| (*key, value.as_str()))
-        .collect::<Vec<_>>();
-    let response: ListPmIssuesResponse =
-        api.get_query(&issues_path(tenant_id), &query_refs).await?;
+    let mut items: Vec<PmIssue> = Vec::new();
+    let mut cursor = pagination.cursor.clone();
+    let mut has_next_page;
+    let mut pages = 0usize;
+
+    loop {
+        let mut query = base_query.clone();
+        if let Some(limit) = pagination.limit {
+            query.push(("limit", limit.to_string()));
+        }
+        if let Some(cursor) = &cursor {
+            query.push(("cursor", cursor.clone()));
+        }
+        let query_refs = query
+            .iter()
+            .map(|(key, value)| (*key, value.as_str()))
+            .collect::<Vec<_>>();
+
+        let response: ListPmIssuesResponse =
+            api.get_query(&issues_path(tenant_id), &query_refs).await?;
+
+        items.extend(response.items);
+        has_next_page = response.has_next_page;
+        cursor = response.next_cursor;
+        pages += 1;
+
+        if !pagination.all || !has_next_page {
+            break;
+        }
+        // A provider that claims another page but hands back no cursor
+        // would loop forever on the same page. Stop and let the warning
+        // report the truncation.
+        if cursor.is_none() || pages >= MAX_ISSUE_PAGES {
+            break;
+        }
+    }
+
+    let response = ListPmIssuesResponse {
+        count: items.len(),
+        items,
+        has_next_page,
+        next_cursor: cursor,
+    };
+
     if json {
-        return print_json(&response);
+        print_json(&response)?;
+    } else {
+        for issue in &response.items {
+            println!(
+                "{}\t{}\t{}\t{}",
+                issue.key, issue.status, issue.priority, issue.title
+            );
+        }
     }
-    for issue in &response.items {
-        println!(
-            "{}\t{}\t{}\t{}",
-            issue.key, issue.status, issue.priority, issue.title
-        );
+
+    // Always to stderr, including under --json, so a script reading only
+    // stdout cannot silently mistake a truncated list for a complete one.
+    if let Some(warning) = truncation_warning(
+        response.has_next_page,
+        response.count,
+        pagination.all,
+        response.next_cursor.as_deref(),
+    ) {
+        eprintln!("{warning}");
     }
+
     Ok(())
+}
+
+/// Build the warning shown when a listing stopped before the last issue.
+///
+/// Returns `None` when every matching issue was returned.
+fn truncation_warning(
+    has_next_page: bool,
+    count: usize,
+    all: bool,
+    next_cursor: Option<&str>,
+) -> Option<String> {
+    if !has_next_page {
+        return None;
+    }
+
+    let mut message =
+        format!("warning: results were truncated at {count} issues; more issues exist.");
+    if all {
+        message.push_str(&format!(
+            "\n         stopped after the {MAX_ISSUE_PAGES}-page limit."
+        ));
+    } else {
+        message.push_str("\n         re-run with --all to fetch every page.");
+    }
+    if let Some(cursor) = next_cursor {
+        message.push_str(&format!("\n         resume with --cursor {cursor}"));
+    }
+
+    Some(message)
 }
 
 async fn run_update(
@@ -994,6 +1101,9 @@ pub async fn run_issue(
             project,
             project_id,
             include_completed,
+            limit,
+            cursor,
+            all,
             json,
         } => {
             let mut query = vec![("include_completed", include_completed.to_string())];
@@ -1012,7 +1122,18 @@ pub async fn run_issue(
             if let Some(project_id) = project_id {
                 query.push(("project_id", project_id.clone()));
             }
-            run_list(&api, tenant_id, query, *json).await
+            run_list(
+                &api,
+                tenant_id,
+                query,
+                ListPagination {
+                    limit: *limit,
+                    cursor: cursor.clone(),
+                    all: *all,
+                },
+                *json,
+            )
+            .await
         }
         IssueCommand::Get {
             issue_id,
@@ -1197,6 +1318,42 @@ pub async fn run_top_level_issue(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn no_warning_when_every_issue_was_returned() {
+        assert_eq!(truncation_warning(false, 100, false, None), None);
+    }
+
+    #[test]
+    fn warning_points_at_all_and_the_resume_cursor() {
+        let warning = truncation_warning(true, 100, false, Some("cursor-abc"))
+            .expect("a truncated listing must warn");
+
+        assert!(warning.contains("truncated at 100 issues"));
+        assert!(warning.contains("--all"));
+        assert!(warning.contains("--cursor cursor-abc"));
+    }
+
+    #[test]
+    fn warning_names_the_page_limit_when_all_was_requested() {
+        let warning = truncation_warning(true, 5_000, true, Some("c"))
+            .expect("a truncated listing must warn");
+
+        assert!(warning.contains(&MAX_ISSUE_PAGES.to_string()));
+        assert!(
+            !warning.contains("re-run with --all"),
+            "--all was already used: {warning}"
+        );
+    }
+
+    #[test]
+    fn list_response_defaults_pagination_fields_for_older_apis() {
+        let response: ListPmIssuesResponse =
+            serde_json::from_str(r#"{"items":[],"count":0}"#).unwrap();
+
+        assert!(!response.has_next_page);
+        assert_eq!(response.next_cursor, None);
+    }
 
     #[test]
     fn builds_pm_issue_paths() {
