@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+## tachyon-cli-v0.6.32
+
+### Added
+
+- Add `--limit`, `--cursor`, and `--all` to `tachyon pm issue list` and `tachyon linear issue list`. The command previously had no way to page and stopped at 100 issues, so older issues could not be listed at all. (PLT-3235)
+
+### Fixed
+
+- Warn on stderr when `issue list` returns a truncated result. The 100-issue cutoff used to be invisible, so a full page looked identical to the end of the list and callers could wrongly conclude they had seen every issue. The warning names the next cursor and is emitted under `--json` too, keeping stdout parseable. (PLT-3235)
+
 ## tachyon-cli-v0.6.31
 
 ### Added
