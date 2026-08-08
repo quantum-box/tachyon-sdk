@@ -339,6 +339,21 @@ fn auth_login_writes_profile_and_legacy_credentials_json() {
 }
 
 #[test]
+fn auth_login_without_client_secret_fails_explicitly() {
+    let tmp = TempDir::new().unwrap();
+
+    let out = isolated_command(tmp.path())
+        .env_remove("TACHYON_COGNITO_CLIENT_SECRET")
+        .args(["auth", "login"])
+        .output()
+        .expect("run tachyon auth login without Cognito client secret");
+
+    assert!(!out.status.success());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("TACHYON_COGNITO_CLIENT_SECRET"));
+}
+
+#[test]
 fn global_profile_flag_does_not_mutate_active_pointer() {
     let tmp = TempDir::new().unwrap();
     write_profile(tmp.path(), "work", &fixture_creds("op_work"));
