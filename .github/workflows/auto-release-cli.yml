@@ -48,6 +48,16 @@ jobs:
             echo "Tag tachyon-cli-v${{ steps.version.outputs.version }} does not exist, will create release"
           fi
 
+      - name: Summarize skipped release
+        if: steps.check_tag.outputs.needed == 'false'
+        run: |
+          echo "::notice title=Release skipped::Tag tachyon-cli-v${{ steps.version.outputs.version }} already exists; no GitHub release was created."
+          {
+            echo "## Release skipped"
+            echo
+            echo "Tag \`tachyon-cli-v${{ steps.version.outputs.version }}\` already exists, so no GitHub release was created."
+          } >> "$GITHUB_STEP_SUMMARY"
+
   build:
     name: Build ${{ matrix.artifact }}
     needs: check

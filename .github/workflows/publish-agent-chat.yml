@@ -46,6 +46,18 @@ jobs:
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
+      - name: Summarize skipped publish
+        if: steps.check.outputs.already_published == 'true'
+        run: |
+          PKG_NAME=$(node -p "require('./package.json').name")
+          PKG_VERSION=$(node -p "require('./package.json').version")
+          echo "::notice title=Publish skipped::${PKG_NAME}@${PKG_VERSION} is already published on npm."
+          {
+            echo "## Publish skipped"
+            echo
+            echo "\`${PKG_NAME}@${PKG_VERSION}\` is already published on npm, so nothing was published."
+          } >> "$GITHUB_STEP_SUMMARY"
+
       - name: Publish
         if: steps.check.outputs.already_published == 'false'
         run: npm publish --access public
