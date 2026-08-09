@@ -41,8 +41,6 @@ use crate::client::AuthDiagnostics;
 const DEFAULT_COGNITO_DOMAIN: &str = "https://auth-pool.n1.tachy.one";
 /// Default Cognito client ID (tachyon-app-client).
 const DEFAULT_COGNITO_CLIENT_ID: &str = "5002hok6cj8mjmt3gepdpdq98i";
-/// Default Cognito client secret (tachyon-app-client).
-const DEFAULT_COGNITO_CLIENT_SECRET: &str = "3epft46iie79jshd4gkpeuj62q1pcmthequ1skbbd9dj1rdojrf";
 
 #[derive(Parser)]
 #[command(name = "tachyon", version, about = "Tachyon Platform CLI")]
@@ -85,9 +83,9 @@ struct Cli {
     #[arg(long, env = "TACHYON_COGNITO_CLIENT_ID", default_value = DEFAULT_COGNITO_CLIENT_ID)]
     cognito_client_id: String,
 
-    /// Cognito OAuth client secret
-    #[arg(long, env = "TACHYON_COGNITO_CLIENT_SECRET", default_value = DEFAULT_COGNITO_CLIENT_SECRET)]
-    cognito_client_secret: String,
+    /// Cognito OAuth client secret. Required for login and token refresh.
+    #[arg(long, env = "TACHYON_COGNITO_CLIENT_SECRET", hide_env_values = true)]
+    cognito_client_secret: Option<String>,
 
     #[command(subcommand)]
     command: Commands,
@@ -668,7 +666,7 @@ fn build_oauth_config(cli: &Cli) -> auth::OAuthConfig {
     auth::OAuthConfig {
         cognito_domain: cli.cognito_domain.clone(),
         client_id: cli.cognito_client_id.clone(),
-        client_secret: cli.cognito_client_secret.clone(),
+        client_secret: cli.cognito_client_secret.clone().unwrap_or_default(),
         redirect_uri,
         scopes: auth::DEFAULT_OAUTH_SCOPES
             .iter()

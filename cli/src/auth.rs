@@ -13,6 +13,9 @@ const POLL_INTERVAL: Duration = Duration::from_secs(2);
 /// Maximum time to wait for the user to complete login.
 const POLL_TIMEOUT: Duration = Duration::from_secs(300);
 
+const MISSING_CLIENT_SECRET_MESSAGE: &str = "Cognito OAuth client secret is required; set \
+TACHYON_COGNITO_CLIENT_SECRET (or pass --cognito-client-secret)";
+
 /// Default profile name when none is configured.
 pub const DEFAULT_PROFILE: &str = "default";
 pub const DEFAULT_OAUTH_SCOPES: &[&str] = &[
@@ -74,6 +77,14 @@ impl OAuthConfig {
     pub fn token_url(&self) -> String {
         format!("{}/oauth2/token", self.cognito_domain)
     }
+}
+
+fn require_client_secret(oauth_config: &OAuthConfig) -> Result<&str> {
+    let client_secret = oauth_config.client_secret.trim();
+    if client_secret.is_empty() {
+        return Err(anyhow!(MISSING_CLIENT_SECRET_MESSAGE));
+    }
+    Ok(client_secret)
 }
 
 impl Default for OAuthConfig {
@@ -465,13 +476,14 @@ async fn exchange_code(
     code: &str,
     code_verifier: &str,
 ) -> Result<TokenResponse> {
+    let client_secret = require_client_secret(oauth_config)?;
     let client = Client::new();
     let resp = client
         .post(oauth_config.token_url())
         .form(&[
             ("grant_type", "authorization_code"),
             ("client_id", &oauth_config.client_id),
-            ("client_secret", &oauth_config.client_secret),
+            ("client_secret", client_secret),
             ("code", code),
             ("redirect_uri", &oauth_config.redirect_uri),
             ("code_verifier", code_verifier),
@@ -531,6 +543,7 @@ pub async fn refresh_access_token(
     profile: &str,
     creds: &StoredCredentials,
 ) -> Result<StoredCredentials> {
+    let client_secret = require_client_secret(oauth_config)?;
     let refresh_token = creds
         .refresh_token
         .as_deref()
@@ -542,7 +555,7 @@ pub async fn refresh_access_token(
         .form(&[
             ("grant_type", "refresh_token"),
             ("client_id", &oauth_config.client_id),
-            ("client_secret", &oauth_config.client_secret),
+            ("client_secret", client_secret),
             ("refresh_token", refresh_token),
         ])
         .send()
@@ -588,6 +601,7 @@ pub async fn refresh_access_token(
 /// a fresh user logging in for the first time has a working setup.
 pub async fn login(oauth_config: &OAuthConfig, api_url: &str, profile: &str) -> Result<()> {
     validate_profile_name(profile)?;
+    require_client_secret(oauth_config)?;
 
     let state = random_string(16);
     let (code_verifier, code_challenge) = pkce_pair();
@@ -812,6 +826,13 @@ mod tests {
         assert!(url.contains("code_challenge=CHALLENGE"));
         assert!(url.contains("code_challenge_method=S256"));
         assert!(url.contains("scope=openid+profile"));
+    }
+
+    #[test]
+    fn missing_client_secret_error_names_required_configuration() {
+        let error = require_client_secret(&OAuthConfig::default()).unwrap_err();
+
+        assert!(error.to_string().contains("TACHYON_COGNITO_CLIENT_SECRET"));
     }
 
     #[test]
