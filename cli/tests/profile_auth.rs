@@ -339,18 +339,28 @@ fn auth_login_writes_profile_and_legacy_credentials_json() {
 }
 
 #[test]
-fn auth_login_without_client_secret_fails_explicitly() {
+fn auth_login_without_client_secret_uses_default_public_client() {
     let tmp = TempDir::new().unwrap();
+    let (server_url, rx, handle) = start_login_server();
 
     let out = isolated_command(tmp.path())
+        .env("TACHYON_API_URL", &server_url)
+        .env("TACHYON_COGNITO_DOMAIN", &server_url)
+        .env_remove("TACHYON_COGNITO_CLIENT_ID")
         .env_remove("TACHYON_COGNITO_CLIENT_SECRET")
         .args(["auth", "login"])
         .output()
         .expect("run tachyon auth login without Cognito client secret");
 
-    assert!(!out.status.success());
-    let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(stderr.contains("TACHYON_COGNITO_CLIENT_SECRET"));
+    assert_ok(&out, "auth login with default public client");
+    handle.join().unwrap();
+    let requests: Vec<String> = rx.try_iter().collect();
+    let token_request = requests
+        .iter()
+        .find(|request| request.starts_with("POST /oauth2/token"))
+        .expect("token exchange request missing");
+    assert!(token_request.contains("client_id=4101nun74fvfusnlsanc00urke"));
+    assert!(!token_request.contains("client_secret="));
 }
 
 #[test]

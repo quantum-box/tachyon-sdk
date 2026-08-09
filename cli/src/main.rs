@@ -39,8 +39,8 @@ use crate::client::AuthDiagnostics;
 
 /// Default Cognito domain for the Tachyon production environment.
 const DEFAULT_COGNITO_DOMAIN: &str = "https://auth-pool.n1.tachy.one";
-/// Default Cognito client ID (tachyon-app-client).
-const DEFAULT_COGNITO_CLIENT_ID: &str = "5002hok6cj8mjmt3gepdpdq98i";
+/// Default Cognito client ID (tachyon-cli-client, a public client).
+const DEFAULT_COGNITO_CLIENT_ID: &str = "4101nun74fvfusnlsanc00urke";
 
 #[derive(Parser)]
 #[command(name = "tachyon", version, about = "Tachyon Platform CLI")]
@@ -83,7 +83,7 @@ struct Cli {
     #[arg(long, env = "TACHYON_COGNITO_CLIENT_ID", default_value = DEFAULT_COGNITO_CLIENT_ID)]
     cognito_client_id: String,
 
-    /// Cognito OAuth client secret. Required for login and token refresh.
+    /// Cognito OAuth client secret for an explicitly configured confidential client
     #[arg(long, env = "TACHYON_COGNITO_CLIENT_SECRET", hide_env_values = true)]
     cognito_client_secret: Option<String>,
 
@@ -94,6 +94,21 @@ struct Cli {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn explicit_cognito_client_id_overrides_public_client_default() {
+        let cli = Cli::try_parse_from([
+            "tachyon",
+            "--cognito-client-id",
+            "explicit-client-id",
+            "auth",
+            "list",
+        ])
+        .unwrap();
+
+        assert_eq!(cli.cognito_client_id, "explicit-client-id");
+        assert_ne!(cli.cognito_client_id, DEFAULT_COGNITO_CLIENT_ID);
+    }
 
     #[test]
     fn parses_tenant_id_after_nested_ops_command() {
