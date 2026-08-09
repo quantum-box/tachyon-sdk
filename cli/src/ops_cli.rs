@@ -320,6 +320,11 @@ struct OpsDeploymentResponse {
     created_at: Option<String>,
 }
 
+#[derive(Debug, Deserialize)]
+struct OpsDeploymentListResponse {
+    deployments: Vec<OpsDeploymentResponse>,
+}
+
 #[derive(Debug, Deserialize, Serialize)]
 struct ScenarioReportResponse {
     #[serde(default)]
@@ -577,7 +582,8 @@ struct SentryAssignRequest {
 // ---- Handlers ----
 
 async fn run_deployments_list(api: &ApiClient, json: bool) -> Result<()> {
-    let deps: Vec<OpsDeploymentResponse> = api.get("/v1/ops/deployments").await?;
+    let response: OpsDeploymentListResponse = api.get("/v1/ops/deployments").await?;
+    let deps = response.deployments;
     if json {
         return print_json(&deps);
     }
