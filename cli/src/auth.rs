@@ -13,9 +13,6 @@ const POLL_INTERVAL: Duration = Duration::from_secs(2);
 /// Maximum time to wait for the user to complete login.
 const POLL_TIMEOUT: Duration = Duration::from_secs(300);
 
-const MISSING_CLIENT_SECRET_MESSAGE: &str = "Cognito OAuth client secret is required; set \
-TACHYON_COGNITO_CLIENT_SECRET (or pass --cognito-client-secret)";
-
 /// Default profile name when none is configured.
 pub const DEFAULT_PROFILE: &str = "default";
 pub const DEFAULT_OAUTH_SCOPES: &[&str] = &[
@@ -79,12 +76,12 @@ impl OAuthConfig {
     }
 }
 
-fn require_client_secret(oauth_config: &OAuthConfig) -> Result<&str> {
-    let client_secret = oauth_config.client_secret.trim();
-    if client_secret.is_empty() {
-        return Err(anyhow!(MISSING_CLIENT_SECRET_MESSAGE));
+fn oauth_client_form_fields(oauth_config: &OAuthConfig) -> Vec<(&'static str, &str)> {
+    let mut fields = vec![("client_id", oauth_config.client_id.as_str())];
+    if !oauth_config.client_secret.trim().is_empty() {
+        fields.push(("client_secret", oauth_config.client_secret.trim()));
     }
-    Ok(client_secret)
+    fields
 }
 
 impl Default for OAuthConfig {
@@ -476,18 +473,17 @@ async fn exchange_code(
     code: &str,
     code_verifier: &str,
 ) -> Result<TokenResponse> {
-    let client_secret = require_client_secret(oauth_config)?;
+    let mut form = oauth_client_form_fields(oauth_config);
+    form.extend([
+        ("grant_type", "authorization_code"),
+        ("code", code),
+        ("redirect_uri", oauth_config.redirect_uri.as_str()),
+        ("code_verifier", code_verifier),
+    ]);
     let client = Client::new();
     let resp = client
         .post(oauth_config.token_url())
-        .form(&[
-            ("grant_type", "authorization_code"),
-            ("client_id", &oauth_config.client_id),
-            ("client_secret", client_secret),
-            ("code", code),
-            ("redirect_uri", &oauth_config.redirect_uri),
-            ("code_verifier", code_verifier),
-        ])
+        .form(&form)
         .send()
         .await
         .context("failed to request token")?;
@@ -543,21 +539,20 @@ pub async fn refresh_access_token(
     profile: &str,
     creds: &StoredCredentials,
 ) -> Result<StoredCredentials> {
-    let client_secret = require_client_secret(oauth_config)?;
     let refresh_token = creds
         .refresh_token
         .as_deref()
         .ok_or_else(|| anyhow!("no refresh token available"))?;
 
+    let mut form = oauth_client_form_fields(oauth_config);
+    form.extend([
+        ("grant_type", "refresh_token"),
+        ("refresh_token", refresh_token),
+    ]);
     let client = Client::new();
     let resp = client
         .post(oauth_config.token_url())
-        .form(&[
-            ("grant_type", "refresh_token"),
-            ("client_id", &oauth_config.client_id),
-            ("client_secret", client_secret),
-            ("refresh_token", refresh_token),
-        ])
+        .form(&form)
         .send()
         .await
         .context("failed to request token refresh")?;
@@ -601,7 +596,6 @@ pub async fn refresh_access_token(
 /// a fresh user logging in for the first time has a working setup.
 pub async fn login(oauth_config: &OAuthConfig, api_url: &str, profile: &str) -> Result<()> {
     validate_profile_name(profile)?;
-    require_client_secret(oauth_config)?;
 
     let state = random_string(16);
     let (code_verifier, code_challenge) = pkce_pair();
@@ -829,10 +823,26 @@ mod tests {
     }
 
     #[test]
-    fn missing_client_secret_error_names_required_configuration() {
-        let error = require_client_secret(&OAuthConfig::default()).unwrap_err();
+    fn oauth_client_form_fields_support_public_and_confidential_clients() {
+        let mut config = OAuthConfig {
+            client_id: "public-client".to_string(),
+            ..OAuthConfig::default()
+        };
 
-        assert!(error.to_string().contains("TACHYON_COGNITO_CLIENT_SECRET"));
+        assert_eq!(
+            oauth_client_form_fields(&config),
+            vec![("client_id", "public-client")]
+        );
+
+        config.client_secret = "explicit-secret".to_string();
+
+        assert_eq!(
+            oauth_client_form_fields(&config),
+            vec![
+                ("client_id", "public-client"),
+                ("client_secret", "explicit-secret"),
+            ]
+        );
     }
 
     #[test]
