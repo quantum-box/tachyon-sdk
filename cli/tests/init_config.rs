@@ -663,7 +663,7 @@ fn compute_builds_list_uses_project_config_from_parent_dir() {
     handle.join().unwrap();
     assert!(first.starts_with("GET /v1/compute/apps "));
     assert!(first.contains("x-operator-id: op_123456789012"));
-    assert!(second.starts_with("GET /v1/compute/apps/app_configured/builds "));
+    assert!(second.starts_with("GET /v1/compute/apps/app_configured/builds?limit=10 "));
     assert!(second.contains("x-operator-id: op_123456789012"));
 }
 
@@ -692,7 +692,7 @@ fn explicit_app_id_overrides_project_config_name() {
     let _first = rx.recv().unwrap();
     let second = rx.recv().unwrap();
     handle.join().unwrap();
-    assert!(second.starts_with("GET /v1/compute/apps/app_explicit/builds "));
+    assert!(second.starts_with("GET /v1/compute/apps/app_explicit/builds?limit=10 "));
 }
 
 #[test]

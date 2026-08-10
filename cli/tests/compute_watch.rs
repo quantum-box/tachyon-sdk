@@ -4,6 +4,7 @@ use std::path::Path;
 use std::process::Command;
 use std::sync::mpsc;
 use std::thread;
+use std::time::Duration;
 
 use tempfile::TempDir;
 
@@ -52,6 +53,32 @@ fn start_server_with_responses(
                 body
             );
             stream.write_all(response.as_bytes()).unwrap();
+        }
+    });
+    (url, rx, handle)
+}
+
+fn start_server_with_body_delays(
+    responses: Vec<(Duration, &'static str)>,
+) -> (String, mpsc::Receiver<String>, thread::JoinHandle<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    let (tx, rx) = mpsc::channel();
+    let handle = thread::spawn(move || {
+        for (body_delay, body) in responses {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut buf = [0_u8; 8192];
+            let n = stream.read(&mut buf).unwrap();
+            tx.send(String::from_utf8_lossy(&buf[..n]).to_string())
+                .unwrap();
+            let headers = format!(
+                "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n",
+                body.len()
+            );
+            stream.write_all(headers.as_bytes()).unwrap();
+            stream.flush().unwrap();
+            thread::sleep(body_delay);
+            let _ = stream.write_all(body.as_bytes());
         }
     });
     (url, rx, handle)
@@ -449,7 +476,7 @@ fn compute_builds_list_prefers_public_preview_url() {
     let first_req = rx.recv().unwrap();
     let second_req = rx.recv().unwrap();
     handle.join().unwrap();
-    assert!(first_req.starts_with(&format!("GET /v1/compute/apps/{app_id}/builds ")));
+    assert!(first_req.starts_with(&format!("GET /v1/compute/apps/{app_id}/builds?limit=10 ")));
     assert!(second_req.starts_with(&format!(
         "GET /v1/compute/apps/{app_id}/deployments?environment=preview "
     )));
@@ -491,7 +518,7 @@ fn compute_builds_list_converts_pages_dev_preview_url_using_build_pr_number() {
     let first_req = rx.recv().unwrap();
     let second_req = rx.recv().unwrap();
     handle.join().unwrap();
-    assert!(first_req.starts_with(&format!("GET /v1/compute/apps/{app_id}/builds ")));
+    assert!(first_req.starts_with(&format!("GET /v1/compute/apps/{app_id}/builds?limit=10 ")));
     assert!(second_req.starts_with(&format!(
         "GET /v1/compute/apps/{app_id}/deployments?environment=preview "
     )));
@@ -505,6 +532,170 @@ fn compute_builds_list_converts_pages_dev_preview_url_using_build_pr_number() {
     assert!(
         !stdout.contains("https://8383df2f.moverent.pages.dev"),
         "stdout:\n{stdout}"
+    );
+}
+
+#[test]
+fn compute_builds_list_sends_limit_and_reports_stage_timings() {
+    let tmp = TempDir::new().unwrap();
+    let app_id = "app_01kp4vm07tr3d4375597d15gkp";
+    let (api_url, rx, handle) = start_server(vec![
+        r#"{"builds":[{"id":"bld_01kp4vm07tr3d4375597d15gka","app_id":"app_01kp4vm07tr3d4375597d15gkp","status":"succeeded"}]}"#,
+    ]);
+
+    let output = isolated_command(tmp.path())
+        .env("TACHYON_API_URL", api_url)
+        .args([
+            "compute",
+            "builds",
+            "list",
+            app_id,
+            "--limit",
+            "3",
+            "--timeout-secs",
+            "1",
+            "--verbose",
+            "--json",
+        ])
+        .output()
+        .expect("run tachyon compute builds list");
+
+    assert!(
+        output.status.success(),
+        "builds list failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+
+    let request = rx.recv().unwrap();
+    handle.join().unwrap();
+    assert!(request.starts_with(&format!("GET /v1/compute/apps/{app_id}/builds?limit=3 ")));
+
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    for stage in [
+        "[timing] resolve app:",
+        "[timing] builds response headers:",
+        "[timing] builds response body:",
+        "[timing] builds response bytes:",
+        "[timing] builds JSON decode:",
+        "[timing] render output:",
+        "[timing] command total:",
+    ] {
+        assert!(stderr.contains(stage), "missing {stage}\nstderr:\n{stderr}");
+    }
+    assert!(
+        !stderr.contains("Still waiting"),
+        "fast request should not emit progress\nstderr:\n{stderr}"
+    );
+}
+
+#[test]
+fn compute_builds_list_times_out_slow_body_with_progress() {
+    let tmp = TempDir::new().unwrap();
+    let app_id = "app_01kp4vm07tr3d4375597d15gkp";
+    let (api_url, rx, handle) = start_server_with_body_delays(vec![(
+        Duration::from_secs(4),
+        r#"{"builds":[{"id":"bld_01kp4vm07tr3d4375597d15gka","app_id":"app_01kp4vm07tr3d4375597d15gkp","status":"succeeded"}]}"#,
+    )]);
+
+    let output = isolated_command(tmp.path())
+        .env("TACHYON_API_URL", api_url)
+        .args([
+            "compute",
+            "builds",
+            "list",
+            app_id,
+            "--limit",
+            "3",
+            "--timeout-secs",
+            "3",
+            "--verbose",
+            "--json",
+        ])
+        .output()
+        .expect("run tachyon compute builds list");
+
+    assert!(
+        !output.status.success(),
+        "slow builds response unexpectedly succeeded\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+
+    let request = rx.recv().unwrap();
+    handle.join().unwrap();
+    assert!(request.starts_with(&format!("GET /v1/compute/apps/{app_id}/builds?limit=3 ")));
+
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(
+        stderr.contains("[timing] builds response headers:"),
+        "stderr:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("Still waiting for builds response body... 2s elapsed"),
+        "stderr:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("timed out waiting for builds response body after 3s"),
+        "stderr:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("[timing] command total:"),
+        "stderr:\n{stderr}"
+    );
+}
+
+#[test]
+fn compute_builds_list_warns_and_succeeds_when_preview_body_times_out() {
+    let tmp = TempDir::new().unwrap();
+    let app_id = "app_01kp4vm07tr3d4375597d15gkp";
+    let build_id = "bld_01kp4vm07tr3d4375597d15gka";
+    let (api_url, rx, handle) = start_server_with_body_delays(vec![
+        (
+            Duration::ZERO,
+            r#"{"builds":[{"id":"bld_01kp4vm07tr3d4375597d15gka","app_id":"app_01kp4vm07tr3d4375597d15gkp","status":"succeeded"}]}"#,
+        ),
+        (Duration::from_secs(2), r#"{"deployments":[]}"#),
+    ]);
+
+    let output = isolated_command(tmp.path())
+        .env("TACHYON_API_URL", api_url)
+        .args([
+            "compute",
+            "builds",
+            "list",
+            app_id,
+            "--limit",
+            "3",
+            "--preview-timeout-secs",
+            "1",
+        ])
+        .output()
+        .expect("run tachyon compute builds list");
+
+    assert!(
+        output.status.success(),
+        "preview timeout should preserve the build list\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+
+    let first_request = rx.recv().unwrap();
+    let second_request = rx.recv().unwrap();
+    handle.join().unwrap();
+    assert!(first_request.starts_with(&format!("GET /v1/compute/apps/{app_id}/builds?limit=3 ")));
+    assert!(second_request.starts_with(&format!(
+        "GET /v1/compute/apps/{app_id}/deployments?environment=preview "
+    )));
+
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains(build_id), "stdout:\n{stdout}");
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(
+        stderr.contains(
+            "Warning: preview URLs unavailable: timed out waiting for preview deployments response body after 1s"
+        ),
+        "stderr:\n{stderr}"
     );
 }
 
