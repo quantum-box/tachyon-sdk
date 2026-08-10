@@ -42,6 +42,23 @@ pub enum BuildsCommand {
         /// Output as JSON
         #[arg(long)]
         json: bool,
+        /// Maximum time to wait for the builds response
+        #[arg(
+            long,
+            default_value_t = BUILDS_LIST_DEFAULT_TIMEOUT_SECS,
+            value_parser = clap::value_parser!(u64).range(1..)
+        )]
+        timeout_secs: u64,
+        /// Maximum time to wait for optional preview URLs
+        #[arg(
+            long,
+            default_value_t = BUILDS_LIST_DEFAULT_PREVIEW_TIMEOUT_SECS,
+            value_parser = clap::value_parser!(u64).range(1..)
+        )]
+        preview_timeout_secs: u64,
+        /// Print per-stage request and rendering timings to stderr
+        #[arg(long)]
+        verbose: bool,
     },
     /// Get details of a specific build
     Get {
@@ -251,23 +268,167 @@ struct CreatePreviewBuildRequest {
     source_branch: String,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub(super) struct BuildsListOptions {
+    pub(super) timeout: Duration,
+    pub(super) preview_timeout: Duration,
+    pub(super) verbose: bool,
+    pub(super) command_started: Instant,
+}
+
+pub(super) fn print_builds_list_timing(verbose: bool, stage: &str, elapsed: Duration) {
+    if verbose {
+        eprintln!("[timing] {stage}: {:.3}s", elapsed.as_secs_f64());
+    }
+}
+
+pub(super) async fn wait_for_builds_list_stage<T, F>(
+    stage: &str,
+    request_started: Instant,
+    timeout: Duration,
+    deadline: tokio::time::Instant,
+    future: F,
+) -> Result<T>
+where
+    F: Future<Output = Result<T>>,
+{
+    tokio::pin!(future);
+    let progress = tokio::time::sleep(BUILDS_LIST_PROGRESS_DELAY);
+    tokio::pin!(progress);
+    let deadline_timer = tokio::time::sleep_until(deadline);
+    tokio::pin!(deadline_timer);
+
+    loop {
+        tokio::select! {
+            result = &mut future => return result,
+            _ = &mut deadline_timer => {
+                return Err(anyhow!(
+                    "timed out waiting for {stage} after {}s",
+                    timeout.as_secs()
+                ));
+            }
+            _ = &mut progress => {
+                eprintln!(
+                    "Still waiting for {stage}... {}s elapsed (timeout: {}s).",
+                    request_started.elapsed().as_secs(),
+                    timeout.as_secs()
+                );
+                progress
+                    .as_mut()
+                    .reset(tokio::time::Instant::now() + BUILDS_LIST_PROGRESS_INTERVAL);
+            }
+        }
+    }
+}
+
+async fn fetch_builds_list_json<T: serde::de::DeserializeOwned>(
+    api: &ApiClient,
+    path: &str,
+    label: &str,
+    timeout: Duration,
+    verbose: bool,
+) -> Result<T> {
+    let request_started = Instant::now();
+    let deadline = tokio::time::Instant::now() + timeout;
+
+    let headers_started = Instant::now();
+    let headers_stage = format!("{label} response headers");
+    let response = wait_for_builds_list_stage(
+        &headers_stage,
+        request_started,
+        timeout,
+        deadline,
+        api.get_response(path),
+    )
+    .await;
+    print_builds_list_timing(verbose, &headers_stage, headers_started.elapsed());
+    let response = response?;
+
+    let body_started = Instant::now();
+    let body_stage = format!("{label} response body");
+    let body_context = format!("read GET {path} response body");
+    let body = wait_for_builds_list_stage(
+        &body_stage,
+        request_started,
+        timeout,
+        deadline,
+        async move { response.bytes().await.with_context(|| body_context) },
+    )
+    .await;
+    let body_elapsed = body_started.elapsed();
+    print_builds_list_timing(verbose, &body_stage, body_elapsed);
+    let body = body?;
+    if verbose {
+        eprintln!("[timing] {label} response bytes: {}", body.len());
+    }
+
+    let decode_started = Instant::now();
+    let decoded = serde_json::from_slice(&body).with_context(|| format!("parse GET {path}"));
+    print_builds_list_timing(
+        verbose,
+        &format!("{label} JSON decode"),
+        decode_started.elapsed(),
+    );
+    let decoded = decoded?;
+    print_builds_list_timing(
+        verbose,
+        &format!("{label} total"),
+        request_started.elapsed(),
+    );
+    Ok(decoded)
+}
+
 pub(super) async fn run_builds_list(
     api: &ApiClient,
     app_id: &str,
     limit: usize,
     json: bool,
+    options: BuildsListOptions,
 ) -> Result<()> {
-    let resp: ListBuildsResponse = api
-        .get(&format!("/v1/compute/apps/{app_id}/builds"))
-        .await?;
+    let builds_path = format!("/v1/compute/apps/{app_id}/builds?limit={limit}");
+    let resp: ListBuildsResponse = match fetch_builds_list_json(
+        api,
+        &builds_path,
+        "builds",
+        options.timeout,
+        options.verbose,
+    )
+    .await
+    {
+        Ok(resp) => resp,
+        Err(error) => {
+            print_builds_list_timing(
+                options.verbose,
+                "command total",
+                options.command_started.elapsed(),
+            );
+            return Err(error);
+        }
+    };
     if json {
+        let render_started = Instant::now();
         let builds = &resp.builds[..resp.builds.len().min(limit)];
-        return print_json(&builds);
+        let result = print_json(&builds);
+        print_builds_list_timing(options.verbose, "render output", render_started.elapsed());
+        print_builds_list_timing(
+            options.verbose,
+            "command total",
+            options.command_started.elapsed(),
+        );
+        return result;
     }
     if resp.builds.is_empty() {
+        let render_started = Instant::now();
         println!("No builds found for app {app_id}");
+        print_builds_list_timing(options.verbose, "render output", render_started.elapsed());
+        print_builds_list_timing(
+            options.verbose,
+            "command total",
+            options.command_started.elapsed(),
+        );
         return Ok(());
     }
+    let render_started = Instant::now();
     let builds = &resp.builds[..resp.builds.len().min(limit)];
     println!(
         "{:<26}  {:<11}  {:<24}  {:<20}  {:<8}  {:<19}",
@@ -292,6 +453,11 @@ pub(super) async fn run_builds_list(
                 .unwrap_or_else(|| "-".to_string()),
         );
     }
+    print_builds_list_timing(
+        options.verbose,
+        "render build table",
+        render_started.elapsed(),
+    );
 
     // Show active preview URLs below the build list.
     let build_pr_numbers: HashMap<&str, i32> = builds
@@ -299,26 +465,50 @@ pub(super) async fn run_builds_list(
         .filter_map(|build| build.pr_number.map(|pr| (build.id.as_str(), pr)))
         .collect();
     let preview_url = format!("/v1/compute/apps/{app_id}/deployments?environment=preview");
-    if let Ok(dep_resp) = api.get::<ListDeploymentsResponse>(&preview_url).await {
-        let active: Vec<_> = dep_resp
-            .deployments
-            .iter()
-            .filter(|d| d.status == "active" || d.status == "deploying")
-            .collect();
-        if !active.is_empty() {
-            println!();
-            println!("Preview URLs:");
-            for dep in &active {
-                let branch = dep.source_branch.as_deref().unwrap_or("-");
-                let pr_number = dep.pr_number.or_else(|| {
-                    dep.build_id
-                        .as_deref()
-                        .and_then(|build_id| build_pr_numbers.get(build_id).copied())
-                });
-                println!("  [{branch}] {}", dep.display_url_with_pr(pr_number));
+    match fetch_builds_list_json::<ListDeploymentsResponse>(
+        api,
+        &preview_url,
+        "preview deployments",
+        options.preview_timeout,
+        options.verbose,
+    )
+    .await
+    {
+        Ok(dep_resp) => {
+            let preview_render_started = Instant::now();
+            let active: Vec<_> = dep_resp
+                .deployments
+                .iter()
+                .filter(|d| d.status == "active" || d.status == "deploying")
+                .collect();
+            if !active.is_empty() {
+                println!();
+                println!("Preview URLs:");
+                for dep in &active {
+                    let branch = dep.source_branch.as_deref().unwrap_or("-");
+                    let pr_number = dep.pr_number.or_else(|| {
+                        dep.build_id
+                            .as_deref()
+                            .and_then(|build_id| build_pr_numbers.get(build_id).copied())
+                    });
+                    println!("  [{branch}] {}", dep.display_url_with_pr(pr_number));
+                }
             }
+            print_builds_list_timing(
+                options.verbose,
+                "render preview URLs",
+                preview_render_started.elapsed(),
+            );
+        }
+        Err(error) => {
+            eprintln!("Warning: preview URLs unavailable: {error}");
         }
     }
+    print_builds_list_timing(
+        options.verbose,
+        "command total",
+        options.command_started.elapsed(),
+    );
     Ok(())
 }
 

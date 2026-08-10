@@ -90,6 +90,17 @@ impl ApiClient {
 
     /// GET a JSON endpoint and deserialize the response.
     pub async fn get<T: DeserializeOwned>(&self, path: &str) -> Result<T> {
+        let resp = self.get_response(path).await?;
+        resp.json()
+            .await
+            .with_context(|| format!("parse GET {path}"))
+    }
+
+    /// GET an endpoint and return the successful response before reading its
+    /// body. Callers that need to distinguish response-header, body-transfer,
+    /// and decode time can use this method without bypassing the shared 401
+    /// refresh and HTTP error handling.
+    pub async fn get_response(&self, path: &str) -> Result<reqwest::Response> {
         let url = format!("{}{}", self.base_url, path);
         let resp = self
             .client
@@ -108,15 +119,13 @@ impl ApiClient {
                         .send()
                         .await
                         .with_context(|| format!("GET {url}"))?;
-                    return self.json_or_error("GET", path, retry).await;
+                    return self.response_or_error("GET", path, retry).await;
                 }
             }
             let body = resp.text().await.unwrap_or_default();
             return Err(self.http_error("GET", path, status, &body));
         }
-        resp.json()
-            .await
-            .with_context(|| format!("parse GET {path}"))
+        Ok(resp)
     }
 
     /// GET with query parameters.
@@ -431,14 +440,24 @@ impl ApiClient {
         path: &str,
         resp: reqwest::Response,
     ) -> Result<T> {
+        let resp = self.response_or_error(method, path, resp).await?;
+        resp.json()
+            .await
+            .with_context(|| format!("parse {method} {path}"))
+    }
+
+    async fn response_or_error(
+        &self,
+        method: &str,
+        path: &str,
+        resp: reqwest::Response,
+    ) -> Result<reqwest::Response> {
         let status = resp.status();
         if !status.is_success() {
             let body = resp.text().await.unwrap_or_default();
             return Err(self.http_error(method, path, status, &body));
         }
-        resp.json()
-            .await
-            .with_context(|| format!("parse {method} {path}"))
+        Ok(resp)
     }
 
     async fn refresh_bearer_after_401(&self) -> Option<String> {

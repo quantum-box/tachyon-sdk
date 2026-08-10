@@ -1,10 +1,11 @@
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, Context, Result};
 use chrono::{DateTime, TimeZone, Utc};
 use clap::{Args, Subcommand, ValueEnum};
 use dialoguer::{theme::ColorfulTheme, Password};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::future::Future;
 use std::io::{self, IsTerminal, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -19,6 +20,14 @@ use crate::resolve;
 
 const BUILD_LOGS_FOLLOW_INTERVAL: Duration = Duration::from_secs(2);
 const BUILD_LOGS_MAX_NO_PROGRESS_NONE_TOKEN_POLLS: usize = 3;
+// Healthy builds-list requests were measured at about 3s. Keep a 10x margin
+// while bounding the observed 62-120s tail.
+const BUILDS_LIST_DEFAULT_TIMEOUT_SECS: u64 = 30;
+// Preview URLs are optional enrichment shown after the build table, so they
+// get a smaller independent budget and never fail the primary list result.
+const BUILDS_LIST_DEFAULT_PREVIEW_TIMEOUT_SECS: u64 = 5;
+const BUILDS_LIST_PROGRESS_DELAY: Duration = Duration::from_secs(2);
+const BUILDS_LIST_PROGRESS_INTERVAL: Duration = Duration::from_secs(5);
 
 #[derive(Debug, Clone, Args)]
 pub struct ComputeArgs {
@@ -323,10 +332,37 @@ pub async fn run(
                 app_id,
                 limit,
                 json,
+                timeout_secs,
+                preview_timeout_secs,
+                verbose,
             } => {
+                let command_started = Instant::now();
                 let app_id = app_id_or_default(app_id, project_config)?;
-                let id = resolve::resolve_app_id(&api, app_id).await?;
-                run_builds_list(&api, &id, *limit, *json).await
+                let timeout = Duration::from_secs(*timeout_secs);
+                let resolve_started = Instant::now();
+                let id = wait_for_builds_list_stage(
+                    "app resolution",
+                    resolve_started,
+                    timeout,
+                    tokio::time::Instant::now() + timeout,
+                    resolve::resolve_app_id(&api, app_id),
+                )
+                .await;
+                print_builds_list_timing(*verbose, "resolve app", resolve_started.elapsed());
+                let id = id?;
+                run_builds_list(
+                    &api,
+                    &id,
+                    *limit,
+                    *json,
+                    BuildsListOptions {
+                        timeout,
+                        preview_timeout: Duration::from_secs(*preview_timeout_secs),
+                        verbose: *verbose,
+                        command_started,
+                    },
+                )
+                .await
             }
             BuildsCommand::Get { build_id, json } => run_builds_get(&api, build_id, *json).await,
             BuildsCommand::Trigger { app_id, branch, pr } => {
@@ -531,9 +567,31 @@ pub async fn run(
         },
         // Legacy shortcuts
         ComputeCommand::Status { app_id, limit } => {
+            let command_started = Instant::now();
             let app_id = app_id_or_default(app_id, project_config)?;
-            let id = resolve::resolve_app_id(&api, app_id).await?;
-            run_builds_list(&api, &id, *limit, false).await
+            let timeout = Duration::from_secs(BUILDS_LIST_DEFAULT_TIMEOUT_SECS);
+            let resolve_started = Instant::now();
+            let id = wait_for_builds_list_stage(
+                "app resolution",
+                resolve_started,
+                timeout,
+                tokio::time::Instant::now() + timeout,
+                resolve::resolve_app_id(&api, app_id),
+            )
+            .await?;
+            run_builds_list(
+                &api,
+                &id,
+                *limit,
+                false,
+                BuildsListOptions {
+                    timeout,
+                    preview_timeout: Duration::from_secs(BUILDS_LIST_DEFAULT_PREVIEW_TIMEOUT_SECS),
+                    verbose: false,
+                    command_started,
+                },
+            )
+            .await
         }
         ComputeCommand::Logs {
             app_id,
