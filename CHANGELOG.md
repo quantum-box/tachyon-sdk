@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Fixed
+
+- Stream Cloud App build command output while retaining a bounded callback tail, allowing the control plane to distinguish active long builds from output stalls. (PLT-3402)
+
 ## tachyon-cli-v0.6.32
 
 ### Added
