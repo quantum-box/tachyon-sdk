@@ -15,6 +15,7 @@ use std::{
     process::Stdio,
     time::{Duration, Instant, SystemTime},
 };
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::process::Command;
 
 const OUTPUT_CAPTURE_LIMIT: usize = 128 * 1024;
@@ -2188,29 +2189,105 @@ async fn run_command_capture(
     label: &str,
     mut command: Command,
 ) -> Result<(std::process::ExitStatus, CommandResult)> {
-    let output = command
-        .output()
-        .await
+    command.stdout(Stdio::piped()).stderr(Stdio::piped());
+    let mut child = command
+        .spawn()
         .with_context(|| format!("failed to spawn {label} command"))?;
-    let stdout = truncate_output(&String::from_utf8_lossy(&output.stdout));
-    let stderr = truncate_output(&String::from_utf8_lossy(&output.stderr));
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| anyhow!("{label} command stdout was not piped"))?;
+    let stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| anyhow!("{label} command stderr was not piped"))?;
 
-    if !stdout.is_empty() {
-        print!("{stdout}");
-    }
-    if !stderr.is_empty() {
-        eprint!("{stderr}");
-    }
+    // Drain both pipes concurrently so verbose child processes cannot block
+    // each other. Forwarding each chunk immediately makes the runner log a
+    // trustworthy build-progress signal while retaining bounded callback data.
+    let stdout_task = tokio::spawn(forward_and_capture(stdout, tokio::io::stdout()));
+    let stderr_task = tokio::spawn(forward_and_capture(stderr, tokio::io::stderr()));
+    let status = child
+        .wait()
+        .await
+        .with_context(|| format!("failed to wait for {label} command"))?;
+    let stdout = stdout_task
+        .await
+        .with_context(|| format!("{label} stdout forwarding task failed"))?
+        .with_context(|| format!("failed to forward {label} stdout"))?;
+    let stderr = stderr_task
+        .await
+        .with_context(|| format!("{label} stderr forwarding task failed"))?
+        .with_context(|| format!("failed to forward {label} stderr"))?;
 
-    if !output.status.success() {
+    if !status.success() {
         tracing::error!(
             %label,
-            exit_code = ?output.status.code(),
+            exit_code = ?status.code(),
             "command failed"
         );
     }
 
-    Ok((output.status, CommandResult { stdout, stderr }))
+    Ok((status, CommandResult { stdout, stderr }))
+}
+
+async fn forward_and_capture<R, W>(mut reader: R, mut writer: W) -> Result<String>
+where
+    R: AsyncRead + Unpin,
+    W: AsyncWrite + Unpin,
+{
+    let mut capture = TailCapture::default();
+    let mut buffer = [0_u8; 8 * 1024];
+
+    loop {
+        let read = reader.read(&mut buffer).await?;
+        if read == 0 {
+            break;
+        }
+        writer.write_all(&buffer[..read]).await?;
+        writer.flush().await?;
+        capture.push(&buffer[..read]);
+    }
+
+    Ok(capture.into_string())
+}
+
+#[derive(Default)]
+struct TailCapture {
+    bytes: Vec<u8>,
+    total_bytes: usize,
+}
+
+impl TailCapture {
+    fn push(&mut self, chunk: &[u8]) {
+        self.total_bytes = self.total_bytes.saturating_add(chunk.len());
+        if chunk.len() >= OUTPUT_CAPTURE_LIMIT {
+            self.bytes.clear();
+            self.bytes
+                .extend_from_slice(&chunk[chunk.len() - OUTPUT_CAPTURE_LIMIT..]);
+            return;
+        }
+
+        let overflow = self
+            .bytes
+            .len()
+            .saturating_add(chunk.len())
+            .saturating_sub(OUTPUT_CAPTURE_LIMIT);
+        if overflow > 0 {
+            self.bytes.drain(..overflow);
+        }
+        self.bytes.extend_from_slice(chunk);
+    }
+
+    fn into_string(self) -> String {
+        let retained = String::from_utf8_lossy(&self.bytes);
+        let dropped = self.total_bytes.saturating_sub(self.bytes.len());
+        if dropped == 0 {
+            retained.into_owned()
+        } else {
+            format!("... truncated {dropped} bytes ...\n{retained}")
+        }
+    }
 }
 
 fn append_result(target: &mut CommandResult, next: CommandResult) {
@@ -3066,6 +3143,44 @@ mod tests {
     fn truncate_output_keeps_short_values_unchanged() {
         let value = "short output";
         assert_eq!(truncate_output(value), value);
+    }
+
+    #[tokio::test]
+    async fn forward_and_capture_streams_before_input_closes() {
+        use tokio::time::{timeout, Duration};
+
+        let (mut input_writer, input_reader) = tokio::io::duplex(64);
+        let (output_writer, mut output_reader) = tokio::io::duplex(64);
+        let forward = tokio::spawn(forward_and_capture(input_reader, output_writer));
+
+        input_writer.write_all(b"first\n").await.unwrap();
+        let mut first = [0_u8; 6];
+        timeout(Duration::from_secs(1), output_reader.read_exact(&mut first))
+            .await
+            .expect("output should arrive while the producer is still open")
+            .unwrap();
+        assert_eq!(&first, b"first\n");
+
+        input_writer.write_all(b"second\n").await.unwrap();
+        input_writer.shutdown().await.unwrap();
+        let mut rest = Vec::new();
+        output_reader.read_to_end(&mut rest).await.unwrap();
+        assert_eq!(rest, b"second\n");
+        assert_eq!(forward.await.unwrap().unwrap(), "first\nsecond\n");
+    }
+
+    #[tokio::test]
+    async fn forward_and_capture_bounds_callback_output_to_the_tail() {
+        let total = OUTPUT_CAPTURE_LIMIT as u64 + 17;
+        let reader = tokio::io::repeat(b'x').take(total);
+
+        let captured = forward_and_capture(reader, tokio::io::sink())
+            .await
+            .unwrap();
+
+        assert!(captured.starts_with("... truncated 17 bytes ...\n"));
+        assert!(captured.len() <= OUTPUT_CAPTURE_LIMIT + 64);
+        assert!(captured.ends_with('x'));
     }
 
     #[test]
