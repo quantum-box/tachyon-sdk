@@ -429,7 +429,28 @@ struct UpdatePmIssueRequest {
 
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
+struct PmIssueAssignee {
+    id: String,
+    name: String,
+    avatar_url: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
 struct PmIssue {
+    provider: String,
+    id: String,
+    key: String,
+    title: String,
+    url: String,
+    status: String,
+    priority: String,
+    assignee: Option<PmIssueAssignee>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+struct PmIssueMutation {
     provider: String,
     id: String,
     key: String,
@@ -442,7 +463,7 @@ struct PmIssue {
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 struct CreatePmIssueResponse {
-    issue: PmIssue,
+    issue: PmIssueMutation,
     created: bool,
 }
 
@@ -462,7 +483,7 @@ struct ListPmIssuesResponse {
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 struct UpdatePmIssueResponse {
-    issue: PmIssue,
+    issue: PmIssueMutation,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1353,6 +1374,66 @@ mod tests {
 
         assert!(!response.has_next_page);
         assert_eq!(response.next_cursor, None);
+    }
+
+    fn issue_json(key: &str, assignee: serde_json::Value) -> serde_json::Value {
+        serde_json::json!({
+            "provider": "linear",
+            "id": format!("id-{key}"),
+            "key": key,
+            "title": format!("Issue {key}"),
+            "url": format!("https://linear.app/issue/{key}"),
+            "status": "Todo",
+            "priority": "none",
+            "assignee": assignee,
+        })
+    }
+
+    #[test]
+    fn list_response_preserves_assigned_and_unassigned_issues() {
+        let response: ListPmIssuesResponse = serde_json::from_value(serde_json::json!({
+            "items": [
+                issue_json(
+                    "PLT-1",
+                    serde_json::json!({
+                        "id": "user-1",
+                        "name": "Alice",
+                        "avatar_url": "https://example.com/alice.png",
+                    }),
+                ),
+                issue_json("PLT-2", serde_json::Value::Null),
+            ],
+            "count": 2,
+            "has_next_page": false,
+            "next_cursor": null,
+        }))
+        .unwrap();
+
+        let value = serde_json::to_value(response).unwrap();
+        assert_eq!(value["items"][0]["assignee"]["id"], "user-1");
+        assert_eq!(value["items"][0]["assignee"]["name"], "Alice");
+        assert_eq!(value["items"][1]["assignee"], serde_json::Value::Null);
+    }
+
+    #[test]
+    fn get_response_preserves_assigned_and_unassigned_issues() {
+        let assigned: PmIssue = serde_json::from_value(issue_json(
+            "PLT-1",
+            serde_json::json!({
+                "id": "user-1",
+                "name": "Alice",
+                "avatar_url": null,
+            }),
+        ))
+        .unwrap();
+        let unassigned: PmIssue =
+            serde_json::from_value(issue_json("PLT-2", serde_json::Value::Null)).unwrap();
+
+        let assigned = serde_json::to_value(assigned).unwrap();
+        let unassigned = serde_json::to_value(unassigned).unwrap();
+        assert_eq!(assigned["assignee"]["id"], "user-1");
+        assert_eq!(assigned["assignee"]["name"], "Alice");
+        assert_eq!(unassigned["assignee"], serde_json::Value::Null);
     }
 
     #[test]
