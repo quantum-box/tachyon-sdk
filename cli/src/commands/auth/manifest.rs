@@ -208,8 +208,7 @@ fn actions_to_prune<'a>(
     manifest: &AuthManifest,
 ) -> Vec<&'a ActionResponse> {
     let contexts = manifest_contexts(manifest);
-    let desired: HashSet<String> =
-        manifest.actions.iter().map(|a| a.full_name()).collect();
+    let desired: HashSet<String> = manifest.actions.iter().map(|a| a.full_name()).collect();
     live.iter()
         .filter(|action| {
             // System actions (no owning platform) are never manifest-owned.
@@ -229,20 +228,16 @@ fn policies_to_prune<'a>(
     tenant_id: &str,
 ) -> Vec<&'a PolicyResponse> {
     let contexts = manifest_contexts(manifest);
-    let desired: HashSet<&str> =
-        manifest.policies.iter().map(|p| p.name.as_str()).collect();
+    let desired: HashSet<&str> = manifest.policies.iter().map(|p| p.name.as_str()).collect();
     live.iter()
         .filter(|policy| {
-            if policy.is_system
-                || policy.tenant_id.as_deref() != Some(tenant_id)
-            {
+            if policy.is_system || policy.tenant_id.as_deref() != Some(tenant_id) {
                 return false;
             }
             let Some((context, _)) = policy.name.split_once(':') else {
                 return false;
             };
-            contexts.contains(context)
-                && !desired.contains(policy.name.as_str())
+            contexts.contains(context) && !desired.contains(policy.name.as_str())
         })
         .collect()
 }
@@ -537,12 +532,12 @@ fn parse_k8s_documents(documents: Vec<serde_yaml::Value>) -> Result<AuthManifest
             "ActionSet" => {
                 let spec: ActionSetSpec = serde_yaml::from_value(doc.spec)?;
                 // `shared` on the set is a shorthand for every action in it.
-                manifest.actions.extend(spec.actions.into_iter().map(
-                    |mut action| {
+                manifest
+                    .actions
+                    .extend(spec.actions.into_iter().map(|mut action| {
                         action.shared = action.shared || spec.shared;
                         action
-                    },
-                ));
+                    }));
             }
             "Policy" => {
                 let spec: K8sPolicySpec = serde_yaml::from_value(doc.spec)?;
@@ -729,11 +724,8 @@ pub async fn build_plan(
             });
         }
 
-        let live_policies: PolicyListResponse =
-            api.get("/v1/auth/policies").await?;
-        for policy in
-            policies_to_prune(&live_policies.policies, manifest, tenant_id)
-        {
+        let live_policies: PolicyListResponse = api.get("/v1/auth/policies").await?;
+        for policy in policies_to_prune(&live_policies.policies, manifest, tenant_id) {
             policy_items.push(PolicyPlanItem {
                 name: policy.name.clone(),
                 scope: format!("namespace/{tenant_id}"),
@@ -947,10 +939,8 @@ async fn prune_absent_resources(
 ) -> Result<usize> {
     let mut pruned = 0usize;
 
-    let live_policies: PolicyListResponse =
-        api.get("/v1/auth/policies").await?;
-    for policy in policies_to_prune(&live_policies.policies, manifest, tenant_id)
-    {
+    let live_policies: PolicyListResponse = api.get("/v1/auth/policies").await?;
+    for policy in policies_to_prune(&live_policies.policies, manifest, tenant_id) {
         let path = format!("/v1/auth/policies/{}", policy.id);
         let outcome = match api.delete(&path).await {
             Ok(()) => {
@@ -966,8 +956,7 @@ async fn prune_absent_resources(
         });
     }
 
-    let live_actions: ActionListResponse =
-        api.get("/v1/auth/actions").await?;
+    let live_actions: ActionListResponse = api.get("/v1/auth/actions").await?;
     for action in actions_to_prune(&live_actions.actions, manifest) {
         let Some(id) = action.id.as_deref() else {
             continue;
@@ -1134,8 +1123,7 @@ pub async fn run(
 
             let api =
                 ApiClient::new_with_auth_diagnostics(config, tenant_id, auth_diagnostics.clone())?;
-            let report =
-                build_plan(&api, &merged, *prune, tenant_id).await?;
+            let report = build_plan(&api, &merged, *prune, tenant_id).await?;
 
             if *json {
                 print_json(&report)?;
@@ -1216,8 +1204,7 @@ pub async fn reconcile_in(
     validate_manifest(&merged)?;
 
     if dry_run {
-        let report =
-            build_plan(api, &merged, prune, default_tenant_id).await?;
+        let report = build_plan(api, &merged, prune, default_tenant_id).await?;
         if json {
             print_json(&report)?;
         } else {
