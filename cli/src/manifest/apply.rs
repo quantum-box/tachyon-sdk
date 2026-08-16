@@ -125,7 +125,7 @@ async fn apply_auth_source(
         Ok(manifest)
     }) {
         Ok(merged) if dry_run => {
-            match auth_manifest::build_plan(api, &merged, args.prune, tenant_id).await {
+            match auth_manifest::build_plan(api, &merged, args.prune, tenant_id, false).await {
                 Ok(report) => {
                     if args.json {
                         print_json(&report)?;
@@ -140,7 +140,7 @@ async fn apply_auth_source(
             }
         }
         Ok(merged) => {
-            match auth_manifest::apply_manifest(api, &merged, args.prune, tenant_id).await {
+            match auth_manifest::apply_manifest(api, &merged, args.prune, tenant_id, false).await {
                 Ok(result) => {
                     let has_errors = auth_apply_has_errors(&result);
                     if args.json {
