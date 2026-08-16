@@ -124,19 +124,21 @@ async fn apply_auth_source(
         auth_manifest::validate_manifest(&manifest)?;
         Ok(manifest)
     }) {
-        Ok(merged) if dry_run => match auth_manifest::build_plan(api, &merged, args.prune).await {
-            Ok(report) => {
-                if args.json {
-                    print_json(&report)?;
-                } else {
-                    println!("=== Auth Manifest Plan ===");
-                    auth_manifest::print_plan(&report);
+        Ok(merged) if dry_run => {
+            match auth_manifest::build_plan(api, &merged, args.prune, tenant_id).await {
+                Ok(report) => {
+                    if args.json {
+                        print_json(&report)?;
+                    } else {
+                        println!("=== Auth Manifest Plan ===");
+                        auth_manifest::print_plan(&report);
+                    }
+                }
+                Err(error) => {
+                    errors.record(format!("Auth manifest plan failed: {error}"));
                 }
             }
-            Err(error) => {
-                errors.record(format!("Auth manifest plan failed: {error}"));
-            }
-        },
+        }
         Ok(merged) => {
             match auth_manifest::apply_manifest(api, &merged, args.prune, tenant_id).await {
                 Ok(result) => {
