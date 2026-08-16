@@ -124,7 +124,8 @@ async fn apply_auth_source(
         auth_manifest::validate_manifest(&manifest)?;
         Ok(manifest)
     }) {
-        Ok(merged) if dry_run => match auth_manifest::build_plan(api, &merged, args.prune).await {
+        Ok(merged) if dry_run => match auth_manifest::build_plan(api, &merged, args.prune, tenant_id)
+                .await {
             Ok(report) => {
                 if args.json {
                     print_json(&report)?;

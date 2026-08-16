@@ -2,6 +2,7 @@ use anyhow::{anyhow, Context, Result};
 use clap::{Args, Subcommand};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use tachyon_sdk::apis::configuration::Configuration;
 
@@ -49,7 +50,8 @@ pub enum ManifestCommand {
         /// Manifest file; defaults to auto-discovery
         #[arg(short = 'f', long)]
         file: Option<PathBuf>,
-        /// Remove resources absent from manifest (currently unsupported)
+        /// Delete definitions the manifest no longer declares, limited to
+        /// the contexts this manifest owns
         #[arg(long)]
         prune: bool,
         /// Output as JSON
@@ -78,6 +80,10 @@ pub struct ActionSpec {
     pub description: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resource_pattern: Option<String>,
+    /// Publish to every descendant of the owning platform. Required when a
+    /// shared policy in the same manifest names this action.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub shared: bool,
 }
 
 impl ActionSpec {
@@ -95,6 +101,10 @@ pub struct PolicySpec {
     pub namespace: Option<String>,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub global: bool,
+    /// Publish to every descendant of the owning tenant. Applying this from
+    /// the root tenant is how a definition becomes usable everywhere.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub shared: bool,
     #[serde(default)]
     pub actions: Vec<PolicyActionSpec>,
     #[serde(default)]
@@ -103,12 +113,17 @@ pub struct PolicySpec {
 
 impl PolicySpec {
     fn scope_label(&self) -> String {
-        if self.global {
+        let base = if self.global {
             "global".to_string()
         } else if let Some(namespace) = &self.namespace {
             format!("namespace/{namespace}")
         } else {
             "caller-tenant".to_string()
+        };
+        if self.shared {
+            format!("{base}+shared")
+        } else {
+            base
         }
     }
 
@@ -136,6 +151,9 @@ pub struct PolicyActionPatternSpec {
 struct ActionResponse {
     #[serde(default)]
     id: Option<String>,
+    /// Owning platform. `None` marks a system action, which prune must skip.
+    #[serde(rename = "platformId", alias = "platform_id", default)]
+    platform_id: Option<String>,
     context: String,
     name: String,
     #[serde(rename = "fullName", alias = "full_name", default)]
@@ -151,6 +169,84 @@ struct ActionListResponse {
     actions: Vec<ActionResponse>,
 }
 
+#[derive(Debug, Deserialize)]
+struct PolicyResponse {
+    id: String,
+    name: String,
+    #[serde(rename = "isSystem", alias = "is_system", default)]
+    is_system: bool,
+    #[serde(rename = "tenantId", alias = "tenant_id", default)]
+    tenant_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct PolicyListResponse {
+    policies: Vec<PolicyResponse>,
+}
+
+/// Contexts the manifest declares, used to bound what `--prune` may delete.
+///
+/// Pruning anything outside these contexts would let a small manifest wipe
+/// definitions owned by other apps in the same tenant.
+fn manifest_contexts(manifest: &AuthManifest) -> HashSet<String> {
+    let mut contexts: HashSet<String> = manifest
+        .actions
+        .iter()
+        .map(|action| action.context.clone())
+        .collect();
+    for policy in &manifest.policies {
+        if let Some((context, _)) = policy.name.split_once(':') {
+            contexts.insert(context.to_string());
+        }
+    }
+    contexts
+}
+
+/// Live actions this manifest owns but no longer declares.
+fn actions_to_prune<'a>(
+    live: &'a [ActionResponse],
+    manifest: &AuthManifest,
+) -> Vec<&'a ActionResponse> {
+    let contexts = manifest_contexts(manifest);
+    let desired: HashSet<String> =
+        manifest.actions.iter().map(|a| a.full_name()).collect();
+    live.iter()
+        .filter(|action| {
+            // System actions (no owning platform) are never manifest-owned.
+            action.platform_id.is_some()
+                && contexts.contains(&action.context)
+                && !desired.contains(&action.full_name)
+        })
+        .collect()
+}
+
+/// Live policies owned by the applied tenant that the manifest no longer
+/// declares. Only `context:Name` policies inside a declared context qualify,
+/// so hand-made tenant policies survive.
+fn policies_to_prune<'a>(
+    live: &'a [PolicyResponse],
+    manifest: &AuthManifest,
+    tenant_id: &str,
+) -> Vec<&'a PolicyResponse> {
+    let contexts = manifest_contexts(manifest);
+    let desired: HashSet<&str> =
+        manifest.policies.iter().map(|p| p.name.as_str()).collect();
+    live.iter()
+        .filter(|policy| {
+            if policy.is_system
+                || policy.tenant_id.as_deref() != Some(tenant_id)
+            {
+                return false;
+            }
+            let Some((context, _)) = policy.name.split_once(':') else {
+                return false;
+            };
+            contexts.contains(context)
+                && !desired.contains(policy.name.as_str())
+        })
+        .collect()
+}
+
 #[derive(Debug, Serialize)]
 struct RegisterActionRequest<'a> {
     context: &'a str,
@@ -159,6 +255,8 @@ struct RegisterActionRequest<'a> {
     description: Option<&'a str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     resource_pattern: Option<&'a str>,
+    #[serde(rename = "sharedWithDescendants")]
+    shared_with_descendants: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -187,6 +285,8 @@ struct RegisterPolicyRequest<'a> {
     global: bool,
     #[serde(rename = "tenantId")]
     tenant_id: &'a str,
+    #[serde(rename = "sharedWithDescendants")]
+    shared_with_descendants: bool,
     actions: Vec<PolicyActionReq<'a>>,
     #[serde(rename = "actionPatterns")]
     action_patterns: Vec<PolicyActionPatternReq<'a>>,
@@ -198,7 +298,8 @@ struct RegisterPolicyRequest<'a> {
 pub struct PlanReport {
     pub actions: Vec<ActionPlanItem>,
     pub policies: Vec<PolicyPlanItem>,
-    pub prune_unsupported: bool,
+    /// True when the report includes resources that `apply --prune` deletes.
+    pub prune: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -220,7 +321,7 @@ pub enum ChangeKind {
     Create,
     Update,
     Unchanged,
-    PruneUnsupported,
+    Prune,
 }
 
 // ---- Apply result ----
@@ -229,7 +330,8 @@ pub enum ChangeKind {
 pub struct ApplyResult {
     pub actions: Vec<ActionApplyItem>,
     pub policies: Vec<PolicyApplyItem>,
-    pub prune_skipped: usize,
+    /// Resources deleted because the manifest no longer declares them.
+    pub pruned: usize,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -250,6 +352,7 @@ pub struct PolicyApplyItem {
 pub enum ApplyOutcome {
     Created,
     Skipped,
+    Pruned,
     Error(String),
 }
 
@@ -433,7 +536,13 @@ fn parse_k8s_documents(documents: Vec<serde_yaml::Value>) -> Result<AuthManifest
         match doc.kind.as_str() {
             "ActionSet" => {
                 let spec: ActionSetSpec = serde_yaml::from_value(doc.spec)?;
-                manifest.actions.extend(spec.actions);
+                // `shared` on the set is a shorthand for every action in it.
+                manifest.actions.extend(spec.actions.into_iter().map(
+                    |mut action| {
+                        action.shared = action.shared || spec.shared;
+                        action
+                    },
+                ));
             }
             "Policy" => {
                 let spec: K8sPolicySpec = serde_yaml::from_value(doc.spec)?;
@@ -446,6 +555,7 @@ fn parse_k8s_documents(documents: Vec<serde_yaml::Value>) -> Result<AuthManifest
                     name: doc.metadata.name,
                     description: spec.description,
                     global: false,
+                    shared: spec.shared,
                     namespace: Some(namespace),
                     actions: spec.actions,
                     action_patterns: spec.action_patterns,
@@ -478,6 +588,8 @@ struct K8sMetadata {
 #[derive(Debug, Deserialize)]
 struct ActionSetSpec {
     #[serde(default)]
+    shared: bool,
+    #[serde(default)]
     actions: Vec<ActionSpec>,
 }
 
@@ -485,6 +597,8 @@ struct ActionSetSpec {
 struct K8sPolicySpec {
     #[serde(default)]
     description: Option<String>,
+    #[serde(default)]
+    shared: bool,
     #[serde(default)]
     actions: Vec<PolicyActionSpec>,
     #[serde(default)]
@@ -535,7 +649,8 @@ pub fn validate_manifest(manifest: &AuthManifest) -> Result<()> {
         }
         if policy.global {
             return Err(anyhow!(
-                "global custom policies are not supported; use a tenant namespace"
+                "global custom policies are not supported; declare the policy \
+                 in the root tenant namespace with `shared: true` instead"
             ));
         }
         for pa in &policy.actions {
@@ -564,6 +679,7 @@ pub async fn build_plan(
     api: &ApiClient,
     manifest: &AuthManifest,
     prune: bool,
+    tenant_id: &str,
 ) -> Result<PlanReport> {
     let live: ActionListResponse = api.get("/v1/auth/actions").await?;
     let live_map: std::collections::HashMap<String, &ActionResponse> = live
@@ -571,9 +687,6 @@ pub async fn build_plan(
         .iter()
         .map(|a| (a.full_name.clone(), a))
         .collect();
-
-    let desired_names: std::collections::HashSet<String> =
-        manifest.actions.iter().map(|a| a.full_name()).collect();
 
     let mut action_items = Vec::new();
 
@@ -597,19 +710,8 @@ pub async fn build_plan(
         });
     }
 
-    if prune {
-        for live_action in &live.actions {
-            if !desired_names.contains(&live_action.full_name) {
-                action_items.push(ActionPlanItem {
-                    full_name: live_action.full_name.clone(),
-                    change: ChangeKind::PruneUnsupported,
-                });
-            }
-        }
-    }
-
-    // Policies: no list endpoint – report all as create (unknown current state)
-    let policy_items = manifest
+    // Policies: no per-policy diff – report declared ones as create.
+    let mut policy_items: Vec<PolicyPlanItem> = manifest
         .policies
         .iter()
         .map(|p| PolicyPlanItem {
@@ -619,10 +721,31 @@ pub async fn build_plan(
         })
         .collect();
 
+    if prune {
+        for action in actions_to_prune(&live.actions, manifest) {
+            action_items.push(ActionPlanItem {
+                full_name: action.full_name.clone(),
+                change: ChangeKind::Prune,
+            });
+        }
+
+        let live_policies: PolicyListResponse =
+            api.get("/v1/auth/policies").await?;
+        for policy in
+            policies_to_prune(&live_policies.policies, manifest, tenant_id)
+        {
+            policy_items.push(PolicyPlanItem {
+                name: policy.name.clone(),
+                scope: format!("namespace/{tenant_id}"),
+                change: ChangeKind::Prune,
+            });
+        }
+    }
+
     Ok(PlanReport {
         actions: action_items,
         policies: policy_items,
-        prune_unsupported: prune,
+        prune,
     })
 }
 
@@ -636,10 +759,10 @@ pub(crate) fn print_plan(report: &PlanReport) {
             ChangeKind::Create => "+",
             ChangeKind::Update => "~",
             ChangeKind::Unchanged => "=",
-            ChangeKind::PruneUnsupported => "!",
+            ChangeKind::Prune => "!",
         };
         let note = match item.change {
-            ChangeKind::PruneUnsupported => " [prune-unsupported: no delete endpoint]",
+            ChangeKind::Prune => " [prune: will be deleted]",
             _ => "",
         };
         println!("  {symbol} {}{note}", item.full_name);
@@ -655,7 +778,7 @@ pub(crate) fn print_plan(report: &PlanReport) {
             ChangeKind::Create => "+",
             ChangeKind::Update => "~",
             ChangeKind::Unchanged => "=",
-            ChangeKind::PruneUnsupported => "!",
+            ChangeKind::Prune => "!",
         };
         println!(
             "  {symbol} {} ({}) [note: current state unknown – no list endpoint]",
@@ -663,10 +786,10 @@ pub(crate) fn print_plan(report: &PlanReport) {
         );
     }
 
-    if report.prune_unsupported {
+    if report.prune {
         println!();
-        println!("Note: --prune is set but the API has no delete endpoint for actions/policies.");
-        println!("      Resources marked '!' will NOT be deleted.");
+        println!("Note: --prune only considers definitions inside the contexts this");
+        println!("      manifest declares. Resources marked '-' are deleted by apply.");
     }
 
     let creates = report
@@ -706,7 +829,7 @@ pub async fn apply_manifest(
 
     let mut action_items = Vec::new();
     let mut policy_items = Vec::new();
-    let mut prune_skipped = 0usize;
+    let mut pruned = 0usize;
 
     for spec in &manifest.actions {
         let req = RegisterActionRequest {
@@ -714,6 +837,7 @@ pub async fn apply_manifest(
             name: &spec.name,
             description: spec.description.as_deref(),
             resource_pattern: spec.resource_pattern.as_deref(),
+            shared_with_descendants: spec.shared,
         };
         let outcome = match api
             .post::<_, serde_json::Value>("/v1/auth/actions", &req)
@@ -746,6 +870,7 @@ pub async fn apply_manifest(
             is_system: false,
             global: false,
             tenant_id: spec.target_tenant_id(default_tenant_id),
+            shared_with_descendants: spec.shared,
             actions: spec
                 .actions
                 .iter()
@@ -789,15 +914,79 @@ pub async fn apply_manifest(
     }
 
     if prune {
-        prune_skipped = 1; // signal to caller that prune was requested but skipped
-        eprintln!("Warning: --prune requested but no delete endpoint is available. No resources were deleted.");
+        pruned = prune_absent_resources(
+            api,
+            manifest,
+            default_tenant_id,
+            &mut action_items,
+            &mut policy_items,
+        )
+        .await?;
     }
 
     Ok(ApplyResult {
         actions: action_items,
         policies: policy_items,
-        prune_skipped,
+        pruned,
     })
+}
+
+/// Delete definitions the manifest no longer declares.
+///
+/// The API has no bulk endpoint, so each resource is deleted individually and
+/// recorded in the same report as the applied ones. A policy still attached to
+/// a user or service account comes back 409; that is surfaced as an error
+/// rather than silently skipped, because a stale grant is the thing prune is
+/// meant to remove.
+async fn prune_absent_resources(
+    api: &ApiClient,
+    manifest: &AuthManifest,
+    tenant_id: &str,
+    action_items: &mut Vec<ActionApplyItem>,
+    policy_items: &mut Vec<PolicyApplyItem>,
+) -> Result<usize> {
+    let mut pruned = 0usize;
+
+    let live_policies: PolicyListResponse =
+        api.get("/v1/auth/policies").await?;
+    for policy in policies_to_prune(&live_policies.policies, manifest, tenant_id)
+    {
+        let path = format!("/v1/auth/policies/{}", policy.id);
+        let outcome = match api.delete(&path).await {
+            Ok(()) => {
+                pruned += 1;
+                ApplyOutcome::Pruned
+            }
+            Err(e) => ApplyOutcome::Error(e.to_string()),
+        };
+        policy_items.push(PolicyApplyItem {
+            name: policy.name.clone(),
+            scope: format!("namespace/{tenant_id}"),
+            outcome,
+        });
+    }
+
+    let live_actions: ActionListResponse =
+        api.get("/v1/auth/actions").await?;
+    for action in actions_to_prune(&live_actions.actions, manifest) {
+        let Some(id) = action.id.as_deref() else {
+            continue;
+        };
+        let path = format!("/v1/auth/actions/{id}");
+        let outcome = match api.delete(&path).await {
+            Ok(()) => {
+                pruned += 1;
+                ApplyOutcome::Pruned
+            }
+            Err(e) => ApplyOutcome::Error(e.to_string()),
+        };
+        action_items.push(ActionApplyItem {
+            full_name: action.full_name.clone(),
+            outcome,
+        });
+    }
+
+    Ok(pruned)
 }
 
 pub(crate) fn print_apply_result(result: &ApplyResult) {
@@ -806,6 +995,7 @@ pub(crate) fn print_apply_result(result: &ApplyResult) {
         let (symbol, note) = match &item.outcome {
             ApplyOutcome::Created => ("+", String::new()),
             ApplyOutcome::Skipped => ("=", " (already exists)".to_string()),
+            ApplyOutcome::Pruned => ("-", " (pruned)".to_string()),
             ApplyOutcome::Error(e) => ("!", format!(" ERROR: {e}")),
         };
         println!("  {symbol} {}{note}", item.full_name);
@@ -816,6 +1006,7 @@ pub(crate) fn print_apply_result(result: &ApplyResult) {
         let (symbol, note) = match &item.outcome {
             ApplyOutcome::Created => ("+", String::new()),
             ApplyOutcome::Skipped => ("=", " (already exists)".to_string()),
+            ApplyOutcome::Pruned => ("-", " (pruned)".to_string()),
             ApplyOutcome::Error(e) => ("!", format!(" ERROR: {e}")),
         };
         println!("  {symbol} {} ({}){note}", item.name, item.scope);
@@ -858,8 +1049,8 @@ pub(crate) fn print_apply_result(result: &ApplyResult) {
          {p_created} policy(ies) created, {p_skipped} skipped, {p_errors} error(s)."
     );
 
-    if result.prune_skipped > 0 {
-        println!("Note: --prune was set but no delete endpoint is available; 0 resources deleted.");
+    if result.pruned > 0 {
+        println!("Pruned: {} resource(s) removed.", result.pruned);
     }
 }
 
@@ -943,7 +1134,8 @@ pub async fn run(
 
             let api =
                 ApiClient::new_with_auth_diagnostics(config, tenant_id, auth_diagnostics.clone())?;
-            let report = build_plan(&api, &merged, *prune).await?;
+            let report =
+                build_plan(&api, &merged, *prune, tenant_id).await?;
 
             if *json {
                 print_json(&report)?;
@@ -1024,7 +1216,8 @@ pub async fn reconcile_in(
     validate_manifest(&merged)?;
 
     if dry_run {
-        let report = build_plan(api, &merged, prune).await?;
+        let report =
+            build_plan(api, &merged, prune, default_tenant_id).await?;
         if json {
             print_json(&report)?;
         } else {
@@ -1070,12 +1263,14 @@ mod tests {
                     name: "ListItems".into(),
                     description: Some("List items".into()),
                     resource_pattern: None,
+                    shared: false,
                 },
                 ActionSpec {
                     context: "myapp".into(),
                     name: "CreateItem".into(),
                     description: None,
                     resource_pattern: None,
+                    shared: false,
                 },
             ],
             policies: vec![PolicySpec {
@@ -1083,6 +1278,7 @@ mod tests {
                 description: None,
                 namespace: None,
                 global: false,
+                shared: false,
                 actions: vec![PolicyActionSpec {
                     action: "myapp:ListItems".into(),
                     effect: "allow".into(),
@@ -1090,6 +1286,145 @@ mod tests {
                 action_patterns: vec![],
             }],
         }
+    }
+
+    fn live_action(
+        id: &str,
+        context: &str,
+        name: &str,
+        platform_id: Option<&str>,
+    ) -> ActionResponse {
+        ActionResponse {
+            id: Some(id.to_string()),
+            platform_id: platform_id.map(str::to_string),
+            context: context.to_string(),
+            name: name.to_string(),
+            full_name: format!("{context}:{name}"),
+            description: None,
+            resource_pattern: None,
+        }
+    }
+
+    fn live_policy(
+        id: &str,
+        name: &str,
+        is_system: bool,
+        tenant_id: Option<&str>,
+    ) -> PolicyResponse {
+        PolicyResponse {
+            id: id.to_string(),
+            name: name.to_string(),
+            is_system,
+            tenant_id: tenant_id.map(str::to_string),
+        }
+    }
+
+    #[test]
+    fn prune_only_touches_contexts_the_manifest_declares() {
+        // sample_manifest owns the `myapp` context only.
+        let manifest = sample_manifest();
+        let live = vec![
+            live_action("act_1", "myapp", "Removed", Some("tn_own")),
+            live_action("act_2", "otherapp", "Untouched", Some("tn_own")),
+            live_action("act_3", "myapp", "ListItems", Some("tn_own")),
+        ];
+
+        let pruned = actions_to_prune(&live, &manifest);
+
+        assert_eq!(pruned.len(), 1);
+        assert_eq!(pruned[0].full_name, "myapp:Removed");
+    }
+
+    #[test]
+    fn prune_skips_system_actions() {
+        let manifest = sample_manifest();
+        let live = vec![live_action("act_1", "myapp", "Removed", None)];
+
+        assert!(actions_to_prune(&live, &manifest).is_empty());
+    }
+
+    #[test]
+    fn policy_prune_is_limited_to_owned_namespaced_policies() {
+        let mut manifest = sample_manifest();
+        manifest.policies[0].name = "myapp:ReadOnly".into();
+        let live = vec![
+            // Same tenant, declared context, absent from the manifest.
+            live_policy("pol_1", "myapp:Removed", false, Some("tn_own")),
+            // Still declared.
+            live_policy("pol_2", "myapp:ReadOnly", false, Some("tn_own")),
+            // Another tenant owns it.
+            live_policy("pol_3", "myapp:Other", false, Some("tn_other")),
+            // System policy.
+            live_policy("pol_4", "myapp:System", true, None),
+            // Hand-made policy without a context prefix.
+            live_policy("pol_5", "AdHocPolicy", false, Some("tn_own")),
+        ];
+
+        let pruned = policies_to_prune(&live, &manifest, "tn_own");
+
+        assert_eq!(pruned.len(), 1);
+        assert_eq!(pruned[0].name, "myapp:Removed");
+    }
+
+    #[test]
+    fn shared_policies_report_their_scope() {
+        let mut manifest = sample_manifest();
+        manifest.policies[0].shared = true;
+        manifest.policies[0].namespace = Some("tn_root".into());
+
+        assert_eq!(
+            manifest.policies[0].scope_label(),
+            "namespace/tn_root+shared"
+        );
+    }
+
+    #[test]
+    fn action_set_shared_applies_to_every_action() {
+        let yaml = r#"
+apiVersion: auth.tachyon.io/v1
+kind: ActionSet
+metadata:
+  name: field-actions
+spec:
+  shared: true
+  actions:
+    - context: field
+      name: ListCustomers
+    - context: field
+      name: ManageCustomers
+"#;
+        let value: serde_yaml::Value = serde_yaml::from_str(yaml).unwrap();
+        let manifest = parse_manifest_value(value).unwrap();
+
+        assert_eq!(manifest.actions.len(), 2);
+        assert!(manifest.actions.iter().all(|action| action.shared));
+    }
+
+    #[test]
+    fn register_requests_carry_the_shared_flag() {
+        let action = RegisterActionRequest {
+            context: "field",
+            name: "ListCustomers",
+            description: None,
+            resource_pattern: None,
+            shared_with_descendants: true,
+        };
+        let value = serde_json::to_value(action).expect("serializable");
+        assert_eq!(value["sharedWithDescendants"], true);
+
+        let policy = RegisterPolicyRequest {
+            name: "field:admin",
+            description: None,
+            is_system: false,
+            global: false,
+            tenant_id: "tn_root",
+            shared_with_descendants: true,
+            actions: vec![],
+            action_patterns: vec![],
+        };
+        let value = serde_json::to_value(policy).expect("serializable");
+        assert_eq!(value["sharedWithDescendants"], true);
+        assert_eq!(value["tenantId"], "tn_root");
     }
 
     #[test]
@@ -1125,6 +1460,7 @@ mod tests {
             name: "Bar".into(),
             description: None,
             resource_pattern: None,
+            shared: false,
         };
         assert_eq!(action.full_name(), "foo:Bar");
     }
@@ -1203,6 +1539,7 @@ mod tests {
                     name: "List".into(),
                     description: None,
                     resource_pattern: None,
+                    shared: false,
                 }],
                 policies: vec![],
             },
@@ -1215,6 +1552,7 @@ mod tests {
                     name: "List".into(), // duplicate
                     description: None,
                     resource_pattern: None,
+                    shared: false,
                 }],
                 policies: vec![],
             },
@@ -1323,6 +1661,7 @@ spec:
             is_system: false,
             global: false,
             tenant_id: "tn_test",
+            shared_with_descendants: false,
             actions: vec![],
             action_patterns: vec![],
         };
