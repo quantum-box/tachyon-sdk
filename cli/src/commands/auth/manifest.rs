@@ -41,6 +41,10 @@ pub enum ManifestCommand {
         /// Include resources absent from manifest that would be pruned
         #[arg(long)]
         prune: bool,
+        /// Register definitions with no owning tenant so every tenant
+        /// resolves them. A manifest that states `global` wins over this.
+        #[arg(long)]
+        global: bool,
         /// Output as JSON
         #[arg(long)]
         json: bool,
@@ -54,6 +58,10 @@ pub enum ManifestCommand {
         /// the contexts this manifest owns
         #[arg(long)]
         prune: bool,
+        /// Register definitions with no owning tenant so every tenant
+        /// resolves them. A manifest that states `global` wins over this.
+        #[arg(long)]
+        global: bool,
         /// Output as JSON
         #[arg(long)]
         json: bool,
@@ -84,11 +92,51 @@ pub struct ActionSpec {
     /// shared policy in the same manifest names this action.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub shared: bool,
+    /// Register with no owning platform so every tenant resolves it.
+    ///
+    /// `Option` rather than `bool` so an explicit `global: false` can be told
+    /// apart from an absent field, which is what makes the manifest able to
+    /// override `--global`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub global: Option<bool>,
 }
 
 impl ActionSpec {
     pub fn full_name(&self) -> String {
         format!("{}:{}", self.context, self.name)
+    }
+}
+
+/// How a declaration resolves against the `--global` flag.
+///
+/// The manifest is the source of truth: a spec that states `global` keeps its
+/// value even when the flag says otherwise, so applying the same file twice
+/// with different flags cannot change what is published. The flag only fills
+/// in specs that stay silent.
+#[derive(Debug, Clone, PartialEq)]
+pub struct GlobalScope {
+    pub effective: bool,
+    /// Set when the manifest and the flag actively disagree. Callers surface
+    /// this so a `--global` run cannot look like it did nothing.
+    pub conflict: Option<String>,
+}
+
+pub fn resolve_global(declared: Option<bool>, flag: bool, label: &str) -> GlobalScope {
+    match declared {
+        Some(declared) if declared != flag && flag => GlobalScope {
+            effective: declared,
+            conflict: Some(format!(
+                "{label}: manifest declares global: {declared}, ignoring --global"
+            )),
+        },
+        Some(declared) => GlobalScope {
+            effective: declared,
+            conflict: None,
+        },
+        None => GlobalScope {
+            effective: flag,
+            conflict: None,
+        },
     }
 }
 
@@ -99,8 +147,13 @@ pub struct PolicySpec {
     pub description: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub namespace: Option<String>,
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub global: bool,
+    /// Register with no owning tenant so every tenant can see and grant it.
+    ///
+    /// `Option` rather than `bool` so an explicit `global: false` can be told
+    /// apart from an absent field, which is what makes the manifest able to
+    /// override `--global`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub global: Option<bool>,
     /// Publish to every descendant of the owning tenant. Applying this from
     /// the root tenant is how a definition becomes usable everywhere.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
@@ -113,7 +166,13 @@ pub struct PolicySpec {
 
 impl PolicySpec {
     fn scope_label(&self) -> String {
-        let base = if self.global {
+        self.scope_label_with(self.global == Some(true))
+    }
+
+    /// Same as [`Self::scope_label`] but for a scope already resolved against
+    /// the `--global` flag, so plan output matches what apply will do.
+    fn scope_label_with(&self, global: bool) -> String {
+        let base = if global {
             "global".to_string()
         } else if let Some(namespace) = &self.namespace {
             format!("namespace/{namespace}")
@@ -151,9 +210,13 @@ pub struct PolicyActionPatternSpec {
 struct ActionResponse {
     #[serde(default)]
     id: Option<String>,
-    /// Owning platform. `None` marks a system action, which prune must skip.
+    /// Owning platform. `None` marks a system or global action.
     #[serde(rename = "platformId", alias = "platform_id", default)]
     platform_id: Option<String>,
+    /// Tenant that registered a global action. Distinguishes one this
+    /// manifest created from a system action nobody may touch.
+    #[serde(rename = "ownerTenantId", alias = "owner_tenant_id", default)]
+    owner_tenant_id: Option<String>,
     context: String,
     name: String,
     #[serde(rename = "fullName", alias = "full_name", default)]
@@ -177,6 +240,10 @@ struct PolicyResponse {
     is_system: bool,
     #[serde(rename = "tenantId", alias = "tenant_id", default)]
     tenant_id: Option<String>,
+    /// Tenant that registered a global policy. Distinguishes one this
+    /// manifest created from a global policy owned by someone else.
+    #[serde(rename = "ownerTenantId", alias = "owner_tenant_id", default)]
+    owner_tenant_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -206,15 +273,18 @@ fn manifest_contexts(manifest: &AuthManifest) -> HashSet<String> {
 fn actions_to_prune<'a>(
     live: &'a [ActionResponse],
     manifest: &AuthManifest,
+    tenant_id: &str,
 ) -> Vec<&'a ActionResponse> {
     let contexts = manifest_contexts(manifest);
     let desired: HashSet<String> = manifest.actions.iter().map(|a| a.full_name()).collect();
     live.iter()
         .filter(|action| {
-            // System actions (no owning platform) are never manifest-owned.
-            action.platform_id.is_some()
-                && contexts.contains(&action.context)
-                && !desired.contains(&action.full_name)
+            // Platform-scoped actions belong to the caller's platform. A
+            // global action is only ours if we registered it; anything else
+            // without a platform is a system action nobody may delete.
+            let owned = action.platform_id.is_some()
+                || action.owner_tenant_id.as_deref() == Some(tenant_id);
+            owned && contexts.contains(&action.context) && !desired.contains(&action.full_name)
         })
         .collect()
 }
@@ -231,7 +301,12 @@ fn policies_to_prune<'a>(
     let desired: HashSet<&str> = manifest.policies.iter().map(|p| p.name.as_str()).collect();
     live.iter()
         .filter(|policy| {
-            if policy.is_system || policy.tenant_id.as_deref() != Some(tenant_id) {
+            // Either a policy this tenant owns, or a global one it
+            // registered. A global policy from another tenant stays put.
+            let owned = policy.tenant_id.as_deref() == Some(tenant_id)
+                || (policy.tenant_id.is_none()
+                    && policy.owner_tenant_id.as_deref() == Some(tenant_id));
+            if policy.is_system || !owned {
                 return false;
             }
             let Some((context, _)) = policy.name.split_once(':') else {
@@ -252,6 +327,7 @@ struct RegisterActionRequest<'a> {
     resource_pattern: Option<&'a str>,
     #[serde(rename = "sharedWithDescendants")]
     shared_with_descendants: bool,
+    global: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -278,8 +354,8 @@ struct RegisterPolicyRequest<'a> {
     #[serde(rename = "isSystem")]
     is_system: bool,
     global: bool,
-    #[serde(rename = "tenantId")]
-    tenant_id: &'a str,
+    #[serde(rename = "tenantId", skip_serializing_if = "Option::is_none")]
+    tenant_id: Option<&'a str>,
     #[serde(rename = "sharedWithDescendants")]
     shared_with_descendants: bool,
     actions: Vec<PolicyActionReq<'a>>,
@@ -327,6 +403,9 @@ pub struct ApplyResult {
     pub policies: Vec<PolicyApplyItem>,
     /// Resources deleted because the manifest no longer declares them.
     pub pruned: usize,
+    /// Places where `--global` was overruled by the manifest.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub warnings: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -536,22 +615,30 @@ fn parse_k8s_documents(documents: Vec<serde_yaml::Value>) -> Result<AuthManifest
                     .actions
                     .extend(spec.actions.into_iter().map(|mut action| {
                         action.shared = action.shared || spec.shared;
+                        action.global = action.global.or(spec.global);
                         action
                     }));
             }
             "Policy" => {
                 let spec: K8sPolicySpec = serde_yaml::from_value(doc.spec)?;
-                let namespace = doc.metadata.namespace.ok_or_else(|| {
-                    anyhow!(
-                        "Policy metadata.namespace is required; global custom policies are not supported"
-                    )
-                })?;
+                // A global policy has no owning tenant, so it is the one kind
+                // that may omit the namespace.
+                let namespace = match doc.metadata.namespace {
+                    Some(namespace) => Some(namespace),
+                    None if spec.global == Some(true) => None,
+                    None => {
+                        return Err(anyhow!(
+                        "Policy '{}': metadata.namespace is required unless spec.global is true",
+                        doc.metadata.name
+                    ))
+                    }
+                };
                 manifest.policies.push(PolicySpec {
                     name: doc.metadata.name,
                     description: spec.description,
-                    global: false,
+                    global: spec.global,
                     shared: spec.shared,
-                    namespace: Some(namespace),
+                    namespace,
                     actions: spec.actions,
                     action_patterns: spec.action_patterns,
                 });
@@ -584,6 +671,10 @@ struct K8sMetadata {
 struct ActionSetSpec {
     #[serde(default)]
     shared: bool,
+    /// Shorthand applied to every action in the set that does not state its
+    /// own `global`.
+    #[serde(default)]
+    global: Option<bool>,
     #[serde(default)]
     actions: Vec<ActionSpec>,
 }
@@ -594,6 +685,8 @@ struct K8sPolicySpec {
     description: Option<String>,
     #[serde(default)]
     shared: bool,
+    #[serde(default)]
+    global: Option<bool>,
     #[serde(default)]
     actions: Vec<PolicyActionSpec>,
     #[serde(default)]
@@ -642,11 +735,21 @@ pub fn validate_manifest(manifest: &AuthManifest) -> Result<()> {
         if policy.name.is_empty() {
             return Err(anyhow!("policy missing name"));
         }
-        if policy.global {
-            return Err(anyhow!(
-                "global custom policies are not supported; declare the policy \
-                 in the root tenant namespace with `shared: true` instead"
-            ));
+        if policy.global == Some(true) {
+            if policy.shared {
+                return Err(anyhow!(
+                    "policy '{}': `global` is already visible to every tenant, \
+                     so `shared` is not applicable",
+                    policy.name
+                ));
+            }
+            if policy.namespace.is_some() {
+                return Err(anyhow!(
+                    "policy '{}': `global` has no owning tenant, so \
+                     `namespace` is not applicable",
+                    policy.name
+                ));
+            }
         }
         for pa in &policy.actions {
             if !pa.action.contains(':') {
@@ -675,6 +778,7 @@ pub async fn build_plan(
     manifest: &AuthManifest,
     prune: bool,
     tenant_id: &str,
+    global: bool,
 ) -> Result<PlanReport> {
     let live: ActionListResponse = api.get("/v1/auth/actions").await?;
     let live_map: std::collections::HashMap<String, &ActionResponse> = live
@@ -711,13 +815,14 @@ pub async fn build_plan(
         .iter()
         .map(|p| PolicyPlanItem {
             name: p.name.clone(),
-            scope: p.scope_label(),
+            // Show the scope apply will actually use, flag included.
+            scope: p.scope_label_with(resolve_global(p.global, global, &p.name).effective),
             change: ChangeKind::Create,
         })
         .collect();
 
     if prune {
-        for action in actions_to_prune(&live.actions, manifest) {
+        for action in actions_to_prune(&live.actions, manifest, tenant_id) {
             action_items.push(ActionPlanItem {
                 full_name: action.full_name.clone(),
                 change: ChangeKind::Prune,
@@ -816,20 +921,25 @@ pub async fn apply_manifest(
     manifest: &AuthManifest,
     prune: bool,
     default_tenant_id: &str,
+    global: bool,
 ) -> Result<ApplyResult> {
     validate_manifest(manifest)?;
 
     let mut action_items = Vec::new();
     let mut policy_items = Vec::new();
+    let mut warnings = Vec::new();
     let mut pruned = 0usize;
 
     for spec in &manifest.actions {
+        let scope = resolve_global(spec.global, global, &spec.full_name());
+        warnings.extend(scope.conflict);
         let req = RegisterActionRequest {
             context: &spec.context,
             name: &spec.name,
             description: spec.description.as_deref(),
             resource_pattern: spec.resource_pattern.as_deref(),
             shared_with_descendants: spec.shared,
+            global: scope.effective,
         };
         let outcome = match api
             .post::<_, serde_json::Value>("/v1/auth/actions", &req)
@@ -856,12 +966,16 @@ pub async fn apply_manifest(
     }
 
     for spec in &manifest.policies {
+        let scope = resolve_global(spec.global, global, &spec.name);
+        warnings.extend(scope.conflict);
         let req = RegisterPolicyRequest {
             name: &spec.name,
             description: spec.description.as_deref(),
             is_system: false,
-            global: false,
-            tenant_id: spec.target_tenant_id(default_tenant_id),
+            global: scope.effective,
+            // A global policy has no owning tenant, so sending one would be
+            // rejected as a contradiction.
+            tenant_id: (!scope.effective).then(|| spec.target_tenant_id(default_tenant_id)),
             shared_with_descendants: spec.shared,
             actions: spec
                 .actions
@@ -900,7 +1014,7 @@ pub async fn apply_manifest(
         };
         policy_items.push(PolicyApplyItem {
             name: spec.name.clone(),
-            scope: spec.scope_label(),
+            scope: spec.scope_label_with(scope.effective),
             outcome,
         });
     }
@@ -920,6 +1034,7 @@ pub async fn apply_manifest(
         actions: action_items,
         policies: policy_items,
         pruned,
+        warnings,
     })
 }
 
@@ -957,7 +1072,7 @@ async fn prune_absent_resources(
     }
 
     let live_actions: ActionListResponse = api.get("/v1/auth/actions").await?;
-    for action in actions_to_prune(&live_actions.actions, manifest) {
+    for action in actions_to_prune(&live_actions.actions, manifest, tenant_id) {
         let Some(id) = action.id.as_deref() else {
             continue;
         };
@@ -979,6 +1094,13 @@ async fn prune_absent_resources(
 }
 
 pub(crate) fn print_apply_result(result: &ApplyResult) {
+    if !result.warnings.is_empty() {
+        println!("Warnings:");
+        for warning in &result.warnings {
+            println!("  ! {warning}");
+        }
+        println!();
+    }
     println!("Actions:");
     for item in &result.actions {
         let (symbol, note) = match &item.outcome {
@@ -1112,7 +1234,12 @@ pub async fn run(
             println!("All manifests are valid.");
         }
 
-        ManifestCommand::Plan { file, prune, json } => {
+        ManifestCommand::Plan {
+            file,
+            prune,
+            global,
+            json,
+        } => {
             let manifests = discover_manifests(file.as_deref(), &cwd)?;
             if manifests.is_empty() {
                 println!("No auth manifests found. Nothing to plan.");
@@ -1123,7 +1250,7 @@ pub async fn run(
 
             let api =
                 ApiClient::new_with_auth_diagnostics(config, tenant_id, auth_diagnostics.clone())?;
-            let report = build_plan(&api, &merged, *prune, tenant_id).await?;
+            let report = build_plan(&api, &merged, *prune, tenant_id, *global).await?;
 
             if *json {
                 print_json(&report)?;
@@ -1132,7 +1259,12 @@ pub async fn run(
             }
         }
 
-        ManifestCommand::Apply { file, prune, json } => {
+        ManifestCommand::Apply {
+            file,
+            prune,
+            global,
+            json,
+        } => {
             let manifests = discover_manifests(file.as_deref(), &cwd)?;
             if manifests.is_empty() {
                 println!("No auth manifests found. Nothing to apply.");
@@ -1143,7 +1275,7 @@ pub async fn run(
 
             let api =
                 ApiClient::new_with_auth_diagnostics(config, tenant_id, auth_diagnostics.clone())?;
-            let result = apply_manifest(&api, &merged, *prune, tenant_id).await?;
+            let result = apply_manifest(&api, &merged, *prune, tenant_id, *global).await?;
 
             let has_errors = result
                 .actions
@@ -1204,7 +1336,7 @@ pub async fn reconcile_in(
     validate_manifest(&merged)?;
 
     if dry_run {
-        let report = build_plan(api, &merged, prune, default_tenant_id).await?;
+        let report = build_plan(api, &merged, prune, default_tenant_id, false).await?;
         if json {
             print_json(&report)?;
         } else {
@@ -1212,7 +1344,7 @@ pub async fn reconcile_in(
             print_plan(&report);
         }
     } else {
-        let result = apply_manifest(api, &merged, prune, default_tenant_id).await?;
+        let result = apply_manifest(api, &merged, prune, default_tenant_id, false).await?;
         let has_errors = result
             .actions
             .iter()
@@ -1251,6 +1383,7 @@ mod tests {
                     description: Some("List items".into()),
                     resource_pattern: None,
                     shared: false,
+                    global: None,
                 },
                 ActionSpec {
                     context: "myapp".into(),
@@ -1258,13 +1391,14 @@ mod tests {
                     description: None,
                     resource_pattern: None,
                     shared: false,
+                    global: None,
                 },
             ],
             policies: vec![PolicySpec {
                 name: "MyAppReadOnly".into(),
                 description: None,
                 namespace: None,
-                global: false,
+                global: None,
                 shared: false,
                 actions: vec![PolicyActionSpec {
                     action: "myapp:ListItems".into(),
@@ -1289,6 +1423,7 @@ mod tests {
             full_name: format!("{context}:{name}"),
             description: None,
             resource_pattern: None,
+            owner_tenant_id: None,
         }
     }
 
@@ -1303,6 +1438,7 @@ mod tests {
             name: name.to_string(),
             is_system,
             tenant_id: tenant_id.map(str::to_string),
+            owner_tenant_id: None,
         }
     }
 
@@ -1316,7 +1452,7 @@ mod tests {
             live_action("act_3", "myapp", "ListItems", Some("tn_own")),
         ];
 
-        let pruned = actions_to_prune(&live, &manifest);
+        let pruned = actions_to_prune(&live, &manifest, "tn_root");
 
         assert_eq!(pruned.len(), 1);
         assert_eq!(pruned[0].full_name, "myapp:Removed");
@@ -1327,7 +1463,7 @@ mod tests {
         let manifest = sample_manifest();
         let live = vec![live_action("act_1", "myapp", "Removed", None)];
 
-        assert!(actions_to_prune(&live, &manifest).is_empty());
+        assert!(actions_to_prune(&live, &manifest, "tn_root").is_empty());
     }
 
     #[test]
@@ -1395,6 +1531,7 @@ spec:
             description: None,
             resource_pattern: None,
             shared_with_descendants: true,
+            global: false,
         };
         let value = serde_json::to_value(action).expect("serializable");
         assert_eq!(value["sharedWithDescendants"], true);
@@ -1404,7 +1541,7 @@ spec:
             description: None,
             is_system: false,
             global: false,
-            tenant_id: "tn_root",
+            tenant_id: Some("tn_root"),
             shared_with_descendants: true,
             actions: vec![],
             action_patterns: vec![],
@@ -1448,6 +1585,7 @@ spec:
             description: None,
             resource_pattern: None,
             shared: false,
+            global: None,
         };
         assert_eq!(action.full_name(), "foo:Bar");
     }
@@ -1527,6 +1665,7 @@ spec:
                     description: None,
                     resource_pattern: None,
                     shared: false,
+                    global: None,
                 }],
                 policies: vec![],
             },
@@ -1540,6 +1679,7 @@ spec:
                     description: None,
                     resource_pattern: None,
                     shared: false,
+                    global: None,
                 }],
                 policies: vec![],
             },
@@ -1599,7 +1739,7 @@ spec:
         let value: serde_yaml::Value = serde_yaml::from_str(yaml).unwrap();
         let manifest = parse_manifest_value(value).unwrap();
         let policy = &manifest.policies[0];
-        assert!(!policy.global);
+        assert_ne!(policy.global, Some(true));
         assert_eq!(
             policy.target_tenant_id("tn_default"),
             "tn_01hjryxysgey07h5jz5wagqj0m"
@@ -1611,43 +1751,78 @@ spec:
         let manifest: AuthManifest =
             serde_yaml::from_str("actions: []\npolicies:\n  - name: FlatPolicy\n").unwrap();
         let policy = &manifest.policies[0];
-        assert!(!policy.global);
+        assert_ne!(policy.global, Some(true));
         assert_eq!(policy.target_tenant_id("tn_default"), "tn_default");
     }
 
+    /// Prune must reach the global definitions this tenant registered, or
+    /// `--global` would create rows the same manifest can never clean up. It
+    /// must still leave another tenant's global definitions alone.
     #[test]
-    fn validate_legacy_global_policy_fails() {
+    fn prune_claims_only_its_own_global_definitions() {
+        let manifest = sample_manifest();
+        let mut ours = live_policy("pol_ours", "myapp:gone", false, None);
+        ours.owner_tenant_id = Some("tn_root".to_string());
+        let mut theirs = live_policy("pol_theirs", "myapp:other", false, None);
+        theirs.owner_tenant_id = Some("tn_someone_else".to_string());
+        let orphan = live_policy("pol_orphan", "myapp:orphan", false, None);
+        let live = vec![ours, theirs, orphan];
+
+        let pruned = policies_to_prune(&live, &manifest, "tn_root");
+
+        let ids: Vec<&str> = pruned.iter().map(|p| p.id.as_str()).collect();
+        assert_eq!(
+            ids,
+            vec!["pol_ours"],
+            "only our global policy is ours to delete"
+        );
+    }
+
+    #[test]
+    fn validate_rejects_global_combined_with_shared() {
         let mut manifest = sample_manifest();
-        manifest.policies[0].global = true;
+        manifest.policies[0].global = Some(true);
+        manifest.policies[0].shared = true;
 
-        let error =
-            validate_manifest(&manifest).expect_err("legacy global policy must be rejected");
+        let error = validate_manifest(&manifest).expect_err("global + shared must be rejected");
 
-        assert!(error.to_string().contains("tenant namespace"));
+        assert!(error.to_string().contains("not applicable"));
+    }
+
+    #[test]
+    fn validate_rejects_global_combined_with_namespace() {
+        let mut manifest = sample_manifest();
+        manifest.policies[0].global = Some(true);
+        manifest.policies[0].namespace = Some("tn_root".to_string());
+
+        let error = validate_manifest(&manifest).expect_err("global + namespace must be rejected");
+
+        assert!(error.to_string().contains("namespace"));
     }
 
     #[tokio::test]
-    async fn apply_rejects_global_policy_before_api_request() {
+    async fn apply_validates_global_combination_before_api_request() {
         let mut manifest = sample_manifest();
-        manifest.policies[0].global = true;
+        manifest.policies[0].global = Some(true);
+        manifest.policies[0].shared = true;
         let configuration = tachyon_sdk::apis::configuration::Configuration::default();
         let api = ApiClient::new(&configuration, "tn_test").unwrap();
 
-        let error = apply_manifest(&api, &manifest, false, "tn_test")
+        let error = apply_manifest(&api, &manifest, false, "tn_test", false)
             .await
             .expect_err("apply must validate before sending requests");
 
-        assert!(error.to_string().contains("tenant namespace"));
+        assert!(error.to_string().contains("not applicable"));
     }
 
     #[test]
-    fn register_request_always_has_tenant_scope() {
+    fn tenant_scoped_request_carries_its_tenant() {
         let request = RegisterPolicyRequest {
             name: "TenantPolicy",
             description: None,
             is_system: false,
             global: false,
-            tenant_id: "tn_test",
+            tenant_id: Some("tn_test"),
             shared_with_descendants: false,
             actions: vec![],
             action_patterns: vec![],
@@ -1656,5 +1831,57 @@ spec:
         let value = serde_json::to_value(request).expect("serializable");
         assert_eq!(value["global"], false);
         assert_eq!(value["tenantId"], "tn_test");
+    }
+
+    /// A global policy has no owning tenant, so sending one would contradict
+    /// the scope and the API rejects it.
+    #[test]
+    fn global_request_omits_the_tenant() {
+        let request = RegisterPolicyRequest {
+            name: "GlobalPolicy",
+            description: None,
+            is_system: false,
+            global: true,
+            tenant_id: None,
+            shared_with_descendants: false,
+            actions: vec![],
+            action_patterns: vec![],
+        };
+
+        let value = serde_json::to_value(request).expect("serializable");
+        assert_eq!(value["global"], true);
+        assert!(value.get("tenantId").is_none());
+    }
+
+    #[test]
+    fn manifest_global_declaration_beats_the_flag() {
+        // Silent spec: the flag decides.
+        assert!(resolve_global(None, true, "x").effective);
+        assert!(!resolve_global(None, false, "x").effective);
+
+        // Declared spec: the manifest decides, either way.
+        assert!(resolve_global(Some(true), false, "x").effective);
+        assert!(!resolve_global(Some(false), true, "x").effective);
+    }
+
+    #[test]
+    fn overruling_the_flag_is_reported() {
+        // Only an active disagreement is worth reporting: the flag asked for
+        // global and the manifest refused.
+        let overruled = resolve_global(Some(false), true, "field:admin");
+        assert!(!overruled.effective);
+        assert!(
+            overruled
+                .conflict
+                .as_deref()
+                .is_some_and(|c| c.contains("field:admin")),
+            "conflict must name the resource, got {:?}",
+            overruled.conflict
+        );
+
+        // Agreement, and a manifest that widens on its own, are silent.
+        assert!(resolve_global(Some(true), true, "x").conflict.is_none());
+        assert!(resolve_global(Some(true), false, "x").conflict.is_none());
+        assert!(resolve_global(None, true, "x").conflict.is_none());
     }
 }
