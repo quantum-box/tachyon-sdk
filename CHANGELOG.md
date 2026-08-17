@@ -2,7 +2,13 @@
 
 ## Unreleased
 
+### Added
+
+- Add `requires` to auth manifest `ActionSpec`: each entry names a full action (`context:Name`) the declaring action depends on within a call context. `manifest apply` sends the declared edge set to `PUT /v1/auth/action-dependencies`, which validates ownership, cycles, and the system-action allowlist server-side. A manifest without `requires` never touches the platform's edge set. (PLT-3597)
+
 ### Fixed
+
+- Send `resourcePattern` in camelCase when registering actions from an auth manifest. The server silently ignored the snake_case key, so a declared `resource_pattern` was never stored and `manifest plan` reported a permanent diff. (PLT-3597)
 
 - Stream Cloud App build command output while retaining a bounded callback tail, allowing the control plane to distinguish active long builds from output stalls. (PLT-3402)
 

@@ -99,12 +99,50 @@ pub struct ActionSpec {
     /// override `--global`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub global: Option<bool>,
+    /// Actions this action depends on within a call context
+    /// (full names, e.g. "field:ListCustomers"). Applied declaratively
+    /// through PUT /v1/auth/action-dependencies: the server validates
+    /// ownership, cycles, and the system-action allowlist.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub requires: Vec<String>,
 }
 
 impl ActionSpec {
     pub fn full_name(&self) -> String {
         format!("{}:{}", self.context, self.name)
     }
+}
+
+#[derive(Debug, Serialize)]
+struct ActionDependencyEdgeReq {
+    action: String,
+    #[serde(rename = "dependsOn")]
+    depends_on: String,
+}
+
+#[derive(Debug, Serialize)]
+struct RegisterActionDependenciesRequest {
+    edges: Vec<ActionDependencyEdgeReq>,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RegisterActionDependenciesResponse {
+    added_count: usize,
+    removed_count: usize,
+    unchanged_count: usize,
+}
+
+/// Outcome of the declarative dependency edge apply.
+#[derive(Debug, Clone, Serialize)]
+pub struct DependencyApplyReport {
+    /// Distinct edges the manifest declares.
+    pub declared: usize,
+    pub added: usize,
+    pub removed: usize,
+    pub unchanged: usize,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
 }
 
 /// How a declaration resolves against the `--global` flag.
@@ -323,7 +361,9 @@ struct RegisterActionRequest<'a> {
     name: &'a str,
     #[serde(skip_serializing_if = "Option::is_none")]
     description: Option<&'a str>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    // The server deserializes with rename_all = "camelCase"; a snake_case
+    // key is silently ignored and the pattern never converges on apply.
+    #[serde(rename = "resourcePattern", skip_serializing_if = "Option::is_none")]
     resource_pattern: Option<&'a str>,
     #[serde(rename = "sharedWithDescendants")]
     shared_with_descendants: bool,
@@ -401,6 +441,11 @@ pub enum ChangeKind {
 pub struct ApplyResult {
     pub actions: Vec<ActionApplyItem>,
     pub policies: Vec<PolicyApplyItem>,
+    /// Present only when the manifest declares `requires` edges. A manifest
+    /// without `requires` never touches the platform's edge set, so other
+    /// manifests of the same platform stay unaffected.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dependencies: Option<DependencyApplyReport>,
     /// Resources deleted because the manifest no longer declares them.
     pub pruned: usize,
     /// Places where `--global` was overruled by the manifest.
@@ -730,6 +775,24 @@ pub fn validate_manifest(manifest: &AuthManifest) -> Result<()> {
                 action.context
             ));
         }
+        for required in &action.requires {
+            let well_formed = required
+                .split_once(':')
+                .is_some_and(|(context, name)| !context.is_empty() && !name.is_empty());
+            if !well_formed {
+                return Err(anyhow!(
+                    "action '{}': requires entry '{}' must be a full                      action name like 'context:Name'",
+                    action.full_name(),
+                    required
+                ));
+            }
+            if *required == action.full_name() {
+                return Err(anyhow!(
+                    "action '{}': requires must not declare a self edge",
+                    action.full_name()
+                ));
+            }
+        }
     }
     for policy in &manifest.policies {
         if policy.name.is_empty() {
@@ -1019,6 +1082,50 @@ pub async fn apply_manifest(
         });
     }
 
+    // Declarative dependency edges. Only sent when the manifest declares
+    // at least one `requires`: the endpoint replaces the platform's whole
+    // edge set, so a manifest that says nothing must not clear edges
+    // declared elsewhere.
+    let mut edges: Vec<ActionDependencyEdgeReq> = Vec::new();
+    let mut seen_edges = std::collections::HashSet::new();
+    for spec in &manifest.actions {
+        for required in &spec.requires {
+            if seen_edges.insert((spec.full_name(), required.clone())) {
+                edges.push(ActionDependencyEdgeReq {
+                    action: spec.full_name(),
+                    depends_on: required.clone(),
+                });
+            }
+        }
+    }
+    let dependencies = if edges.is_empty() {
+        None
+    } else {
+        let declared = edges.len();
+        match api
+            .put::<_, RegisterActionDependenciesResponse>(
+                "/v1/auth/action-dependencies",
+                &RegisterActionDependenciesRequest { edges },
+            )
+            .await
+        {
+            Ok(response) => Some(DependencyApplyReport {
+                declared,
+                added: response.added_count,
+                removed: response.removed_count,
+                unchanged: response.unchanged_count,
+                error: None,
+            }),
+            Err(e) => Some(DependencyApplyReport {
+                declared,
+                added: 0,
+                removed: 0,
+                unchanged: 0,
+                error: Some(e.to_string()),
+            }),
+        }
+    };
+
     if prune {
         pruned = prune_absent_resources(
             api,
@@ -1033,6 +1140,7 @@ pub async fn apply_manifest(
     Ok(ApplyResult {
         actions: action_items,
         policies: policy_items,
+        dependencies,
         pruned,
         warnings,
     })
@@ -1153,6 +1261,24 @@ pub(crate) fn print_apply_result(result: &ApplyResult) {
         .iter()
         .filter(|p| matches!(p.outcome, ApplyOutcome::Error(_)))
         .count();
+
+    if let Some(dependencies) = &result.dependencies {
+        println!();
+        println!("Dependency edges:");
+        match &dependencies.error {
+            Some(error) => println!(
+                "  ! {} edge(s) declared, apply failed: {error}",
+                dependencies.declared
+            ),
+            None => println!(
+                "  {} edge(s) declared: {} added, {} removed, {} unchanged",
+                dependencies.declared,
+                dependencies.added,
+                dependencies.removed,
+                dependencies.unchanged
+            ),
+        }
+    }
 
     println!();
     println!(
@@ -1384,6 +1510,7 @@ mod tests {
                     resource_pattern: None,
                     shared: false,
                     global: None,
+                    requires: vec![],
                 },
                 ActionSpec {
                     context: "myapp".into(),
@@ -1392,6 +1519,7 @@ mod tests {
                     resource_pattern: None,
                     shared: false,
                     global: None,
+                    requires: vec![],
                 },
             ],
             policies: vec![PolicySpec {
@@ -1586,8 +1714,81 @@ spec:
             resource_pattern: None,
             shared: false,
             global: None,
+            requires: vec![],
         };
         assert_eq!(action.full_name(), "foo:Bar");
+    }
+
+    #[test]
+    fn requires_parses_and_roundtrips() {
+        let yaml = "actions:\n  - context: field\n    name: SyncStorefront\n    requires:\n      - field:ListCustomers\n      - field:ManageCustomers\npolicies: []\n";
+        let manifest: AuthManifest = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(
+            manifest.actions[0].requires,
+            vec!["field:ListCustomers", "field:ManageCustomers"]
+        );
+        assert!(validate_manifest(&manifest).is_ok());
+        // An absent `requires` stays absent when reserialized.
+        let bare: AuthManifest = serde_yaml::from_str(
+            "actions:\n  - context: field\n    name: SyncStorefront\npolicies: []\n",
+        )
+        .unwrap();
+        assert!(bare.actions[0].requires.is_empty());
+        let reserialized = serde_yaml::to_string(&bare).unwrap();
+        assert!(!reserialized.contains("requires"));
+    }
+
+    #[test]
+    fn requires_must_be_a_full_action_name() {
+        let yaml = "actions:\n  - context: field\n    name: SyncStorefront\n    requires:\n      - ListCustomers\npolicies: []\n";
+        let manifest: AuthManifest = serde_yaml::from_str(yaml).unwrap();
+        let error = validate_manifest(&manifest).unwrap_err();
+        assert!(
+            error.to_string().contains("action name like"),
+            "unexpected: {error}"
+        );
+    }
+
+    #[test]
+    fn requires_rejects_a_self_edge() {
+        let yaml = "actions:\n  - context: field\n    name: SyncStorefront\n    requires:\n      - field:SyncStorefront\npolicies: []\n";
+        let manifest: AuthManifest = serde_yaml::from_str(yaml).unwrap();
+        let error = validate_manifest(&manifest).unwrap_err();
+        assert!(
+            error.to_string().contains("self edge"),
+            "unexpected: {error}"
+        );
+    }
+
+    #[test]
+    fn register_action_request_sends_camel_case_resource_pattern() {
+        let request = RegisterActionRequest {
+            context: "field",
+            name: "SyncStorefront",
+            description: None,
+            resource_pattern: Some("trn:field:storefront:*"),
+            shared_with_descendants: false,
+            global: false,
+        };
+        let json = serde_json::to_value(&request).unwrap();
+        assert_eq!(
+            json["resourcePattern"], "trn:field:storefront:*",
+            "the server expects camelCase; snake_case is silently dropped"
+        );
+        assert!(json.get("resource_pattern").is_none());
+    }
+
+    #[test]
+    fn dependency_edges_serialize_for_the_registration_api() {
+        let request = RegisterActionDependenciesRequest {
+            edges: vec![ActionDependencyEdgeReq {
+                action: "field:SyncStorefront".to_string(),
+                depends_on: "field:ListCustomers".to_string(),
+            }],
+        };
+        let json = serde_json::to_value(&request).unwrap();
+        assert_eq!(json["edges"][0]["action"], "field:SyncStorefront");
+        assert_eq!(json["edges"][0]["dependsOn"], "field:ListCustomers");
     }
 
     #[test]
@@ -1666,6 +1867,7 @@ spec:
                     resource_pattern: None,
                     shared: false,
                     global: None,
+                    requires: vec![],
                 }],
                 policies: vec![],
             },
@@ -1680,6 +1882,7 @@ spec:
                     resource_pattern: None,
                     shared: false,
                     global: None,
+                    requires: vec![],
                 }],
                 policies: vec![],
             },
