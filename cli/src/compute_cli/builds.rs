@@ -172,6 +172,10 @@ pub(super) struct BuildResponse {
     pub(super) pr_number: Option<i32>,
     pub(super) status: String,
     #[serde(default)]
+    pub(super) artifact_status: Option<String>,
+    #[serde(default)]
+    pub(super) deploy_hook_status: Option<String>,
+    #[serde(default)]
     pub(super) duration_secs: Option<i32>,
     #[serde(default)]
     pub(super) error_message: Option<String>,
@@ -240,6 +244,8 @@ pub(super) enum AgentBuildEvent<'a> {
     Build {
         build_id: &'a str,
         status: &'a str,
+        artifact_status: &'a str,
+        deploy_hook_status: &'a str,
     },
     Log {
         build_id: &'a str,
@@ -249,6 +255,8 @@ pub(super) enum AgentBuildEvent<'a> {
     Result {
         build_id: &'a str,
         status: &'a str,
+        artifact_status: &'a str,
+        deploy_hook_status: &'a str,
         exit_code: i32,
         #[serde(skip_serializing_if = "Option::is_none")]
         error_message: Option<&'a str>,
@@ -274,6 +282,16 @@ pub(super) struct BuildsListOptions {
     pub(super) preview_timeout: Duration,
     pub(super) verbose: bool,
     pub(super) command_started: Instant,
+}
+
+impl BuildResponse {
+    fn artifact_status(&self) -> &str {
+        self.artifact_status.as_deref().unwrap_or(&self.status)
+    }
+
+    fn deploy_hook_status(&self) -> &str {
+        self.deploy_hook_status.as_deref().unwrap_or("legacy")
+    }
 }
 
 pub(super) fn print_builds_list_timing(verbose: bool, stage: &str, elapsed: Duration) {
@@ -431,18 +449,27 @@ pub(super) async fn run_builds_list(
     let render_started = Instant::now();
     let builds = &resp.builds[..resp.builds.len().min(limit)];
     println!(
-        "{:<26}  {:<11}  {:<24}  {:<20}  {:<8}  {:<19}",
-        "BUILD ID", "STATUS", "EXECUTION", "BRANCH", "COMMIT", "CREATED AT"
+        "{:<26}  {:<11}  {:<11}  {:<12}  {:<24}  {:<20}  {:<8}  {:<19}",
+        "BUILD ID",
+        "EFFECTIVE",
+        "ARTIFACT",
+        "DEPLOY HOOK",
+        "EXECUTION",
+        "BRANCH",
+        "COMMIT",
+        "CREATED AT"
     );
     println!(
-        "{:-<26}  {:-<11}  {:-<24}  {:-<20}  {:-<8}  {:-<19}",
-        "", "", "", "", "", ""
+        "{:-<26}  {:-<11}  {:-<11}  {:-<12}  {:-<24}  {:-<20}  {:-<8}  {:-<19}",
+        "", "", "", "", "", "", "", ""
     );
     for build in builds {
         println!(
-            "{:<26}  {:<11}  {:<24}  {:<20}  {:<8}  {:<19}",
+            "{:<26}  {:<11}  {:<11}  {:<12}  {:<24}  {:<20}  {:<8}  {:<19}",
             build.id,
             build.status,
+            build.artifact_status(),
+            build.deploy_hook_status(),
             truncate(build_execution_label(build).as_deref().unwrap_or("-"), 24),
             truncate(build.source_branch.as_deref().unwrap_or("-"), 20),
             truncate_sha(build.commit_sha.as_deref().unwrap_or("-")),
@@ -519,7 +546,9 @@ pub(super) async fn run_builds_get(api: &ApiClient, build_id: &str, json: bool) 
     }
     println!("ID:       {}", build.id);
     println!("App ID:   {}", build.app_id);
-    println!("Status:   {}", build.status);
+    println!("Effective:   {}", build.status);
+    println!("Artifact:    {}", build.artifact_status());
+    println!("Deploy Hook: {}", build.deploy_hook_status());
     println!(
         "Branch:   {}",
         build.source_branch.as_deref().unwrap_or("-")
@@ -548,7 +577,7 @@ pub(super) async fn run_builds_get(api: &ApiClient, build_id: &str, json: bool) 
     );
 
     // Fetch the associated deployment to show the preview URL.
-    if build.status == "succeeded" {
+    if build.artifact_status() == "succeeded" {
         let url: String = format!("/v1/compute/apps/{}/deployments", build.app_id);
         if let Ok(resp) = api.get::<ListDeploymentsResponse>(&url).await {
             if let Some(dep) = resp
@@ -820,6 +849,8 @@ pub(super) async fn run_builds_logs(
             print_agent_event(&AgentBuildEvent::Result {
                 build_id: &resolved_build_id,
                 status: &build.status,
+                artifact_status: build.artifact_status(),
+                deploy_hook_status: build.deploy_hook_status(),
                 exit_code,
                 error_message: build.error_message.as_deref(),
             })?;
@@ -983,6 +1014,8 @@ pub(super) async fn run_builds_watch(
     let timeout = timeout_secs.map(Duration::from_secs);
     let mut next_token: Option<String> = None;
     let mut last_status: Option<String> = None;
+    let mut last_artifact_status: Option<String> = None;
+    let mut last_deploy_hook_status: Option<String> = None;
     let mut last_execution: Option<String> = None;
 
     loop {
@@ -992,6 +1025,8 @@ pub(super) async fn run_builds_watch(
                     print_agent_event(&AgentBuildEvent::Result {
                         build_id: &resolved_build_id,
                         status: "timeout",
+                        artifact_status: "unknown",
+                        deploy_hook_status: "unknown",
                         exit_code: 124,
                         error_message: Some("watch timed out"),
                     })?;
@@ -1003,16 +1038,29 @@ pub(super) async fn run_builds_watch(
         let build: BuildResponse = api
             .get(&format!("/v1/compute/builds/{resolved_build_id}"))
             .await?;
-        if last_status.as_deref() != Some(build.status.as_str()) {
+        if last_status.as_deref() != Some(build.status.as_str())
+            || last_artifact_status.as_deref() != Some(build.artifact_status())
+            || last_deploy_hook_status.as_deref() != Some(build.deploy_hook_status())
+        {
             if agent {
                 print_agent_event(&AgentBuildEvent::Build {
                     build_id: &resolved_build_id,
                     status: &build.status,
+                    artifact_status: build.artifact_status(),
+                    deploy_hook_status: build.deploy_hook_status(),
                 })?;
             } else {
-                println!("Build {}: {}", resolved_build_id, build.status);
+                println!(
+                    "Build {}: effective={}, artifact={}, deploy_hook={}",
+                    resolved_build_id,
+                    build.status,
+                    build.artifact_status(),
+                    build.deploy_hook_status()
+                );
             }
             last_status = Some(build.status.clone());
+            last_artifact_status = Some(build.artifact_status().to_string());
+            last_deploy_hook_status = Some(build.deploy_hook_status().to_string());
         }
         if !agent {
             let execution = build_execution_label(&build);
@@ -1067,6 +1115,8 @@ pub(super) async fn run_builds_watch(
                 print_agent_event(&AgentBuildEvent::Result {
                     build_id: &resolved_build_id,
                     status: &build.status,
+                    artifact_status: build.artifact_status(),
+                    deploy_hook_status: build.deploy_hook_status(),
                     exit_code,
                     error_message: build.error_message.as_deref(),
                 })?;
@@ -1575,6 +1625,8 @@ mod tests {
             commit_message: None,
             pr_number: None,
             status: "building".to_string(),
+            artifact_status: Some("building".to_string()),
+            deploy_hook_status: Some("expected".to_string()),
             duration_secs: None,
             error_message: None,
             iac_plan_output: None,
@@ -1631,6 +1683,26 @@ mod tests {
 
         assert!(build.iac_plan_output.is_none());
         assert!(build.iac_success.is_none());
+        assert_eq!(build.artifact_status(), "succeeded");
+        assert_eq!(build.deploy_hook_status(), "legacy");
+    }
+
+    #[test]
+    fn build_response_deserializes_independent_build_gate_statuses() {
+        let build: BuildResponse = serde_json::from_str(
+            r#"{
+                "id": "bld_test",
+                "app_id": "app_test",
+                "status": "failed",
+                "artifact_status": "succeeded",
+                "deploy_hook_status": "not_reported"
+            }"#,
+        )
+        .expect("independent build gate statuses must deserialize");
+
+        assert_eq!(build.status, "failed");
+        assert_eq!(build.artifact_status(), "succeeded");
+        assert_eq!(build.deploy_hook_status(), "not_reported");
     }
 
     #[test]

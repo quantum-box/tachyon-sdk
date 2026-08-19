@@ -198,7 +198,7 @@ fn compute_builds_watch_keeps_terminal_log_404_as_error() {
 fn compute_builds_watch_agent_emits_compact_jsonl_and_exits_success() {
     let tmp = TempDir::new().unwrap();
     let (api_url, rx, handle) = start_server(vec![
-        r#"{"id":"bld_test1234567890","app_id":"app_test1234567890","status":"succeeded","error_message":null}"#,
+        r#"{"id":"bld_test1234567890","app_id":"app_test1234567890","status":"succeeded","artifact_status":"succeeded","deploy_hook_status":"succeeded","error_message":null}"#,
         r#"{"lines":[{"timestamp":1767225600000,"message":"build finished"}],"next_token":null,"is_complete":true}"#,
     ]);
 
@@ -238,10 +238,57 @@ fn compute_builds_watch_agent_emits_compact_jsonl_and_exits_success() {
     assert_eq!(lines.len(), 3, "stdout:\n{stdout}");
     assert_eq!(lines[0]["type"], "build");
     assert_eq!(lines[0]["status"], "succeeded");
+    assert_eq!(lines[0]["artifact_status"], "succeeded");
+    assert_eq!(lines[0]["deploy_hook_status"], "succeeded");
     assert_eq!(lines[1]["type"], "log");
     assert_eq!(lines[1]["message"], "build finished");
     assert_eq!(lines[2]["type"], "result");
     assert_eq!(lines[2]["exit_code"], 0);
+}
+
+#[test]
+fn compute_builds_watch_uses_effective_status_for_deploy_hook_failure_exit() {
+    let tmp = TempDir::new().unwrap();
+    let (api_url, rx, handle) = start_server(vec![
+        r#"{"id":"bld_test1234567890","app_id":"app_test1234567890","status":"failed","artifact_status":"succeeded","deploy_hook_status":"failed","error_message":"deploy hook failed"}"#,
+    ]);
+
+    let output = isolated_command(tmp.path())
+        .env("TACHYON_API_URL", api_url)
+        .args([
+            "compute",
+            "builds",
+            "watch",
+            "--build-id",
+            "bld_test1234567890",
+            "--no-logs",
+            "--agent",
+        ])
+        .output()
+        .expect("run tachyon compute builds watch");
+
+    assert!(
+        !output.status.success(),
+        "deploy hook failure must produce a failing exit status\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+
+    let request = rx.recv().unwrap();
+    handle.join().unwrap();
+    assert!(request.starts_with("GET /v1/compute/builds/bld_test1234567890 "));
+
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let lines: Vec<serde_json::Value> = stdout
+        .lines()
+        .map(|line| serde_json::from_str(line).expect("json line"))
+        .collect();
+    assert_eq!(lines.len(), 2, "stdout:\n{stdout}");
+    assert_eq!(lines[0]["artifact_status"], "succeeded");
+    assert_eq!(lines[0]["deploy_hook_status"], "failed");
+    assert_eq!(lines[1]["type"], "result");
+    assert_eq!(lines[1]["status"], "failed");
+    assert_eq!(lines[1]["exit_code"], 1);
 }
 
 #[test]
