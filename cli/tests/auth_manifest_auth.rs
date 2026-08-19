@@ -181,6 +181,73 @@ fn start_failing_apply_action_server() -> (String, mpsc::Receiver<String>, threa
     (url, rx, handle)
 }
 
+fn start_existing_policy_server(
+    patch_status: &'static str,
+) -> (String, mpsc::Receiver<String>, thread::JoinHandle<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    let (tx, rx) = mpsc::channel();
+    let handle = thread::spawn(move || {
+        for _ in 0..2 {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut buf = [0_u8; 16384];
+            let n = stream.read(&mut buf).unwrap();
+            let request = String::from_utf8_lossy(&buf[..n]).to_string();
+            tx.send(request.clone()).unwrap();
+
+            let (status, body) = if request.starts_with("GET /v1/auth/policies ") {
+                (
+                    "200 OK",
+                    r#"{"policies":[{"id":"pol_existing","name":"ManifestPolicy","isSystem":false,"tenantId":"tn_test1234567890"}]}"#,
+                )
+            } else if request.starts_with("PATCH /v1/auth/policies/pol_existing ") {
+                if patch_status == "200 OK" {
+                    (
+                        patch_status,
+                        r#"{"createdAt":"2026-08-19T00:00:00Z","description":"Updated description","id":"pol_existing","isSystem":false,"name":"ManifestPolicy","tenantId":"tn_test1234567890","updatedAt":"2026-08-19T00:00:01Z"}"#,
+                    )
+                } else {
+                    (
+                        patch_status,
+                        r#"{"code":"INTERNAL_SERVER_ERROR","message":"policy update failed"}"#,
+                    )
+                }
+            } else {
+                (
+                    "500 Internal Server Error",
+                    r#"{"error":"unexpected request"}"#,
+                )
+            };
+            let response = format!(
+                "HTTP/1.1 {status}\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            stream.write_all(response.as_bytes()).unwrap();
+        }
+    });
+    (url, rx, handle)
+}
+
+fn write_policy_manifest(path: &Path) {
+    fs::write(
+        path,
+        r#"actions: []
+policies:
+  - name: ManifestPolicy
+    description: Updated description
+    actions:
+      - action: manifest:Read
+        effect: allow
+    action_patterns:
+      - context_pattern: billing
+        name_pattern: Read*
+        effect: deny
+"#,
+    )
+    .unwrap();
+}
+
 fn start_refresh_then_actions_server() -> (String, mpsc::Receiver<String>, thread::JoinHandle<()>) {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let url = format!("http://{}", listener.local_addr().unwrap());
@@ -575,6 +642,146 @@ fn manifest_apply_fails_when_auth_apply_reports_resource_errors() {
     assert!(stderr.contains("Auth manifest apply: some resources failed."));
     assert!(stderr.contains("Manifest apply completed with 1 error(s):"));
     assert!(stderr.contains("1 manifest step(s) failed"));
+}
+
+#[test]
+fn auth_manifest_apply_updates_an_existing_policy_with_the_generated_patch_contract() {
+    let tmp = TempDir::new().unwrap();
+    write_policy_manifest(&tmp.path().join("auth.yml"));
+    let (api_url, rx, handle) = start_existing_policy_server("200 OK");
+
+    let output = isolated_command(tmp.path())
+        .current_dir(tmp.path())
+        .env("TACHYON_API_URL", api_url)
+        .env("TACHYON_API_KEY", "test-token")
+        .args([
+            "--tenant-id",
+            "tn_test1234567890",
+            "auth",
+            "manifest",
+            "apply",
+            "--file",
+            "auth.yml",
+            "--json",
+        ])
+        .output()
+        .expect("run auth manifest policy update");
+
+    handle.join().unwrap();
+    let list_request = rx.recv().unwrap();
+    let patch_request = rx.recv().unwrap();
+    assert_ok(&output, "auth manifest policy update");
+    assert!(list_request.starts_with("GET /v1/auth/policies "));
+    assert!(patch_request.starts_with("PATCH /v1/auth/policies/pol_existing "));
+    assert!(has_header(
+        &patch_request,
+        "x-operator-id",
+        "tn_test1234567890"
+    ));
+    assert!(has_header(
+        &patch_request,
+        "authorization",
+        "Bearer test-token"
+    ));
+    let body = patch_request
+        .split_once("\r\n\r\n")
+        .map(|(_, body)| body)
+        .expect("PATCH request body");
+    let body: serde_json::Value = serde_json::from_str(body).unwrap();
+    assert_eq!(body["description"], "Updated description");
+    assert_eq!(
+        body["actionsToAdd"],
+        serde_json::json!([{
+            "actionFullName": "manifest:Read",
+            "effect": "allow"
+        }])
+    );
+    assert_eq!(
+        body["actionPatternsToAdd"],
+        serde_json::json!([{
+            "contextPattern": "billing",
+            "effect": "deny",
+            "namePattern": "Read*"
+        }])
+    );
+    assert!(body.get("actionsToRemove").is_none());
+    assert!(body.get("actionPatternsToRemove").is_none());
+
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["policies"][0]["outcome"], "updated");
+    assert!(report["warnings"][0]
+        .as_str()
+        .is_some_and(|warning| warning.contains("exact manifest convergence was not verified")));
+}
+
+#[test]
+fn auth_manifest_apply_prints_updated_policy_and_partial_reconciliation_warning() {
+    let tmp = TempDir::new().unwrap();
+    write_policy_manifest(&tmp.path().join("auth.yml"));
+    let (api_url, rx, handle) = start_existing_policy_server("200 OK");
+
+    let output = isolated_command(tmp.path())
+        .current_dir(tmp.path())
+        .env("TACHYON_API_URL", api_url)
+        .env("TACHYON_API_KEY", "test-token")
+        .args([
+            "--tenant-id",
+            "tn_test1234567890",
+            "auth",
+            "manifest",
+            "apply",
+            "--file",
+            "auth.yml",
+        ])
+        .output()
+        .expect("run auth manifest policy update");
+
+    handle.join().unwrap();
+    let _list_request = rx.recv().unwrap();
+    let patch_request = rx.recv().unwrap();
+    assert!(patch_request.starts_with("PATCH /v1/auth/policies/pol_existing "));
+    assert_ok(&output, "auth manifest policy update");
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("Policy reconciliation is partial"));
+    assert!(stdout.contains("~ ManifestPolicy (caller-tenant) (updated)"));
+    assert!(stdout.contains("1 updated"));
+}
+
+#[test]
+fn auth_manifest_apply_reports_patch_failure_and_exits_nonzero() {
+    let tmp = TempDir::new().unwrap();
+    write_policy_manifest(&tmp.path().join("auth.yml"));
+    let (api_url, rx, handle) = start_existing_policy_server("500 Internal Server Error");
+
+    let output = isolated_command(tmp.path())
+        .current_dir(tmp.path())
+        .env("TACHYON_API_URL", api_url)
+        .env("TACHYON_API_KEY", "test-token")
+        .args([
+            "--tenant-id",
+            "tn_test1234567890",
+            "auth",
+            "manifest",
+            "apply",
+            "--file",
+            "auth.yml",
+        ])
+        .output()
+        .expect("run failing auth manifest policy update");
+
+    handle.join().unwrap();
+    let _list_request = rx.recv().unwrap();
+    let patch_request = rx.recv().unwrap();
+    assert!(patch_request.starts_with("PATCH /v1/auth/policies/pol_existing "));
+    assert!(!output.status.success());
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("Policy reconciliation is partial"));
+    assert!(stdout.contains("! ManifestPolicy (caller-tenant) ERROR:"));
+    assert!(stdout.contains("1 error(s)"));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("Some resources failed to apply"));
 }
 
 #[test]

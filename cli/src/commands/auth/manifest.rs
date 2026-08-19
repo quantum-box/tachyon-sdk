@@ -4,7 +4,9 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
+use tachyon_sdk::apis::auth_policies_api;
 use tachyon_sdk::apis::configuration::Configuration;
+use tachyon_sdk::models::{PolicyActionPatternRequest, PolicyActionRequest, UpdatePolicyRequest};
 
 use crate::client::{print_json, ApiClient, AuthDiagnostics};
 
@@ -270,7 +272,7 @@ struct ActionListResponse {
     actions: Vec<ActionResponse>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 struct PolicyResponse {
     id: String,
     name: String,
@@ -353,6 +355,30 @@ fn policies_to_prune<'a>(
             contexts.contains(context) && !desired.contains(policy.name.as_str())
         })
         .collect()
+}
+
+/// Find the policy in the exact scope targeted by a manifest declaration.
+///
+/// Global names are visible across tenants, so a matching name and null
+/// tenant alone are not sufficient: only the tenant that registered the
+/// global policy may update it.
+fn existing_policy_for_spec<'a>(
+    live: &'a [PolicyResponse],
+    spec: &PolicySpec,
+    global: bool,
+    default_tenant_id: &str,
+) -> Option<&'a PolicyResponse> {
+    let target_tenant_id = (!global).then(|| spec.target_tenant_id(default_tenant_id));
+    live.iter().find(|policy| {
+        policy.name == spec.name
+            && !policy.is_system
+            && if global {
+                policy.tenant_id.is_none()
+                    && policy.owner_tenant_id.as_deref() == Some(default_tenant_id)
+            } else {
+                policy.tenant_id.as_deref() == target_tenant_id
+            }
+    })
 }
 
 #[derive(Debug, Serialize)]
@@ -470,6 +496,7 @@ pub struct PolicyApplyItem {
 #[serde(rename_all = "lowercase")]
 pub enum ApplyOutcome {
     Created,
+    Updated,
     Skipped,
     Pruned,
     Error(String),
@@ -981,6 +1008,7 @@ pub(crate) fn print_plan(report: &PlanReport) {
 
 pub async fn apply_manifest(
     api: &ApiClient,
+    config: &Configuration,
     manifest: &AuthManifest,
     prune: bool,
     default_tenant_id: &str,
@@ -1028,9 +1056,21 @@ pub async fn apply_manifest(
         });
     }
 
+    let live_policies = if manifest.policies.is_empty() {
+        None
+    } else {
+        Some(api.get::<PolicyListResponse>("/v1/auth/policies").await?)
+    };
+    let sdk_config = policy_sdk_configuration(config, default_tenant_id)?;
+    let mut warned_incomplete_policy_reconciliation = false;
+
     for spec in &manifest.policies {
         let scope = resolve_global(spec.global, global, &spec.name);
         warnings.extend(scope.conflict);
+        let target_tenant_id = (!scope.effective).then(|| spec.target_tenant_id(default_tenant_id));
+        let existing = live_policies.as_ref().and_then(|response| {
+            existing_policy_for_spec(&response.policies, spec, scope.effective, default_tenant_id)
+        });
         let req = RegisterPolicyRequest {
             name: &spec.name,
             description: spec.description.as_deref(),
@@ -1038,7 +1078,7 @@ pub async fn apply_manifest(
             global: scope.effective,
             // A global policy has no owning tenant, so sending one would be
             // rejected as a contradiction.
-            tenant_id: (!scope.effective).then(|| spec.target_tenant_id(default_tenant_id)),
+            tenant_id: target_tenant_id,
             shared_with_descendants: spec.shared,
             actions: spec
                 .actions
@@ -1058,21 +1098,60 @@ pub async fn apply_manifest(
                 })
                 .collect(),
         };
-        let outcome = match api
-            .post::<_, serde_json::Value>("/v1/auth/policies", &req)
-            .await
-        {
-            Ok(_) => ApplyOutcome::Created,
-            Err(e) => {
-                let msg = e.to_string();
-                if msg.contains("409")
-                    || msg.contains("already exists")
-                    || msg.contains("duplicate")
-                {
-                    ApplyOutcome::Skipped
-                } else {
-                    ApplyOutcome::Error(msg)
-                }
+        let outcome = if let Some(existing) = existing {
+            // The current API response includes policy metadata, but not the
+            // action or action-pattern membership needed to calculate safe
+            // removals. Upsert every declared entry and explicitly report the
+            // convergence limitation instead of claiming a no-op or silently
+            // treating the existing policy as applied.
+            if !warned_incomplete_policy_reconciliation {
+                warnings.push(
+                    "Policy reconciliation is partial: the API does not expose current policy \
+                     actions or action patterns. Declared entries are sent for upsert, but stale \
+                     entries were not removed and exact manifest convergence was not verified."
+                        .to_string(),
+                );
+                warned_incomplete_policy_reconciliation = true;
+            }
+            let update = UpdatePolicyRequest {
+                actions_to_add: (!spec.actions.is_empty()).then(|| {
+                    spec.actions
+                        .iter()
+                        .map(|action| {
+                            PolicyActionRequest::new(action.action.clone(), action.effect.clone())
+                        })
+                        .collect()
+                }),
+                actions_to_remove: None,
+                action_patterns_to_add: (!spec.action_patterns.is_empty()).then(|| {
+                    spec.action_patterns
+                        .iter()
+                        .map(|pattern| {
+                            PolicyActionPatternRequest::new(
+                                pattern.context_pattern.clone(),
+                                pattern.effect.clone(),
+                                pattern.name_pattern.clone(),
+                            )
+                        })
+                        .collect()
+                }),
+                action_patterns_to_remove: None,
+                // Always send the declared description (including null). It
+                // gives an otherwise-empty policy a concrete PATCH operation,
+                // so Updated is only reported after the API acknowledges it.
+                description: Some(spec.description.clone()),
+            };
+            match auth_policies_api::update_policy(&sdk_config, &existing.id, update).await {
+                Ok(_) => ApplyOutcome::Updated,
+                Err(error) => ApplyOutcome::Error(error.to_string()),
+            }
+        } else {
+            match api
+                .post::<_, serde_json::Value>("/v1/auth/policies", &req)
+                .await
+            {
+                Ok(_) => ApplyOutcome::Created,
+                Err(error) => ApplyOutcome::Error(error.to_string()),
             }
         };
         policy_items.push(PolicyApplyItem {
@@ -1146,6 +1225,30 @@ pub async fn apply_manifest(
     })
 }
 
+/// Build the generated SDK's reqwest 0.12 client with the same authentication
+/// context used by the CLI's reqwest 0.13 ApiClient.
+fn policy_sdk_configuration(config: &Configuration, tenant_id: &str) -> Result<Configuration> {
+    let mut headers = reqwest12::header::HeaderMap::new();
+    headers.insert(
+        "x-operator-id",
+        reqwest12::header::HeaderValue::from_str(tenant_id)?,
+    );
+    if let Some(token) = &config.bearer_access_token {
+        headers.insert(
+            reqwest12::header::AUTHORIZATION,
+            reqwest12::header::HeaderValue::from_str(&format!("Bearer {token}"))?,
+        );
+    }
+    let client = reqwest12::Client::builder()
+        .default_headers(headers)
+        .build()
+        .context("build SDK client for policy update")?;
+    Ok(Configuration {
+        client,
+        ..config.clone()
+    })
+}
+
 /// Delete definitions the manifest no longer declares.
 ///
 /// The API has no bulk endpoint, so each resource is deleted individually and
@@ -1213,6 +1316,7 @@ pub(crate) fn print_apply_result(result: &ApplyResult) {
     for item in &result.actions {
         let (symbol, note) = match &item.outcome {
             ApplyOutcome::Created => ("+", String::new()),
+            ApplyOutcome::Updated => ("~", " (updated)".to_string()),
             ApplyOutcome::Skipped => ("=", " (already exists)".to_string()),
             ApplyOutcome::Pruned => ("-", " (pruned)".to_string()),
             ApplyOutcome::Error(e) => ("!", format!(" ERROR: {e}")),
@@ -1224,6 +1328,7 @@ pub(crate) fn print_apply_result(result: &ApplyResult) {
     for item in &result.policies {
         let (symbol, note) = match &item.outcome {
             ApplyOutcome::Created => ("+", String::new()),
+            ApplyOutcome::Updated => ("~", " (updated)".to_string()),
             ApplyOutcome::Skipped => ("=", " (already exists)".to_string()),
             ApplyOutcome::Pruned => ("-", " (pruned)".to_string()),
             ApplyOutcome::Error(e) => ("!", format!(" ERROR: {e}")),
@@ -1241,6 +1346,11 @@ pub(crate) fn print_apply_result(result: &ApplyResult) {
         .iter()
         .filter(|a| a.outcome == ApplyOutcome::Skipped)
         .count();
+    let a_updated = result
+        .actions
+        .iter()
+        .filter(|a| a.outcome == ApplyOutcome::Updated)
+        .count();
     let a_errors = result
         .actions
         .iter()
@@ -1255,6 +1365,11 @@ pub(crate) fn print_apply_result(result: &ApplyResult) {
         .policies
         .iter()
         .filter(|p| p.outcome == ApplyOutcome::Skipped)
+        .count();
+    let p_updated = result
+        .policies
+        .iter()
+        .filter(|p| p.outcome == ApplyOutcome::Updated)
         .count();
     let p_errors = result
         .policies
@@ -1282,8 +1397,9 @@ pub(crate) fn print_apply_result(result: &ApplyResult) {
 
     println!();
     println!(
-        "Applied: {a_created} action(s) created, {a_skipped} skipped, {a_errors} error(s); \
-         {p_created} policy(ies) created, {p_skipped} skipped, {p_errors} error(s)."
+        "Applied: {a_created} action(s) created, {a_updated} updated, {a_skipped} skipped, \
+         {a_errors} error(s); {p_created} policy(ies) created, {p_updated} updated, \
+         {p_skipped} skipped, {p_errors} error(s)."
     );
 
     if result.pruned > 0 {
@@ -1401,7 +1517,7 @@ pub async fn run(
 
             let api =
                 ApiClient::new_with_auth_diagnostics(config, tenant_id, auth_diagnostics.clone())?;
-            let result = apply_manifest(&api, &merged, *prune, tenant_id, *global).await?;
+            let result = apply_manifest(&api, config, &merged, *prune, tenant_id, *global).await?;
 
             let has_errors = result
                 .actions
@@ -1433,7 +1549,7 @@ pub async fn run(
 /// Returns None if no manifests found (skip gracefully).
 #[allow(dead_code)]
 pub async fn reconcile(
-    api: &ApiClient,
+    config: &Configuration,
     default_tenant_id: &str,
     dry_run: bool,
     file: Option<&Path>,
@@ -1441,12 +1557,12 @@ pub async fn reconcile(
     json: bool,
 ) -> Result<Option<()>> {
     let cwd = std::env::current_dir()?;
-    reconcile_in(api, default_tenant_id, dry_run, file, prune, json, &cwd).await
+    reconcile_in(config, default_tenant_id, dry_run, file, prune, json, &cwd).await
 }
 
 #[allow(dead_code)]
 pub async fn reconcile_in(
-    api: &ApiClient,
+    config: &Configuration,
     default_tenant_id: &str,
     dry_run: bool,
     file: Option<&Path>,
@@ -1460,9 +1576,10 @@ pub async fn reconcile_in(
     }
     let merged = merge_manifests(manifests);
     validate_manifest(&merged)?;
+    let api = ApiClient::new(config, default_tenant_id)?;
 
     if dry_run {
-        let report = build_plan(api, &merged, prune, default_tenant_id, false).await?;
+        let report = build_plan(&api, &merged, prune, default_tenant_id, false).await?;
         if json {
             print_json(&report)?;
         } else {
@@ -1470,7 +1587,7 @@ pub async fn reconcile_in(
             print_plan(&report);
         }
     } else {
-        let result = apply_manifest(api, &merged, prune, default_tenant_id, false).await?;
+        let result = apply_manifest(&api, config, &merged, prune, default_tenant_id, false).await?;
         let has_errors = result
             .actions
             .iter()
@@ -1845,9 +1962,16 @@ spec:
 
         // Use a dummy config; the API is never called if manifests are empty.
         let dummy_config = tachyon_sdk::apis::configuration::Configuration::default();
-        let api = ApiClient::new(&dummy_config, "tn_test").unwrap();
-
-        let result = reconcile_in(&api, "tn_test", false, None, false, false, tmp.path()).await;
+        let result = reconcile_in(
+            &dummy_config,
+            "tn_test",
+            false,
+            None,
+            false,
+            false,
+            tmp.path(),
+        )
+        .await;
         assert!(
             matches!(result, Ok(None)),
             "expected Ok(None) but got {:?}",
@@ -1982,6 +2106,29 @@ spec:
     }
 
     #[test]
+    fn global_apply_does_not_claim_another_tenants_policy() {
+        let mut manifest = sample_manifest();
+        manifest.policies[0].global = Some(true);
+        let mut foreign = live_policy("pol_foreign", "MyAppReadOnly", false, None);
+        foreign.owner_tenant_id = Some("tn_other".to_string());
+        let mut ours = live_policy("pol_ours", "MyAppReadOnly", false, None);
+        ours.owner_tenant_id = Some("tn_root".to_string());
+
+        assert!(existing_policy_for_spec(
+            &[foreign.clone()],
+            &manifest.policies[0],
+            true,
+            "tn_root"
+        )
+        .is_none());
+        assert_eq!(
+            existing_policy_for_spec(&[foreign, ours], &manifest.policies[0], true, "tn_root")
+                .map(|policy| policy.id.as_str()),
+            Some("pol_ours")
+        );
+    }
+
+    #[test]
     fn validate_rejects_global_combined_with_shared() {
         let mut manifest = sample_manifest();
         manifest.policies[0].global = Some(true);
@@ -2011,7 +2158,7 @@ spec:
         let configuration = tachyon_sdk::apis::configuration::Configuration::default();
         let api = ApiClient::new(&configuration, "tn_test").unwrap();
 
-        let error = apply_manifest(&api, &manifest, false, "tn_test", false)
+        let error = apply_manifest(&api, &configuration, &manifest, false, "tn_test", false)
             .await
             .expect_err("apply must validate before sending requests");
 
