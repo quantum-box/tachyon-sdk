@@ -1174,16 +1174,17 @@ spec:
     handle.join().unwrap();
     assert_eq!(
         requests.len(),
-        2,
-        "isolated apply must send only saveManifest and applyManifest: {requests:#?}"
+        1,
+        "isolated apply must send one combined applyManifest request: {requests:#?}"
     );
     assert!(requests
         .iter()
         .all(|request| request.starts_with("POST /v1/graphql ")));
-    assert!(requests[0].contains("saveManifest"));
-    assert!(requests[1].contains("applyManifest"));
-    assert!(requests[1].contains("releaseChecksOnly"));
-    assert!(requests[1].contains("true"));
+    assert!(!requests[0].contains("saveManifest"));
+    assert!(requests[0].contains("applyManifest"));
+    assert!(requests[0].contains("releaseChecksOnly"));
+    assert!(requests[0].contains("releaseChecksManifest"));
+    assert!(requests[0].contains("true"));
     let requests_joined = requests.join("\n");
     assert!(!requests_joined.contains("/v1/compute/apps/"));
     assert!(!requests_joined.contains("PUT /"));
