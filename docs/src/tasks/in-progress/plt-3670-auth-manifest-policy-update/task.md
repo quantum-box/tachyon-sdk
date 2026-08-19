@@ -36,7 +36,7 @@ action patterns が反映されない silent success を修正する。
 - [x] 更新 API が失敗した場合、apply は error を報告して非ゼロ終了する。
 - [x] 回帰テストが旧 POST/409 skip 経路を拒否し、修正後の PATCH 経路で成功する。
 - [x] `cargo fmt --check`、`cargo clippy -- -D warnings`、`cargo test` が成功する。
-- [ ] feature branch の PR CI が green になる。
+- [x] feature branch の PR CI が green になる。
 
 ## 調査記録
 
@@ -71,5 +71,12 @@ API read contract の follow-up 後に行う。
 - 2026-08-19: `cargo +stable clippy -- -D warnings` 成功。
 - 2026-08-19: `cargo +stable test` 成功。unit 344件と全 integration targets が成功し、
   `auth_manifest_auth` 14件に追加した PATCH success / human output / error tests を含む。
+- 2026-08-19: PR #272 の `Check CLI`、`Release tag prefix lint`、
+  `Require version bumps for release changes` が成功。run `32227751466` / job
+  `95990896906` の `cargo test` log で次の新規 tests が実際に収集・実行され、すべて
+  `ok` であることを確認。
+  - `auth_manifest_apply_updates_an_existing_policy_with_the_generated_patch_contract`
+  - `auth_manifest_apply_prints_updated_policy_and_partial_reconciliation_warning`
+  - `auth_manifest_apply_reports_patch_failure_and_exits_nonzero`
 - 実 API への適用・永続化確認は未実施。mock は CLI request と result handling のみを
   証明し、server persistence、stale membership 除去、完全収束は証明しない。
