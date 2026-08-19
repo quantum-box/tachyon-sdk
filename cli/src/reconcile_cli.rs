@@ -5,7 +5,6 @@ use serde_json::Value;
 use std::path::PathBuf;
 use tachyon_sdk::apis::configuration::Configuration;
 
-use crate::client::ApiClient;
 use crate::commands::auth::manifest as auth_manifest;
 use crate::compute_cli;
 
@@ -52,8 +51,6 @@ pub struct ReconcileArgs {
 
 #[allow(dead_code)]
 pub async fn run(args: &ReconcileArgs, config: &Configuration, tenant_id: &str) -> Result<()> {
-    let api = ApiClient::new(config, tenant_id)?;
-
     // --- 1. Cloud Apps reconcile ---
     // Only run if the file exists and contains a CloudApps / CloudApp manifest.
     let cloud_apps_file = args
@@ -91,7 +88,7 @@ pub async fn run(args: &ReconcileArgs, config: &Configuration, tenant_id: &str) 
     // Auto-discovers auth manifest from tachyon.yml auth.manifest section
     // and .tachyon/manifests/**/*.yml.  Silently skipped if nothing is found.
     let auth_result = auth_manifest::reconcile(
-        &api,
+        config,
         tenant_id,
         args.dry_run,
         None, // auto-discovery; --file is for Cloud Apps
