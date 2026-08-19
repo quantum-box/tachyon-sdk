@@ -26,7 +26,6 @@ action patterns が反映されない silent success を修正する。
 - `tachyon-apps` 側の `sdk/cli` と `apps/tachyon-cli` の参照・変更。
 - API contract や生成 SDK 自体の変更。
 - `tachyon org policies get` が actions を `null` で返す問題の修正。
-- CLI release/version bump。
 - PR の merge。
 
 ## 完了条件
@@ -61,6 +60,10 @@ API read contract の follow-up 後に行う。
 
 ## 実行ログ
 
+- 2026-08-19: PR CI の release version gate が、release-relevant な CLI 変更に対して
+  version が `0.6.40` のままであることを検出して失敗。
+- 2026-08-19: repository の version sync 規約に従い、Cargo / npm package metadata を
+  `0.6.41` に更新し、Unreleased changelog に PLT-3670 の修正内容を追加。
 - 2026-08-19: API repository の `save_policy_actions` と
   `save_policy_action_patterns` がともに duplicate key 時に effect を更新する upsert
   であることを確認。

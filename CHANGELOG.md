@@ -8,6 +8,8 @@
 
 ### Fixed
 
+- Update existing auth manifest policies through the generated SDK PATCH API instead of reporting duplicate POST responses as a successful skip. Existing policy updates now report `updated`, failures exit non-zero, and output explicitly warns that the current API cannot verify or remove stale action membership. (PLT-3670)
+
 - Send `resourcePattern` in camelCase when registering actions from an auth manifest. The server silently ignored the snake_case key, so a declared `resource_pattern` was never stored and `manifest plan` reported a permanent diff. (PLT-3597)
 
 - Stream Cloud App build command output while retaining a bounded callback tail, allowing the control plane to distinguish active long builds from output stalls. (PLT-3402)
