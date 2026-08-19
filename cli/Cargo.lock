@@ -2320,7 +2320,7 @@ dependencies = [
 
 [[package]]
 name = "tachyon"
-version = "0.6.40"
+version = "0.6.41"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2333,6 +2333,7 @@ dependencies = [
  "futures-util",
  "http",
  "rand 0.8.5",
+ "reqwest 0.12.28",
  "reqwest 0.13.2",
  "rmcp",
  "rstest",

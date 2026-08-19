@@ -43,7 +43,8 @@ pub(crate) async fn run(
                 );
             }
             ManifestKind::Auth => {
-                apply_auth_source(source, args, &api, tenant_id, dry_run, &mut errors).await?;
+                apply_auth_source(source, args, &api, config, tenant_id, dry_run, &mut errors)
+                    .await?;
             }
             ManifestKind::CloudApps => {
                 let manifest = match compute_cli::normalize_cloud_apps_document(&source.document) {
@@ -116,6 +117,7 @@ async fn apply_auth_source(
     source: &super::discovery::ManifestSource,
     args: &ApplyArgs,
     api: &ApiClient,
+    config: &Configuration,
     tenant_id: &str,
     dry_run: bool,
     errors: &mut ManifestApplyErrors,
@@ -140,7 +142,9 @@ async fn apply_auth_source(
             }
         }
         Ok(merged) => {
-            match auth_manifest::apply_manifest(api, &merged, args.prune, tenant_id, false).await {
+            match auth_manifest::apply_manifest(api, config, &merged, args.prune, tenant_id, false)
+                .await
+            {
                 Ok(result) => {
                     let has_errors = auth_apply_has_errors(&result);
                     if args.json {
