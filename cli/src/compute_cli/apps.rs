@@ -215,6 +215,10 @@ pub(super) struct AppResponse {
     #[serde(default)]
     pub(super) buildspec_strategy: Option<String>,
     #[serde(default)]
+    pub(super) tier: Option<String>,
+    #[serde(default)]
+    pub(super) subnet: Option<String>,
+    #[serde(default)]
     pub(super) watch_paths: Option<Vec<String>>,
     #[serde(default)]
     pub(super) paths_ignore: Option<Vec<String>>,
@@ -1696,6 +1700,13 @@ pub(crate) fn app_entry_to_api_body(entry: &Value) -> Result<Value> {
     copy_string_field(entry, obj, "rootDirectory", "root_directory");
     copy_string_field(entry, obj, "dockerContext", "docker_context");
     copy_string_field(entry, obj, "buildspecStrategy", "buildspec_strategy");
+    // `tier: enterprise` and its `subnet` choose the app's network profile,
+    // which is what gives a Lambda app a route to PrivateLink-only resources.
+    // The manifest schema has always parsed them, but they never reached the
+    // API, so an enterprise app created from a manifest came back standard
+    // and off-network.
+    copy_string_field(entry, obj, "tier", "tier");
+    copy_string_field(entry, obj, "subnet", "subnet");
     if let Some(command) = build_command {
         obj.insert("build_command".to_string(), Value::String(command));
     }
@@ -1846,6 +1857,11 @@ fn app_field_value(app: &AppResponse, field: &str) -> Value {
         "buildspec_strategy" => {
             opt_string_value(app.buildspec_strategy.as_deref().or(Some("inline")))
         }
+        // The API defaults an unset tier to `standard`, so compare against
+        // that rather than null; otherwise a manifest that says `standard`
+        // would show up as a change on every apply.
+        "tier" => opt_string_value(app.tier.as_deref().or(Some("standard"))),
+        "subnet" => opt_string_value(app.subnet.as_deref()),
         "watch_paths" => match &app.watch_paths {
             Some(paths) if !paths.is_empty() => {
                 Value::Array(paths.iter().map(|p| Value::String(p.clone())).collect())
@@ -2088,6 +2104,61 @@ spec:
         let body = app_entry_to_api_body(&entries[0]).unwrap();
 
         assert_eq!(body["name"], "field");
+    }
+
+    #[test]
+    fn api_body_carries_enterprise_network_profile() {
+        let (_tmp, path) = write_manifest(
+            r#"
+apiVersion: apps.tachy.one/v1alpha
+kind: CloudApps
+spec:
+  apps:
+    - name: field
+      repository:
+        url: https://github.com/quantum-box/tachyonfield
+        owner: quantum-box
+        name: tachyonfield
+      framework: cargo_lambda
+      deploymentTarget: lambda
+      tier: enterprise
+      subnet: enterprise-field
+"#,
+        );
+
+        let manifest = load_cloud_apps_manifest(&path).unwrap();
+        let entries = select_app_entries(&manifest, Some("field")).unwrap();
+        let body = app_entry_to_api_body(&entries[0]).unwrap();
+
+        // Without these the app is created on the standard tier with no
+        // subnet, so a Lambda that needs PrivateLink egress silently lands
+        // off-network.
+        assert_eq!(body["tier"], "enterprise");
+        assert_eq!(body["subnet"], "enterprise-field");
+    }
+
+    #[test]
+    fn api_body_omits_network_profile_when_manifest_does() {
+        let (_tmp, path) = write_manifest(
+            r#"
+apiVersion: apps.tachy.one/v1alpha
+kind: CloudApps
+spec:
+  apps:
+    - name: field
+      repository:
+        url: https://github.com/quantum-box/tachyonfield
+        owner: quantum-box
+        name: tachyonfield
+"#,
+        );
+
+        let manifest = load_cloud_apps_manifest(&path).unwrap();
+        let entries = select_app_entries(&manifest, Some("field")).unwrap();
+        let body = app_entry_to_api_body(&entries[0]).unwrap();
+
+        assert!(body.get("tier").is_none());
+        assert!(body.get("subnet").is_none());
     }
 
     #[test]
