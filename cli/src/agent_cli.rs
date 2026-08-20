@@ -673,7 +673,7 @@ async fn run_sessions_list(api: &ApiClient, json: bool) -> Result<()> {
     println!("{:-<28}  {:-<28}  {:-<19}  {:-<19}", "", "", "", "");
     for s in &sessions {
         println!(
-            "{:<28}  {:<28}  {:<12}  {}",
+            "{:<28}  {:<28}  {:<19}  {}",
             s.id,
             truncate(s.name.as_deref().unwrap_or("-"), 28),
             s.created_at,
@@ -934,7 +934,7 @@ async fn run_protocols_list(api: &ApiClient, json: bool) -> Result<()> {
         "{:<28}  {:<28}  {:<28}  DESCRIPTION",
         "ID", "PROTOCOL NAME", "TITLE"
     );
-    println!("{:-<28}  {:-<24}  {:-<16}  {:-<40}", "", "", "", "");
+    println!("{:-<28}  {:-<28}  {:-<28}  {:-<40}", "", "", "", "");
     for p in &protocols {
         println!(
             "{:<28}  {:<28}  {:<28}  {}",

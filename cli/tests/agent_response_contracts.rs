@@ -42,6 +42,15 @@ fn agent_responses_use_exact_api_fields() {
             forbidden_output: None,
         },
         Case {
+            label: "agent worktree list envelope",
+            args: &["agent", "worktrees", "list", "--json"],
+            path: "/v1/agent/worktrees",
+            valid_body: r#"{"worktrees":[],"total":0}"#,
+            invalid_body: r#"{"worktrees":[],"total_count":0}"#,
+            missing_field: "total",
+            forbidden_output: None,
+        },
+        Case {
             label: "agent status",
             args: &["agent", "status", "agent-one", "--json"],
             path: "/v1/llms/agents/agent-one/status",
