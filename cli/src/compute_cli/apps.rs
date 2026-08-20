@@ -3267,7 +3267,9 @@ async fn apply_compute_cloud_app_manifest(
     release_checks_only: bool,
     change_control_token: Option<&str>,
 ) -> Result<()> {
-    save_compute_cloud_app_manifest(api, manifest, change_control_token).await?;
+    if !release_checks_only {
+        save_compute_cloud_app_manifest(api, manifest, change_control_token).await?;
+    }
     let name = manifest
         .get("metadata")
         .and_then(|metadata| metadata.get("name"))
@@ -3280,6 +3282,7 @@ async fn apply_compute_cloud_app_manifest(
     });
     if release_checks_only {
         apply_input["releaseChecksOnly"] = Value::Bool(true);
+        apply_input["releaseChecksManifest"] = Value::String(serde_json::to_string(manifest)?);
     }
     let body = json!({
         "query": r#"
