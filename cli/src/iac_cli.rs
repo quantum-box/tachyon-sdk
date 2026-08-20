@@ -198,33 +198,28 @@ pub enum ConnectionsCommand {
 
 #[derive(Debug, Deserialize, Serialize)]
 struct OAuthProvidersResponse {
-    #[serde(default)]
-    github: Option<OAuthProviderConfig>,
-    #[serde(default)]
-    linear: Option<OAuthProviderConfig>,
+    providers: Vec<OAuthProviderConfig>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
 struct OAuthProviderConfig {
-    #[serde(default)]
-    client_id: Option<String>,
-    #[serde(default)]
-    enabled: Option<bool>,
-    #[serde(default)]
-    scopes: Option<Vec<String>>,
+    provider: String,
+    client_id: String,
+    redirect_uri: String,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
 struct IntegrationResponse {
     id: String,
-    #[serde(default)]
-    name: Option<String>,
-    #[serde(default)]
-    provider: Option<String>,
-    #[serde(default)]
-    status: Option<String>,
-    #[serde(default)]
-    created_at: Option<String>,
+    name: String,
+    description: String,
+    category: String,
+    provider: String,
+    icon_url: Option<String>,
+    is_enabled: bool,
+    is_featured: bool,
+    requires_oauth: bool,
+    requires_setup: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -233,18 +228,38 @@ struct IntegrationListResponse {
 }
 
 #[derive(Debug, Deserialize, Serialize)]
+struct IntegrationDetailResponse {
+    id: String,
+    name: String,
+    description: String,
+    category: String,
+    provider: String,
+    icon_url: Option<String>,
+    sync_capability: String,
+    supported_objects: Vec<String>,
+    is_enabled: bool,
+    is_featured: bool,
+    requires_oauth: bool,
+    oauth_scopes: Vec<String>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
 struct ConnectionResponse {
     id: String,
-    #[serde(default)]
-    integration_id: Option<String>,
-    #[serde(default)]
-    provider: Option<String>,
-    #[serde(default)]
-    status: Option<String>,
-    #[serde(default)]
-    account_name: Option<String>,
-    #[serde(default)]
-    created_at: Option<String>,
+    integration_id: String,
+    provider: String,
+    status: String,
+    external_account_id: Option<String>,
+    external_account_name: Option<String>,
+    connected_at: String,
+    last_synced_at: Option<String>,
+    error_message: Option<String>,
+    metadata: std::collections::HashMap<String, serde_json::Value>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ConnectionListResponse {
+    connections: Vec<ConnectionResponse>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -373,37 +388,11 @@ async fn run_oauth_providers(
         return print_json(&resp);
     }
     println!("OAuth Provider Configurations:");
-    println!();
-    if let Some(gh) = &resp.github {
-        println!("  GitHub:");
-        println!(
-            "    Enabled:   {}",
-            gh.enabled
-                .map(|v| if v { "yes" } else { "no" })
-                .unwrap_or("-")
-        );
-        println!("    Client ID: {}", gh.client_id.as_deref().unwrap_or("-"));
-        if let Some(scopes) = &gh.scopes {
-            println!("    Scopes:    {}", scopes.join(", "));
-        }
-    } else {
-        println!("  GitHub: not configured");
-    }
-    println!();
-    if let Some(lr) = &resp.linear {
-        println!("  Linear:");
-        println!(
-            "    Enabled:   {}",
-            lr.enabled
-                .map(|v| if v { "yes" } else { "no" })
-                .unwrap_or("-")
-        );
-        println!("    Client ID: {}", lr.client_id.as_deref().unwrap_or("-"));
-        if let Some(scopes) = &lr.scopes {
-            println!("    Scopes:    {}", scopes.join(", "));
-        }
-    } else {
-        println!("  Linear: not configured");
+    for provider in &resp.providers {
+        println!();
+        println!("  {}:", provider.provider);
+        println!("    Client ID:    {}", provider.client_id);
+        println!("    Redirect URI: {}", provider.redirect_uri);
     }
     Ok(())
 }
@@ -419,57 +408,53 @@ async fn run_integrations_list(api: &ApiClient, json: bool) -> Result<()> {
         return Ok(());
     }
     println!(
-        "{:<28}  {:<20}  {:<16}  {:<12}  CREATED AT",
-        "ID", "NAME", "PROVIDER", "STATUS"
+        "{:<28}  {:<20}  {:<16}  {:<8}  REQUIRES SETUP",
+        "ID", "NAME", "PROVIDER", "ENABLED"
     );
     println!(
-        "{:-<28}  {:-<20}  {:-<16}  {:-<12}  {:-<19}",
+        "{:-<28}  {:-<20}  {:-<16}  {:-<8}  {:-<14}",
         "", "", "", "", ""
     );
     for i in &integrations {
         println!(
-            "{:<28}  {:<20}  {:<16}  {:<12}  {}",
-            i.id,
-            i.name.as_deref().unwrap_or("-"),
-            i.provider.as_deref().unwrap_or("-"),
-            i.status.as_deref().unwrap_or("-"),
-            i.created_at.as_deref().unwrap_or("-"),
+            "{:<28}  {:<20}  {:<16}  {:<8}  {}",
+            i.id, i.name, i.provider, i.is_enabled, i.requires_setup,
         );
     }
     Ok(())
 }
 
 async fn run_integrations_get(api: &ApiClient, id: &str, json: bool) -> Result<()> {
-    let i: IntegrationResponse = api.get(&format!("/v1/integrations/{id}")).await?;
+    let i: IntegrationDetailResponse = api.get(&format!("/v1/integrations/{id}")).await?;
     if json {
         return print_json(&i);
     }
-    println!("ID:       {}", i.id);
-    println!("Name:     {}", i.name.as_deref().unwrap_or("-"));
-    println!("Provider: {}", i.provider.as_deref().unwrap_or("-"));
-    println!("Status:   {}", i.status.as_deref().unwrap_or("-"));
-    println!("Created:  {}", i.created_at.as_deref().unwrap_or("-"));
+    println!("ID:               {}", i.id);
+    println!("Name:             {}", i.name);
+    println!("Description:      {}", i.description);
+    println!("Category:         {}", i.category);
+    println!("Provider:         {}", i.provider);
+    println!("Sync capability:  {}", i.sync_capability);
+    println!("Supported objects: {}", i.supported_objects.join(", "));
+    println!("Enabled:          {}", i.is_enabled);
+    println!("Featured:         {}", i.is_featured);
+    println!("Requires OAuth:   {}", i.requires_oauth);
+    println!("OAuth scopes:     {}", i.oauth_scopes.join(", "));
     Ok(())
 }
 
 async fn run_connections_list(api: &ApiClient, json: bool) -> Result<()> {
-    // The endpoint returns `{ "connections": [...] }`, and carries fields
-    // (external_account_id, metadata) that ConnectionResponse drops. Decode
-    // loosely so `--json` shows the payload as served.
-    let raw: serde_json::Value = api.get("/v1/integrations/connections").await?;
+    let response: ConnectionListResponse = api.get("/v1/integrations/connections").await?;
+    let conns = response.connections;
     if json {
-        return print_json(&raw);
+        return print_json(&conns);
     }
-    let conns: Vec<ConnectionResponse> = match raw.get("connections") {
-        Some(connections) => serde_json::from_value(connections.clone())?,
-        None => serde_json::from_value(raw)?,
-    };
     if conns.is_empty() {
         println!("No connections found.");
         return Ok(());
     }
     println!(
-        "{:<28}  {:<16}  {:<12}  {:<20}  CREATED AT",
+        "{:<28}  {:<16}  {:<12}  {:<20}  CONNECTED AT",
         "ID", "PROVIDER", "STATUS", "ACCOUNT"
     );
     println!(
@@ -480,10 +465,10 @@ async fn run_connections_list(api: &ApiClient, json: bool) -> Result<()> {
         println!(
             "{:<28}  {:<16}  {:<12}  {:<20}  {}",
             c.id,
-            c.provider.as_deref().unwrap_or("-"),
-            c.status.as_deref().unwrap_or("-"),
-            c.account_name.as_deref().unwrap_or("-"),
-            c.created_at.as_deref().unwrap_or("-"),
+            c.provider,
+            c.status,
+            c.external_account_name.as_deref().unwrap_or("-"),
+            c.connected_at,
         );
     }
     Ok(())
@@ -497,10 +482,13 @@ async fn run_connections_get(api: &ApiClient, id: &str, json: bool) -> Result<()
         return print_json(&c);
     }
     println!("ID:       {}", c.id);
-    println!("Provider: {}", c.provider.as_deref().unwrap_or("-"));
-    println!("Status:   {}", c.status.as_deref().unwrap_or("-"));
-    println!("Account:  {}", c.account_name.as_deref().unwrap_or("-"));
-    println!("Created:  {}", c.created_at.as_deref().unwrap_or("-"));
+    println!("Provider:  {}", c.provider);
+    println!("Status:    {}", c.status);
+    println!(
+        "Account:   {}",
+        c.external_account_name.as_deref().unwrap_or("-")
+    );
+    println!("Connected: {}", c.connected_at);
     Ok(())
 }
 
