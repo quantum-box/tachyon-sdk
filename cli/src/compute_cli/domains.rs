@@ -39,13 +39,13 @@ pub(super) struct ListDomainsResponse {
 #[derive(Debug, Deserialize, Serialize)]
 pub(super) struct CustomDomainResponse {
     pub(super) id: String,
+    pub(super) app_id: String,
     pub(super) domain: String,
-    #[serde(default)]
-    pub(super) status: Option<String>,
-    #[serde(default)]
-    pub(super) verified: Option<bool>,
-    #[serde(default)]
-    pub(super) created_at: Option<String>,
+    pub(super) status: String,
+    pub(super) tls_status: String,
+    pub(super) cname_target: String,
+    pub(super) created_at: String,
+    pub(super) updated_at: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -65,26 +65,21 @@ pub(super) async fn run_domains_list(api: &ApiClient, app_id: &str, json: bool) 
         return Ok(());
     }
     println!(
-        "{:<28}  {:<40}  {:<10}  {:<8}  CREATED AT",
-        "ID", "DOMAIN", "STATUS", "VERIFIED"
+        "{:<28}  {:<40}  {:<10}  {:<12}  CREATED AT",
+        "ID", "DOMAIN", "STATUS", "TLS STATUS"
     );
     println!(
-        "{:-<28}  {:-<40}  {:-<10}  {:-<8}  {:-<19}",
+        "{:-<28}  {:-<40}  {:-<10}  {:-<12}  {:-<19}",
         "", "", "", "", ""
     );
     for d in &resp.domains {
         println!(
-            "{:<28}  {:<40}  {:<10}  {:<8}  {}",
+            "{:<28}  {:<40}  {:<10}  {:<12}  {}",
             d.id,
             d.domain,
-            d.status.as_deref().unwrap_or("-"),
-            d.verified
-                .map(|v| if v { "yes" } else { "no" })
-                .unwrap_or("-"),
-            d.created_at
-                .as_deref()
-                .map(format_created_at)
-                .unwrap_or_else(|| "-".to_string()),
+            d.status,
+            d.tls_status,
+            format_created_at(&d.created_at),
         );
     }
     Ok(())
