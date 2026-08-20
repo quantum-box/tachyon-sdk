@@ -24,6 +24,15 @@ fn iac_and_domain_responses_use_exact_api_fields() {
             forbidden_output: None,
         },
         Case {
+            label: "oauth provider envelope",
+            args: &["iac", "oauth-providers", "--json"],
+            path: "/v1/iac/oauth-providers?tenant_id=tn_test1234567890",
+            valid_body: r#"{"providers":[]}"#,
+            invalid_body: r#"{"github":null,"linear":null}"#,
+            missing_field: "providers",
+            forbidden_output: None,
+        },
+        Case {
             label: "oauth provider",
             args: &["iac", "oauth-providers", "--json"],
             path: "/v1/iac/oauth-providers?tenant_id=tn_test1234567890",
@@ -31,6 +40,15 @@ fn iac_and_domain_responses_use_exact_api_fields() {
             invalid_body: r#"{"providers":[{"provider":"github","clientId":"client-id","client_secret":"secret-value","redirect_uri":"https://example.invalid/callback"}]}"#,
             missing_field: "client_id",
             forbidden_output: Some("secret-value"),
+        },
+        Case {
+            label: "integration connection envelope",
+            args: &["iac", "connections", "list", "--json"],
+            path: "/v1/integrations/connections",
+            valid_body: r#"{"connections":[]}"#,
+            invalid_body: r#"{"items":[]}"#,
+            missing_field: "connections",
+            forbidden_output: None,
         },
         Case {
             label: "integration connection",
