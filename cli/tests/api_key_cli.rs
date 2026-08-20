@@ -96,7 +96,7 @@ fn api_key_list_decodes_openapi_envelope() {
     let tmp = TempDir::new().unwrap();
     let (api_url, rx, handle) = start_server(
         "200 OK",
-        r#"{"apiKeys":[{"id":"key_123456789012","serviceAccountId":"sa_123456789012","name":"CEO key","createdAt":"2026-05-21T00:00:00Z"}]}"#,
+        r#"{"apiKeys":[{"id":"key_123456789012","serviceAccountId":"sa_123456789012","name":"CEO key","value":"pk_****","createdAt":"2026-05-21T00:00:00Z","expiresAt":null}]}"#,
     );
 
     let output = isolated_command(tmp.path())
@@ -121,6 +121,33 @@ fn api_key_list_decodes_openapi_envelope() {
     let keys: Vec<serde_json::Value> = serde_json::from_slice(&output.stdout).expect("keys json");
     assert_eq!(keys.len(), 1);
     assert_eq!(keys[0]["id"], "key_123456789012");
+}
+
+#[test]
+fn api_key_list_rejects_wrong_value_field_name() {
+    let tmp = TempDir::new().unwrap();
+    let (api_url, rx, handle) = start_server(
+        "200 OK",
+        r#"{"apiKeys":[{"id":"key_123456789012","serviceAccountId":"sa_123456789012","name":"CEO key","prefix":"pk_legacy","createdAt":"2026-05-21T00:00:00Z","expiresAt":null}]}"#,
+    );
+
+    let output = isolated_command(tmp.path())
+        .env("TACHYON_API_URL", api_url)
+        .args(["api-key", "list", "sa_123456789012", "--json"])
+        .output()
+        .expect("run tachyon api-key list");
+
+    let req = rx.recv().unwrap();
+    handle.join().unwrap();
+    assert!(req.starts_with(
+        "GET /v1/auth/service-accounts/sa_123456789012/api-keys?operator_id=tn_test1234567890 "
+    ));
+    assert!(
+        !output.status.success(),
+        "wrong value field unexpectedly decoded"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("value"), "stderr was:\n{stderr}");
 }
 
 #[test]

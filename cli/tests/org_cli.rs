@@ -80,6 +80,20 @@ fn assert_success(output: &Output) {
     );
 }
 
+fn assert_decode_failure(output: &Output, missing_field: &str) {
+    assert!(
+        !output.status.success(),
+        "response with a mismatched field unexpectedly decoded\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains(missing_field),
+        "missing {missing_field:?} decode error; stderr was:\n{stderr}"
+    );
+}
+
 fn finish_requests(rx: mpsc::Receiver<Vec<String>>, handle: thread::JoinHandle<()>) -> Vec<String> {
     let requests = rx.recv().unwrap();
     handle.join().unwrap();
@@ -99,7 +113,7 @@ fn service_accounts_list_sends_tenant_query_and_decodes_openapi_envelope() {
     let tmp = TempDir::new().unwrap();
     let (api_url, rx, handle) = start_server(vec![MockResponse {
         status: "200 OK",
-        body: r#"{"serviceAccounts":[{"id":"sa_123456789012","name":"inventory","createdAt":"2026-08-01T00:00:00Z"}]}"#,
+        body: r#"{"serviceAccounts":[{"id":"sa_123456789012","tenantId":"tn_test1234567890","name":"inventory","createdAt":"2026-08-01T00:00:00Z"}]}"#,
     }]);
 
     let output = run_org(
@@ -121,11 +135,11 @@ fn service_accounts_list_sends_tenant_query_and_decodes_openapi_envelope() {
 }
 
 #[test]
-fn service_accounts_list_keeps_legacy_array_compatibility() {
+fn service_accounts_list_rejects_wrong_item_fields() {
     let tmp = TempDir::new().unwrap();
     let (api_url, rx, handle) = start_server(vec![MockResponse {
         status: "200 OK",
-        body: r#"[{"id":"sa_123456789012","name":"legacy"}]"#,
+        body: r#"{"serviceAccounts":[{"id":"sa_123456789012","name":"legacy","description":"old field","createdAt":"2026-08-01T00:00:00Z"}]}"#,
     }]);
 
     let output = run_org(
@@ -133,16 +147,12 @@ fn service_accounts_list_keeps_legacy_array_compatibility() {
         api_url,
         &["org", "service-accounts", "list", "--json"],
     );
-    assert_success(&output);
-
     let requests = finish_requests(rx, handle);
     assert_tenant_request(
         &requests[0],
         "GET /v1/auth/service-accounts?operator_id=tn_test1234567890 ",
     );
-    let accounts: Vec<serde_json::Value> =
-        serde_json::from_slice(&output.stdout).expect("service accounts json");
-    assert_eq!(accounts.len(), 1);
+    assert_decode_failure(&output, "tenantId");
 }
 
 #[test]
@@ -150,7 +160,7 @@ fn service_accounts_get_sends_tenant_query_and_header() {
     let tmp = TempDir::new().unwrap();
     let (api_url, rx, handle) = start_server(vec![MockResponse {
         status: "200 OK",
-        body: r#"{"id":"sa_123456789012","name":"inventory"}"#,
+        body: r#"{"id":"sa_123456789012","tenantId":"tn_test1234567890","name":"inventory","createdAt":"2026-08-01T00:00:00Z"}"#,
     }]);
 
     let output = run_org(
@@ -178,7 +188,7 @@ fn service_account_api_keys_sends_tenant_query_and_decodes_openapi_envelope() {
     let tmp = TempDir::new().unwrap();
     let (api_url, rx, handle) = start_server(vec![MockResponse {
         status: "200 OK",
-        body: r#"{"apiKeys":[{"id":"key_123456789012","name":"audit","prefix":"masked","createdAt":"2026-08-01T00:00:00Z"}]}"#,
+        body: r#"{"apiKeys":[{"id":"key_123456789012","serviceAccountId":"sa_123456789012","name":"audit","value":"pk_****","createdAt":"2026-08-01T00:00:00Z","expiresAt":null}]}"#,
     }]);
 
     let output = run_org(
@@ -206,11 +216,11 @@ fn service_account_api_keys_sends_tenant_query_and_decodes_openapi_envelope() {
 }
 
 #[test]
-fn service_account_api_keys_keeps_legacy_array_compatibility() {
+fn service_account_api_keys_reject_wrong_item_fields() {
     let tmp = TempDir::new().unwrap();
     let (api_url, rx, handle) = start_server(vec![MockResponse {
         status: "200 OK",
-        body: r#"[{"id":"key_123456789012","name":"legacy"}]"#,
+        body: r#"{"apiKeys":[{"id":"key_123456789012","serviceAccountId":"sa_123456789012","name":"legacy","prefix":"pk_legacy","createdAt":"2026-08-01T00:00:00Z","expiresAt":null}]}"#,
     }]);
 
     let output = run_org(
@@ -224,16 +234,12 @@ fn service_account_api_keys_keeps_legacy_array_compatibility() {
             "--json",
         ],
     );
-    assert_success(&output);
-
     let requests = finish_requests(rx, handle);
     assert_tenant_request(
         &requests[0],
         "GET /v1/auth/service-accounts/sa_123456789012/api-keys?operator_id=tn_test1234567890 ",
     );
-    let keys: Vec<serde_json::Value> =
-        serde_json::from_slice(&output.stdout).expect("api keys json");
-    assert_eq!(keys.len(), 1);
+    assert_decode_failure(&output, "value");
 }
 
 #[test]
@@ -242,7 +248,7 @@ fn api_key_name_resolution_uses_tenant_query() {
     let (api_url, rx, handle) = start_server(vec![
         MockResponse {
             status: "200 OK",
-            body: r#"{"serviceAccounts":[{"id":"sa_123456789012","name":"inventory"}]}"#,
+            body: r#"{"serviceAccounts":[{"id":"sa_123456789012","tenantId":"tn_test1234567890","name":"inventory","createdAt":"2026-08-01T00:00:00Z"}]}"#,
         },
         MockResponse {
             status: "200 OK",
@@ -274,7 +280,7 @@ fn users_list_sends_tenant_query_and_decodes_openapi_envelope() {
     let tmp = TempDir::new().unwrap();
     let (api_url, rx, handle) = start_server(vec![MockResponse {
         status: "200 OK",
-        body: r#"{"users":[{"id":"us_123456789012","username":"member","email":"member@example.invalid","role":"member","createdAt":"2026-08-01T00:00:00Z"}]}"#,
+        body: r#"{"users":[{"id":"us_123456789012","name":"Member","email":"member@example.invalid","role":"member","tenants":["tn_test1234567890"],"status":"active","createdAt":"2026-08-01T00:00:00Z","expiresAt":null}]}"#,
     }]);
 
     let output = run_org(tmp.path(), api_url, &["org", "users", "list", "--json"]);
@@ -288,6 +294,248 @@ fn users_list_sends_tenant_query_and_decodes_openapi_envelope() {
     let users: Vec<serde_json::Value> = serde_json::from_slice(&output.stdout).expect("users json");
     assert_eq!(users.len(), 1);
     assert_eq!(users[0]["id"], "us_123456789012");
+    assert_eq!(users[0]["name"], "Member");
+}
+
+#[test]
+fn users_list_rejects_wrong_user_field_names() {
+    let tmp = TempDir::new().unwrap();
+    let (api_url, rx, handle) = start_server(vec![MockResponse {
+        status: "200 OK",
+        body: r#"{"users":[{"id":"us_123456789012","username":"member","email":"member@example.invalid","role":"member","tenants":["tn_test1234567890"],"state":"active","createdAt":"2026-08-01T00:00:00Z","expiresAt":null}]}"#,
+    }]);
+
+    let output = run_org(tmp.path(), api_url, &["org", "users", "list", "--json"]);
+    let requests = finish_requests(rx, handle);
+    assert_tenant_request(
+        &requests[0],
+        "GET /v1/auth/users?operator_id=tn_test1234567890 ",
+    );
+    assert_decode_failure(&output, "status");
+}
+
+#[test]
+fn users_get_decodes_exact_contract_and_rejects_wrong_fields() {
+    let valid = r#"{"id":"us_123456789012","email":"member@example.invalid","name":"Member","role":"member","tenants":["tn_test1234567890"]}"#;
+    let invalid = r#"{"id":"us_123456789012","email":"member@example.invalid","username":"member","role_name":"member","tenants":["tn_test1234567890"]}"#;
+
+    for (body, succeeds) in [(valid, true), (invalid, false)] {
+        let tmp = TempDir::new().unwrap();
+        let (api_url, rx, handle) = start_server(vec![MockResponse {
+            status: "200 OK",
+            body,
+        }]);
+        let output = run_org(
+            tmp.path(),
+            api_url,
+            &["org", "users", "get", "us_123456789012", "--json"],
+        );
+        let requests = finish_requests(rx, handle);
+        assert_tenant_request(&requests[0], "GET /v1/auth/users/us_123456789012 ");
+        if succeeds {
+            assert_success(&output);
+        } else {
+            assert_decode_failure(&output, "role");
+        }
+    }
+}
+
+#[test]
+fn operators_decode_exact_contract_and_reject_alias_field() {
+    let valid = r#"[{"id":"tn_operator1234567890","name":"Operator","operatorName":"operator-one","platformId":"tn_platform123456789"}]"#;
+    let invalid = r#"[{"id":"tn_operator1234567890","name":"Operator","alias":"operator-one","platformId":"tn_platform123456789"}]"#;
+
+    for (body, succeeds) in [(valid, true), (invalid, false)] {
+        let tmp = TempDir::new().unwrap();
+        let (api_url, rx, handle) = start_server(vec![MockResponse {
+            status: "200 OK",
+            body,
+        }]);
+        let output = run_org(tmp.path(), api_url, &["org", "operators", "list", "--json"]);
+        let requests = finish_requests(rx, handle);
+        assert_tenant_request(&requests[0], "GET /v1/auth/operators/by-user ");
+        if succeeds {
+            assert_success(&output);
+        } else {
+            assert_decode_failure(&output, "operatorName");
+        }
+    }
+}
+
+#[test]
+fn policies_list_decodes_camel_case_api_contract() {
+    let tmp = TempDir::new().unwrap();
+    let (api_url, rx, handle) = start_server(vec![MockResponse {
+        status: "200 OK",
+        body: r#"{"policies":[{"id":"pol_123456789012","name":"finance:Accountant","description":"Finance role","isSystem":false,"tenantId":"tn_test1234567890","sharedWithDescendants":true,"ownerTenantId":null,"createdAt":"2026-08-01T00:00:00Z","updatedAt":"2026-08-02T00:00:00Z"}],"totalCount":1}"#,
+    }]);
+
+    let output = run_org(tmp.path(), api_url, &["org", "policies", "list", "--json"]);
+    assert_success(&output);
+
+    let requests = finish_requests(rx, handle);
+    assert_tenant_request(&requests[0], "GET /v1/auth/policies ");
+    let policies: Vec<serde_json::Value> =
+        serde_json::from_slice(&output.stdout).expect("policies json");
+    assert_eq!(policies[0]["name"], "finance:Accountant");
+    assert_eq!(policies[0]["sharedWithDescendants"], true);
+}
+
+#[test]
+fn policies_list_rejects_wrong_policy_field_names() {
+    let tmp = TempDir::new().unwrap();
+    let (api_url, rx, handle) = start_server(vec![MockResponse {
+        status: "200 OK",
+        body: r#"{"policies":[{"id":"pol_123456789012","name":"finance:Accountant","description":null,"is_system":false,"tenantId":null,"sharedWithDescendants":false,"ownerTenantId":null,"createdAt":"2026-08-01T00:00:00Z","updatedAt":"2026-08-02T00:00:00Z"}],"totalCount":1}"#,
+    }]);
+
+    let output = run_org(tmp.path(), api_url, &["org", "policies", "list", "--json"]);
+    let requests = finish_requests(rx, handle);
+    assert_tenant_request(&requests[0], "GET /v1/auth/policies ");
+    assert_decode_failure(&output, "isSystem");
+}
+
+#[test]
+fn policies_list_rejects_wrong_envelope_field_names() {
+    let tmp = TempDir::new().unwrap();
+    let (api_url, rx, handle) = start_server(vec![MockResponse {
+        status: "200 OK",
+        body: r#"{"policies":[],"total_count":0}"#,
+    }]);
+
+    let output = run_org(tmp.path(), api_url, &["org", "policies", "list", "--json"]);
+    let requests = finish_requests(rx, handle);
+    assert_tenant_request(&requests[0], "GET /v1/auth/policies ");
+    assert_decode_failure(&output, "totalCount");
+}
+
+#[test]
+fn user_policies_decode_policy_ids_envelope() {
+    let tmp = TempDir::new().unwrap();
+    let (api_url, rx, handle) = start_server(vec![MockResponse {
+        status: "200 OK",
+        body: r#"{"policyIds":["pol_123456789012"]}"#,
+    }]);
+
+    let output = run_org(
+        tmp.path(),
+        api_url,
+        &["org", "users", "policies", "us_123456789012", "--json"],
+    );
+    assert_success(&output);
+
+    let requests = finish_requests(rx, handle);
+    assert_tenant_request(&requests[0], "GET /v1/auth/users/us_123456789012/policies ");
+    let policy_ids: Vec<String> = serde_json::from_slice(&output.stdout).expect("policy ids json");
+    assert_eq!(policy_ids, ["pol_123456789012"]);
+}
+
+#[test]
+fn user_policies_reject_wrong_policy_ids_field_name() {
+    let tmp = TempDir::new().unwrap();
+    let (api_url, rx, handle) = start_server(vec![MockResponse {
+        status: "200 OK",
+        body: r#"{"policy_ids":["pol_123456789012"]}"#,
+    }]);
+
+    let output = run_org(
+        tmp.path(),
+        api_url,
+        &["org", "users", "policies", "us_123456789012", "--json"],
+    );
+    let requests = finish_requests(rx, handle);
+    assert_tenant_request(&requests[0], "GET /v1/auth/users/us_123456789012/policies ");
+    assert_decode_failure(&output, "policyIds");
+}
+
+#[test]
+fn policy_mappings_send_filters_and_decode_api_contract() {
+    let tmp = TempDir::new().unwrap();
+    let (api_url, rx, handle) = start_server(vec![MockResponse {
+        status: "200 OK",
+        body: r#"{"mappings":[{"userId":"us_123456789012","tenantId":"tn_test1234567890","policyId":"pol_123456789012","resourceScope":"resource-scope","assignedAt":"2026-08-01T00:00:00Z"}]}"#,
+    }]);
+
+    let output = run_org(
+        tmp.path(),
+        api_url,
+        &[
+            "org",
+            "policies",
+            "mappings",
+            "--resource-scope",
+            "resource-scope",
+            "--json",
+        ],
+    );
+    assert_success(&output);
+
+    let requests = finish_requests(rx, handle);
+    assert_tenant_request(
+        &requests[0],
+        "GET /v1/auth/user-policy-mappings?tenantId=tn_test1234567890&resourceScope=resource-scope ",
+    );
+    let mappings: Vec<serde_json::Value> =
+        serde_json::from_slice(&output.stdout).expect("policy mappings json");
+    assert_eq!(mappings[0]["policyId"], "pol_123456789012");
+    assert_eq!(mappings[0]["resourceScope"], "resource-scope");
+}
+
+#[test]
+fn policy_mappings_reject_wrong_mapping_field_names() {
+    let tmp = TempDir::new().unwrap();
+    let (api_url, rx, handle) = start_server(vec![MockResponse {
+        status: "200 OK",
+        body: r#"{"mappings":[{"user_id":"us_123456789012","tenantId":"tn_test1234567890","policyId":"pol_123456789012","resourceScope":null,"assignedAt":"2026-08-01T00:00:00Z"}]}"#,
+    }]);
+
+    let output = run_org(
+        tmp.path(),
+        api_url,
+        &[
+            "org",
+            "policies",
+            "mappings",
+            "--resource-scope",
+            "resource-scope",
+            "--json",
+        ],
+    );
+    let requests = finish_requests(rx, handle);
+    assert_tenant_request(
+        &requests[0],
+        "GET /v1/auth/user-policy-mappings?tenantId=tn_test1234567890&resourceScope=resource-scope ",
+    );
+    assert_decode_failure(&output, "userId");
+}
+
+#[test]
+fn policy_actions_decode_full_name_and_reject_legacy_action_field() {
+    let valid_body = r#"{"actions":[{"id":"act_123456789012","platformId":null,"sharedWithDescendants":false,"ownerTenantId":null,"context":"finance","name":"ListInvoices","fullName":"finance:ListInvoices","description":"List invoices","resourcePattern":null,"sandboxRestriction":"none"}],"totalCount":1}"#;
+    let invalid_body = r#"{"actions":[{"id":"act_123456789012","platformId":null,"sharedWithDescendants":false,"ownerTenantId":null,"context":"finance","name":"ListInvoices","action":"finance:ListInvoices","description":"List invoices","resourcePattern":null,"sandboxRestriction":"none"}],"totalCount":1}"#;
+
+    for (body, succeeds) in [(valid_body, true), (invalid_body, false)] {
+        let tmp = TempDir::new().unwrap();
+        let (api_url, rx, handle) = start_server(vec![MockResponse {
+            status: "200 OK",
+            body,
+        }]);
+        let output = run_org(
+            tmp.path(),
+            api_url,
+            &["org", "policies", "actions", "--json"],
+        );
+        let requests = finish_requests(rx, handle);
+        assert_tenant_request(&requests[0], "GET /v1/auth/actions ");
+        if succeeds {
+            assert_success(&output);
+            let actions: Vec<serde_json::Value> =
+                serde_json::from_slice(&output.stdout).expect("actions json");
+            assert_eq!(actions[0]["fullName"], "finance:ListInvoices");
+        } else {
+            assert_decode_failure(&output, "fullName");
+        }
+    }
 }
 
 #[test]

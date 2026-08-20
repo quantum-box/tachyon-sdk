@@ -103,7 +103,7 @@ fn list_commands_decode_their_api_envelopes() {
             label: "org policies actions",
             args: &["org", "policies", "actions", "--json"],
             path: "/v1/auth/actions",
-            body: r#"{"actions":[]}"#,
+            body: r#"{"actions":[],"totalCount":0}"#,
         },
         Case {
             label: "agent protocols list",
@@ -177,7 +177,7 @@ fn name_resolvers_decode_list_envelopes() {
             list_path: "/v1/agent/workers",
             get_path: "/v1/agent/workers/wrk_123456789012",
             list_body: r#"{"workers":[{"id":"wrk_123456789012","name":"worker-one"}]}"#,
-            get_body: r#"{"id":"wrk_123456789012","name":"worker-one"}"#,
+            get_body: r#"{"id":"wrk_123456789012","name":"worker-one","status":"online","last_heartbeat_at":"2026-08-02T00:00:00Z","created_at":"2026-08-01T00:00:00Z"}"#,
             expected_id: "wrk_123456789012",
         },
         Case {
@@ -185,8 +185,8 @@ fn name_resolvers_decode_list_envelopes() {
             args: &["agent", "protocols", "get", "protocol-one", "--json"],
             list_path: "/v1/llms/agent-protocols",
             get_path: "/v1/llms/agent-protocols/ap_123456789012",
-            list_body: r#"{"items":[{"id":"ap_123456789012","name":"protocol-one"}],"next_cursor":null}"#,
-            get_body: r#"{"id":"ap_123456789012","name":"protocol-one"}"#,
+            list_body: r#"{"items":[{"id":"ap_123456789012","tenant_id":"tn_test1234567890","title":"Protocol One","protocol_name":"protocol-one","description":null,"markdown":"Protocol body","created_at":"2026-08-01T00:00:00Z","updated_at":"2026-08-02T00:00:00Z"}],"next_cursor":null}"#,
+            get_body: r#"{"id":"ap_123456789012","tenant_id":"tn_test1234567890","title":"Protocol One","protocol_name":"protocol-one","description":null,"markdown":"Protocol body","created_at":"2026-08-01T00:00:00Z","updated_at":"2026-08-02T00:00:00Z"}"#,
             expected_id: "ap_123456789012",
         },
         Case {
@@ -195,7 +195,7 @@ fn name_resolvers_decode_list_envelopes() {
             list_path: "/v1/integrations",
             get_path: "/v1/integrations/int_123456789012",
             list_body: r#"{"integrations":[{"id":"int_123456789012","name":"integration-one"}]}"#,
-            get_body: r#"{"id":"int_123456789012","name":"integration-one"}"#,
+            get_body: r#"{"id":"int_123456789012","name":"integration-one","description":"Integration","category":"automation","provider":"provider-one","icon_url":null,"sync_capability":"none","supported_objects":[],"is_enabled":true,"is_featured":false,"requires_oauth":false,"oauth_scopes":[]}"#,
             expected_id: "int_123456789012",
         },
     ];
@@ -219,7 +219,7 @@ fn name_resolvers_decode_list_envelopes() {
 #[test]
 fn operators_list_keeps_decoding_the_api_bare_array() {
     let tmp = TempDir::new().unwrap();
-    let body = r#"[{"id":"tn_operator1234567890","name":"Operator"}]"#;
+    let body = r#"[{"id":"tn_operator1234567890","name":"Operator","operatorName":"operator-one","platformId":"tn_platform123456789"}]"#;
     let (api_url, rx, handle) = start_server(vec![body]);
     let output = run(
         tmp.path(),

@@ -59,34 +59,17 @@ struct RevokeApiKeyRequest {
 #[serde(rename_all = "camelCase")]
 pub struct ApiKeyResponse {
     id: String,
-    #[serde(default)]
-    service_account_id: Option<String>,
+    service_account_id: String,
     name: String,
-    #[serde(default)]
-    value: Option<String>,
-    #[serde(default, alias = "created_at")]
-    created_at: Option<String>,
-    #[serde(default, alias = "revoked_at")]
-    revoked_at: Option<String>,
+    value: String,
+    created_at: String,
+    expires_at: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
-#[serde(untagged)]
-enum ApiKeyListResponse {
-    Envelope {
-        #[serde(rename = "apiKeys")]
-        api_keys: Vec<ApiKeyResponse>,
-    },
-    Array(Vec<ApiKeyResponse>),
-}
-
-impl ApiKeyListResponse {
-    fn into_vec(self) -> Vec<ApiKeyResponse> {
-        match self {
-            ApiKeyListResponse::Envelope { api_keys } => api_keys,
-            ApiKeyListResponse::Array(api_keys) => api_keys,
-        }
-    }
+#[serde(rename_all = "camelCase")]
+struct ApiKeyListResponse {
+    api_keys: Vec<ApiKeyResponse>,
 }
 
 #[derive(Debug, Serialize)]
@@ -120,21 +103,11 @@ async fn run_create(
 
     println!("API key created.");
     println!("ID:                {}", key.id);
-    println!(
-        "Service Account:   {}",
-        key.service_account_id
-            .as_deref()
-            .unwrap_or(service_account_id)
-    );
+    println!("Service Account:   {}", key.service_account_id);
     println!("Name:              {}", key.name);
-    println!(
-        "Created:           {}",
-        key.created_at.as_deref().unwrap_or("-")
-    );
-    if let Some(value) = key.value.as_deref() {
-        println!("Value:             {value}");
-        println!("Store this value now. It may not be shown again.");
-    }
+    println!("Created:           {}", key.created_at);
+    println!("Value:             {}", key.value);
+    println!("Store this value now. It may not be shown again.");
     Ok(())
 }
 
@@ -150,7 +123,7 @@ async fn run_list(
             &[("operator_id", tenant_id)],
         )
         .await?;
-    let keys = response.into_vec();
+    let keys = response.api_keys;
     if json {
         return print_json(&keys);
     }
@@ -160,7 +133,7 @@ async fn run_list(
     }
 
     println!(
-        "{:<28}  {:<24}  {:<16}  {:<19}  REVOKED AT",
+        "{:<28}  {:<24}  {:<16}  {:<19}  EXPIRES AT",
         "ID", "NAME", "PREFIX", "CREATED AT"
     );
     println!(
@@ -168,14 +141,14 @@ async fn run_list(
         "", "", "", "", ""
     );
     for key in &keys {
-        let prefix = key.value.as_deref().map(api_key_prefix).unwrap_or("-");
+        let prefix = api_key_prefix(&key.value);
         println!(
             "{:<28}  {:<24}  {:<16}  {:<19}  {}",
             key.id,
             truncate(&key.name, 24),
             prefix,
-            key.created_at.as_deref().unwrap_or("-"),
-            key.revoked_at.as_deref().unwrap_or("-"),
+            key.created_at,
+            key.expires_at.as_deref().unwrap_or("-"),
         );
     }
     Ok(())

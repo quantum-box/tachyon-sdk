@@ -29,12 +29,11 @@ struct AppEntry {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct OperatorEntry {
     id: String,
-    #[serde(default)]
-    name: Option<String>,
-    #[serde(default)]
-    alias: Option<String>,
+    name: String,
+    operator_name: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -52,8 +51,7 @@ struct WorkerListResponse {
 #[derive(Debug, Deserialize)]
 struct ProtocolEntry {
     id: String,
-    #[serde(default)]
-    name: Option<String>,
+    protocol_name: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -135,16 +133,16 @@ pub async fn resolve_tenant_id(
         return Ok(op.id);
     }
 
-    // Fall back to listing operators and matching by name or alias
+    // Fall back to listing operators and matching by display or operator name.
     let ops: Vec<OperatorEntry> = api.get("/v1/auth/operators/by-user").await?;
     let matches: Vec<_> = ops
         .iter()
-        .filter(|o| o.alias.as_deref() == Some(name_or_id) || o.name.as_deref() == Some(name_or_id))
+        .filter(|o| o.operator_name == name_or_id || o.name == name_or_id)
         .collect();
 
     match matches.len() {
         0 => Err(anyhow!(
-            "no operator found with name or alias '{name_or_id}'"
+            "no operator found with name or operator name '{name_or_id}'"
         )),
         1 => {
             eprintln!("Resolved tenant '{}' → {}", name_or_id, matches[0].id);
@@ -230,7 +228,7 @@ pub async fn resolve_protocol_id(api: &ApiClient, name_or_id: &str) -> Result<St
     let protocols = response.items;
     let matches: Vec<_> = protocols
         .iter()
-        .filter(|p| p.name.as_deref() == Some(name_or_id))
+        .filter(|p| p.protocol_name == name_or_id)
         .collect();
 
     match matches.len() {
@@ -317,5 +315,28 @@ pub async fn resolve_service_account_id(
                 ids.join(", ")
             ))
         }
+    }
+}
+
+#[cfg(test)]
+mod response_contract_tests {
+    use super::{OperatorEntry, ProtocolEntry};
+
+    #[test]
+    fn operator_entry_uses_api_field_names() {
+        let valid = r#"{"id":"tn_123","name":"Operator","operatorName":"operator-one"}"#;
+        let wrong = r#"{"id":"tn_123","name":"Operator","alias":"operator-one"}"#;
+
+        assert!(serde_json::from_str::<OperatorEntry>(valid).is_ok());
+        assert!(serde_json::from_str::<OperatorEntry>(wrong).is_err());
+    }
+
+    #[test]
+    fn protocol_entry_uses_api_field_names() {
+        let valid = r#"{"id":"ap_123","protocol_name":"protocol-one"}"#;
+        let wrong = r#"{"id":"ap_123","name":"protocol-one"}"#;
+
+        assert!(serde_json::from_str::<ProtocolEntry>(valid).is_ok());
+        assert!(serde_json::from_str::<ProtocolEntry>(wrong).is_err());
     }
 }
