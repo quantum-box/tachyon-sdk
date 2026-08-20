@@ -588,6 +588,11 @@ struct ProtocolResponse {
     created_at: Option<String>,
 }
 
+#[derive(Debug, Deserialize)]
+struct ProtocolListResponse {
+    items: Vec<ProtocolResponse>,
+}
+
 #[derive(Debug, Deserialize, Serialize)]
 struct WorkerResponse {
     id: String,
@@ -599,6 +604,11 @@ struct WorkerResponse {
     last_heartbeat: Option<String>,
     #[serde(default)]
     created_at: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct WorkerListResponse {
+    workers: Vec<WorkerResponse>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -613,6 +623,11 @@ struct WorktreeResponse {
     repository_url: Option<String>,
     #[serde(default)]
     created_at: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct WorktreeListResponse {
+    worktrees: Vec<WorktreeResponse>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -634,6 +649,11 @@ struct MemoryResponse {
     status: Option<String>,
     #[serde(default)]
     created_at: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct MemoryListResponse {
+    memories: Vec<MemoryResponse>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -919,7 +939,8 @@ async fn run_session_diagnose(
 }
 
 async fn run_protocols_list(api: &ApiClient, json: bool) -> Result<()> {
-    let protocols: Vec<ProtocolResponse> = api.get("/v1/llms/agent-protocols").await?;
+    let response: ProtocolListResponse = api.get("/v1/llms/agent-protocols").await?;
+    let protocols = response.items;
     if json {
         return print_json(&protocols);
     }
@@ -959,7 +980,8 @@ async fn run_protocols_get(api: &ApiClient, id: &str, json: bool) -> Result<()> 
 }
 
 async fn run_workers_list(api: &ApiClient, json: bool) -> Result<()> {
-    let workers: Vec<WorkerResponse> = api.get("/v1/agent/workers").await?;
+    let response: WorkerListResponse = api.get("/v1/agent/workers").await?;
+    let workers = response.workers;
     if json {
         return print_json(&workers);
     }
@@ -1016,7 +1038,8 @@ async fn run_workers_metrics(api: &ApiClient, worker_id: &str, json: bool) -> Re
 }
 
 async fn run_worktrees_list(api: &ApiClient, json: bool) -> Result<()> {
-    let worktrees: Vec<WorktreeResponse> = api.get("/v1/agent/worktrees").await?;
+    let response: WorktreeListResponse = api.get("/v1/agent/worktrees").await?;
+    let worktrees = response.worktrees;
     if json {
         return print_json(&worktrees);
     }
@@ -1055,7 +1078,8 @@ async fn run_worktrees_get(api: &ApiClient, task_id: &str, json: bool) -> Result
 }
 
 async fn run_memory_list(api: &ApiClient, json: bool) -> Result<()> {
-    let memories: Vec<MemoryResponse> = api.get("/v1/agent/memory").await?;
+    let response: MemoryListResponse = api.get("/v1/agent/memory").await?;
+    let memories = response.memories;
     if json {
         return print_json(&memories);
     }

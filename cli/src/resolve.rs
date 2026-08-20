@@ -45,6 +45,11 @@ struct WorkerEntry {
 }
 
 #[derive(Debug, Deserialize)]
+struct WorkerListResponse {
+    workers: Vec<WorkerEntry>,
+}
+
+#[derive(Debug, Deserialize)]
 struct ProtocolEntry {
     id: String,
     #[serde(default)]
@@ -52,10 +57,20 @@ struct ProtocolEntry {
 }
 
 #[derive(Debug, Deserialize)]
+struct ProtocolListResponse {
+    items: Vec<ProtocolEntry>,
+}
+
+#[derive(Debug, Deserialize)]
 struct IntegrationEntry {
     id: String,
     #[serde(default)]
     name: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct IntegrationListResponse {
+    integrations: Vec<IntegrationEntry>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -180,7 +195,8 @@ pub async fn resolve_worker_id(api: &ApiClient, name_or_id: &str) -> Result<Stri
         return Ok(name_or_id.to_string());
     }
 
-    let workers: Vec<WorkerEntry> = api.get("/v1/agent/workers").await?;
+    let response: WorkerListResponse = api.get("/v1/agent/workers").await?;
+    let workers = response.workers;
     let matches: Vec<_> = workers
         .iter()
         .filter(|w| w.name.as_deref() == Some(name_or_id))
@@ -210,7 +226,8 @@ pub async fn resolve_protocol_id(api: &ApiClient, name_or_id: &str) -> Result<St
         return Ok(name_or_id.to_string());
     }
 
-    let protocols: Vec<ProtocolEntry> = api.get("/v1/llms/agent-protocols").await?;
+    let response: ProtocolListResponse = api.get("/v1/llms/agent-protocols").await?;
+    let protocols = response.items;
     let matches: Vec<_> = protocols
         .iter()
         .filter(|p| p.name.as_deref() == Some(name_or_id))
@@ -240,7 +257,8 @@ pub async fn resolve_integration_id(api: &ApiClient, name_or_id: &str) -> Result
         return Ok(name_or_id.to_string());
     }
 
-    let integrations: Vec<IntegrationEntry> = api.get("/v1/integrations").await?;
+    let response: IntegrationListResponse = api.get("/v1/integrations").await?;
+    let integrations = response.integrations;
     let matches: Vec<_> = integrations
         .iter()
         .filter(|i| i.name.as_deref() == Some(name_or_id))

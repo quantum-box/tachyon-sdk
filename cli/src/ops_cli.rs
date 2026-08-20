@@ -341,6 +341,11 @@ struct ScenarioReportResponse {
     created_at: Option<String>,
 }
 
+#[derive(Debug, Deserialize)]
+struct ScenarioReportListResponse {
+    test_runs: Vec<ScenarioReportResponse>,
+}
+
 #[derive(Debug, Deserialize, Serialize)]
 struct CodingJobResponse {
     coding_job_id: String,
@@ -628,7 +633,8 @@ async fn run_deployments_get(api: &ApiClient, id: &str, json: bool) -> Result<()
 }
 
 async fn run_reports_list(api: &ApiClient, json: bool) -> Result<()> {
-    let reports: Vec<ScenarioReportResponse> = api.get("/v1/ops/scenario-reports").await?;
+    let response: ScenarioReportListResponse = api.get("/v1/ops/scenario-reports").await?;
+    let reports = response.test_runs;
     if json {
         return print_json(&reports);
     }
