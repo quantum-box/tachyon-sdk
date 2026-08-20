@@ -69,6 +69,11 @@ pub(super) struct DeploymentResponse {
     pub(super) created_at: Option<String>,
     #[serde(default)]
     pub(super) updated_at: Option<String>,
+    /// Why a failed deployment failed. The API has always returned this;
+    /// without it a `failed` deployment is opaque from the CLI and the
+    /// only way to see the cause is to query the API by hand.
+    #[serde(default)]
+    pub(super) error_message: Option<String>,
 }
 
 impl DeploymentResponse {
@@ -175,6 +180,9 @@ pub(super) async fn run_deployments_get(
             .map(format_created_at)
             .unwrap_or_else(|| "-".to_string())
     );
+    if let Some(error) = dep.error_message.as_deref().filter(|e| !e.is_empty()) {
+        println!("Error:    {error}");
+    }
     Ok(())
 }
 
@@ -257,4 +265,37 @@ pub(super) async fn run_deployments_rollback_candidates(
         resp.candidates[0].id
     );
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn deployment_response_keeps_the_failure_reason() {
+        // A failed deployment is opaque without this: the API returns the
+        // reason, and dropping it here sent people to the raw API to find
+        // out why a deploy failed.
+        let dep: DeploymentResponse = serde_json::from_str(
+            r#"{
+                "id": "dep_1",
+                "status": "failed",
+                "error_message": "NotFoundError: Lambda function lambda-x does not exist"
+            }"#,
+        )
+        .unwrap();
+
+        assert_eq!(
+            dep.error_message.as_deref(),
+            Some("NotFoundError: Lambda function lambda-x does not exist")
+        );
+    }
+
+    #[test]
+    fn deployment_response_tolerates_a_missing_failure_reason() {
+        let dep: DeploymentResponse =
+            serde_json::from_str(r#"{"id": "dep_1", "status": "active"}"#).unwrap();
+
+        assert!(dep.error_message.is_none());
+    }
 }
