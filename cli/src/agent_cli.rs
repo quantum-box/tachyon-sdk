@@ -435,12 +435,9 @@ impl CodingJobDockerConfig {
 #[derive(Debug, Deserialize, Serialize)]
 struct SessionResponse {
     id: String,
-    #[serde(default)]
-    agent_id: Option<String>,
-    #[serde(default)]
-    status: Option<String>,
-    #[serde(default)]
-    created_at: Option<String>,
+    name: Option<String>,
+    created_at: String,
+    updated_at: String,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -576,16 +573,13 @@ struct AgentEventsResponse {
 #[derive(Debug, Deserialize, Serialize)]
 struct ProtocolResponse {
     id: String,
-    #[serde(default)]
-    name: Option<String>,
-    #[serde(default)]
+    tenant_id: String,
+    title: String,
+    protocol_name: String,
     description: Option<String>,
-    #[serde(default)]
-    model: Option<String>,
-    #[serde(default)]
-    system_prompt: Option<String>,
-    #[serde(default)]
-    created_at: Option<String>,
+    markdown: String,
+    created_at: String,
+    updated_at: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -596,14 +590,10 @@ struct ProtocolListResponse {
 #[derive(Debug, Deserialize, Serialize)]
 struct WorkerResponse {
     id: String,
-    #[serde(default)]
     name: Option<String>,
-    #[serde(default)]
-    status: Option<String>,
-    #[serde(default)]
-    last_heartbeat: Option<String>,
-    #[serde(default)]
-    created_at: Option<String>,
+    status: String,
+    last_heartbeat_at: Option<String>,
+    created_at: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -613,42 +603,34 @@ struct WorkerListResponse {
 
 #[derive(Debug, Deserialize, Serialize)]
 struct WorktreeResponse {
-    #[serde(default)]
-    task_id: Option<String>,
-    #[serde(default)]
-    status: Option<String>,
-    #[serde(default)]
-    branch: Option<String>,
-    #[serde(default)]
-    repository_url: Option<String>,
-    #[serde(default)]
-    created_at: Option<String>,
+    path: String,
+    branch_name: String,
+    task_id: String,
+    status: String,
 }
 
 #[derive(Debug, Deserialize)]
 struct WorktreeListResponse {
     worktrees: Vec<WorktreeResponse>,
+    total: usize,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
 struct AgentStatusResponse {
-    #[serde(default)]
-    status: Option<String>,
-    #[serde(default)]
-    agent_id: Option<String>,
-    #[serde(default)]
-    session_id: Option<String>,
+    is_running: bool,
+    progress: u8,
+    state: String,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
 struct MemoryResponse {
     id: String,
-    #[serde(default)]
-    content: Option<String>,
-    #[serde(default)]
-    status: Option<String>,
-    #[serde(default)]
-    created_at: Option<String>,
+    clause: String,
+    raw_facts: Vec<String>,
+    status: String,
+    source: String,
+    created_at: String,
+    updated_at: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -685,17 +667,17 @@ async fn run_sessions_list(api: &ApiClient, json: bool) -> Result<()> {
         return Ok(());
     }
     println!(
-        "{:<28}  {:<28}  {:<12}  CREATED AT",
-        "ID", "AGENT ID", "STATUS"
+        "{:<28}  {:<28}  {:<19}  UPDATED AT",
+        "ID", "NAME", "CREATED AT"
     );
-    println!("{:-<28}  {:-<28}  {:-<12}  {:-<19}", "", "", "", "");
+    println!("{:-<28}  {:-<28}  {:-<19}  {:-<19}", "", "", "", "");
     for s in &sessions {
         println!(
-            "{:<28}  {:<28}  {:<12}  {}",
+            "{:<28}  {:<28}  {:<19}  {}",
             s.id,
-            s.agent_id.as_deref().unwrap_or("-"),
-            s.status.as_deref().unwrap_or("-"),
-            s.created_at.as_deref().unwrap_or("-"),
+            truncate(s.name.as_deref().unwrap_or("-"), 28),
+            s.created_at,
+            s.updated_at,
         );
     }
     Ok(())
@@ -948,14 +930,17 @@ async fn run_protocols_list(api: &ApiClient, json: bool) -> Result<()> {
         println!("No agent protocols found.");
         return Ok(());
     }
-    println!("{:<28}  {:<24}  {:<16}  DESCRIPTION", "ID", "NAME", "MODEL");
-    println!("{:-<28}  {:-<24}  {:-<16}  {:-<40}", "", "", "", "");
+    println!(
+        "{:<28}  {:<28}  {:<28}  DESCRIPTION",
+        "ID", "PROTOCOL NAME", "TITLE"
+    );
+    println!("{:-<28}  {:-<28}  {:-<28}  {:-<40}", "", "", "", "");
     for p in &protocols {
         println!(
-            "{:<28}  {:<24}  {:<16}  {}",
+            "{:<28}  {:<28}  {:<28}  {}",
             p.id,
-            truncate(p.name.as_deref().unwrap_or("-"), 24),
-            p.model.as_deref().unwrap_or("-"),
+            truncate(&p.protocol_name, 28),
+            truncate(&p.title, 28),
             truncate(p.description.as_deref().unwrap_or("-"), 40),
         );
     }
@@ -968,14 +953,14 @@ async fn run_protocols_get(api: &ApiClient, id: &str, json: bool) -> Result<()> 
         return print_json(&p);
     }
     println!("ID:          {}", p.id);
-    println!("Name:        {}", p.name.as_deref().unwrap_or("-"));
+    println!("Tenant ID:   {}", p.tenant_id);
+    println!("Title:       {}", p.title);
+    println!("Protocol:    {}", p.protocol_name);
     println!("Description: {}", p.description.as_deref().unwrap_or("-"));
-    println!("Model:       {}", p.model.as_deref().unwrap_or("-"));
-    if let Some(prompt) = &p.system_prompt {
-        println!("System prompt:");
-        println!("  {}", prompt.replace('\n', "\n  "));
-    }
-    println!("Created:     {}", p.created_at.as_deref().unwrap_or("-"));
+    println!("Markdown:");
+    println!("  {}", p.markdown.replace('\n', "\n  "));
+    println!("Created:     {}", p.created_at);
+    println!("Updated:     {}", p.updated_at);
     Ok(())
 }
 
@@ -1002,9 +987,9 @@ async fn run_workers_list(api: &ApiClient, json: bool) -> Result<()> {
             "{:<28}  {:<20}  {:<12}  {:<20}  {}",
             w.id,
             truncate(w.name.as_deref().unwrap_or("-"), 20),
-            w.status.as_deref().unwrap_or("-"),
-            w.last_heartbeat.as_deref().unwrap_or("-"),
-            w.created_at.as_deref().unwrap_or("-"),
+            w.status,
+            w.last_heartbeat_at.as_deref().unwrap_or("-"),
+            w.created_at,
         );
     }
     Ok(())
@@ -1017,12 +1002,12 @@ async fn run_workers_get(api: &ApiClient, worker_id: &str, json: bool) -> Result
     }
     println!("ID:             {}", w.id);
     println!("Name:           {}", w.name.as_deref().unwrap_or("-"));
-    println!("Status:         {}", w.status.as_deref().unwrap_or("-"));
+    println!("Status:         {}", w.status);
     println!(
         "Last heartbeat: {}",
-        w.last_heartbeat.as_deref().unwrap_or("-")
+        w.last_heartbeat_at.as_deref().unwrap_or("-")
     );
-    println!("Created:        {}", w.created_at.as_deref().unwrap_or("-"));
+    println!("Created:        {}", w.created_at);
     Ok(())
 }
 
@@ -1039,7 +1024,7 @@ async fn run_workers_metrics(api: &ApiClient, worker_id: &str, json: bool) -> Re
 
 async fn run_worktrees_list(api: &ApiClient, json: bool) -> Result<()> {
     let response: WorktreeListResponse = api.get("/v1/agent/worktrees").await?;
-    let worktrees = response.worktrees;
+    let WorktreeListResponse { worktrees, total } = response;
     if json {
         return print_json(&worktrees);
     }
@@ -1048,19 +1033,20 @@ async fn run_worktrees_list(api: &ApiClient, json: bool) -> Result<()> {
         return Ok(());
     }
     println!(
-        "{:<28}  {:<12}  {:<24}  REPOSITORY",
+        "{:<28}  {:<12}  {:<24}  PATH",
         "TASK ID", "STATUS", "BRANCH"
     );
     println!("{:-<28}  {:-<12}  {:-<24}  {:-<40}", "", "", "", "");
     for w in &worktrees {
         println!(
             "{:<28}  {:<12}  {:<24}  {}",
-            w.task_id.as_deref().unwrap_or("-"),
-            w.status.as_deref().unwrap_or("-"),
-            truncate(w.branch.as_deref().unwrap_or("-"), 24),
-            truncate(w.repository_url.as_deref().unwrap_or("-"), 40),
+            w.task_id,
+            w.status,
+            truncate(&w.branch_name, 24),
+            truncate(&w.path, 40),
         );
     }
+    println!("Total: {total}");
     Ok(())
 }
 
@@ -1069,11 +1055,10 @@ async fn run_worktrees_get(api: &ApiClient, task_id: &str, json: bool) -> Result
     if json {
         return print_json(&w);
     }
-    println!("Task ID:    {}", w.task_id.as_deref().unwrap_or("-"));
-    println!("Status:     {}", w.status.as_deref().unwrap_or("-"));
-    println!("Branch:     {}", w.branch.as_deref().unwrap_or("-"));
-    println!("Repository: {}", w.repository_url.as_deref().unwrap_or("-"));
-    println!("Created:    {}", w.created_at.as_deref().unwrap_or("-"));
+    println!("Task ID: {}", w.task_id);
+    println!("Status:  {}", w.status);
+    println!("Branch:  {}", w.branch_name);
+    println!("Path:    {}", w.path);
     Ok(())
 }
 
@@ -1089,16 +1074,16 @@ async fn run_memory_list(api: &ApiClient, json: bool) -> Result<()> {
     }
     println!(
         "{:<28}  {:<12}  {:<50}  CREATED AT",
-        "ID", "STATUS", "CONTENT"
+        "ID", "STATUS", "CLAUSE"
     );
     println!("{:-<28}  {:-<12}  {:-<50}  {:-<19}", "", "", "", "");
     for m in &memories {
         println!(
             "{:<28}  {:<12}  {:<50}  {}",
             m.id,
-            m.status.as_deref().unwrap_or("-"),
-            truncate(m.content.as_deref().unwrap_or("-"), 50),
-            m.created_at.as_deref().unwrap_or("-"),
+            m.status,
+            truncate(&m.clause, 50),
+            m.created_at,
         );
     }
     Ok(())
@@ -1120,11 +1105,9 @@ async fn run_agent_status(
     if json {
         return print_json(&status);
     }
-    println!("Status:     {}", status.status.as_deref().unwrap_or("-"));
-    println!("Agent ID:   {}", status.agent_id.as_deref().unwrap_or("-"));
-    if let Some(sid) = &status.session_id {
-        println!("Session ID: {sid}");
-    }
+    println!("Running:  {}", status.is_running);
+    println!("Progress: {}%", status.progress);
+    println!("State:    {}", status.state);
     Ok(())
 }
 
