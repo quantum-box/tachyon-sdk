@@ -298,6 +298,11 @@ struct ActionResponse {
     description: Option<String>,
 }
 
+#[derive(Debug, Deserialize)]
+struct ActionListResponse {
+    actions: Vec<ActionResponse>,
+}
+
 // ---- Handlers ----
 
 async fn run_operators_list(api: &ApiClient, json: bool) -> Result<()> {
@@ -566,7 +571,8 @@ async fn run_policies_delete(api: &ApiClient, policy_id: &str) -> Result<()> {
 }
 
 async fn run_policies_actions(api: &ApiClient, json: bool) -> Result<()> {
-    let actions: Vec<ActionResponse> = api.get("/v1/auth/actions").await?;
+    let response: ActionListResponse = api.get("/v1/auth/actions").await?;
+    let actions = response.actions;
     if json {
         return print_json(&actions);
     }

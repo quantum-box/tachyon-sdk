@@ -227,6 +227,11 @@ struct IntegrationResponse {
     created_at: Option<String>,
 }
 
+#[derive(Debug, Deserialize)]
+struct IntegrationListResponse {
+    integrations: Vec<IntegrationResponse>,
+}
+
 #[derive(Debug, Deserialize, Serialize)]
 struct ConnectionResponse {
     id: String,
@@ -404,7 +409,8 @@ async fn run_oauth_providers(
 }
 
 async fn run_integrations_list(api: &ApiClient, json: bool) -> Result<()> {
-    let integrations: Vec<IntegrationResponse> = api.get("/v1/integrations").await?;
+    let response: IntegrationListResponse = api.get("/v1/integrations").await?;
+    let integrations = response.integrations;
     if json {
         return print_json(&integrations);
     }
