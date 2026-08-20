@@ -86,7 +86,7 @@ fn assert_list_request(request: &str) {
 fn deployments_list_decodes_api_envelope_and_prints_items() {
     let tmp = TempDir::new().unwrap();
     let (api_url, rx, handle) = start_server(
-        r#"{"deployments":[{"id":"dep_123456789012","service":"tachyon-api","environment":"production","status":"success","version":"0.92.134","created_at":"2026-08-09T00:00:00Z"}],"total":1}"#,
+        r#"{"deployments":[{"id":"dep_123456789012","service_name":"tachyon-api","version":"0.92.134","environment":"production","status":"success","ci_branch":"main","ci_commit_sha":"abc123","ci_run_url":"https://ci.invalid/run/1","started_at":"2026-08-09T00:00:00Z","completed_at":null,"duration_ms":null}],"total":1}"#,
     );
 
     let output = run_list(tmp.path(), api_url, true);
@@ -98,7 +98,7 @@ fn deployments_list_decodes_api_envelope_and_prints_items() {
         serde_json::from_slice(&output.stdout).expect("deployments json");
     assert_eq!(deployments.len(), 1);
     assert_eq!(deployments[0]["id"], "dep_123456789012");
-    assert_eq!(deployments[0]["service"], "tachyon-api");
+    assert_eq!(deployments[0]["service_name"], "tachyon-api");
 }
 
 #[test]

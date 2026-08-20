@@ -308,69 +308,91 @@ pub enum SentryIssuesCommand {
 #[derive(Debug, Deserialize, Serialize)]
 struct OpsDeploymentResponse {
     id: String,
-    #[serde(default)]
-    service: Option<String>,
-    #[serde(default)]
-    environment: Option<String>,
-    #[serde(default)]
-    status: Option<String>,
-    #[serde(default)]
-    version: Option<String>,
-    #[serde(default)]
-    created_at: Option<String>,
+    operator_id: String,
+    service_name: String,
+    version: String,
+    environment: String,
+    status: String,
+    ci_provider: Option<String>,
+    ci_run_url: Option<String>,
+    ci_repository: Option<String>,
+    ci_branch: Option<String>,
+    ci_commit_sha: Option<String>,
+    error_message: Option<String>,
+    started_at: String,
+    completed_at: Option<String>,
+    duration_ms: Option<i64>,
+    created_at: String,
+    updated_at: String,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct OpsDeploymentSummaryResponse {
+    id: String,
+    service_name: String,
+    version: String,
+    environment: String,
+    status: String,
+    ci_branch: Option<String>,
+    ci_commit_sha: Option<String>,
+    ci_run_url: Option<String>,
+    started_at: String,
+    completed_at: Option<String>,
+    duration_ms: Option<i64>,
 }
 
 #[derive(Debug, Deserialize)]
 struct OpsDeploymentListResponse {
-    deployments: Vec<OpsDeploymentResponse>,
+    deployments: Vec<OpsDeploymentSummaryResponse>,
+    total: i64,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
 struct ScenarioReportResponse {
-    #[serde(default)]
-    run_id: Option<String>,
-    #[serde(default)]
-    status: Option<String>,
-    #[serde(default)]
-    total: Option<i32>,
-    #[serde(default)]
-    passed: Option<i32>,
-    #[serde(default)]
-    failed: Option<i32>,
-    #[serde(default)]
-    created_at: Option<String>,
+    id: String,
+    status: String,
+    total_scenarios: i32,
+    passed_scenarios: i32,
+    failed_scenarios: i32,
+    total_duration_ms: i64,
+    ci_repository: Option<String>,
+    ci_branch: Option<String>,
+    ci_commit_sha: Option<String>,
+    ci_pull_request_number: Option<i64>,
+    created_at: String,
 }
 
 #[derive(Debug, Deserialize)]
 struct ScenarioReportListResponse {
     test_runs: Vec<ScenarioReportResponse>,
+    total: i64,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
 struct CodingJobResponse {
     coding_job_id: String,
-    #[serde(default)]
-    provider: Option<String>,
-    #[serde(default)]
-    status: Option<String>,
-    #[serde(default)]
-    prompt: Option<String>,
-    #[serde(default)]
+    provider: String,
+    status: String,
+    prompt: String,
     context_paths: Vec<String>,
-    #[serde(default)]
+    output_profile: Option<String>,
+    environment: HashMap<String, String>,
+    metadata: Value,
+    container_execution: Option<Value>,
+    executor: Value,
     normalized_output: Option<Value>,
-    #[serde(default)]
+    raw_events: Option<Vec<Value>>,
+    artifacts: Option<Vec<Value>>,
+    billing: Option<Value>,
     error_message: Option<String>,
-    #[serde(default)]
+    exit_code: Option<i32>,
     session_id: Option<String>,
-    #[serde(default)]
     resume_session_id: Option<String>,
-    #[serde(default)]
+    use_worktree: bool,
+    auto_merge: bool,
     assigned_worker_id: Option<String>,
-    #[serde(default)]
-    tool_name: Option<String>,
-    #[serde(default)]
-    created_at: Option<String>,
+    created_at: String,
+    updated_at: String,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -588,7 +610,10 @@ struct SentryAssignRequest {
 
 async fn run_deployments_list(api: &ApiClient, json: bool) -> Result<()> {
     let response: OpsDeploymentListResponse = api.get("/v1/ops/deployments").await?;
-    let deps = response.deployments;
+    let OpsDeploymentListResponse {
+        deployments: deps,
+        total,
+    } = response;
     if json {
         return print_json(&deps);
     }
@@ -597,7 +622,7 @@ async fn run_deployments_list(api: &ApiClient, json: bool) -> Result<()> {
         return Ok(());
     }
     println!(
-        "{:<28}  {:<20}  {:<12}  {:<12}  {:<16}  CREATED AT",
+        "{:<28}  {:<20}  {:<12}  {:<12}  {:<16}  STARTED AT",
         "ID", "SERVICE", "ENVIRONMENT", "STATUS", "VERSION"
     );
     println!(
@@ -608,13 +633,14 @@ async fn run_deployments_list(api: &ApiClient, json: bool) -> Result<()> {
         println!(
             "{:<28}  {:<20}  {:<12}  {:<12}  {:<16}  {}",
             d.id,
-            truncate(d.service.as_deref().unwrap_or("-"), 20),
-            d.environment.as_deref().unwrap_or("-"),
-            d.status.as_deref().unwrap_or("-"),
-            d.version.as_deref().unwrap_or("-"),
-            d.created_at.as_deref().unwrap_or("-"),
+            truncate(&d.service_name, 20),
+            d.environment,
+            d.status,
+            d.version,
+            d.started_at,
         );
     }
+    println!("Total: {total}");
     Ok(())
 }
 
@@ -624,17 +650,20 @@ async fn run_deployments_get(api: &ApiClient, id: &str, json: bool) -> Result<()
         return print_json(&d);
     }
     println!("ID:          {}", d.id);
-    println!("Service:     {}", d.service.as_deref().unwrap_or("-"));
-    println!("Environment: {}", d.environment.as_deref().unwrap_or("-"));
-    println!("Status:      {}", d.status.as_deref().unwrap_or("-"));
-    println!("Version:     {}", d.version.as_deref().unwrap_or("-"));
-    println!("Created:     {}", d.created_at.as_deref().unwrap_or("-"));
+    println!("Service:     {}", d.service_name);
+    println!("Environment: {}", d.environment);
+    println!("Status:      {}", d.status);
+    println!("Version:     {}", d.version);
+    println!("Created:     {}", d.created_at);
     Ok(())
 }
 
 async fn run_reports_list(api: &ApiClient, json: bool) -> Result<()> {
     let response: ScenarioReportListResponse = api.get("/v1/ops/scenario-reports").await?;
-    let reports = response.test_runs;
+    let ScenarioReportListResponse {
+        test_runs: reports,
+        total,
+    } = response;
     if json {
         return print_json(&reports);
     }
@@ -653,20 +682,10 @@ async fn run_reports_list(api: &ApiClient, json: bool) -> Result<()> {
     for r in &reports {
         println!(
             "{:<28}  {:<10}  {:<8}  {:<8}  {:<8}  {}",
-            r.run_id.as_deref().unwrap_or("-"),
-            r.status.as_deref().unwrap_or("-"),
-            r.total
-                .map(|v| v.to_string())
-                .unwrap_or_else(|| "-".to_string()),
-            r.passed
-                .map(|v| v.to_string())
-                .unwrap_or_else(|| "-".to_string()),
-            r.failed
-                .map(|v| v.to_string())
-                .unwrap_or_else(|| "-".to_string()),
-            r.created_at.as_deref().unwrap_or("-"),
+            r.id, r.status, r.total_scenarios, r.passed_scenarios, r.failed_scenarios, r.created_at,
         );
     }
+    println!("Total: {total}");
     Ok(())
 }
 
@@ -970,15 +989,15 @@ fn resolve_coding_job_cwd(
     }
 }
 
-fn is_terminal_coding_job_status(status: Option<&str>) -> bool {
-    matches!(status, Some("succeeded" | "failed" | "cancelled"))
+fn is_terminal_coding_job_status(status: &str) -> bool {
+    matches!(status, "succeeded" | "failed" | "cancelled")
 }
 
 fn print_coding_job_created(job: &CodingJobResponse) {
     println!("Coding job created.");
     println!("Job ID:   {}", job.coding_job_id);
-    println!("Provider: {}", job.provider.as_deref().unwrap_or("-"));
-    println!("Status:   {}", job.status.as_deref().unwrap_or("-"));
+    println!("Provider: {}", job.provider);
+    println!("Status:   {}", job.status);
     if let Some(worker_id) = &job.assigned_worker_id {
         println!("Worker:   {worker_id}");
     }
@@ -990,7 +1009,7 @@ fn print_coding_job_created(job: &CodingJobResponse) {
 }
 
 fn print_coding_job_final(job: &CodingJobResponse) -> Result<()> {
-    println!("Final status: {}", job.status.as_deref().unwrap_or("-"));
+    println!("Final status: {}", job.status);
     if let Some(output) = &job.normalized_output {
         if let Some(text) = output.pointer("/body/text").and_then(Value::as_str) {
             println!("{text}");
@@ -1019,7 +1038,7 @@ async fn wait_coding_job(
             .get(&format!("/v1/agent/coding-jobs/{coding_job_id}"))
             .await?;
         let job = response.job;
-        if is_terminal_coding_job_status(job.status.as_deref()) {
+        if is_terminal_coding_job_status(&job.status) {
             return Ok(job);
         }
         if started_at.elapsed() >= timeout {
@@ -1169,21 +1188,14 @@ async fn run_coding_jobs_list(api: &ApiClient, json: bool) -> Result<()> {
         return Ok(());
     }
     println!(
-        "{:<28}  {:<16}  {:<12}  {:<20}  CREATED AT",
-        "JOB ID", "PROVIDER", "STATUS", "TOOL"
+        "{:<28}  {:<16}  {:<12}  CREATED AT",
+        "JOB ID", "PROVIDER", "STATUS"
     );
-    println!(
-        "{:-<28}  {:-<16}  {:-<12}  {:-<20}  {:-<19}",
-        "", "", "", "", ""
-    );
+    println!("{:-<28}  {:-<16}  {:-<12}  {:-<19}", "", "", "", "");
     for j in &jobs {
         println!(
-            "{:<28}  {:<16}  {:<12}  {:<20}  {}",
-            j.coding_job_id,
-            j.provider.as_deref().unwrap_or("-"),
-            j.status.as_deref().unwrap_or("-"),
-            truncate(j.tool_name.as_deref().unwrap_or("-"), 20),
-            j.created_at.as_deref().unwrap_or("-"),
+            "{:<28}  {:<16}  {:<12}  {}",
+            j.coding_job_id, j.provider, j.status, j.created_at,
         );
     }
     Ok(())
