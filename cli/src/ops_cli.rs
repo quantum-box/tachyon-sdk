@@ -308,11 +308,22 @@ pub enum SentryIssuesCommand {
 #[derive(Debug, Deserialize, Serialize)]
 struct OpsDeploymentResponse {
     id: String,
+    operator_id: String,
     service_name: String,
     version: String,
     environment: String,
     status: String,
+    ci_provider: Option<String>,
+    ci_run_url: Option<String>,
+    ci_repository: Option<String>,
+    ci_branch: Option<String>,
+    ci_commit_sha: Option<String>,
+    error_message: Option<String>,
+    started_at: String,
+    completed_at: Option<String>,
+    duration_ms: Option<i64>,
     created_at: String,
+    updated_at: String,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -322,7 +333,12 @@ struct OpsDeploymentSummaryResponse {
     version: String,
     environment: String,
     status: String,
+    ci_branch: Option<String>,
+    ci_commit_sha: Option<String>,
+    ci_run_url: Option<String>,
     started_at: String,
+    completed_at: Option<String>,
+    duration_ms: Option<i64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -338,6 +354,11 @@ struct ScenarioReportResponse {
     total_scenarios: i32,
     passed_scenarios: i32,
     failed_scenarios: i32,
+    total_duration_ms: i64,
+    ci_repository: Option<String>,
+    ci_branch: Option<String>,
+    ci_commit_sha: Option<String>,
+    ci_pull_request_number: Option<i64>,
     created_at: String,
 }
 
@@ -354,10 +375,21 @@ struct CodingJobResponse {
     status: String,
     prompt: String,
     context_paths: Vec<String>,
+    output_profile: Option<String>,
+    environment: HashMap<String, String>,
+    metadata: Value,
+    container_execution: Option<Value>,
+    executor: Value,
     normalized_output: Option<Value>,
+    raw_events: Option<Vec<Value>>,
+    artifacts: Option<Vec<Value>>,
+    billing: Option<Value>,
     error_message: Option<String>,
+    exit_code: Option<i32>,
     session_id: Option<String>,
     resume_session_id: Option<String>,
+    use_worktree: bool,
+    auto_merge: bool,
     assigned_worker_id: Option<String>,
     created_at: String,
     updated_at: String,

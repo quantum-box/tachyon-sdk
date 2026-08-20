@@ -35,7 +35,7 @@ fn start_coding_jobs_server() -> (String, mpsc::Receiver<String>, thread::JoinHa
         let req = String::from_utf8_lossy(&buf[..n]).to_string();
         tx.send(req).unwrap();
 
-        let body = r#"{"job":{"coding_job_id":"job_01testcodingjob","provider":"codex","status":"queued"}}"#;
+        let body = r#"{"job":{"coding_job_id":"job_01testcodingjob","provider":"codex","status":"queued","prompt":"inspect","context_paths":[],"output_profile":null,"environment":{},"metadata":{},"executor":{"operator_id":"tn_test1234567890"},"use_worktree":false,"auto_merge":false,"created_at":"2026-08-01T00:00:00Z","updated_at":"2026-08-01T00:00:00Z"}}"#;
         let response = format!(
             "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
             body.len(),
