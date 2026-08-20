@@ -124,6 +124,11 @@ pub enum ServiceAccountsCommand {
 
 #[derive(Debug, Clone, Subcommand)]
 pub enum PoliciesCommand {
+    /// List policies visible to the current tenant
+    List {
+        #[arg(long)]
+        json: bool,
+    },
     /// Get a policy by ID
     Get {
         policy_id: String,
@@ -137,133 +142,128 @@ pub enum PoliciesCommand {
         #[arg(long)]
         json: bool,
     },
+    /// Find user-policy mappings by resource scope
+    Mappings {
+        #[arg(long)]
+        resource_scope: String,
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 // ---- Response types ----
 
 #[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
 struct OperatorResponse {
     id: String,
-    #[serde(default)]
-    name: Option<String>,
-    #[serde(default)]
-    alias: Option<String>,
-    #[serde(default)]
-    created_at: Option<String>,
+    name: String,
+    operator_name: String,
+    platform_id: String,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
 struct UserResponse {
     id: String,
-    #[serde(default)]
-    username: Option<String>,
-    #[serde(default)]
     email: Option<String>,
-    #[serde(default)]
-    role: Option<String>,
-    #[serde(default, alias = "createdAt")]
-    created_at: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(untagged)]
-enum UserListResponse {
-    Envelope { users: Vec<UserResponse> },
-    Array(Vec<UserResponse>),
-}
-
-impl UserListResponse {
-    fn into_vec(self) -> Vec<UserResponse> {
-        match self {
-            Self::Envelope { users } => users,
-            Self::Array(users) => users,
-        }
-    }
+    name: Option<String>,
+    role: String,
+    tenants: Vec<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ListedUserResponse {
+    id: Option<String>,
+    email: Option<String>,
+    name: Option<String>,
+    role: Option<String>,
+    tenants: Vec<String>,
+    status: String,
+    created_at: Option<String>,
+    expires_at: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct UserListResponse {
+    users: Vec<ListedUserResponse>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
 struct ServiceAccountResponse {
     id: String,
-    #[serde(default)]
-    name: Option<String>,
-    #[serde(default)]
-    description: Option<String>,
-    #[serde(default, alias = "createdAt")]
-    created_at: Option<String>,
+    tenant_id: String,
+    name: String,
+    created_at: String,
 }
 
 #[derive(Debug, Deserialize)]
-#[serde(untagged)]
-enum ServiceAccountListResponse {
-    Envelope {
-        #[serde(rename = "serviceAccounts")]
-        service_accounts: Vec<ServiceAccountResponse>,
-    },
-    Array(Vec<ServiceAccountResponse>),
-}
-
-impl ServiceAccountListResponse {
-    fn into_vec(self) -> Vec<ServiceAccountResponse> {
-        match self {
-            Self::Envelope { service_accounts } => service_accounts,
-            Self::Array(service_accounts) => service_accounts,
-        }
-    }
+#[serde(rename_all = "camelCase")]
+struct ServiceAccountListResponse {
+    service_accounts: Vec<ServiceAccountResponse>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
 struct ApiKeyResponse {
     id: String,
-    #[serde(default)]
-    name: Option<String>,
-    #[serde(default)]
-    prefix: Option<String>,
-    #[serde(default, alias = "createdAt")]
-    created_at: Option<String>,
+    service_account_id: String,
+    name: String,
+    value: String,
+    created_at: String,
+    expires_at: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
-#[serde(untagged)]
-enum ApiKeyListResponse {
-    Envelope {
-        #[serde(rename = "apiKeys")]
-        api_keys: Vec<ApiKeyResponse>,
-    },
-    Array(Vec<ApiKeyResponse>),
-}
-
-impl ApiKeyListResponse {
-    fn into_vec(self) -> Vec<ApiKeyResponse> {
-        match self {
-            Self::Envelope { api_keys } => api_keys,
-            Self::Array(api_keys) => api_keys,
-        }
-    }
+#[serde(rename_all = "camelCase")]
+struct ApiKeyListResponse {
+    api_keys: Vec<ApiKeyResponse>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
 struct PolicyResponse {
     id: String,
-    #[serde(default)]
-    name: Option<String>,
-    #[serde(default)]
+    name: String,
     description: Option<String>,
-    #[serde(default)]
-    actions: Option<Vec<String>>,
-    #[serde(default)]
-    resources: Option<Vec<String>>,
-    #[serde(default)]
-    effect: Option<String>,
+    is_system: bool,
+    tenant_id: Option<String>,
+    shared_with_descendants: bool,
+    owner_tenant_id: Option<String>,
+    created_at: String,
+    updated_at: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PolicyListResponse {
+    policies: Vec<PolicyResponse>,
+    total_count: usize,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct UserPolicyListResponse {
+    policy_ids: Vec<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
-struct UserPolicyResponse {
-    #[serde(default)]
-    policy_id: Option<String>,
-    #[serde(default)]
-    policy_name: Option<String>,
-    #[serde(default)]
-    scope: Option<String>,
+#[serde(rename_all = "camelCase")]
+struct UserPolicyMappingResponse {
+    user_id: String,
+    tenant_id: String,
+    policy_id: String,
+    resource_scope: Option<String>,
+    assigned_at: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct UserPolicyMappingListResponse {
+    mappings: Vec<UserPolicyMappingResponse>,
 }
 
 #[derive(Debug, Serialize)]
@@ -291,16 +291,25 @@ struct GrantTenantAccessRequest {
 }
 
 #[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
 struct ActionResponse {
-    #[serde(default)]
-    action: Option<String>,
-    #[serde(default)]
+    id: String,
+    platform_id: Option<String>,
+    shared_with_descendants: bool,
+    owner_tenant_id: Option<String>,
+    context: String,
+    name: String,
+    full_name: String,
     description: Option<String>,
+    resource_pattern: Option<String>,
+    sandbox_restriction: String,
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct ActionListResponse {
     actions: Vec<ActionResponse>,
+    total_count: usize,
 }
 
 // ---- Handlers ----
@@ -314,15 +323,18 @@ async fn run_operators_list(api: &ApiClient, json: bool) -> Result<()> {
         println!("No operators found.");
         return Ok(());
     }
-    println!("{:<28}  {:<24}  {:<20}  CREATED AT", "ID", "NAME", "ALIAS");
-    println!("{:-<28}  {:-<24}  {:-<20}  {:-<19}", "", "", "", "");
+    println!(
+        "{:<28}  {:<24}  {:<24}  PLATFORM ID",
+        "ID", "NAME", "OPERATOR NAME"
+    );
+    println!("{:-<28}  {:-<24}  {:-<24}  {:-<28}", "", "", "", "");
     for op in &ops {
         println!(
-            "{:<28}  {:<24}  {:<20}  {}",
+            "{:<28}  {:<24}  {:<24}  {}",
             op.id,
-            truncate(op.name.as_deref().unwrap_or("-"), 24),
-            op.alias.as_deref().unwrap_or("-"),
-            op.created_at.as_deref().unwrap_or("-"),
+            truncate(&op.name, 24),
+            truncate(&op.operator_name, 24),
+            op.platform_id,
         );
     }
     Ok(())
@@ -334,9 +346,9 @@ async fn run_operators_get(api: &ApiClient, id: &str, json: bool) -> Result<()> 
         return print_json(&op);
     }
     println!("ID:      {}", op.id);
-    println!("Name:    {}", op.name.as_deref().unwrap_or("-"));
-    println!("Alias:   {}", op.alias.as_deref().unwrap_or("-"));
-    println!("Created: {}", op.created_at.as_deref().unwrap_or("-"));
+    println!("Name:    {}", op.name);
+    println!("Operator name: {}", op.operator_name);
+    println!("Platform ID:   {}", op.platform_id);
     Ok(())
 }
 
@@ -348,9 +360,9 @@ async fn run_operators_by_alias(api: &ApiClient, alias: &str, json: bool) -> Res
         return print_json(&op);
     }
     println!("ID:      {}", op.id);
-    println!("Name:    {}", op.name.as_deref().unwrap_or("-"));
-    println!("Alias:   {}", op.alias.as_deref().unwrap_or("-"));
-    println!("Created: {}", op.created_at.as_deref().unwrap_or("-"));
+    println!("Name:    {}", op.name);
+    println!("Operator name: {}", op.operator_name);
+    println!("Platform ID:   {}", op.platform_id);
     Ok(())
 }
 
@@ -358,7 +370,7 @@ async fn run_users_list(api: &ApiClient, tenant_id: &str, json: bool) -> Result<
     let response: UserListResponse = api
         .get_query("/v1/auth/users", &[("operator_id", tenant_id)])
         .await?;
-    let users = response.into_vec();
+    let users = response.users;
     if json {
         return print_json(&users);
     }
@@ -368,7 +380,7 @@ async fn run_users_list(api: &ApiClient, tenant_id: &str, json: bool) -> Result<
     }
     println!(
         "{:<28}  {:<24}  {:<30}  {:<10}  CREATED AT",
-        "ID", "USERNAME", "EMAIL", "ROLE"
+        "ID", "NAME", "EMAIL", "ROLE"
     );
     println!(
         "{:-<28}  {:-<24}  {:-<30}  {:-<10}  {:-<19}",
@@ -377,8 +389,8 @@ async fn run_users_list(api: &ApiClient, tenant_id: &str, json: bool) -> Result<
     for u in &users {
         println!(
             "{:<28}  {:<24}  {:<30}  {:<10}  {}",
-            u.id,
-            truncate(u.username.as_deref().unwrap_or("-"), 24),
+            u.id.as_deref().unwrap_or("-"),
+            truncate(u.name.as_deref().unwrap_or("-"), 24),
             truncate(u.email.as_deref().unwrap_or("-"), 30),
             u.role.as_deref().unwrap_or("-"),
             u.created_at.as_deref().unwrap_or("-"),
@@ -393,10 +405,10 @@ async fn run_users_get(api: &ApiClient, user_id: &str, json: bool) -> Result<()>
         return print_json(&u);
     }
     println!("ID:       {}", u.id);
-    println!("Username: {}", u.username.as_deref().unwrap_or("-"));
+    println!("Name:     {}", u.name.as_deref().unwrap_or("-"));
     println!("Email:    {}", u.email.as_deref().unwrap_or("-"));
-    println!("Role:     {}", u.role.as_deref().unwrap_or("-"));
-    println!("Created:  {}", u.created_at.as_deref().unwrap_or("-"));
+    println!("Role:     {}", u.role);
+    println!("Tenants:  {}", u.tenants.join(", "));
     Ok(())
 }
 
@@ -437,9 +449,10 @@ async fn run_users_invite(
 }
 
 async fn run_users_policies(api: &ApiClient, user_id: &str, json: bool) -> Result<()> {
-    let policies: Vec<UserPolicyResponse> = api
+    let response: UserPolicyListResponse = api
         .get(&format!("/v1/auth/users/{user_id}/policies"))
         .await?;
+    let policies = response.policy_ids;
     if json {
         return print_json(&policies);
     }
@@ -447,15 +460,10 @@ async fn run_users_policies(api: &ApiClient, user_id: &str, json: bool) -> Resul
         println!("No policies attached to user {user_id}");
         return Ok(());
     }
-    println!("{:<28}  {:<24}  SCOPE", "POLICY ID", "NAME");
-    println!("{:-<28}  {:-<24}  {:-<20}", "", "", "");
-    for p in &policies {
-        println!(
-            "{:<28}  {:<24}  {}",
-            p.policy_id.as_deref().unwrap_or("-"),
-            p.policy_name.as_deref().unwrap_or("-"),
-            p.scope.as_deref().unwrap_or("-"),
-        );
+    println!("POLICY ID");
+    println!("{:-<28}", "");
+    for policy_id in &policies {
+        println!("{policy_id}");
     }
     Ok(())
 }
@@ -464,7 +472,7 @@ async fn run_service_accounts_list(api: &ApiClient, tenant_id: &str, json: bool)
     let response: ServiceAccountListResponse = api
         .get_query("/v1/auth/service-accounts", &[("operator_id", tenant_id)])
         .await?;
-    let accs = response.into_vec();
+    let accs = response.service_accounts;
     if json {
         return print_json(&accs);
     }
@@ -473,17 +481,17 @@ async fn run_service_accounts_list(api: &ApiClient, tenant_id: &str, json: bool)
         return Ok(());
     }
     println!(
-        "{:<28}  {:<24}  {:<40}  CREATED AT",
-        "ID", "NAME", "DESCRIPTION"
+        "{:<28}  {:<28}  {:<24}  CREATED AT",
+        "ID", "TENANT ID", "NAME"
     );
-    println!("{:-<28}  {:-<24}  {:-<40}  {:-<19}", "", "", "", "");
+    println!("{:-<28}  {:-<28}  {:-<24}  {:-<19}", "", "", "", "");
     for sa in &accs {
         println!(
-            "{:<28}  {:<24}  {:<40}  {}",
+            "{:<28}  {:<28}  {:<24}  {}",
             sa.id,
-            truncate(sa.name.as_deref().unwrap_or("-"), 24),
-            truncate(sa.description.as_deref().unwrap_or("-"), 40),
-            sa.created_at.as_deref().unwrap_or("-"),
+            sa.tenant_id,
+            truncate(&sa.name, 24),
+            sa.created_at,
         );
     }
     Ok(())
@@ -505,9 +513,9 @@ async fn run_service_accounts_get(
         return print_json(&sa);
     }
     println!("ID:          {}", sa.id);
-    println!("Name:        {}", sa.name.as_deref().unwrap_or("-"));
-    println!("Description: {}", sa.description.as_deref().unwrap_or("-"));
-    println!("Created:     {}", sa.created_at.as_deref().unwrap_or("-"));
+    println!("Tenant ID:   {}", sa.tenant_id);
+    println!("Name:        {}", sa.name);
+    println!("Created:     {}", sa.created_at);
     Ok(())
 }
 
@@ -523,7 +531,7 @@ async fn run_service_accounts_api_keys(
             &[("operator_id", tenant_id)],
         )
         .await?;
-    let keys = response.into_vec();
+    let keys = response.api_keys;
     if json {
         return print_json(&keys);
     }
@@ -531,17 +539,50 @@ async fn run_service_accounts_api_keys(
         println!("No API keys found for service account {id}");
         return Ok(());
     }
-    println!("{:<28}  {:<20}  {:<16}  CREATED AT", "ID", "NAME", "PREFIX");
+    println!("{:<28}  {:<20}  {:<16}  CREATED AT", "ID", "NAME", "VALUE");
     println!("{:-<28}  {:-<20}  {:-<16}  {:-<19}", "", "", "", "");
     for k in &keys {
         println!(
             "{:<28}  {:<20}  {:<16}  {}",
-            k.id,
-            k.name.as_deref().unwrap_or("-"),
-            k.prefix.as_deref().unwrap_or("-"),
-            k.created_at.as_deref().unwrap_or("-"),
+            k.id, k.name, k.value, k.created_at,
         );
     }
+    Ok(())
+}
+
+async fn run_policies_list(api: &ApiClient, json: bool) -> Result<()> {
+    let response: PolicyListResponse = api.get("/v1/auth/policies").await?;
+    let PolicyListResponse {
+        policies,
+        total_count,
+    } = response;
+    if json {
+        return print_json(&policies);
+    }
+    if policies.is_empty() {
+        println!("No policies found.");
+        return Ok(());
+    }
+    println!(
+        "{:<28}  {:<32}  {:<6}  {:<28}  {:<6}  CREATED AT",
+        "ID", "NAME", "SYSTEM", "TENANT ID", "SHARED"
+    );
+    println!(
+        "{:-<28}  {:-<32}  {:-<6}  {:-<28}  {:-<6}  {:-<19}",
+        "", "", "", "", "", ""
+    );
+    for policy in &policies {
+        println!(
+            "{:<28}  {:<32}  {:<6}  {:<28}  {:<6}  {}",
+            policy.id,
+            truncate(&policy.name, 32),
+            policy.is_system,
+            policy.tenant_id.as_deref().unwrap_or("-"),
+            policy.shared_with_descendants,
+            policy.created_at,
+        );
+    }
+    println!("Total: {total_count}");
     Ok(())
 }
 
@@ -551,15 +592,17 @@ async fn run_policies_get(api: &ApiClient, policy_id: &str, json: bool) -> Resul
         return print_json(&p);
     }
     println!("ID:          {}", p.id);
-    println!("Name:        {}", p.name.as_deref().unwrap_or("-"));
+    println!("Name:        {}", p.name);
     println!("Description: {}", p.description.as_deref().unwrap_or("-"));
-    println!("Effect:      {}", p.effect.as_deref().unwrap_or("-"));
-    if let Some(actions) = &p.actions {
-        println!("Actions:     {}", actions.join(", "));
-    }
-    if let Some(resources) = &p.resources {
-        println!("Resources:   {}", resources.join(", "));
-    }
+    println!("System:      {}", p.is_system);
+    println!("Tenant ID:   {}", p.tenant_id.as_deref().unwrap_or("-"));
+    println!("Shared:      {}", p.shared_with_descendants);
+    println!(
+        "Owner tenant: {}",
+        p.owner_tenant_id.as_deref().unwrap_or("-")
+    );
+    println!("Created:     {}", p.created_at);
+    println!("Updated:     {}", p.updated_at);
     Ok(())
 }
 
@@ -572,7 +615,10 @@ async fn run_policies_delete(api: &ApiClient, policy_id: &str) -> Result<()> {
 
 async fn run_policies_actions(api: &ApiClient, json: bool) -> Result<()> {
     let response: ActionListResponse = api.get("/v1/auth/actions").await?;
-    let actions = response.actions;
+    let ActionListResponse {
+        actions,
+        total_count,
+    } = response;
     if json {
         return print_json(&actions);
     }
@@ -585,8 +631,50 @@ async fn run_policies_actions(api: &ApiClient, json: bool) -> Result<()> {
     for a in &actions {
         println!(
             "{:<40}  {}",
-            a.action.as_deref().unwrap_or("-"),
+            a.full_name,
             a.description.as_deref().unwrap_or("-"),
+        );
+    }
+    println!("Total: {total_count}");
+    Ok(())
+}
+
+async fn run_policy_mappings(
+    api: &ApiClient,
+    tenant_id: &str,
+    resource_scope: &str,
+    json: bool,
+) -> Result<()> {
+    let response: UserPolicyMappingListResponse = api
+        .get_query(
+            "/v1/auth/user-policy-mappings",
+            &[("tenantId", tenant_id), ("resourceScope", resource_scope)],
+        )
+        .await?;
+    let mappings = response.mappings;
+    if json {
+        return print_json(&mappings);
+    }
+    if mappings.is_empty() {
+        println!("No user-policy mappings found.");
+        return Ok(());
+    }
+    println!(
+        "{:<28}  {:<28}  {:<28}  {:<40}  ASSIGNED AT",
+        "USER ID", "TENANT ID", "POLICY ID", "RESOURCE SCOPE"
+    );
+    println!(
+        "{:-<28}  {:-<28}  {:-<28}  {:-<40}  {:-<19}",
+        "", "", "", "", ""
+    );
+    for mapping in &mappings {
+        println!(
+            "{:<28}  {:<28}  {:<28}  {:<40}  {}",
+            mapping.user_id,
+            mapping.tenant_id,
+            mapping.policy_id,
+            truncate(mapping.resource_scope.as_deref().unwrap_or("-"), 40),
+            mapping.assigned_at,
         );
     }
     Ok(())
@@ -643,11 +731,16 @@ pub async fn run(args: &OrgArgs, config: &Configuration, tenant_id: &str) -> Res
             }
         },
         OrgCommand::Policies { command } => match command {
+            PoliciesCommand::List { json } => run_policies_list(&api, *json).await,
             PoliciesCommand::Get { policy_id, json } => {
                 run_policies_get(&api, policy_id, *json).await
             }
             PoliciesCommand::Delete { policy_id } => run_policies_delete(&api, policy_id).await,
             PoliciesCommand::Actions { json } => run_policies_actions(&api, *json).await,
+            PoliciesCommand::Mappings {
+                resource_scope,
+                json,
+            } => run_policy_mappings(&api, tenant_id, resource_scope, *json).await,
         },
     }
 }
