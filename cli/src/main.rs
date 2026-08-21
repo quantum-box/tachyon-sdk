@@ -20,6 +20,7 @@ mod pm_cli;
 mod pm_resource_cli;
 mod reconcile_cli;
 mod resolve;
+mod response_contract;
 mod secret_cli;
 mod settings;
 mod settings_cli;

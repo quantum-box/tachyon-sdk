@@ -1,6 +1,6 @@
 [package]
 name = "tachyon"
-version = "0.6.47"
+version = "0.6.48"
 edition = "2021"
 description = "CLI for the Tachyon Platform"
 license = "MIT"
@@ -49,6 +49,7 @@ zip = { version = "2", default-features = false, features = ["deflate"] }
 [dev-dependencies]
 base64 = "0.22"
 rstest = "0.21"
+syn = { version = "2", features = ["full", "visit"] }
 tempfile = "3"
 
 [workspace]
