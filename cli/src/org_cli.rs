@@ -1,10 +1,14 @@
 use anyhow::Result;
 use clap::{Args, Subcommand};
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use tachyon_sdk::apis::configuration::Configuration;
 
 use crate::client::{print_json, truncate, ApiClient};
 use crate::resolve;
+use crate::response_contract::{
+    registered_contract, tachyon_response_contract, ContractRegistration,
+};
 
 #[derive(Debug, Clone, Args)]
 pub struct OrgArgs {
@@ -153,7 +157,8 @@ pub enum PoliciesCommand {
 
 // ---- Response types ----
 
-#[derive(Debug, Deserialize, Serialize)]
+// response-contract:auth.operators.list:start
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 struct OperatorResponse {
     id: String,
@@ -161,6 +166,19 @@ struct OperatorResponse {
     operator_name: String,
     platform_id: String,
 }
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+#[serde(transparent)]
+struct OperatorListResponse(Vec<OperatorResponse>);
+
+tachyon_response_contract! {
+    root: OperatorListResponse,
+    id: "auth.operators.list",
+    operation: ("GET", "/v1/auth/operators/by-user", 200),
+    api_owner: "packages/auth",
+    cli_owner: "cli/org",
+}
+// response-contract:auth.operators.list:end
 
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -290,7 +308,8 @@ struct GrantTenantAccessRequest {
     platform_id: Option<String>,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+// response-contract:auth.actions.list:start
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 struct ActionResponse {
     id: String,
@@ -305,17 +324,35 @@ struct ActionResponse {
     sandbox_restriction: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 struct ActionListResponse {
     actions: Vec<ActionResponse>,
     total_count: usize,
 }
 
+tachyon_response_contract! {
+    root: ActionListResponse,
+    id: "auth.actions.list",
+    operation: ("GET", "/v1/auth/actions", 200),
+    api_owner: "packages/auth",
+    cli_owner: "cli/org",
+}
+// response-contract:auth.actions.list:end
+
+#[allow(dead_code)]
+pub(crate) fn auth_list_contracts() -> Vec<ContractRegistration> {
+    vec![
+        registered_contract::<OperatorListResponse>(),
+        registered_contract::<ActionListResponse>(),
+    ]
+}
+
 // ---- Handlers ----
 
 async fn run_operators_list(api: &ApiClient, json: bool) -> Result<()> {
-    let ops: Vec<OperatorResponse> = api.get("/v1/auth/operators/by-user").await?;
+    let response: OperatorListResponse = api.get_contract("/v1/auth/operators/by-user").await?;
+    let ops = response.0;
     if json {
         return print_json(&ops);
     }
@@ -614,7 +651,7 @@ async fn run_policies_delete(api: &ApiClient, policy_id: &str) -> Result<()> {
 }
 
 async fn run_policies_actions(api: &ApiClient, json: bool) -> Result<()> {
-    let response: ActionListResponse = api.get("/v1/auth/actions").await?;
+    let response: ActionListResponse = api.get_contract("/v1/auth/actions").await?;
     let ActionListResponse {
         actions,
         total_count,

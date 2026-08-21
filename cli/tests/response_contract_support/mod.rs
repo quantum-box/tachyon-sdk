@@ -103,3 +103,36 @@ pub fn run_cases(cases: &[Case]) {
         }
     }
 }
+
+#[allow(dead_code)]
+pub fn run_value_case(
+    label: &str,
+    args: &[&str],
+    path: &str,
+    body: &'static str,
+    expected_output: &[&str],
+) {
+    let tmp = TempDir::new().unwrap();
+    let (api_url, rx, handle) = start_server(body);
+    let output = run(tmp.path(), &api_url, args);
+    let request = rx.recv().unwrap();
+    handle.join().unwrap();
+
+    assert!(
+        request.starts_with(&format!("GET {path} ")),
+        "{label} request was:\n{request}"
+    );
+    assert!(
+        output.status.success(),
+        "{label} value response failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    for expected in expected_output {
+        assert!(
+            stdout.contains(expected),
+            "{label} did not propagate {expected:?}; stdout was:\n{stdout}"
+        );
+    }
+}

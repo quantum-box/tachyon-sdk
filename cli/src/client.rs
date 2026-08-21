@@ -4,6 +4,7 @@ use serde::de::DeserializeOwned;
 use tachyon_sdk::apis::configuration::Configuration;
 
 use crate::auth;
+use crate::response_contract::TachyonResponseContract;
 
 /// Non-secret context used to explain authentication failures.
 #[derive(Debug, Clone)]
@@ -94,6 +95,21 @@ impl ApiClient {
         resp.json()
             .await
             .with_context(|| format!("parse GET {path}"))
+    }
+
+    /// GET an enrolled Tachyon REST endpoint through its compile-time response
+    /// contract. Family rollout keeps unenrolled endpoints on [`Self::get`]
+    /// until their registry entries and producer comparisons are ready.
+    pub async fn get_contract<T: TachyonResponseContract>(&self, path: &str) -> Result<T> {
+        if path != T::PATH || T::METHOD != "GET" {
+            return Err(anyhow!(
+                "response contract {} is registered for {} {}, not GET {path}",
+                T::ID,
+                T::METHOD,
+                T::PATH
+            ));
+        }
+        self.get(path).await
     }
 
     /// GET an endpoint and return the successful response before reading its

@@ -2320,7 +2320,7 @@ dependencies = [
 
 [[package]]
 name = "tachyon"
-version = "0.6.47"
+version = "0.6.48"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2342,6 +2342,7 @@ dependencies = [
  "serde_json",
  "serde_yaml",
  "sha2",
+ "syn",
  "tachyon-sdk",
  "tempfile",
  "tokio",

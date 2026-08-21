@@ -1,0 +1,3 @@
+schema_version = 1
+
+# Phase 1 auth/list contracts require no generator overrides.

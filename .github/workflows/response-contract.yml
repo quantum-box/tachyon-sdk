@@ -1,0 +1,45 @@
+name: Response contract
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/response-contract.yml'
+      - 'cli/Cargo.lock'
+      - 'cli/Cargo.toml'
+      - 'cli/contracts/tachyon-api/**'
+      - 'cli/src/client.rs'
+      - 'cli/src/org_cli.rs'
+      - 'cli/src/response_contract.rs'
+
+permissions:
+  contents: read
+
+jobs:
+  auth-list:
+    name: Response contract auth-list (non-required rollout)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: cli
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            cli/target
+          key: ${{ runner.os }}-response-contract-${{ hashFiles('cli/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-response-contract-
+
+      - name: Verify vendored auth/list contracts
+        run: |
+          cargo test response_contract::tests -- --ignored --nocapture
+          cargo test --test auth_response_contracts -- --ignored --nocapture
