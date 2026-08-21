@@ -4,6 +4,8 @@
 
 ### Added
 
+- Add `tachyon compute deployments rollback --to-previous` to roll back to the newest production rollback candidate without picking a deployment ID, and `tachyon compute deployments rollback-candidates` to list the eligible targets (successful serving record, provider metadata present) newest first. During an incident the deployment list mixes failed and deleted rows, so finding a valid rollback target used to require manual archaeology. (PLT-3787)
+
 - Add `requires` to auth manifest `ActionSpec`: each entry names a full action (`context:Name`) the declaring action depends on within a call context. `manifest apply` sends the declared edge set to `PUT /v1/auth/action-dependencies`, which validates ownership, cycles, and the system-action allowlist server-side. A manifest without `requires` never touches the platform's edge set. (PLT-3597)
 
 ### Fixed
