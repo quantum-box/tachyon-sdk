@@ -451,10 +451,20 @@ pub async fn run(
             DeploymentsCommand::Rollback {
                 app_id,
                 deployment_id,
+                to_previous,
             } => {
                 let app_id = app_id_or_default(app_id, project_config)?;
                 let id = resolve::resolve_app_id(&api, app_id).await?;
-                run_deployments_rollback(&api, &id, deployment_id).await
+                run_deployments_rollback(&api, &id, deployment_id.as_deref(), *to_previous).await
+            }
+            DeploymentsCommand::RollbackCandidates {
+                app_id,
+                limit,
+                json,
+            } => {
+                let app_id = app_id_or_default(app_id, project_config)?;
+                let id = resolve::resolve_app_id(&api, app_id).await?;
+                run_deployments_rollback_candidates(&api, &id, *limit, *json).await
             }
         },
         ComputeCommand::Env { command } => match command {
