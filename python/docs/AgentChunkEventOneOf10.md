@@ -6,7 +6,7 @@ Emitted when a coding job is created, before sync polling begins. Frontend can u
 
 Name | Type | Description | Notes
 ------------ | ------------- | ------------- | -------------
-**coding_job_id** | **str** |  |
+**coding_job_id** | **str** |  | 
 **provider** | **str** |  | 
 **tool_id** | **str** |  | 
 **type** | **str** |  | 
@@ -29,3 +29,5 @@ agent_chunk_event_one_of10_dict = agent_chunk_event_one_of10_instance.to_dict()
 agent_chunk_event_one_of10_from_dict = AgentChunkEventOneOf10.from_dict(agent_chunk_event_one_of10_dict)
 ```
 [[Back to Model list]](../README.md#documentation-for-models) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to README]](../README.md)
+
+

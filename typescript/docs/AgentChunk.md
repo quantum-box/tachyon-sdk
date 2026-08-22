@@ -28,7 +28,7 @@ Name | Type
 `promptTokens` | number
 `totalCost` | number
 `totalTokens` | number
-`jobId` | string
+`codingJobId` | string
 `provider` | string
 `agent` | [AgentSource](AgentSource.md)
 
@@ -60,7 +60,7 @@ const example = {
   "promptTokens": null,
   "totalCost": null,
   "totalTokens": null,
-  "jobId": null,
+  "codingJobId": null,
   "provider": null,
   "agent": null,
 } satisfies AgentChunk

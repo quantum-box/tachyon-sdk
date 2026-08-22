@@ -84,7 +84,7 @@ No authorization required
 
 Delete an operator
 
-The acting tenant scope (`x-operator-id`, falling back to `x-platform-id`) must be the target operator itself or its parent platform. The parent platform is resolved from the target record, so callers do not need to supply `x-platform-id`.
+The acting tenant scope (&#x60;x-operator-id&#x60;, falling back to &#x60;x-platform-id&#x60;) must be the target operator itself or its parent platform. The parent platform is resolved from the target record, so callers do not need to supply &#x60;x-platform-id&#x60;.
 
 ### Example
 
@@ -144,7 +144,7 @@ No authorization required
 | **403** | Forbidden |  -  |
 | **404** | Operator not found |  -  |
 
-[[Back to top]](#) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to Model list]](../README.md#documentation-for-models) [[Back to README]](../README.md)
+[[Back to top]](#) [[Back to API list]](../README.md#api-endpoints) [[Back to Model list]](../README.md#models) [[Back to README]](../README.md)
 
 
 ## findOperatorsByUser

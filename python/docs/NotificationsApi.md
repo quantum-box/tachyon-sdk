@@ -37,7 +37,7 @@ with tachyon_sdk.ApiClient(configuration) as api_client:
     api_instance = tachyon_sdk.NotificationsApi(api_client)
     x_operator_id = 'tn_xxxxxx' # str | Operator ID
     authorization = 'Bearer xxxxx' # str | Authorization
-    send_sms_notification_request = tachyon_sdk.SendSmsNotificationRequest() # SendSmsNotificationRequest |
+    send_sms_notification_request = tachyon_sdk.SendSmsNotificationRequest() # SendSmsNotificationRequest | 
 
     try:
         # Send an SMS notification
@@ -55,9 +55,9 @@ with tachyon_sdk.ApiClient(configuration) as api_client:
 
 Name | Type | Description  | Notes
 ------------- | ------------- | ------------- | -------------
- **x_operator_id** | **str**| Operator ID |
- **authorization** | **str**| Authorization |
- **send_sms_notification_request** | [**SendSmsNotificationRequest**](SendSmsNotificationRequest.md)|  |
+ **x_operator_id** | **str**| Operator ID | 
+ **authorization** | **str**| Authorization | 
+ **send_sms_notification_request** | [**SendSmsNotificationRequest**](SendSmsNotificationRequest.md)|  | 
 
 ### Return type
 
@@ -83,3 +83,4 @@ No authorization required
 **500** | Internal server error |  -  |
 
 [[Back to top]](#) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to Model list]](../README.md#documentation-for-models) [[Back to README]](../README.md)
+

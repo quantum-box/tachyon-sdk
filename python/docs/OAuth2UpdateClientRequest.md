@@ -6,10 +6,10 @@ Request to update an OAuth2 client
 
 Name | Type | Description | Notes
 ------------ | ------------- | ------------- | -------------
-**allowed_scopes** | **List[str]** | Allowed scopes | [optional]
-**name** | **str** | Display name | [optional]
-**redirect_uris** | **List[str]** | Allowed redirect URIs | [optional]
-**status** | **str** | Status: \&quot;active\&quot; or \&quot;inactive\&quot; | [optional]
+**allowed_scopes** | **List[str]** | Allowed scopes | [optional] 
+**name** | **str** | Display name | [optional] 
+**redirect_uris** | **List[str]** | Allowed redirect URIs | [optional] 
+**status** | **str** | Status: \&quot;active\&quot; or \&quot;inactive\&quot; | [optional] 
 
 ## Example
 

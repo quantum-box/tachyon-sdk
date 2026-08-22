@@ -84,7 +84,10 @@ No authorization required
 
 Delete an operator
 
-The acting tenant scope (`x-operator-id`, falling back to `x-platform-id`) must be the target operator itself or its parent platform. The parent platform is resolved from the target record, so callers do not need to supply `x-platform-id`.
+The acting tenant scope (`x-operator-id`, falling back to
+`x-platform-id`) must be the target operator itself or its parent
+platform. The parent platform is resolved from the target record,
+so callers do not need to supply `x-platform-id`.
 
 ### Example
 
@@ -124,7 +127,7 @@ with tachyon_sdk.ApiClient(configuration) as api_client:
 
 Name | Type | Description  | Notes
 ------------- | ------------- | ------------- | -------------
- **id** | **str**| Operator ID |
+ **id** | **str**| Operator ID | 
 
 ### Return type
 
