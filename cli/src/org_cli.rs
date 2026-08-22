@@ -62,6 +62,10 @@ pub enum OperatorsCommand {
         #[arg(long)]
         json: bool,
     },
+    /// Delete an operator (hard delete, for cleaning up empty organizations).
+    /// The acting scope (--tenant-id) must be the target operator itself or
+    /// its parent platform.
+    Delete { operator_id: String },
 }
 
 // --- Users ---
@@ -179,6 +183,13 @@ tachyon_response_contract! {
     cli_owner: "cli/org",
 }
 // response-contract:auth.operators.list:end
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DeleteOperatorResponse {
+    #[allow(dead_code)]
+    success: bool,
+}
 
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -400,6 +411,12 @@ async fn run_operators_by_alias(api: &ApiClient, alias: &str, json: bool) -> Res
     println!("Name:    {}", op.name);
     println!("Operator name: {}", op.operator_name);
     println!("Platform ID:   {}", op.platform_id);
+    Ok(())
+}
+
+async fn run_operators_delete(api: &ApiClient, id: &str) -> Result<()> {
+    let _: DeleteOperatorResponse = api.delete_json(&format!("/v1/auth/operators/{id}")).await?;
+    println!("Operator {id} deleted.");
     Ok(())
 }
 
@@ -730,6 +747,9 @@ pub async fn run(args: &OrgArgs, config: &Configuration, tenant_id: &str) -> Res
             }
             OperatorsCommand::ByAlias { alias, json } => {
                 run_operators_by_alias(&api, alias, *json).await
+            }
+            OperatorsCommand::Delete { operator_id } => {
+                run_operators_delete(&api, operator_id).await
             }
         },
         OrgCommand::Users { command } => match command {

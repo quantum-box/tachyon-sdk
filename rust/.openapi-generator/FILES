@@ -96,6 +96,7 @@ docs/CreateUserRequest.md
 docs/CreateUserResponse.md
 docs/CrmObjectMappingsApi.md
 docs/DefaultApi.md
+docs/DeleteOperatorResponse.md
 docs/DeleteProductResponse.md
 docs/DeleteResponse.md
 docs/DeleteServiceAccountResponse.md
@@ -349,6 +350,7 @@ src/models/create_service_account_request.rs
 src/models/create_shipping_destination_request.rs
 src/models/create_user_request.rs
 src/models/create_user_response.rs
+src/models/delete_operator_response.rs
 src/models/delete_product_response.rs
 src/models/delete_response.rs
 src/models/delete_service_account_response.rs

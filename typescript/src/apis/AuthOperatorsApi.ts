@@ -17,6 +17,7 @@ import * as runtime from '../runtime';
 import type {
   CreateOperatorRequest,
   CreateOperatorResponse,
+  DeleteOperatorResponse,
   OperatorListResponse,
   OperatorResponse,
 } from '../models/index';
@@ -25,6 +26,8 @@ import {
     CreateOperatorRequestToJSON,
     CreateOperatorResponseFromJSON,
     CreateOperatorResponseToJSON,
+    DeleteOperatorResponseFromJSON,
+    DeleteOperatorResponseToJSON,
     OperatorListResponseFromJSON,
     OperatorListResponseToJSON,
     OperatorResponseFromJSON,
@@ -33,6 +36,10 @@ import {
 
 export interface CreateOperatorOperationRequest {
     createOperatorRequest: CreateOperatorRequest;
+}
+
+export interface DeleteOperatorRequest {
+    id: string;
 }
 
 export interface FindOperatorsByUserRequest {
@@ -98,6 +105,53 @@ export class AuthOperatorsApi extends runtime.BaseAPI {
      */
     async createOperator(requestParameters: CreateOperatorOperationRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<CreateOperatorResponse> {
         const response = await this.createOperatorRaw(requestParameters, initOverrides);
+        return await response.value();
+    }
+
+    /**
+     * Creates request options for deleteOperator without sending the request
+     */
+    async deleteOperatorRequestOpts(requestParameters: DeleteOperatorRequest): Promise<runtime.RequestOpts> {
+        if (requestParameters['id'] == null) {
+            throw new runtime.RequiredError(
+                'id',
+                'Required parameter "id" was null or undefined when calling deleteOperator().'
+            );
+        }
+
+        const queryParameters: any = {};
+
+        const headerParameters: runtime.HTTPHeaders = {};
+
+
+        let urlPath = `/v1/auth/operators/{id}`;
+        urlPath = urlPath.replace(`{${"id"}}`, encodeURIComponent(String(requestParameters['id'])));
+
+        return {
+            path: urlPath,
+            method: 'DELETE',
+            headers: headerParameters,
+            query: queryParameters,
+        };
+    }
+
+    /**
+     * The acting tenant scope (`x-operator-id`, falling back to `x-platform-id`) must be the target operator itself or its parent platform. The parent platform is resolved from the target record, so callers do not need to supply `x-platform-id`.
+     * Delete an operator
+     */
+    async deleteOperatorRaw(requestParameters: DeleteOperatorRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<DeleteOperatorResponse>> {
+        const requestOptions = await this.deleteOperatorRequestOpts(requestParameters);
+        const response = await this.request(requestOptions, initOverrides);
+
+        return new runtime.JSONApiResponse(response, (jsonValue) => DeleteOperatorResponseFromJSON(jsonValue));
+    }
+
+    /**
+     * The acting tenant scope (`x-operator-id`, falling back to `x-platform-id`) must be the target operator itself or its parent platform. The parent platform is resolved from the target record, so callers do not need to supply `x-platform-id`.
+     * Delete an operator
+     */
+    async deleteOperator(requestParameters: DeleteOperatorRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<DeleteOperatorResponse> {
+        const response = await this.deleteOperatorRaw(requestParameters, initOverrides);
         return await response.value();
     }
 

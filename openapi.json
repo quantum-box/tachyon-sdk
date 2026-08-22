@@ -853,6 +853,43 @@
                         "description": "Operator not found"
                     }
                 }
+            },
+            "delete": {
+                "tags": [
+                    "Auth - Operators"
+                ],
+                "summary": "Delete an operator",
+                "description": "The acting tenant scope (`x-operator-id`, falling back to\n`x-platform-id`) must be the target operator itself or its parent\nplatform. The parent platform is resolved from the target record,\nso callers do not need to supply `x-platform-id`.",
+                "operationId": "delete_operator",
+                "parameters": [
+                    {
+                        "name": "id",
+                        "in": "path",
+                        "description": "Operator ID",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Operator deleted",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/DeleteOperatorResponse"
+                                }
+                            }
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden"
+                    },
+                    "404": {
+                        "description": "Operator not found"
+                    }
+                }
             }
         },
         "/v1/auth/policies/check": {
@@ -7930,6 +7967,18 @@
                 "properties": {
                     "user": {
                         "$ref": "#/components/schemas/User"
+                    }
+                }
+            },
+            "DeleteOperatorResponse": {
+                "type": "object",
+                "description": "Response for deleting an operator",
+                "required": [
+                    "success"
+                ],
+                "properties": {
+                    "success": {
+                        "type": "boolean"
                     }
                 }
             },

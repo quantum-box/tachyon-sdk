@@ -5,6 +5,7 @@ All URIs are relative to *http://localhost*
 Method | HTTP request | Description
 ------------- | ------------- | -------------
 [**create_operator**](AuthOperatorsApi.md#create_operator) | **POST** /v1/auth/operators | Create an operator under a platform
+[**delete_operator**](AuthOperatorsApi.md#delete_operator) | **DELETE** /v1/auth/operators/{id} | Delete an operator
 [**find_operators_by_user**](AuthOperatorsApi.md#find_operators_by_user) | **GET** /v1/auth/operators/by-user | Find operators accessible to a user under a platform
 [**get_operator_by_alias**](AuthOperatorsApi.md#get_operator_by_alias) | **GET** /v1/auth/operators/by-alias | Get an operator by alias within a platform
 [**get_operator_by_id**](AuthOperatorsApi.md#get_operator_by_id) | **GET** /v1/auth/operators/{id} | Get an operator by ID
@@ -75,6 +76,76 @@ No authorization required
 |-------------|-------------|------------------|
 **200** | Operator created |  -  |
 **400** | Bad request |  -  |
+
+[[Back to top]](#) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to Model list]](../README.md#documentation-for-models) [[Back to README]](../README.md)
+
+# **delete_operator**
+> DeleteOperatorResponse delete_operator(id)
+
+Delete an operator
+
+The acting tenant scope (`x-operator-id`, falling back to `x-platform-id`) must be the target operator itself or its parent platform. The parent platform is resolved from the target record, so callers do not need to supply `x-platform-id`.
+
+### Example
+
+
+```python
+import tachyon_sdk
+from tachyon_sdk.models.delete_operator_response import DeleteOperatorResponse
+from tachyon_sdk.rest import ApiException
+from pprint import pprint
+
+# Defining the host is optional and defaults to http://localhost
+# See configuration.py for a list of all supported configuration parameters.
+configuration = tachyon_sdk.Configuration(
+    host = "http://localhost"
+)
+
+
+# Enter a context with an instance of the API client
+with tachyon_sdk.ApiClient(configuration) as api_client:
+    # Create an instance of the API class
+    api_instance = tachyon_sdk.AuthOperatorsApi(api_client)
+    id = 'id_example' # str | Operator ID
+
+    try:
+        # Delete an operator
+        api_response = api_instance.delete_operator(id)
+        print("The response of AuthOperatorsApi->delete_operator:\n")
+        pprint(api_response)
+    except Exception as e:
+        print("Exception when calling AuthOperatorsApi->delete_operator: %s\n" % e)
+```
+
+
+
+### Parameters
+
+
+Name | Type | Description  | Notes
+------------- | ------------- | ------------- | -------------
+ **id** | **str**| Operator ID |
+
+### Return type
+
+[**DeleteOperatorResponse**](DeleteOperatorResponse.md)
+
+### Authorization
+
+No authorization required
+
+### HTTP request headers
+
+ - **Content-Type**: Not defined
+ - **Accept**: application/json
+
+### HTTP response details
+
+| Status code | Description | Response headers |
+|-------------|-------------|------------------|
+**200** | Operator deleted |  -  |
+**403** | Forbidden |  -  |
+**404** | Operator not found |  -  |
 
 [[Back to top]](#) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to Model list]](../README.md#documentation-for-models) [[Back to README]](../README.md)
 
