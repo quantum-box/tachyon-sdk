@@ -21,6 +21,15 @@ pub enum CreateOperatorError {
     UnknownValue(serde_json::Value),
 }
 
+/// struct for typed errors of method [`delete_operator`]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum DeleteOperatorError {
+    Status403(),
+    Status404(),
+    UnknownValue(serde_json::Value),
+}
+
 /// struct for typed errors of method [`find_operators_by_user`]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(untagged)]
@@ -83,6 +92,58 @@ pub async fn create_operator(
     } else {
         let content = resp.text().await?;
         let entity: Option<CreateOperatorError> =
+            serde_json::from_str(&content).ok();
+        Err(Error::ResponseError(ResponseContent {
+            status,
+            content,
+            entity,
+        }))
+    }
+}
+
+/// The acting tenant scope (`x-operator-id`, falling back to `x-platform-id`) must be the target operator itself or its parent platform. The parent platform is resolved from the target record, so callers do not need to supply `x-platform-id`.
+pub async fn delete_operator(
+    configuration: &configuration::Configuration,
+    id: &str,
+) -> Result<models::DeleteOperatorResponse, Error<DeleteOperatorError>> {
+    // add a prefix to parameters to efficiently prevent name collisions
+    let p_path_id = id;
+
+    let uri_str = format!(
+        "{}/v1/auth/operators/{id}",
+        configuration.base_path,
+        id = crate::apis::urlencode(p_path_id)
+    );
+    let mut req_builder = configuration
+        .client
+        .request(reqwest::Method::DELETE, &uri_str);
+
+    if let Some(ref user_agent) = configuration.user_agent {
+        req_builder = req_builder
+            .header(reqwest::header::USER_AGENT, user_agent.clone());
+    }
+
+    let req = req_builder.build()?;
+    let resp = configuration.client.execute(req).await?;
+
+    let status = resp.status();
+    let content_type = resp
+        .headers()
+        .get("content-type")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("application/octet-stream");
+    let content_type = super::ContentType::from(content_type);
+
+    if !status.is_client_error() && !status.is_server_error() {
+        let content = resp.text().await?;
+        match content_type {
+            ContentType::Json => serde_json::from_str(&content).map_err(Error::from),
+            ContentType::Text => return Err(Error::from(serde_json::Error::custom("Received `text/plain` content type response that cannot be converted to `models::DeleteOperatorResponse`"))),
+            ContentType::Unsupported(unknown_type) => return Err(Error::from(serde_json::Error::custom(format!("Received `{unknown_type}` content type response that cannot be converted to `models::DeleteOperatorResponse`")))),
+        }
+    } else {
+        let content = resp.text().await?;
+        let entity: Option<DeleteOperatorError> =
             serde_json::from_str(&content).ok();
         Err(Error::ResponseError(ResponseContent {
             status,

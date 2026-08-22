@@ -156,6 +156,8 @@ pub mod create_user_request;
 pub use self::create_user_request::CreateUserRequest;
 pub mod create_user_response;
 pub use self::create_user_response::CreateUserResponse;
+pub mod delete_operator_response;
+pub use self::delete_operator_response::DeleteOperatorResponse;
 pub mod delete_product_response;
 pub use self::delete_product_response::DeleteProductResponse;
 pub mod delete_response;

@@ -102,6 +102,7 @@ Class | Method | HTTP request | Description
 *AuthOAuthTokensApi* | [**list_oauth_tokens**](docs/AuthOAuthTokensApi.md#list_oauth_tokens) | **GET** /v1/auth/oauth-tokens | List all OAuth tokens
 *AuthOAuthTokensApi* | [**save_oauth_token**](docs/AuthOAuthTokensApi.md#save_oauth_token) | **POST** /v1/auth/oauth-tokens | Save an OAuth token
 *AuthOperatorsApi* | [**create_operator**](docs/AuthOperatorsApi.md#create_operator) | **POST** /v1/auth/operators | Create an operator under a platform
+*AuthOperatorsApi* | [**delete_operator**](docs/AuthOperatorsApi.md#delete_operator) | **DELETE** /v1/auth/operators/{id} | Delete an operator
 *AuthOperatorsApi* | [**find_operators_by_user**](docs/AuthOperatorsApi.md#find_operators_by_user) | **GET** /v1/auth/operators/by-user | Find operators accessible to a user under a platform
 *AuthOperatorsApi* | [**get_operator_by_alias**](docs/AuthOperatorsApi.md#get_operator_by_alias) | **GET** /v1/auth/operators/by-alias | Get an operator by alias within a platform
 *AuthOperatorsApi* | [**get_operator_by_id**](docs/AuthOperatorsApi.md#get_operator_by_id) | **GET** /v1/auth/operators/{id} | Get an operator by ID
@@ -272,6 +273,7 @@ Class | Method | HTTP request | Description
  - [CreateShippingDestinationRequest](docs/CreateShippingDestinationRequest.md)
  - [CreateUserRequest](docs/CreateUserRequest.md)
  - [CreateUserResponse](docs/CreateUserResponse.md)
+ - [DeleteOperatorResponse](docs/DeleteOperatorResponse.md)
  - [DeleteProductResponse](docs/DeleteProductResponse.md)
  - [DeleteResponse](docs/DeleteResponse.md)
  - [DeleteServiceAccountResponse](docs/DeleteServiceAccountResponse.md)

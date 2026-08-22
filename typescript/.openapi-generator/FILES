@@ -95,6 +95,7 @@ docs/CreateShippingDestinationRequest.md
 docs/CreateUserRequest.md
 docs/CreateUserResponse.md
 docs/DefaultApi.md
+docs/DeleteOperatorResponse.md
 docs/DeleteProductResponse.md
 docs/DeleteResponse.md
 docs/DeleteServiceAccountResponse.md
@@ -347,6 +348,7 @@ src/models/CreateServiceAccountRequest.ts
 src/models/CreateShippingDestinationRequest.ts
 src/models/CreateUserRequest.ts
 src/models/CreateUserResponse.ts
+src/models/DeleteOperatorResponse.ts
 src/models/DeleteProductResponse.ts
 src/models/DeleteResponse.ts
 src/models/DeleteServiceAccountResponse.ts

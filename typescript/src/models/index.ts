@@ -79,6 +79,7 @@ export * from './CreateServiceAccountRequest';
 export * from './CreateShippingDestinationRequest';
 export * from './CreateUserRequest';
 export * from './CreateUserResponse';
+export * from './DeleteOperatorResponse';
 export * from './DeleteProductResponse';
 export * from './DeleteResponse';
 export * from './DeleteServiceAccountResponse';

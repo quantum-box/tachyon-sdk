@@ -539,6 +539,62 @@ fn policy_actions_decode_full_name_and_reject_legacy_action_field() {
 }
 
 #[test]
+fn operators_delete_200_reports_success() {
+    let tmp = TempDir::new().unwrap();
+    let (api_url, rx, handle) = start_server(vec![MockResponse {
+        status: "200 OK",
+        body: r#"{"success":true}"#,
+    }]);
+
+    let output = run_org(
+        tmp.path(),
+        api_url,
+        &["org", "operators", "delete", "tn_target1234567890"],
+    );
+    assert_success(&output);
+
+    let requests = finish_requests(rx, handle);
+    assert_tenant_request(
+        &requests[0],
+        "DELETE /v1/auth/operators/tn_target1234567890 ",
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "Operator tn_target1234567890 deleted.\n"
+    );
+}
+
+#[test]
+fn operators_delete_403_is_not_reported_as_success() {
+    let tmp = TempDir::new().unwrap();
+    let (api_url, rx, handle) = start_server(vec![MockResponse {
+        status: "403 Forbidden",
+        body: r#"{"code":"FORBIDDEN","message":"PermissionDenied: You do not have permission for this tenant"}"#,
+    }]);
+
+    let output = run_org(
+        tmp.path(),
+        api_url,
+        &["org", "operators", "delete", "tn_unrelated1234567"],
+    );
+
+    let requests = finish_requests(rx, handle);
+    assert_tenant_request(
+        &requests[0],
+        "DELETE /v1/auth/operators/tn_unrelated1234567 ",
+    );
+    assert!(!output.status.success(), "403 must fail the command");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!stdout.contains("deleted"), "stdout was:\n{stdout}");
+    assert!(stderr.contains("403 Forbidden"), "stderr was:\n{stderr}");
+    assert!(
+        stderr.contains("You do not have permission for this tenant"),
+        "stderr was:\n{stderr}"
+    );
+}
+
+#[test]
 fn policies_delete_204_reports_success() {
     let tmp = TempDir::new().unwrap();
     let (api_url, rx, handle) = start_server(vec![MockResponse {

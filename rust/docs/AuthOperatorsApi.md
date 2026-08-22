@@ -5,6 +5,7 @@ All URIs are relative to *http://localhost*
 Method | HTTP request | Description
 ------------- | ------------- | -------------
 [**create_operator**](AuthOperatorsApi.md#create_operator) | **POST** /v1/auth/operators | Create an operator under a platform
+[**delete_operator**](AuthOperatorsApi.md#delete_operator) | **DELETE** /v1/auth/operators/{id} | Delete an operator
 [**find_operators_by_user**](AuthOperatorsApi.md#find_operators_by_user) | **GET** /v1/auth/operators/by-user | Find operators accessible to a user under a platform
 [**get_operator_by_alias**](AuthOperatorsApi.md#get_operator_by_alias) | **GET** /v1/auth/operators/by-alias | Get an operator by alias within a platform
 [**get_operator_by_id**](AuthOperatorsApi.md#get_operator_by_id) | **GET** /v1/auth/operators/{id} | Get an operator by ID
@@ -34,6 +35,36 @@ No authorization required
 ### HTTP request headers
 
 - **Content-Type**: application/json
+- **Accept**: application/json
+
+[[Back to top]](#) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to Model list]](../README.md#documentation-for-models) [[Back to README]](../README.md)
+
+
+## delete_operator
+
+> models::DeleteOperatorResponse delete_operator(id)
+Delete an operator
+
+The acting tenant scope (`x-operator-id`, falling back to `x-platform-id`) must be the target operator itself or its parent platform. The parent platform is resolved from the target record, so callers do not need to supply `x-platform-id`.
+
+### Parameters
+
+
+Name | Type | Description  | Required | Notes
+------------- | ------------- | ------------- | ------------- | -------------
+**id** | **String** | Operator ID | [required] |
+
+### Return type
+
+[**models::DeleteOperatorResponse**](DeleteOperatorResponse.md)
+
+### Authorization
+
+No authorization required
+
+### HTTP request headers
+
+- **Content-Type**: Not defined
 - **Accept**: application/json
 
 [[Back to top]](#) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to Model list]](../README.md#documentation-for-models) [[Back to README]](../README.md)
