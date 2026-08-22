@@ -962,12 +962,14 @@ fn build_app_apply_plans(
             let sentry_plan = plan_sentry_integration(&entry)?;
             let has_auth_config = entry.get("auth").is_some();
             let has_resource_declarations = has_declarative_resource_declarations(&entry);
+            let has_database_declarations = has_manifest_database_declarations(&entry);
             let iac_manifest = if env_plan.secret_refs.is_empty()
                 && env_plan.server_managed_credentials.is_empty()
                 && env_plan.internal_service_refs.is_empty()
                 && sentry_plan.is_none()
                 && !has_auth_config
                 && !has_resource_declarations
+                && !has_database_declarations
             {
                 None
             } else {
@@ -1135,6 +1137,19 @@ const ENVIRONMENT_RESOURCE_DECLARATION_KEYS: &[&str] = &[
 
 fn is_environment_resource_declaration(key: &str) -> bool {
     ENVIRONMENT_RESOURCE_DECLARATION_KEYS.contains(&key)
+}
+
+/// Named-cluster managed databases (`databases`, PLT-3819) are a
+/// tenant-scoped, base-level declaration reconciled by the server-side
+/// ApplyManifest. They deliberately stay out of
+/// `ENVIRONMENT_RESOURCE_DECLARATION_KEYS`: an overlay-level
+/// `databases` must keep failing overlay validation instead of being
+/// silently ignored by the server.
+fn has_manifest_database_declarations(entry: &Value) -> bool {
+    entry
+        .get("databases")
+        .and_then(Value::as_array)
+        .is_some_and(|databases| !databases.is_empty())
 }
 
 fn has_declarative_resource_declarations(entry: &Value) -> bool {
@@ -2392,6 +2407,92 @@ spec:
                 "resource declaration {key} did not trigger an IaC manifest"
             );
         }
+    }
+
+    #[test]
+    fn databases_declaration_triggers_iac_manifest_and_passes_through() {
+        // PLT-3819: a base-level `databases` declaration must reach the
+        // server-side ApplyManifest even when the app has no other IaC
+        // trigger (no secret refs, auth, sentry, or resources).
+        let entry = json!({
+            "name": "courseboard-api",
+            "repository": {
+                "url": "https://github.com/quantum-box/courseboard",
+                "owner": "quantum-box",
+                "name": "courseboard"
+            },
+            "databases": [{
+                "name": "tidb_courseboard_prod",
+                "cluster": "txcloud",
+                "provider": "tidb",
+                "user": "courseboard_api"
+            }]
+        });
+
+        let plans =
+            build_app_apply_plans(vec![entry], "tn_01ks18jhh1xvggktfzjx5jqsen", "production")
+                .unwrap();
+        let manifest = plans[0]
+            .iac_manifest
+            .as_ref()
+            .expect("databases declaration did not trigger an IaC manifest");
+
+        assert_eq!(
+            manifest["spec"]["databases"],
+            json!([{
+                "name": "tidb_courseboard_prod",
+                "cluster": "txcloud",
+                "provider": "tidb",
+                "user": "courseboard_api"
+            }])
+        );
+    }
+
+    #[test]
+    fn empty_databases_declaration_does_not_trigger_iac_manifest() {
+        let entry = json!({
+            "name": "plain-app",
+            "repository": {
+                "url": "https://github.com/quantum-box/plain-app",
+                "owner": "quantum-box",
+                "name": "plain-app"
+            },
+            "databases": []
+        });
+
+        let plans =
+            build_app_apply_plans(vec![entry], "tn_01ks18jhh1xvggktfzjx5jqsen", "production")
+                .unwrap();
+
+        assert!(plans[0].iac_manifest.is_none());
+    }
+
+    #[test]
+    fn databases_in_environment_overlay_is_rejected() {
+        // `databases` is a base-level, tenant-scoped declaration. An
+        // overlay-level declaration would be silently ignored by the
+        // server, so the resolver must fail loud instead.
+        let entry = json!({
+            "name": "courseboard-api",
+            "environments": {
+                "production": {
+                    "databases": [{
+                        "name": "tidb_courseboard_prod",
+                        "cluster": "txcloud",
+                        "provider": "tidb",
+                        "user": "courseboard_api"
+                    }]
+                }
+            }
+        });
+
+        let error =
+            match build_app_apply_plans(vec![entry], "tn_01ks18jhh1xvggktfzjx5jqsen", "production")
+            {
+                Ok(_) => panic!("expected overlay validation to fail"),
+                Err(error) => error,
+            };
+        assert!(error.to_string().contains("unsupported field databases"));
     }
 
     #[test]
