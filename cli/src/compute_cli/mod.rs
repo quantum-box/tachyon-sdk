@@ -574,10 +574,20 @@ pub async fn run(
                 app_id,
                 min_instances,
                 max_instances,
+                lambda_memory_size,
+                lambda_timeout,
             } => {
                 let app_id = app_id_or_default(app_id, project_config)?;
                 let id = resolve::resolve_app_id(&api, app_id).await?;
-                run_scaling_update(&api, &id, *min_instances, *max_instances).await
+                run_scaling_update(
+                    &api,
+                    &id,
+                    *min_instances,
+                    *max_instances,
+                    *lambda_memory_size,
+                    *lambda_timeout,
+                )
+                .await
             }
         },
         // Legacy shortcuts
