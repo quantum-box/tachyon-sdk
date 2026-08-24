@@ -28,6 +28,40 @@ pub enum PreviewCommand {
         #[arg(long)]
         branch: String,
     },
+    /// Manage a pull request's managed preview database
+    Database {
+        #[command(subcommand)]
+        command: PreviewDatabaseCommand,
+    },
+}
+
+#[derive(Debug, Clone, Subcommand)]
+pub enum PreviewDatabaseCommand {
+    /// Delete a pull request's preview database so the next build recreates it
+    ///
+    /// The recovery hatch for a preview database that has become unusable —
+    /// a migration that died partway leaves SQLx refusing that migration
+    /// forever, and rewriting an already-applied migration leaves a checksum
+    /// the database disagrees with. Neither is repairable from the build
+    /// side.
+    ///
+    /// This is destructive and immediate: any data entered through the
+    /// preview is gone. The database itself is recreated by the next build,
+    /// not by this command.
+    Delete {
+        /// App ID or name
+        #[arg(long)]
+        app: String,
+        /// Pull request number
+        #[arg(long)]
+        pr: i32,
+        /// Delete without asking for confirmation
+        #[arg(long)]
+        yes: bool,
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[derive(Debug, Clone, Subcommand)]
@@ -683,6 +717,54 @@ pub(super) async fn run_preview_create(api: &ApiClient, app: &str, branch: &str)
     }
     if let Some(pr_number) = build.pr_number {
         println!("PR: #{pr_number}");
+    }
+    Ok(())
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub(super) struct DeletePreviewDatabaseResponse {
+    pub(super) deleted: bool,
+}
+
+pub(super) async fn run_preview_database_delete(
+    api: &ApiClient,
+    app: &str,
+    pr: i32,
+    assume_yes: bool,
+    json: bool,
+) -> Result<()> {
+    if pr <= 0 {
+        anyhow::bail!("--pr must be a positive pull request number");
+    }
+    let app_id = resolve::resolve_app_id(api, app).await?;
+
+    if !assume_yes {
+        // Deleting takes the preview offline until the next build and drops
+        // whatever a reviewer entered through it, so an unattended
+        // invocation must not do that silently.
+        println!("App: {app_id}");
+        println!("Pull request: #{pr}");
+        println!();
+        println!("This deletes the preview database, its user, and its credential secret.");
+        println!("Data entered through the preview will be lost.");
+        println!("The next build for this pull request provisions a fresh database.");
+        println!();
+        println!("No changes made. Re-run with --yes to delete.");
+        return Ok(());
+    }
+
+    let resp: DeletePreviewDatabaseResponse = api
+        .delete_json(&format!("/v1/apps/{app_id}/previews/{pr}/database"))
+        .await?;
+
+    if json {
+        return print_json(&resp);
+    }
+    if resp.deleted {
+        println!("Deleted the preview database for {app_id} PR #{pr}.");
+        println!("The next build for this pull request provisions a fresh one.");
+    } else {
+        println!("No preview database was provisioned for {app_id} PR #{pr}.");
     }
     Ok(())
 }

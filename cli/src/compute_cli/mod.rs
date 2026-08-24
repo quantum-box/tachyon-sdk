@@ -316,6 +316,11 @@ pub async fn run(
             Some(PreviewCommand::Create { app, branch }) => {
                 run_preview_create(&api, app, branch).await
             }
+            Some(PreviewCommand::Database { command }) => match command {
+                PreviewDatabaseCommand::Delete { app, pr, yes, json } => {
+                    run_preview_database_delete(&api, app, *pr, *yes, *json).await
+                }
+            },
             None => {
                 run_preview(
                     &api,
