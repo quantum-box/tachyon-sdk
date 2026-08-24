@@ -4,6 +4,8 @@
 
 ### Added
 
+- Add `--lambda-timeout` and `--lambda-memory-size` to `tachyon compute scaling update`, and show both in `tachyon compute scaling get`. The scaling endpoint has always accepted them; only the CLI request left them out, so raising a function's invocation timeout meant the web console or a hand-rolled PATCH. That blocks recovery when a deploy hook invokes the app's own candidate alias and the migration gate needs longer than the 30s default. (PLT-3861)
+
 - Add `tachyon compute deployments rollback --to-previous` to roll back to the newest production rollback candidate without picking a deployment ID, and `tachyon compute deployments rollback-candidates` to list the eligible targets (successful serving record, provider metadata present) newest first. During an incident the deployment list mixes failed and deleted rows, so finding a valid rollback target used to require manual archaeology. (PLT-3787)
 
 - Add `requires` to auth manifest `ActionSpec`: each entry names a full action (`context:Name`) the declaring action depends on within a call context. `manifest apply` sends the declared edge set to `PUT /v1/auth/action-dependencies`, which validates ownership, cycles, and the system-action allowlist server-side. A manifest without `requires` never touches the platform's edge set. (PLT-3597)
