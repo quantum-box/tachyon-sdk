@@ -458,6 +458,7 @@ pub enum ChangeKind {
     Create,
     Update,
     Unchanged,
+    Unknown,
     Prune,
 }
 
@@ -899,7 +900,7 @@ pub async fn build_plan(
         });
     }
 
-    // Policies: no per-policy diff – report declared ones as create.
+    // Policies: no per-policy diff is available, so their current state is unknown.
     let mut policy_items: Vec<PolicyPlanItem> = manifest
         .policies
         .iter()
@@ -907,7 +908,7 @@ pub async fn build_plan(
             name: p.name.clone(),
             // Show the scope apply will actually use, flag included.
             scope: p.scope_label_with(resolve_global(p.global, global, &p.name).effective),
-            change: ChangeKind::Create,
+            change: ChangeKind::Unknown,
         })
         .collect();
 
@@ -942,12 +943,7 @@ pub(crate) fn print_plan(report: &PlanReport) {
         println!("  (none)");
     }
     for item in &report.actions {
-        let symbol = match item.change {
-            ChangeKind::Create => "+",
-            ChangeKind::Update => "~",
-            ChangeKind::Unchanged => "=",
-            ChangeKind::Prune => "!",
-        };
+        let symbol = change_symbol(&item.change);
         let note = match item.change {
             ChangeKind::Prune => " [prune: will be deleted]",
             _ => "",
@@ -961,16 +957,9 @@ pub(crate) fn print_plan(report: &PlanReport) {
         println!("  (none)");
     }
     for item in &report.policies {
-        let symbol = match item.change {
-            ChangeKind::Create => "+",
-            ChangeKind::Update => "~",
-            ChangeKind::Unchanged => "=",
-            ChangeKind::Prune => "!",
-        };
-        println!(
-            "  {symbol} {} ({}) [note: current state unknown – no list endpoint]",
-            item.name, item.scope
-        );
+        let symbol = change_symbol(&item.change);
+        let note = policy_plan_note(&item.change);
+        println!("  {symbol} {} ({}){note}", item.name, item.scope);
     }
 
     if report.prune {
@@ -994,14 +983,42 @@ pub(crate) fn print_plan(report: &PlanReport) {
         .iter()
         .filter(|a| a.change == ChangeKind::Unchanged)
         .count();
+    let policy_creates = report
+        .policies
+        .iter()
+        .filter(|p| p.change == ChangeKind::Create)
+        .count();
+    let policy_unknown = report
+        .policies
+        .iter()
+        .filter(|p| p.change == ChangeKind::Unknown)
+        .count();
     println!();
     println!(
-        "Summary: {} action(s) to add, {} to update, {} unchanged, {} policy(ies) to register.",
+        "Summary: {} action(s) to add, {} to update, {} unchanged, {} policy(ies) to register, {} with current state unknown.",
         creates,
         updates,
         unchanged,
-        report.policies.len()
+        policy_creates,
+        policy_unknown
     );
+}
+
+fn change_symbol(change: &ChangeKind) -> &'static str {
+    match change {
+        ChangeKind::Create => "+",
+        ChangeKind::Update => "~",
+        ChangeKind::Unchanged => "=",
+        ChangeKind::Unknown => "?",
+        ChangeKind::Prune => "!",
+    }
+}
+
+fn policy_plan_note(change: &ChangeKind) -> &'static str {
+    match change {
+        ChangeKind::Unknown => " [note: current state unknown – no list endpoint]",
+        _ => "",
+    }
 }
 
 // ---- Apply ----
@@ -1684,6 +1701,28 @@ mod tests {
             is_system,
             tenant_id: tenant_id.map(str::to_string),
             owner_tenant_id: None,
+        }
+    }
+
+    #[test]
+    fn plan_symbols_preserve_known_changes_and_distinguish_unknown() {
+        assert_eq!(change_symbol(&ChangeKind::Create), "+");
+        assert_eq!(change_symbol(&ChangeKind::Update), "~");
+        assert_eq!(change_symbol(&ChangeKind::Unchanged), "=");
+        assert_eq!(change_symbol(&ChangeKind::Unknown), "?");
+        assert_eq!(change_symbol(&ChangeKind::Prune), "!");
+    }
+
+    #[test]
+    fn policy_plan_note_is_only_shown_for_unknown_state() {
+        assert!(!policy_plan_note(&ChangeKind::Unknown).is_empty());
+        for known in [
+            ChangeKind::Create,
+            ChangeKind::Update,
+            ChangeKind::Unchanged,
+            ChangeKind::Prune,
+        ] {
+            assert_eq!(policy_plan_note(&known), "");
         }
     }
 
