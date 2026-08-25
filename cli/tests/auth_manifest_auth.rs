@@ -137,6 +137,28 @@ fn start_actions_server() -> (String, mpsc::Receiver<String>, thread::JoinHandle
     (url, rx, handle)
 }
 
+fn start_mixed_plan_server() -> (String, mpsc::Receiver<String>, thread::JoinHandle<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    let (tx, rx) = mpsc::channel();
+    let handle = thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let mut buf = [0_u8; 8192];
+        let n = stream.read(&mut buf).unwrap();
+        let req = String::from_utf8_lossy(&buf[..n]).to_string();
+        tx.send(req).unwrap();
+
+        let body = r#"{"actions":[{"context":"demo","name":"Stable","fullName":"demo:Stable","description":"same"},{"context":"demo","name":"Changed","fullName":"demo:Changed","description":"old"}]}"#;
+        let response = format!(
+            "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+            body.len(),
+            body
+        );
+        stream.write_all(response.as_bytes()).unwrap();
+    });
+    (url, rx, handle)
+}
+
 fn start_apply_action_server() -> (String, mpsc::Receiver<String>, thread::JoinHandle<()>) {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let url = format!("http://{}", listener.local_addr().unwrap());
@@ -386,6 +408,59 @@ fn auth_manifest_plan_refreshes_access_token_after_401() {
     assert!(profile.contains("fresh-refresh-token"));
     let legacy = fs::read_to_string(config_root(tmp.path()).join("credentials.json")).unwrap();
     assert!(legacy.contains("fresh-access-token"));
+}
+
+#[test]
+fn auth_manifest_plan_distinguishes_unknown_policies_from_known_action_changes() {
+    let tmp = TempDir::new().unwrap();
+    write_profile(tmp.path());
+    fs::write(
+        tmp.path().join("auth.yml"),
+        r#"actions:
+  - context: demo
+    name: Stable
+    description: same
+  - context: demo
+    name: Changed
+    description: new
+  - context: demo
+    name: New
+policies:
+  - name: DemoPolicy
+"#,
+    )
+    .unwrap();
+    let (api_url, rx, handle) = start_mixed_plan_server();
+
+    let output = isolated_command(tmp.path())
+        .current_dir(tmp.path())
+        .env("TACHYON_API_URL", api_url)
+        .args([
+            "--tenant-id",
+            "tn_test1234567890",
+            "auth",
+            "manifest",
+            "plan",
+            "--file",
+            "auth.yml",
+        ])
+        .output()
+        .expect("run tachyon auth manifest plan");
+
+    handle.join().unwrap();
+    assert!(rx.recv().unwrap().starts_with("GET /v1/auth/actions "));
+    assert_ok(&output, "auth manifest plan with mixed changes");
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("  = demo:Stable"));
+    assert!(stdout.contains("  ~ demo:Changed"));
+    assert!(stdout.contains("  + demo:New"));
+    assert!(stdout.contains(
+        "  ? DemoPolicy (caller-tenant) [note: current state unknown – no list endpoint]"
+    ));
+    assert!(stdout.contains(
+        "Summary: 1 action(s) to add, 1 to update, 1 unchanged, 0 policy(ies) to register, 1 with current state unknown."
+    ));
 }
 
 #[test]
