@@ -1,0 +1,146 @@
+name: Release version drift
+
+# The publish workflows only fire on a push touching their own package
+# path, and nothing retries or reports a failed publish. A version that
+# fails to ship therefore stays unshipped and silent until someone
+# happens to touch that package again - @tachyon-sdk/storekit sat on an
+# unpublished 0.3.1 from 2026-05-02 to 2026-08-26 exactly that way.
+# This job is the missing feedback loop: it compares every release
+# package's in-repo version against what is actually published, retries
+# the publish, and keeps one tracking issue open until it succeeds.
+
+on:
+  schedule:
+    # 06:00 JST. Early enough that a failed overnight publish is visible
+    # at the start of the working day.
+    - cron: "0 21 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  # Needed to re-dispatch the publish workflows.
+  actions: write
+  # Needed to open, refresh, and close the tracking issue.
+  issues: write
+
+concurrency:
+  group: release-version-drift
+  cancel-in-progress: false
+
+env:
+  DRIFT_LABEL: release-version-drift
+
+jobs:
+  detect:
+    name: Detect unpublished versions
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      # Run the detector's own tests first. A detector that silently
+      # stopped working would look exactly like "no drift", which is the
+      # failure mode this whole workflow exists to prevent.
+      - name: Test detector
+        run: node scripts/test-release-version-drift.mjs
+
+      - name: Check published versions
+        id: check
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          node scripts/check-release-version-drift.mjs \
+            --output drift.json --markdown drift.md
+          count=$(node -p "require('./drift.json').length")
+          echo "count=$count" >> "$GITHUB_OUTPUT"
+
+      - name: Re-dispatch publish workflows
+        if: steps.check.outputs.count != '0'
+        id: dispatch
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          failures=""
+          for workflow in $(node -p "require('./drift.json').map((e) => e.workflow).join(' ')"); do
+            echo "dispatching $workflow"
+            # </dev/null so gh cannot swallow the loop's input, and the
+            # loop keeps going so one broken workflow does not hide the
+            # rest of the drift.
+            if ! gh workflow run "$(basename "$workflow")" --ref "$DEFAULT_BRANCH" </dev/null; then
+              failures="${failures}${workflow} "
+            fi
+          done
+
+          if [ -n "$failures" ]; then
+            echo "::warning title=Dispatch failed::could not dispatch: ${failures}"
+          fi
+          echo "failures=${failures}" >> "$GITHUB_OUTPUT"
+
+      - name: Build report
+        if: steps.check.outputs.count != '0'
+        env:
+          DISPATCH_FAILURES: ${{ steps.dispatch.outputs.failures }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          {
+            echo "The version in this repository is not published for the packages below."
+            echo "The publish workflows only trigger on a push to their own package path,"
+            echo "so they will not retry on their own."
+            echo
+            cat drift.md
+            echo
+            if [ -n "$DISPATCH_FAILURES" ]; then
+              echo "> [!WARNING]"
+              echo "> Automatic re-dispatch failed for: $DISPATCH_FAILURES"
+              echo "> Run the publish workflow manually."
+            else
+              echo "A publish run was dispatched automatically for each of them."
+              echo "If this issue is still open tomorrow that publish is failing:"
+              echo "read the workflow logs rather than re-running it by hand."
+            fi
+            echo
+            echo "Detected by [this run]($RUN_URL)."
+          } > report.md
+          cat report.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Open or refresh tracking issue
+        if: steps.check.outputs.count != '0'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh label create "$DRIFT_LABEL" \
+            --description "A released version is missing from its registry" \
+            --color B60205 2>/dev/null || true
+
+          existing=$(gh issue list --label "$DRIFT_LABEL" --state open \
+            --json number --jq '.[0].number // empty')
+
+          if [ -z "$existing" ]; then
+            gh issue create \
+              --title "Unpublished release versions detected" \
+              --label "$DRIFT_LABEL" \
+              --body-file report.md
+          else
+            # Edit the body instead of adding a comment. This runs daily
+            # until the publish succeeds, and a daily comment would train
+            # everyone to mute the issue.
+            gh issue edit "$existing" --body-file report.md
+            echo "refreshed issue #$existing"
+          fi
+
+      - name: Close tracking issue when clean
+        if: steps.check.outputs.count == '0'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          existing=$(gh issue list --label "$DRIFT_LABEL" --state open \
+            --json number --jq '.[0].number // empty')
+          if [ -n "$existing" ]; then
+            gh issue close "$existing" \
+              --comment "Every release package version is published again. Closing."
+          fi
+          echo "no drift: every release package version is published" >> "$GITHUB_STEP_SUMMARY"
