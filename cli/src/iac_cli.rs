@@ -183,6 +183,15 @@ pub enum ConnectionsCommand {
     },
     /// Disconnect an integration
     Disconnect { id: String },
+    /// Atomically append repositories to a shared GitHub connection allowlist
+    AddAllowedRepositories {
+        id: String,
+        /// owner/repo, repeatable
+        #[arg(long = "repo", required = true)]
+        repos: Vec<String>,
+        #[arg(long)]
+        json: bool,
+    },
     /// Set the repository allowlist on a shared GitHub connection
     SetAllowedRepositories {
         id: String,
@@ -501,6 +510,52 @@ struct SetAllowedRepositoriesRequest<'a> {
 struct SetAllowedRepositoriesResponse {
     connection_id: String,
     allowed_repositories: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct AddAllowedRepositoriesRequest<'a> {
+    repositories: &'a [String],
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct AddAllowedRepositoriesResponse {
+    connection_id: String,
+    added: Vec<String>,
+    already_present: Vec<String>,
+    allowed_repositories: Vec<String>,
+}
+
+async fn run_connections_add_allowed_repositories(
+    api: &ApiClient,
+    id: &str,
+    repos: &[String],
+    json: bool,
+) -> Result<()> {
+    let response: AddAllowedRepositoriesResponse = api
+        .post(
+            &format!("/v1/integrations/connections/{id}/allowed-repositories"),
+            &AddAllowedRepositoriesRequest {
+                repositories: repos,
+            },
+        )
+        .await?;
+    if json {
+        return print_json(&response);
+    }
+    println!("Connection: {}", response.connection_id);
+    println!("Added:");
+    for repo in &response.added {
+        println!("  {repo}");
+    }
+    println!("Already present:");
+    for repo in &response.already_present {
+        println!("  {repo}");
+    }
+    println!("Allowed repositories:");
+    for repo in &response.allowed_repositories {
+        println!("  {repo}");
+    }
+    Ok(())
 }
 
 async fn run_connections_set_allowed_repositories(
@@ -1314,6 +1369,9 @@ pub async fn run(args: &IacArgs, config: &Configuration, tenant_id: &str) -> Res
             ConnectionsCommand::List { json } => run_connections_list(&api, *json).await,
             ConnectionsCommand::Get { id, json } => run_connections_get(&api, id, *json).await,
             ConnectionsCommand::Disconnect { id } => run_connections_disconnect(&api, id).await,
+            ConnectionsCommand::AddAllowedRepositories { id, repos, json } => {
+                run_connections_add_allowed_repositories(&api, id, repos, *json).await
+            }
             ConnectionsCommand::SetAllowedRepositories { id, repos, json } => {
                 run_connections_set_allowed_repositories(&api, id, repos, *json).await
             }

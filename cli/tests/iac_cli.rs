@@ -104,6 +104,63 @@ fn request_json(request: &str) -> serde_json::Value {
     serde_json::from_str(request_body(request)).unwrap()
 }
 
+#[test]
+fn add_allowed_repositories_posts_atomic_append_contract() {
+    let tmp = TempDir::new().unwrap();
+    let response = json!({
+        "connection_id": "con_test",
+        "added": ["quantum-box/bernard-square"],
+        "already_present": ["quantum-box/tachyon-apps"],
+        "allowed_repositories": [
+            "quantum-box/tachyon-apps",
+            "quantum-box/bernard-square"
+        ]
+    })
+    .to_string();
+    let (api_url, rx, handle) = start_graphql_server(vec![response]);
+
+    let output = isolated_command(tmp.path())
+        .env("TACHYON_API_URL", api_url)
+        .args([
+            "iac",
+            "connections",
+            "add-allowed-repositories",
+            "con_test",
+            "--repo",
+            "quantum-box/tachyon-apps",
+            "--repo",
+            "quantum-box/bernard-square",
+            "--json",
+        ])
+        .output()
+        .expect("run atomic allowlist append");
+
+    assert!(
+        output.status.success(),
+        "allowlist append failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let request = rx.recv_timeout(Duration::from_secs(1)).unwrap();
+    handle.join().unwrap();
+    assert!(request.starts_with("POST /v1/integrations/connections/con_test/allowed-repositories "));
+    assert_eq!(
+        request_json(&request),
+        json!({
+            "repositories": [
+                "quantum-box/tachyon-apps",
+                "quantum-box/bernard-square"
+            ]
+        })
+    );
+    let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(stdout["added"], json!(["quantum-box/bernard-square"]));
+    assert_eq!(
+        stdout["already_present"],
+        json!(["quantum-box/tachyon-apps"])
+    );
+}
+
 fn has_change_control_header(request: &str) -> bool {
     request.lines().any(|line| {
         line.to_ascii_lowercase()

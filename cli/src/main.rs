@@ -112,6 +112,44 @@ mod tests {
     }
 
     #[test]
+    fn parses_atomic_github_allowlist_append() {
+        let cli = Cli::try_parse_from([
+            "tachyon",
+            "iac",
+            "connections",
+            "add-allowed-repositories",
+            "con_test",
+            "--repo",
+            "quantum-box/tachyon-apps",
+            "--repo",
+            "quantum-box/bernard-square",
+            "--json",
+        ])
+        .unwrap();
+
+        match cli.command {
+            Commands::Iac(iac_cli::IacArgs {
+                command:
+                    iac_cli::IacCommand::Connections {
+                        command:
+                            iac_cli::ConnectionsCommand::AddAllowedRepositories { id, repos, json },
+                    },
+            }) => {
+                assert_eq!(id, "con_test");
+                assert_eq!(
+                    repos,
+                    vec![
+                        "quantum-box/tachyon-apps".to_string(),
+                        "quantum-box/bernard-square".to_string(),
+                    ]
+                );
+                assert!(json);
+            }
+            _ => panic!("unexpected command"),
+        }
+    }
+
+    #[test]
     fn parses_tenant_id_after_nested_ops_command() {
         let cli = Cli::try_parse_from([
             "tachyon",
