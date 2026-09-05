@@ -1108,6 +1108,7 @@ const ENVIRONMENT_MATERIALIZATION_KEYS: &[&str] = &[
     "framework",
     "deploymentTarget",
     "versionRetention",
+    "scaling",
     "tier",
     "subnet",
     "build",
