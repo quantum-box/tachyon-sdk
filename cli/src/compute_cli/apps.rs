@@ -1723,6 +1723,14 @@ pub(crate) fn app_entry_to_api_body(entry: &Value) -> Result<Value> {
     // and off-network.
     copy_string_field(entry, obj, "tier", "tier");
     copy_string_field(entry, obj, "subnet", "subnet");
+    // Same shape of gap as tier/subnet above: `spec.scaling` was parsed and
+    // then went nowhere, so an app declaring 2048 MiB kept being deployed at
+    // the framework default. The app is the only durable home for these -- a
+    // deployment's own scaling config is rebuilt empty on every deploy.
+    if let Some(scaling) = entry.get("scaling").and_then(Value::as_object) {
+        copy_i64_field_from_map(scaling, obj, "lambdaMemorySize", "lambda_memory_size");
+        copy_i64_field_from_map(scaling, obj, "lambdaTimeout", "lambda_timeout");
+    }
     if let Some(command) = build_command {
         obj.insert("build_command".to_string(), Value::String(command));
     }
@@ -1767,6 +1775,19 @@ fn copy_string_field_from_map(
 ) {
     if let Some(value) = source.get(from).and_then(Value::as_str) {
         target.insert(to.to_string(), Value::String(value.to_string()));
+    }
+}
+
+/// Copies an integer field, which the sizing knobs need and the string
+/// helpers above cannot carry.
+fn copy_i64_field_from_map(
+    source: &serde_json::Map<String, Value>,
+    target: &mut serde_json::Map<String, Value>,
+    from: &str,
+    to: &str,
+) {
+    if let Some(value) = source.get(from).and_then(Value::as_i64) {
+        target.insert(to.to_string(), Value::from(value));
     }
 }
 
@@ -2120,6 +2141,64 @@ spec:
         let body = app_entry_to_api_body(&entries[0]).unwrap();
 
         assert_eq!(body["name"], "field");
+    }
+
+    /// The incident: a manifest declared 2048 MiB, `plan` said "changed:
+    /// <none>", and the app kept deploying at the framework default because
+    /// the value never made it into the REST body.
+    #[test]
+    fn api_body_carries_declared_lambda_sizing() {
+        let (_tmp, path) = write_manifest(
+            r#"
+apiVersion: apps.tachy.one/v1alpha
+kind: CloudApps
+spec:
+  apps:
+    - name: field
+      repository:
+        url: https://github.com/quantum-box/tachyonfield
+        owner: quantum-box
+        name: tachyonfield
+      deploymentTarget: lambda
+      scaling:
+        lambdaMemorySize: 2048
+        lambdaTimeout: 60
+"#,
+        );
+
+        let manifest = load_cloud_apps_manifest(&path).unwrap();
+        let entries = select_app_entries(&manifest, Some("field")).unwrap();
+        let body = app_entry_to_api_body(&entries[0]).unwrap();
+
+        assert_eq!(body["lambda_memory_size"], 2048);
+        assert_eq!(body["lambda_timeout"], 60);
+    }
+
+    /// A manifest that says nothing about sizing must not send anything:
+    /// omitting the field is how a caller says "leave it alone", and sending
+    /// a default here would overwrite whatever the app already had.
+    #[test]
+    fn api_body_omits_lambda_sizing_when_not_declared() {
+        let (_tmp, path) = write_manifest(
+            r#"
+apiVersion: apps.tachy.one/v1alpha
+kind: CloudApps
+spec:
+  apps:
+    - name: field
+      repository:
+        url: https://github.com/quantum-box/tachyonfield
+        owner: quantum-box
+        name: tachyonfield
+"#,
+        );
+
+        let manifest = load_cloud_apps_manifest(&path).unwrap();
+        let entries = select_app_entries(&manifest, Some("field")).unwrap();
+        let body = app_entry_to_api_body(&entries[0]).unwrap();
+
+        assert!(body.get("lambda_memory_size").is_none());
+        assert!(body.get("lambda_timeout").is_none());
     }
 
     #[test]
