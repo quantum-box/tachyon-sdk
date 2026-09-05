@@ -1393,10 +1393,7 @@ fn dir_has_sql_files(dir: &Path) -> bool {
 /// so finding one here means the repository and the manifest both claim
 /// ownership. Failing is the only way to keep which one `wrangler deploy`
 /// reads from depending on the file layout.
-fn write_generated_wrangler_config(
-    workload: &BuildWorkloadSpec,
-    app_dir: &Path,
-) -> Result<()> {
+fn write_generated_wrangler_config(workload: &BuildWorkloadSpec, app_dir: &Path) -> Result<()> {
     let Some(config) = workload.wrangler_config.as_ref() else {
         return Ok(());
     };
