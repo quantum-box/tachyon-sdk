@@ -218,6 +218,16 @@ pub(super) struct AppResponse {
     pub(super) tier: Option<String>,
     #[serde(default)]
     pub(super) subnet: Option<String>,
+    /// Lambda memory in MiB the app has. `None` means the per-framework
+    /// default. Read back so `plan` can tell a declaration that took from one
+    /// that did not: a field missing here never equals what the manifest
+    /// says, so every apply would report it as changed forever.
+    #[serde(default)]
+    pub(super) lambda_memory_size: Option<i64>,
+    /// Lambda invocation timeout in seconds the app has. `None` means the
+    /// per-framework default.
+    #[serde(default)]
+    pub(super) lambda_timeout: Option<i64>,
     #[serde(default)]
     pub(super) watch_paths: Option<Vec<String>>,
     #[serde(default)]
@@ -1899,6 +1909,8 @@ fn app_field_value(app: &AppResponse, field: &str) -> Value {
         // would show up as a change on every apply.
         "tier" => opt_string_value(app.tier.as_deref().or(Some("standard"))),
         "subnet" => opt_string_value(app.subnet.as_deref()),
+        "lambda_memory_size" => opt_i64_value(app.lambda_memory_size),
+        "lambda_timeout" => opt_i64_value(app.lambda_timeout),
         "watch_paths" => match &app.watch_paths {
             Some(paths) if !paths.is_empty() => {
                 Value::Array(paths.iter().map(|p| Value::String(p.clone())).collect())
@@ -1912,6 +1924,13 @@ fn app_field_value(app: &AppResponse, field: &str) -> Value {
             _ => Value::Null,
         },
         _ => Value::Null,
+    }
+}
+
+fn opt_i64_value(value: Option<i64>) -> Value {
+    match value {
+        Some(value) => Value::from(value),
+        None => Value::Null,
     }
 }
 
@@ -2199,6 +2218,47 @@ spec:
 
         assert!(body.get("lambda_memory_size").is_none());
         assert!(body.get("lambda_timeout").is_none());
+    }
+
+    fn app_with_sizing(memory: Option<i64>, timeout: Option<i64>) -> AppResponse {
+        serde_json::from_value(json!({
+            "id": "app_1",
+            "name": "field",
+            "lambda_memory_size": memory,
+            "lambda_timeout": timeout,
+        }))
+        .unwrap()
+    }
+
+    /// Without reading the value back, a declaration never equals what the
+    /// app has, so `plan` reports it as changed on every run and an apply is
+    /// sent forever. It also means an operator cannot tell a declaration that
+    /// took from one that was dropped -- which is how a 2048 MiB manifest sat
+    /// next to a 512 MiB deployment unnoticed.
+    #[test]
+    fn declared_sizing_matching_the_app_is_not_a_change() {
+        let app = app_with_sizing(Some(2048), Some(60));
+        let body = json!({
+            "name": "field",
+            "lambda_memory_size": 2048,
+            "lambda_timeout": 60,
+        });
+
+        let (action, changed) = classify_app_action(Some(&app), &body);
+
+        assert!(matches!(action, ApplyAction::NoChange), "{changed:?}");
+        assert!(changed.is_empty(), "{changed:?}");
+    }
+
+    #[test]
+    fn a_different_declared_size_is_still_a_change() {
+        let app = app_with_sizing(Some(512), None);
+        let body = json!({"name": "field", "lambda_memory_size": 2048});
+
+        let (action, changed) = classify_app_action(Some(&app), &body);
+
+        assert!(matches!(action, ApplyAction::Update));
+        assert_eq!(changed, vec!["lambda_memory_size".to_string()]);
     }
 
     #[test]
