@@ -53,6 +53,80 @@ pub fn http_error_status(err: &anyhow::Error) -> Option<reqwest::StatusCode> {
     err.downcast_ref::<HttpError>().map(|e| e.status)
 }
 
+/// Header carrying the platform scope that validates access to a tenant the
+/// caller is not a direct member of (e.g. the system tenant that holds the
+/// host Sentry token).
+pub const PLATFORM_ID_HEADER: &str = "x-platform-id";
+
+/// Process-wide platform scope registered once from the CLI global option.
+///
+/// The value is read whenever an [`ApiClient`] or SDK configuration is built,
+/// so every command inherits `--platform-id` without threading it through
+/// each call site.
+static PLATFORM_ID: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+
+/// Register the platform scope for this process. Returns an error when the
+/// value cannot be sent as an HTTP header. Later calls are ignored.
+pub fn set_platform_id(platform_id: Option<&str>) -> Result<()> {
+    let normalized = platform_id
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string);
+    if let Some(value) = &normalized {
+        header::HeaderValue::from_str(value)
+            .with_context(|| format!("invalid --platform-id value: {value}"))?;
+    }
+    let _ = PLATFORM_ID.set(normalized);
+    Ok(())
+}
+
+/// Platform scope registered via [`set_platform_id`], if any.
+pub fn platform_id() -> Option<&'static str> {
+    PLATFORM_ID.get().and_then(|value| value.as_deref())
+}
+
+/// Default headers shared by [`ApiClient`] and the generated SDK client.
+pub fn default_headers(
+    tenant_id: &str,
+    platform_id: Option<&str>,
+    bearer_token: Option<&str>,
+) -> Result<header::HeaderMap> {
+    let mut headers = header::HeaderMap::new();
+    headers.insert("x-operator-id", header::HeaderValue::from_str(tenant_id)?);
+    if let Some(platform_id) = platform_id {
+        headers.insert(
+            PLATFORM_ID_HEADER,
+            header::HeaderValue::from_str(platform_id)?,
+        );
+    }
+    if let Some(token) = bearer_token {
+        headers.insert(
+            header::AUTHORIZATION,
+            header::HeaderValue::from_str(&format!("Bearer {token}"))?,
+        );
+    }
+    Ok(headers)
+}
+
+/// HTTP client for the generated SDK that carries the registered platform
+/// scope. Generated API calls add `x-operator-id` and the bearer token per
+/// request, so only `x-platform-id` is installed as a default header.
+///
+/// The generated SDK is pinned to reqwest 0.12, so this client is built from
+/// the `reqwest12` alias rather than the CLI's own reqwest version.
+pub fn sdk_http_client() -> reqwest12::Client {
+    let mut headers = reqwest12::header::HeaderMap::new();
+    if let Some(platform_id) = platform_id() {
+        if let Ok(value) = reqwest12::header::HeaderValue::from_str(platform_id) {
+            headers.insert(PLATFORM_ID_HEADER, value);
+        }
+    }
+    reqwest12::Client::builder()
+        .default_headers(headers)
+        .build()
+        .expect("reqwest client with default headers should build")
+}
+
 /// Shared API client that carries Tachyon auth headers.
 pub struct ApiClient {
     pub client: Client,
@@ -72,14 +146,11 @@ impl ApiClient {
         tenant_id: &str,
         auth_diagnostics: Option<AuthDiagnostics>,
     ) -> Result<Self> {
-        let mut headers = header::HeaderMap::new();
-        headers.insert("x-operator-id", header::HeaderValue::from_str(tenant_id)?);
-        if let Some(token) = &config.bearer_access_token {
-            headers.insert(
-                header::AUTHORIZATION,
-                header::HeaderValue::from_str(&format!("Bearer {token}"))?,
-            );
-        }
+        let headers = default_headers(
+            tenant_id,
+            platform_id(),
+            config.bearer_access_token.as_deref(),
+        )?;
         let client = Client::builder().default_headers(headers).build()?;
         let base_url = config.base_path.trim_end_matches('/').to_string();
         Ok(Self {
@@ -634,5 +705,27 @@ mod tests {
         let rendered = err.to_string();
         assert!(rendered.contains("status=401 Unauthorized"));
         assert!(rendered.contains("Authentication diagnostics: ..."));
+    }
+}
+
+#[cfg(test)]
+mod platform_scope_tests {
+    use super::*;
+
+    #[test]
+    fn default_headers_include_platform_scope_only_when_set() {
+        let without = default_headers("tn_operator", None, Some("token")).unwrap();
+        assert_eq!(without.get("x-operator-id").unwrap(), "tn_operator");
+        assert!(without.get(PLATFORM_ID_HEADER).is_none());
+        assert_eq!(without.get(header::AUTHORIZATION).unwrap(), "Bearer token");
+
+        let with = default_headers("tn_operator", Some("tn_platform"), None).unwrap();
+        assert_eq!(with.get(PLATFORM_ID_HEADER).unwrap(), "tn_platform");
+        assert!(with.get(header::AUTHORIZATION).is_none());
+    }
+
+    #[test]
+    fn default_headers_reject_platform_scope_that_is_not_a_header_value() {
+        assert!(default_headers("tn_operator", Some("bad\nvalue"), None).is_err());
     }
 }

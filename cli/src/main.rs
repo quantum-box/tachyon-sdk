@@ -64,6 +64,17 @@ struct Cli {
     )]
     tenant_id: String,
 
+    /// Platform ID that scopes the request (x-platform-id header). Required
+    /// when the tenant is one you access through a parent platform rather
+    /// than direct membership, such as the system tenant for ops commands.
+    #[arg(
+        long,
+        visible_alias = "platform",
+        env = "TACHYON_PLATFORM_ID",
+        global = true
+    )]
+    platform_id: Option<String>,
+
     /// API key for authentication (overrides stored OAuth token)
     #[arg(long, env = "TACHYON_API_KEY")]
     api_key: Option<String>,
@@ -147,6 +158,45 @@ mod tests {
             }
             _ => panic!("unexpected command"),
         }
+    }
+
+    #[test]
+    fn parses_platform_id_after_nested_ops_command() {
+        let cli = Cli::try_parse_from([
+            "tachyon",
+            "ops",
+            "sentry",
+            "issues",
+            "resolve",
+            "12345",
+            "--tenant-id",
+            "tn_system",
+            "--platform-id",
+            "tn_platform",
+        ])
+        .unwrap();
+
+        assert_eq!(cli.tenant_id, "tn_system");
+        assert_eq!(cli.platform_id.as_deref(), Some("tn_platform"));
+    }
+
+    #[test]
+    fn platform_id_defaults_to_none_and_accepts_platform_alias() {
+        let cli = Cli::try_parse_from(["tachyon", "auth", "list"]).unwrap();
+        assert_eq!(cli.platform_id, None);
+
+        let cli = Cli::try_parse_from([
+            "tachyon",
+            "--platform",
+            "tn_platform",
+            "ops",
+            "sentry",
+            "issues",
+            "view",
+            "12345",
+        ])
+        .unwrap();
+        assert_eq!(cli.platform_id.as_deref(), Some("tn_platform"));
     }
 
     #[test]
@@ -733,6 +783,7 @@ fn build_oauth_config(cli: &Cli) -> auth::OAuthConfig {
 async fn build_config(cli: &Cli, profile: &str) -> Configuration {
     let mut config = Configuration::new();
     config.base_path = cli.api_url.clone();
+    config.client = client::sdk_http_client();
     config.bearer_access_token = resolve_token(cli, profile).await.map(|token| token.value);
     config
 }
@@ -791,6 +842,7 @@ async fn build_config_with_auth(
 ) -> (Configuration, Option<AuthDiagnostics>) {
     let mut config = Configuration::new();
     config.base_path = cli.api_url.clone();
+    config.client = client::sdk_http_client();
     let resolved = resolve_token(cli, profile).await;
     let diagnostics = Some(AuthDiagnostics {
         profile: Some(profile.to_string()),
@@ -817,6 +869,7 @@ async fn main() {
 
 async fn run() -> Result<()> {
     let cli = Cli::parse();
+    client::set_platform_id(cli.platform_id.as_deref())?;
 
     // Resolve the profile to use for this invocation. For most commands this
     // is the active profile (or the value of --profile / TACHYON_PROFILE for a
