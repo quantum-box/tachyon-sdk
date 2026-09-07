@@ -1139,6 +1139,8 @@ const ENVIRONMENT_MATERIALIZATION_KEYS: &[&str] = &[
 /// Declarative resources whose lifecycle may span multiple environments.
 /// They must retain their original environment scope for server reconciliation.
 const ENVIRONMENT_RESOURCE_DECLARATION_KEYS: &[&str] = &[
+    "worker",
+    "kvNamespaces",
     "resources",
     "d1Databases",
     "provisionedDatabase",
@@ -2461,6 +2463,14 @@ spec:
                 },
                 "preview": {
                     "rootDirectory": "apps/preview",
+                    "kvNamespaces": [{"binding": "SESSIONS"}],
+                    "worker": {
+                        "generateConfig": true,
+                        "main": "src/index.ts",
+                        "compatibilityDate": "2026-06-18",
+                        "durableObjects": [{ "binding": "ROOMS", "className": "Room" }],
+                        "migrations": [{ "tag": "v1", "newSqliteClasses": ["Room"] }]
+                    },
                     "resources": [{
                         "type": "sentry",
                         "name": "courseboard-preview",
@@ -2512,8 +2522,42 @@ spec:
     }
 
     #[test]
+    fn worker_declaration_alone_triggers_iac_save_and_preserves_migrations() {
+        let worker = json!({
+            "generateConfig": true,
+            "main": "src/index.ts",
+            "compatibilityDate": "2026-06-18",
+            "durableObjects": [{ "binding": "ROOMS", "className": "Room" }],
+            "migrations": [{ "tag": "v1", "newSqliteClasses": ["Room"] }]
+        });
+        let entry = json!({
+            "name": "order-sync",
+            "repository": {
+                "url": "https://github.com/quantum-box/example",
+                "owner": "quantum-box", "name": "example"
+            },
+            "framework": "worker", "deploymentTarget": "cloudflare_workers",
+            "worker": worker.clone()
+        });
+        for environment in ["production", "preview"] {
+            let plans = build_app_apply_plans(
+                vec![entry.clone()],
+                "tn_01hjryxysgey07h5jz5wagqj0m",
+                environment,
+            )
+            .unwrap();
+            assert_eq!(
+                plans[0].iac_manifest.as_ref().unwrap()["spec"]["worker"],
+                worker
+            );
+        }
+    }
+
+    #[test]
     fn resource_declaration_keys_each_trigger_iac_manifest() {
         for (key, value) in [
+            ("kvNamespaces", json!([{ "binding": "SESSIONS" }])),
+            ("worker", json!({ "generateConfig": true })),
             ("resources", json!([])),
             ("d1Databases", json!([])),
             (
