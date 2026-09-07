@@ -1,5 +1,6 @@
 mod apply;
 mod discovery;
+mod oauth2_resource;
 mod plan;
 mod reconcile;
 mod schema;

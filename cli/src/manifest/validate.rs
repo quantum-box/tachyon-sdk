@@ -90,6 +90,13 @@ pub(crate) fn validate_source(
             auth_manifest::validate_manifest(&manifest)?;
             Ok("auth actions/policies".to_string())
         }
+        ManifestKind::OAuth2Resource => {
+            let manifest = super::oauth2_resource::parse(&source.document)?;
+            Ok(format!(
+                "OAuth2Resource {} ({})",
+                manifest.metadata.name, manifest.spec.resource
+            ))
+        }
         ManifestKind::Iac => {
             Ok("IaC v1alpha manifest recognized; apply not supported yet".to_string())
         }
