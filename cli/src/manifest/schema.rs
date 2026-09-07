@@ -210,6 +210,12 @@ pub struct CloudAppSpec {
     /// Cloudflare R2 bucket bindings.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub r2_buckets: Vec<R2BucketSpec>,
+    /// Cloudflare Workers KV namespace declarations.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub kv_namespaces: Vec<KvNamespaceSpec>,
+    /// Control-plane generated Wrangler configuration.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub worker: Option<WorkerSpec>,
     /// Opt-in Speed Insights (Core Web Vitals collection). Only honored for
     /// static deployment targets.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -244,6 +250,57 @@ pub struct CloudAppSpec {
     /// Environment-specific overrides (preview / staging / production).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub environments: Option<EnvironmentOverrides>,
+}
+
+/// Cloudflare Workers configuration owned by the manifest.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WorkerSpec {
+    #[serde(default)]
+    pub generate_config: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub main: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub compatibility_date: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub compatibility_flags: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub observability: Option<WorkerObservabilitySpec>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub durable_objects: Vec<WorkerDurableObjectBinding>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub migrations: Vec<WorkerDurableObjectMigration>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WorkerObservabilitySpec {
+    #[serde(default)]
+    pub enabled: bool,
+}
+
+/// A Durable Object namespace local to the Worker being deployed.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WorkerDurableObjectBinding {
+    pub binding: String,
+    pub class_name: String,
+}
+
+/// Additive SQLite migration; keep existing tags and append new steps.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WorkerDurableObjectMigration {
+    pub tag: String,
+    pub new_sqlite_classes: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct KvNamespaceSpec {
+    pub binding: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
 }
 
 /// Source repository settings.
@@ -954,6 +1011,25 @@ mod tests {
         let rendered = serde_json::to_string(&schema).unwrap();
         assert!(rendered.contains("actions"));
         assert!(rendered.contains("policies"));
+    }
+
+    #[test]
+    fn typed_model_preserves_worker_durable_objects_and_kv() {
+        let worker = serde_json::json!({
+            "generateConfig": true, "main": "src/index.ts", "compatibilityDate": "2026-06-18",
+            "compatibilityFlags": ["nodejs_compat"], "observability": {"enabled": true},
+            "durableObjects": [{"binding": "ROOMS", "className": "Room"}],
+            "migrations": [{"tag": "v1", "newSqliteClasses": ["Room"]}]
+        });
+        let value = serde_json::json!({
+            "worker": worker, "kvNamespaces": [{"binding": "SESSIONS", "title": "sessions"}],
+            "environments": {"preview": {"worker": worker}}
+        });
+        let spec: CloudAppSpec = serde_json::from_value(value.clone()).unwrap();
+        assert_eq!(serde_json::to_value(spec).unwrap(), value);
+        let schema = serde_json::to_value(schemars::schema_for!(CloudAppSpec)).unwrap();
+        assert!(schema["properties"].get("worker").is_some());
+        assert!(schema["properties"].get("kvNamespaces").is_some());
     }
 
     #[test]
