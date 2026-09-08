@@ -167,6 +167,13 @@ pub struct CloudAppSpec {
     /// default; values below the compute minimum are clamped.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub version_retention: Option<u16>,
+    /// Runtime sizing for the deployed function.
+    ///
+    /// This schema is what the CLI sends: a key it does not model is dropped
+    /// while parsing, so the server never sees it and `plan` reports no
+    /// change. Keep it in step with `CloudAppManifestSpec` in tachyon-apps.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scaling: Option<ScalingSpec>,
     /// Service tier. `enterprise` opts Lambda apps into a dedicated network
     /// profile (e.g. TiDB Serverless PrivateLink subnet).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -208,6 +215,12 @@ pub struct CloudAppSpec {
     /// Cloudflare R2 bucket bindings.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub r2_buckets: Vec<R2BucketSpec>,
+    /// Cloudflare Workers KV namespace declarations.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub kv_namespaces: Vec<KvNamespaceSpec>,
+    /// Control-plane generated Wrangler configuration.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub worker: Option<WorkerSpec>,
     /// Opt-in Speed Insights (Core Web Vitals collection). Only honored for
     /// static deployment targets.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -242,6 +255,57 @@ pub struct CloudAppSpec {
     /// Environment-specific overrides (preview / staging / production).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub environments: Option<EnvironmentOverrides>,
+}
+
+/// Cloudflare Workers configuration owned by the manifest.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WorkerSpec {
+    #[serde(default)]
+    pub generate_config: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub main: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub compatibility_date: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub compatibility_flags: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub observability: Option<WorkerObservabilitySpec>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub durable_objects: Vec<WorkerDurableObjectBinding>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub migrations: Vec<WorkerDurableObjectMigration>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WorkerObservabilitySpec {
+    #[serde(default)]
+    pub enabled: bool,
+}
+
+/// A Durable Object namespace local to the Worker being deployed.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WorkerDurableObjectBinding {
+    pub binding: String,
+    pub class_name: String,
+}
+
+/// Additive SQLite migration; keep existing tags and append new steps.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WorkerDurableObjectMigration {
+    pub tag: String,
+    pub new_sqlite_classes: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct KvNamespaceSpec {
+    pub binding: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
 }
 
 /// Source repository settings.
@@ -829,6 +893,28 @@ pub struct CustomDomainSpec {
     pub zone_id: Option<String>,
 }
 
+/// Runtime sizing for a Cloud App's deployed function.
+///
+/// Only the Lambda deployment target reads these. Omitted leaves the
+/// per-framework default in place.
+///
+/// This is the only durable home for the values: `PATCH /v1/apps/:id/scaling`
+/// writes onto the *active deployment*, and a new deployment starts from an
+/// empty scaling config, so a value set that way is discarded by the next
+/// deploy.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ScalingSpec {
+    /// Lambda memory in MiB (128-10240). Raise it for a function that decodes
+    /// what it is sent: the 512 MiB default is a ceiling an image or PDF
+    /// reader hits as an out-of-memory kill.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lambda_memory_size: Option<i32>,
+    /// Lambda invocation timeout in seconds (1-900).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lambda_timeout: Option<i32>,
+}
+
 /// Environment-specific overrides. Each overlay accepts the same fields as
 /// the app spec (except `environments`); set fields replace the base value
 /// for that runtime environment.
@@ -846,6 +932,44 @@ pub struct EnvironmentOverrides {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The CLI is the transport: a key this schema does not model is invisible
+    /// to `plan`, so an operator declaring it sees "changed: <none>" and has no
+    /// way to tell a no-op from a dropped field. That is how a Lambda memory
+    /// bump looked applied while the app kept the 512 MiB default.
+    #[test]
+    fn cloud_app_spec_round_trips_scaling() {
+        let spec: CloudAppSpec =
+            serde_yaml::from_str("scaling:\n  lambdaMemorySize: 2048\n  lambdaTimeout: 60\n")
+                .unwrap();
+        let scaling = spec.scaling.clone().expect("scaling must survive parsing");
+        assert_eq!(scaling.lambda_memory_size, Some(2048));
+        assert_eq!(scaling.lambda_timeout, Some(60));
+
+        let rendered = serde_json::to_value(&spec).unwrap();
+        assert_eq!(rendered["scaling"]["lambdaMemorySize"], 2048);
+        assert_eq!(rendered["scaling"]["lambdaTimeout"], 60);
+    }
+
+    /// An overlay accepts the same fields as the base entry, so a preview that
+    /// does not need production's headroom can say so.
+    #[test]
+    fn environment_overlay_accepts_scaling() {
+        let spec: CloudAppSpec = serde_yaml::from_str(
+            "environments:\n  preview:\n    scaling:\n      lambdaMemorySize: 512\n",
+        )
+        .unwrap();
+        let preview = spec
+            .environments
+            .and_then(|environments| environments.preview)
+            .expect("preview overlay");
+        assert_eq!(
+            preview
+                .scaling
+                .and_then(|scaling| scaling.lambda_memory_size),
+            Some(512)
+        );
+    }
 
     #[test]
     fn cloud_apps_schema_lists_all_frameworks_and_targets() {
@@ -892,6 +1016,25 @@ mod tests {
         let rendered = serde_json::to_string(&schema).unwrap();
         assert!(rendered.contains("actions"));
         assert!(rendered.contains("policies"));
+    }
+
+    #[test]
+    fn typed_model_preserves_worker_durable_objects_and_kv() {
+        let worker = serde_json::json!({
+            "generateConfig": true, "main": "src/index.ts", "compatibilityDate": "2026-06-18",
+            "compatibilityFlags": ["nodejs_compat"], "observability": {"enabled": true},
+            "durableObjects": [{"binding": "ROOMS", "className": "Room"}],
+            "migrations": [{"tag": "v1", "newSqliteClasses": ["Room"]}]
+        });
+        let value = serde_json::json!({
+            "worker": worker, "kvNamespaces": [{"binding": "SESSIONS", "title": "sessions"}],
+            "environments": {"preview": {"worker": worker}}
+        });
+        let spec: CloudAppSpec = serde_json::from_value(value.clone()).unwrap();
+        assert_eq!(serde_json::to_value(spec).unwrap(), value);
+        let schema = serde_json::to_value(schemars::schema_for!(CloudAppSpec)).unwrap();
+        assert!(schema["properties"].get("worker").is_some());
+        assert!(schema["properties"].get("kvNamespaces").is_some());
     }
 
     #[test]

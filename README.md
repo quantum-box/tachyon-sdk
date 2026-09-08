@@ -186,6 +186,9 @@ server-side tenant and change-control policy behavior.
 # Set credentials
 export TACHYON_API_URL=https://api.n1.tachy.one
 export TACHYON_TENANT_ID=tn_xxxx
+# Optional: platform scope (x-platform-id) for tenants you reach through a
+# parent platform rather than direct membership, e.g. the system tenant.
+export TACHYON_PLATFORM_ID=tn_xxxx
 export TACHYON_API_KEY=your-api-key
 
 # Show recent build status for an app

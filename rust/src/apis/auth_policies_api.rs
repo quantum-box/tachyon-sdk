@@ -230,7 +230,8 @@ pub async fn delete_policy(
         .request(reqwest::Method::DELETE, &uri_str);
 
     if let Some(ref user_agent) = configuration.user_agent {
-        req_builder = req_builder.header(reqwest::header::USER_AGENT, user_agent.clone());
+        req_builder = req_builder
+            .header(reqwest::header::USER_AGENT, user_agent.clone());
     }
 
     let req = req_builder.build()?;
@@ -242,7 +243,8 @@ pub async fn delete_policy(
         Ok(())
     } else {
         let content = resp.text().await?;
-        let entity: Option<DeletePolicyError> = serde_json::from_str(&content).ok();
+        let entity: Option<DeletePolicyError> =
+            serde_json::from_str(&content).ok();
         Err(Error::ResponseError(ResponseContent {
             status,
             content,

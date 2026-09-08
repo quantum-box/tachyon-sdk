@@ -218,6 +218,16 @@ pub(super) struct AppResponse {
     pub(super) tier: Option<String>,
     #[serde(default)]
     pub(super) subnet: Option<String>,
+    /// Lambda memory in MiB the app has. `None` means the per-framework
+    /// default. Read back so `plan` can tell a declaration that took from one
+    /// that did not: a field missing here never equals what the manifest
+    /// says, so every apply would report it as changed forever.
+    #[serde(default)]
+    pub(super) lambda_memory_size: Option<i64>,
+    /// Lambda invocation timeout in seconds the app has. `None` means the
+    /// per-framework default.
+    #[serde(default)]
+    pub(super) lambda_timeout: Option<i64>,
     #[serde(default)]
     pub(super) watch_paths: Option<Vec<String>>,
     #[serde(default)]
@@ -1108,6 +1118,7 @@ const ENVIRONMENT_MATERIALIZATION_KEYS: &[&str] = &[
     "framework",
     "deploymentTarget",
     "versionRetention",
+    "scaling",
     "tier",
     "subnet",
     "build",
@@ -1128,6 +1139,8 @@ const ENVIRONMENT_MATERIALIZATION_KEYS: &[&str] = &[
 /// Declarative resources whose lifecycle may span multiple environments.
 /// They must retain their original environment scope for server reconciliation.
 const ENVIRONMENT_RESOURCE_DECLARATION_KEYS: &[&str] = &[
+    "worker",
+    "kvNamespaces",
     "resources",
     "d1Databases",
     "provisionedDatabase",
@@ -1722,6 +1735,14 @@ pub(crate) fn app_entry_to_api_body(entry: &Value) -> Result<Value> {
     // and off-network.
     copy_string_field(entry, obj, "tier", "tier");
     copy_string_field(entry, obj, "subnet", "subnet");
+    // Same shape of gap as tier/subnet above: `spec.scaling` was parsed and
+    // then went nowhere, so an app declaring 2048 MiB kept being deployed at
+    // the framework default. The app is the only durable home for these -- a
+    // deployment's own scaling config is rebuilt empty on every deploy.
+    if let Some(scaling) = entry.get("scaling").and_then(Value::as_object) {
+        copy_i64_field_from_map(scaling, obj, "lambdaMemorySize", "lambda_memory_size");
+        copy_i64_field_from_map(scaling, obj, "lambdaTimeout", "lambda_timeout");
+    }
     if let Some(command) = build_command {
         obj.insert("build_command".to_string(), Value::String(command));
     }
@@ -1766,6 +1787,19 @@ fn copy_string_field_from_map(
 ) {
     if let Some(value) = source.get(from).and_then(Value::as_str) {
         target.insert(to.to_string(), Value::String(value.to_string()));
+    }
+}
+
+/// Copies an integer field, which the sizing knobs need and the string
+/// helpers above cannot carry.
+fn copy_i64_field_from_map(
+    source: &serde_json::Map<String, Value>,
+    target: &mut serde_json::Map<String, Value>,
+    from: &str,
+    to: &str,
+) {
+    if let Some(value) = source.get(from).and_then(Value::as_i64) {
+        target.insert(to.to_string(), Value::from(value));
     }
 }
 
@@ -1877,6 +1911,8 @@ fn app_field_value(app: &AppResponse, field: &str) -> Value {
         // would show up as a change on every apply.
         "tier" => opt_string_value(app.tier.as_deref().or(Some("standard"))),
         "subnet" => opt_string_value(app.subnet.as_deref()),
+        "lambda_memory_size" => opt_i64_value(app.lambda_memory_size),
+        "lambda_timeout" => opt_i64_value(app.lambda_timeout),
         "watch_paths" => match &app.watch_paths {
             Some(paths) if !paths.is_empty() => {
                 Value::Array(paths.iter().map(|p| Value::String(p.clone())).collect())
@@ -1890,6 +1926,13 @@ fn app_field_value(app: &AppResponse, field: &str) -> Value {
             _ => Value::Null,
         },
         _ => Value::Null,
+    }
+}
+
+fn opt_i64_value(value: Option<i64>) -> Value {
+    match value {
+        Some(value) => Value::from(value),
+        None => Value::Null,
     }
 }
 
@@ -2121,6 +2164,105 @@ spec:
         assert_eq!(body["name"], "field");
     }
 
+    /// The incident: a manifest declared 2048 MiB, `plan` said "changed:
+    /// <none>", and the app kept deploying at the framework default because
+    /// the value never made it into the REST body.
+    #[test]
+    fn api_body_carries_declared_lambda_sizing() {
+        let (_tmp, path) = write_manifest(
+            r#"
+apiVersion: apps.tachy.one/v1alpha
+kind: CloudApps
+spec:
+  apps:
+    - name: field
+      repository:
+        url: https://github.com/quantum-box/tachyonfield
+        owner: quantum-box
+        name: tachyonfield
+      deploymentTarget: lambda
+      scaling:
+        lambdaMemorySize: 2048
+        lambdaTimeout: 60
+"#,
+        );
+
+        let manifest = load_cloud_apps_manifest(&path).unwrap();
+        let entries = select_app_entries(&manifest, Some("field")).unwrap();
+        let body = app_entry_to_api_body(&entries[0]).unwrap();
+
+        assert_eq!(body["lambda_memory_size"], 2048);
+        assert_eq!(body["lambda_timeout"], 60);
+    }
+
+    /// A manifest that says nothing about sizing must not send anything:
+    /// omitting the field is how a caller says "leave it alone", and sending
+    /// a default here would overwrite whatever the app already had.
+    #[test]
+    fn api_body_omits_lambda_sizing_when_not_declared() {
+        let (_tmp, path) = write_manifest(
+            r#"
+apiVersion: apps.tachy.one/v1alpha
+kind: CloudApps
+spec:
+  apps:
+    - name: field
+      repository:
+        url: https://github.com/quantum-box/tachyonfield
+        owner: quantum-box
+        name: tachyonfield
+"#,
+        );
+
+        let manifest = load_cloud_apps_manifest(&path).unwrap();
+        let entries = select_app_entries(&manifest, Some("field")).unwrap();
+        let body = app_entry_to_api_body(&entries[0]).unwrap();
+
+        assert!(body.get("lambda_memory_size").is_none());
+        assert!(body.get("lambda_timeout").is_none());
+    }
+
+    fn app_with_sizing(memory: Option<i64>, timeout: Option<i64>) -> AppResponse {
+        serde_json::from_value(json!({
+            "id": "app_1",
+            "name": "field",
+            "lambda_memory_size": memory,
+            "lambda_timeout": timeout,
+        }))
+        .unwrap()
+    }
+
+    /// Without reading the value back, a declaration never equals what the
+    /// app has, so `plan` reports it as changed on every run and an apply is
+    /// sent forever. It also means an operator cannot tell a declaration that
+    /// took from one that was dropped -- which is how a 2048 MiB manifest sat
+    /// next to a 512 MiB deployment unnoticed.
+    #[test]
+    fn declared_sizing_matching_the_app_is_not_a_change() {
+        let app = app_with_sizing(Some(2048), Some(60));
+        let body = json!({
+            "name": "field",
+            "lambda_memory_size": 2048,
+            "lambda_timeout": 60,
+        });
+
+        let (action, changed) = classify_app_action(Some(&app), &body);
+
+        assert!(matches!(action, ApplyAction::NoChange), "{changed:?}");
+        assert!(changed.is_empty(), "{changed:?}");
+    }
+
+    #[test]
+    fn a_different_declared_size_is_still_a_change() {
+        let app = app_with_sizing(Some(512), None);
+        let body = json!({"name": "field", "lambda_memory_size": 2048});
+
+        let (action, changed) = classify_app_action(Some(&app), &body);
+
+        assert!(matches!(action, ApplyAction::Update));
+        assert_eq!(changed, vec!["lambda_memory_size".to_string()]);
+    }
+
     #[test]
     fn api_body_carries_enterprise_network_profile() {
         let (_tmp, path) = write_manifest(
@@ -2321,6 +2463,14 @@ spec:
                 },
                 "preview": {
                     "rootDirectory": "apps/preview",
+                    "kvNamespaces": [{"binding": "SESSIONS"}],
+                    "worker": {
+                        "generateConfig": true,
+                        "main": "src/index.ts",
+                        "compatibilityDate": "2026-06-18",
+                        "durableObjects": [{ "binding": "ROOMS", "className": "Room" }],
+                        "migrations": [{ "tag": "v1", "newSqliteClasses": ["Room"] }]
+                    },
                     "resources": [{
                         "type": "sentry",
                         "name": "courseboard-preview",
@@ -2372,8 +2522,42 @@ spec:
     }
 
     #[test]
+    fn worker_declaration_alone_triggers_iac_save_and_preserves_migrations() {
+        let worker = json!({
+            "generateConfig": true,
+            "main": "src/index.ts",
+            "compatibilityDate": "2026-06-18",
+            "durableObjects": [{ "binding": "ROOMS", "className": "Room" }],
+            "migrations": [{ "tag": "v1", "newSqliteClasses": ["Room"] }]
+        });
+        let entry = json!({
+            "name": "order-sync",
+            "repository": {
+                "url": "https://github.com/quantum-box/example",
+                "owner": "quantum-box", "name": "example"
+            },
+            "framework": "worker", "deploymentTarget": "cloudflare_workers",
+            "worker": worker.clone()
+        });
+        for environment in ["production", "preview"] {
+            let plans = build_app_apply_plans(
+                vec![entry.clone()],
+                "tn_01hjryxysgey07h5jz5wagqj0m",
+                environment,
+            )
+            .unwrap();
+            assert_eq!(
+                plans[0].iac_manifest.as_ref().unwrap()["spec"]["worker"],
+                worker
+            );
+        }
+    }
+
+    #[test]
     fn resource_declaration_keys_each_trigger_iac_manifest() {
         for (key, value) in [
+            ("kvNamespaces", json!([{ "binding": "SESSIONS" }])),
+            ("worker", json!({ "generateConfig": true })),
             ("resources", json!([])),
             ("d1Databases", json!([])),
             (
