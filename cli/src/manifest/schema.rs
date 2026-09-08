@@ -233,10 +233,6 @@ pub struct CloudAppSpec {
     /// origin receives a request.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub middleware: Option<MiddlewareConfig>,
-    /// End-user authentication evaluated by txcloud-proxy before the app
-    /// origin receives a request.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub auth: Option<AuthConfig>,
     /// Production liveness probe evaluated by tachyon-reconcile.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub liveness_proof: Option<ProofConfig>,
@@ -766,54 +762,6 @@ pub enum MiddlewareAction {
     Next,
     Redirect,
     Rewrite,
-}
-
-/// End-user authentication evaluated by txcloud-proxy. When enabled, an
-/// OAuth2 client (`{appName}-web`) and its env vars are auto-provisioned.
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct AuthConfig {
-    pub enabled: bool,
-    /// Only `tachyon` is supported.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub provider: Option<AuthProvider>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub issuer: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub client_id: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub login_url: Option<String>,
-    /// Paths that bypass authentication.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub public_paths: Vec<String>,
-    /// Session cookie names checked by the proxy. Defaults include
-    /// next-auth and txcloud session cookies.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub session_cookie_names: Vec<String>,
-    /// Env var names that receive the auto-provisioned OAuth2 client
-    /// credentials.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub env: Option<AuthEnvConfig>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum AuthProvider {
-    Tachyon,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct AuthEnvConfig {
-    /// Defaults to `TACHYON_CLIENT_ID`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub client_id: Option<String>,
-    /// Defaults to `TACHYON_CLIENT_SECRET`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub client_secret: Option<String>,
-    /// Defaults to `TACHYON_USER_POOL_ID`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub user_pool_id: Option<String>,
 }
 
 /// Liveness/readiness probe configuration.

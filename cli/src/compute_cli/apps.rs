@@ -970,24 +970,21 @@ fn build_app_apply_plans(
             let body = app_entry_to_api_body(&entry)?;
             let env_plan = plan_env_vars(&entry, environment)?;
             let sentry_plan = plan_sentry_integration(&entry)?;
-            let has_auth_config = entry.get("auth").is_some();
             let has_resource_declarations = has_declarative_resource_declarations(&entry);
             let has_database_declarations = has_manifest_database_declarations(&entry);
             let iac_manifest = if env_plan.secret_refs.is_empty()
                 && env_plan.server_managed_credentials.is_empty()
                 && env_plan.internal_service_refs.is_empty()
                 && sentry_plan.is_none()
-                && !has_auth_config
                 && !has_resource_declarations
                 && !has_database_declarations
             {
                 None
             } else {
                 let mut manifest = cloud_app_manifest_for_iac(&entry, tenant_id)?;
-                let requires_apply_target = has_auth_config
-                    || sentry_plan
-                        .as_ref()
-                        .is_some_and(|plan| !plan.env_vars.is_empty());
+                let requires_apply_target = sentry_plan
+                    .as_ref()
+                    .is_some_and(|plan| !plan.env_vars.is_empty());
                 if requires_apply_target {
                     let target = apply_target_for_generated_env(environment)?;
                     manifest["spec"]["applyTarget"] = Value::String(target.to_string());
@@ -1130,7 +1127,6 @@ const ENVIRONMENT_MATERIALIZATION_KEYS: &[&str] = &[
     "speedInsights",
     "rum",
     "middleware",
-    "auth",
     "livenessProof",
     "readinessProof",
     "hooks",
@@ -2907,8 +2903,10 @@ spec:
         );
     }
 
+    /// The generated-env target guard survives the removal of `auth`
+    /// (ADR-0105); Sentry is now its only trigger.
     #[test]
-    fn auth_only_preview_plan_carries_apply_target() {
+    fn staging_sentry_integration_is_rejected_without_safe_target() {
         let entry = json!({
             "name": "fieldadmin",
             "repository": {
@@ -2917,74 +2915,21 @@ spec:
                 "name": "tachyonfield"
             },
             "environments": {
-                "preview": {
-                    "auth": { "enabled": true }
-                }
-            }
-        });
-
-        let plans =
-            build_app_apply_plans(vec![entry], "tn_01ks18jhh1xvggktfzjx5jqsen", "preview").unwrap();
-
-        assert_eq!(
-            plans[0].iac_manifest.as_ref().unwrap()["spec"]["applyTarget"],
-            "preview"
-        );
-    }
-
-    #[test]
-    fn auth_disabled_still_builds_iac_plan() {
-        let entry = json!({
-            "name": "fieldadmin",
-            "repository": {
-                "url": "https://github.com/quantum-box/tachyonfield",
-                "owner": "quantum-box",
-                "name": "tachyonfield"
-            },
-            "environments": {
-                "preview": {
-                    "auth": { "enabled": false }
-                }
-            }
-        });
-
-        let plans =
-            build_app_apply_plans(vec![entry], "tn_01ks18jhh1xvggktfzjx5jqsen", "preview").unwrap();
-
-        assert_eq!(
-            plans[0].iac_manifest.as_ref().unwrap()["spec"]["auth"]["enabled"],
-            false
-        );
-    }
-
-    #[test]
-    fn staging_auth_config_is_rejected_without_safe_target() {
-        for enabled in [true, false] {
-            let entry = json!({
-                "name": "fieldadmin",
-                "repository": {
-                    "url": "https://github.com/quantum-box/tachyonfield",
-                    "owner": "quantum-box",
-                    "name": "tachyonfield"
-                },
-                "environments": {
-                    "staging": {
-                        "auth": { "enabled": enabled }
+                "staging": {
+                    "integrations": {
+                        "sentry": { "project": "fieldadmin-staging" }
                     }
                 }
-            });
+            }
+        });
 
-            let error = match build_app_apply_plans(
-                vec![entry],
-                "tn_01ks18jhh1xvggktfzjx5jqsen",
-                "staging",
-            ) {
-                Ok(_) => panic!("staging auth config must fail closed"),
+        let error =
+            match build_app_apply_plans(vec![entry], "tn_01ks18jhh1xvggktfzjx5jqsen", "staging") {
+                Ok(_) => panic!("staging generated env vars must fail closed"),
                 Err(error) => error.to_string(),
             };
 
-            assert!(error.contains("no safe target for generated auth or Sentry env vars"));
-        }
+        assert!(error.contains("no safe target for generated Sentry env vars"));
     }
 
     #[test]
@@ -3437,17 +3382,14 @@ fn apply_target_for_environment(environment: &str) -> Option<&'static str> {
 
 fn apply_target_for_generated_env(environment: &str) -> Result<&'static str> {
     apply_target_for_environment(environment).ok_or_else(|| {
-        anyhow!(
-            "environment {environment} has no safe target for generated auth or Sentry env vars"
-        )
+        anyhow!("environment {environment} has no safe target for generated Sentry env vars")
     })
 }
 
 pub(crate) fn validate_generated_env_target(entry: &Value, environment: &str) -> Result<()> {
-    let has_auth_config = entry.get("auth").is_some();
     let generates_sentry_env =
         plan_sentry_integration(entry)?.is_some_and(|plan| !plan.env_vars.is_empty());
-    if has_auth_config || generates_sentry_env {
+    if generates_sentry_env {
         let _ = apply_target_for_generated_env(environment)?;
     }
     Ok(())
