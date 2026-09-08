@@ -104,7 +104,31 @@ pub(crate) fn validate_source(
     }
 }
 
+/// `spec.auth` was the txcloud-proxy end-user auth gate, removed in
+/// ADR-0105. `apply` rejects it server-side; fail here too so the manifest
+/// author sees it before a round trip.
+fn reject_removed_auth_block(entry: &serde_json::Value) -> Result<()> {
+    let declares_auth = entry.get("auth").is_some()
+        || entry
+            .get("environments")
+            .and_then(|environments| environments.as_object())
+            .is_some_and(|overlays| {
+                overlays
+                    .values()
+                    .any(|overlay| overlay.get("auth").is_some())
+            });
+    if declares_auth {
+        return Err(anyhow!(
+            "app `auth` was removed. Delete the `auth` block and declare an \
+             OAuth2Client with `oauth2ClientRef` env vars to sign users in \
+             from the app itself."
+        ));
+    }
+    Ok(())
+}
+
 fn validate_cloud_app_entry(entry: &serde_json::Value, environment: &str) -> Result<()> {
+    reject_removed_auth_block(entry)?;
     if environment == "sandbox" {
         match entry.get("environments") {
             Some(serde_json::Value::Object(overlays)) if !overlays.is_empty() => {
@@ -136,6 +160,32 @@ mod tests {
     use super::*;
 
     #[test]
+    fn validation_rejects_a_removed_auth_block() {
+        let entry = json!({
+            "name": "site",
+            "auth": { "enabled": true }
+        });
+
+        let error = validate_cloud_app_entry(&entry, "production").unwrap_err();
+
+        assert!(error.to_string().contains("`auth` was removed"));
+    }
+
+    #[test]
+    fn validation_rejects_a_removed_auth_block_in_an_overlay() {
+        let entry = json!({
+            "name": "site",
+            "environments": {
+                "preview": { "auth": { "enabled": false } }
+            }
+        });
+
+        let error = validate_cloud_app_entry(&entry, "preview").unwrap_err();
+
+        assert!(error.to_string().contains("`auth` was removed"));
+    }
+
+    #[test]
     fn sandbox_validation_checks_defined_overlays_individually() {
         let entry = json!({
             "name": "fieldadmin",
@@ -154,7 +204,7 @@ mod tests {
     }
 
     #[test]
-    fn sandbox_validation_rejects_unscoped_staging_auth() {
+    fn sandbox_validation_rejects_unscoped_staging_sentry() {
         let entry = json!({
             "name": "fieldadmin",
             "repository": {
@@ -163,7 +213,11 @@ mod tests {
                 "name": "tachyonfield"
             },
             "environments": {
-                "staging": { "auth": { "enabled": true } }
+                "staging": {
+                    "integrations": {
+                        "sentry": { "project": "fieldadmin-staging" }
+                    }
+                }
             }
         });
 
@@ -171,6 +225,6 @@ mod tests {
             .unwrap_err()
             .to_string();
 
-        assert!(error.contains("no safe target for generated auth or Sentry env vars"));
+        assert!(error.contains("no safe target for generated Sentry env vars"));
     }
 }
