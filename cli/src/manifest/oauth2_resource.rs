@@ -74,9 +74,7 @@ pub struct OAuth2ResourceSpec {
 }
 
 /// Client admission rules.
-#[derive(
-    Debug, Clone, Default, Serialize, Deserialize, JsonSchema, PartialEq, Eq,
-)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct OAuth2ResourceClientsSpec {
     /// Allow clients registered through RFC 7591 dynamic registration
@@ -152,7 +150,9 @@ fn validate_unique_tokens(values: &[String], field: &str) -> Result<()> {
             ));
         }
         if !seen.insert(value.as_str()) {
-            return Err(anyhow!("OAuth2Resource {field} contains duplicate '{value}'"));
+            return Err(anyhow!(
+                "OAuth2Resource {field} contains duplicate '{value}'"
+            ));
         }
     }
     Ok(())
@@ -238,7 +238,10 @@ pub(crate) struct OAuth2ResourceApplyResult {
 }
 
 /// Compare the desired spec with the live registration.
-pub(crate) fn classify(live: Option<&ResourceResponse>, spec: &OAuth2ResourceSpec) -> (ChangeKind, Vec<String>) {
+pub(crate) fn classify(
+    live: Option<&ResourceResponse>,
+    spec: &OAuth2ResourceSpec,
+) -> (ChangeKind, Vec<String>) {
     let Some(live) = live else {
         return (ChangeKind::Create, Vec::new());
     };
@@ -288,7 +291,10 @@ fn check_tenant(manifest: &OAuth2ResourceManifest, tenant_id: &str) -> Result<()
 
 async fn find_live(api: &ApiClient, name: &str) -> Result<Option<ResourceResponse>> {
     let live: ResourceListResponse = api.get("/v1/auth/oauth2-resources").await?;
-    Ok(live.resources.into_iter().find(|resource| resource.name == name))
+    Ok(live
+        .resources
+        .into_iter()
+        .find(|resource| resource.name == name))
 }
 
 pub(crate) async fn plan(
@@ -404,7 +410,11 @@ mod tests {
 
     #[test]
     fn rejects_invalid_uri_and_duplicates() {
-        for bad in ["library.example/mcp", "https://library.example/mcp#frag", "https:///mcp"] {
+        for bad in [
+            "library.example/mcp",
+            "https://library.example/mcp#frag",
+            "https:///mcp",
+        ] {
             assert!(
                 parse(&manifest(serde_json::json!({ "resource": bad }))).is_err(),
                 "{bad}"
@@ -434,8 +444,10 @@ mod tests {
 
     #[test]
     fn tenant_mismatch_is_rejected() {
-        let parsed = parse(&manifest(serde_json::json!({ "resource": "https://library.example/mcp" })))
-            .unwrap();
+        let parsed = parse(&manifest(
+            serde_json::json!({ "resource": "https://library.example/mcp" }),
+        ))
+        .unwrap();
         assert!(check_tenant(&parsed, "tn_01hjjn348rn3t49zz6hvmfq67p").is_err());
         assert!(check_tenant(&parsed, "tn_01hjryxysgey07h5jz5wagqj0m").is_ok());
     }
