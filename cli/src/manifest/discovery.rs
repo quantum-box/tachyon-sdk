@@ -10,6 +10,9 @@ use std::path::{Path, PathBuf};
 pub(crate) enum ManifestKind {
     CloudApps,
     Auth,
+    /// `apps.tachy.one/v1alpha` `kind: OAuth2Resource` (PLT-4373)
+    #[serde(rename = "oauth2_resource")]
+    OAuth2Resource,
     Iac,
     Unsupported,
 }
@@ -117,6 +120,17 @@ fn classify_value(
             document: value.clone(),
             detail,
         });
+    } else if value.get("apiVersion").and_then(Value::as_str) == Some("apps.tachy.one/v1alpha")
+        && value.get("kind").and_then(Value::as_str) == Some("OAuth2Resource")
+    {
+        sources.push(ManifestSource {
+            path: path.to_path_buf(),
+            kind: ManifestKind::OAuth2Resource,
+            id: manifest_id(path, document_index, value, "OAuth2Resource"),
+            depends_on: manifest_dependencies(value),
+            document: value.clone(),
+            detail: "OAuth2Resource".to_string(),
+        });
     } else if value.get("apiVersion").and_then(Value::as_str) == Some("apps.tachy.one/v1alpha") {
         let detail = value
             .get("kind")
@@ -170,6 +184,9 @@ fn looks_like_auth(value: &Value) -> bool {
 fn source_order(source: &ManifestSource) -> (u8, &Path) {
     let rank = match source.kind {
         ManifestKind::Iac => 0,
+        // Resources are referenced by clients at authorize time only, so
+        // they can land right after the other IaC kinds.
+        ManifestKind::OAuth2Resource => 0,
         ManifestKind::Auth => 1,
         ManifestKind::CloudApps => 2,
         ManifestKind::Unsupported => 3,
@@ -487,6 +504,39 @@ metadata:
             .collect::<Vec<_>>();
 
         assert_eq!(kinds, vec![ManifestKind::Iac, ManifestKind::CloudApps]);
+    }
+
+    #[test]
+    fn discover_classifies_oauth2_resource_documents() {
+        let tmp = TempDir::new().unwrap();
+        fs::create_dir(tmp.path().join(".git")).unwrap();
+        write(
+            &tmp.path().join("tachyon.yml"),
+            r#"apiVersion: apps.tachy.one/v1alpha
+kind: OAuth2Resource
+metadata:
+  name: library-mcp
+spec:
+  resource: https://library.example/mcp
+---
+apiVersion: apps.tachy.one/v1alpha
+kind: OAuth2Client
+metadata:
+  name: fieldadmin-web
+"#,
+        );
+
+        let sources = discover(None, tmp.path()).unwrap();
+        let kinds = sources
+            .iter()
+            .map(|source| (source.kind.clone(), source.id.clone()))
+            .collect::<Vec<_>>();
+
+        assert!(kinds.contains(&(
+            ManifestKind::OAuth2Resource,
+            "OAuth2Resource/library-mcp".to_string()
+        )));
+        assert!(kinds.iter().any(|(kind, _)| *kind == ManifestKind::Iac));
     }
 
     #[test]

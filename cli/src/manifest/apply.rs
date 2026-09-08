@@ -6,6 +6,7 @@ use crate::commands::auth::manifest::{self as auth_manifest, ApplyOutcome};
 use crate::compute_cli;
 
 use super::discovery::{discover, ManifestKind};
+use super::oauth2_resource;
 use super::validate::validate_source;
 use super::ApplyArgs;
 
@@ -45,6 +46,10 @@ pub(crate) async fn run(
             ManifestKind::Auth => {
                 apply_auth_source(source, args, &api, config, tenant_id, dry_run, &mut errors)
                     .await?;
+            }
+            ManifestKind::OAuth2Resource => {
+                apply_oauth2_resource_source(source, args, &api, tenant_id, dry_run, &mut errors)
+                    .await;
             }
             ManifestKind::CloudApps => {
                 let manifest = match compute_cli::normalize_cloud_apps_document(&source.document) {
@@ -171,6 +176,61 @@ async fn apply_auth_source(
         }
     }
     Ok(())
+}
+
+async fn apply_oauth2_resource_source(
+    source: &super::discovery::ManifestSource,
+    args: &ApplyArgs,
+    api: &ApiClient,
+    tenant_id: &str,
+    dry_run: bool,
+    errors: &mut ManifestApplyErrors,
+) {
+    let manifest = match oauth2_resource::parse(&source.document) {
+        Ok(manifest) => manifest,
+        Err(error) => {
+            errors.record(format!(
+                "Invalid OAuth2Resource manifest {}: {error}",
+                source.path.display()
+            ));
+            return;
+        }
+    };
+    if dry_run {
+        match oauth2_resource::plan(api, &manifest, tenant_id).await {
+            Ok(plan) => {
+                if args.json {
+                    if let Err(error) = print_json(&plan) {
+                        errors.record(format!("OAuth2Resource plan output failed: {error}"));
+                    }
+                } else {
+                    println!("=== OAuth2Resource Plan ===");
+                    oauth2_resource::print_plan(&plan);
+                }
+            }
+            Err(error) => errors.record(format!(
+                "OAuth2Resource manifest {} plan failed: {error}",
+                source.path.display()
+            )),
+        }
+        return;
+    }
+    match oauth2_resource::apply(api, &manifest, tenant_id).await {
+        Ok(result) => {
+            if args.json {
+                if let Err(error) = print_json(&result) {
+                    errors.record(format!("OAuth2Resource apply output failed: {error}"));
+                }
+            } else {
+                println!("=== OAuth2Resource Apply ===");
+                oauth2_resource::print_apply(&result);
+            }
+        }
+        Err(error) => errors.record(format!(
+            "OAuth2Resource manifest {} apply failed: {error}",
+            source.path.display()
+        )),
+    }
 }
 
 #[derive(Default)]

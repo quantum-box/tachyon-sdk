@@ -34,12 +34,17 @@ pub enum SchemaKind {
     CloudApps,
     /// Auth manifest (custom actions and policies)
     Auth,
+    /// OAuth2 protected resource (kind: OAuth2Resource, RFC 8707 target)
+    OAuth2Resource,
 }
 
 pub(crate) fn run(args: &SchemaArgs) -> Result<()> {
     let schema = match args.kind {
         SchemaKind::CloudApps => schemars::schema_for!(CloudAppsDocument),
         SchemaKind::Auth => schemars::schema_for!(AuthManifest),
+        SchemaKind::OAuth2Resource => {
+            schemars::schema_for!(super::oauth2_resource::OAuth2ResourceManifest)
+        }
     };
     let output = if args.compact {
         serde_json::to_string(&schema)?
