@@ -799,7 +799,7 @@ pub struct CloudAppCacheRuleSpec {
     #[schemars(
         length(min = 1),
         extend(
-            "pattern" = r"^(?!.*[\u0000-\u001F\u007F-\u009F])\S(?:.*\S)?$"
+            "pattern" = r"^(?!.*[\u0000-\u001F\u007F-\u009F\uFEFF])\S(?:.*\S)?$"
         )
     )]
     pub name: String,
@@ -838,7 +838,7 @@ pub enum CloudAppCacheEdgeTtl {
 #[schemars(
     transparent,
     extend(
-        "pattern" = r"^/(?!/)(?!\.{1,2}(?:/|$))(?!.*//)(?!.*/\.{1,2}(?:/|$))(?!.*[?#\\%\s\u0000-\u001F\u007F-\u009F]).*$"
+        "pattern" = r"^/(?!/)(?!\.{1,2}(?:/|$))(?!.*//)(?!.*/\.{1,2}(?:/|$))(?!.*[?#\\%\s\u0000-\u001F\u007F-\u009F\uFEFF]).*$"
     )
 )]
 pub struct CloudAppCachePathPattern(String);
@@ -866,9 +866,7 @@ pub(super) fn is_safe_cache_path_pattern(path: &str) -> bool {
         || path
             .chars()
             .any(|character| matches!(character, '?' | '#' | '\\' | '%'))
-        || path
-            .chars()
-            .any(|character| character.is_control() || character.is_whitespace())
+        || path.chars().any(is_disallowed_cache_character)
     {
         return false;
     }
@@ -876,6 +874,10 @@ pub(super) fn is_safe_cache_path_pattern(path: &str) -> bool {
     path.split('/')
         .skip(1)
         .all(|segment| !matches!(segment, "." | ".."))
+}
+
+pub(super) fn is_disallowed_cache_character(character: char) -> bool {
+    character.is_control() || character.is_whitespace() || character == '\u{feff}'
 }
 
 fn deserialize_only_anonymous<'de, D>(deserializer: D) -> Result<Option<bool>, D::Error>
@@ -1073,7 +1075,7 @@ mod tests {
         assert_eq!(properties["methods"]["minItems"], 1);
         assert!(properties["name"]["pattern"]
             .as_str()
-            .is_some_and(|pattern| pattern.contains("\\S")));
+            .is_some_and(|pattern| pattern.contains("\\S") && pattern.contains("\\uFEFF")));
         assert_eq!(properties["onlyAnonymous"]["const"], true);
         assert_eq!(
             properties["edgeTtl"]["$ref"],
@@ -1081,7 +1083,7 @@ mod tests {
         );
         assert!(schema["$defs"]["CloudAppCachePathPattern"]["pattern"]
             .as_str()
-            .is_some_and(|pattern| pattern.contains("\\u0000")));
+            .is_some_and(|pattern| { pattern.contains("\\u0000") && pattern.contains("\\uFEFF") }));
 
         let false_value = serde_yaml::from_str::<CloudAppSpec>(
             "cache:\n  rules:\n    - name: public-docs\n      paths: ['/docs/*']\n      methods: [GET]\n      onlyAnonymous: false\n      edgeTtl: respect-origin\n",
@@ -1106,6 +1108,10 @@ mod tests {
         assert!(serde_yaml::from_str::<CloudAppSpec>("cache: null\n").is_err());
         assert!(serde_yaml::from_str::<CloudAppSpec>(
             "cache:\n  rules:\n    - name: public-docs\n      paths: ['/docs/\u{a0}*']\n      methods: [GET]\n      edgeTtl: respect-origin\n"
+        )
+        .is_err());
+        assert!(serde_yaml::from_str::<CloudAppSpec>(
+            "cache:\n  rules:\n    - name: public-docs\n      paths: ['/docs/\u{feff}*']\n      methods: [GET]\n      edgeTtl: respect-origin\n"
         )
         .is_err());
 
