@@ -233,6 +233,11 @@ pub struct CloudAppSpec {
     /// origin receives a request.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub middleware: Option<MiddlewareConfig>,
+    /// Opt-in shared-cache desired state. Omission preserves the current
+    /// delivery behavior; an explicit empty `rules` list clears the managed
+    /// set once reconciliation is implemented.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache: Option<CloudAppCacheSpec>,
     /// Production liveness probe evaluated by tachyon-reconcile.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub liveness_proof: Option<ProofConfig>,
@@ -764,6 +769,110 @@ pub enum MiddlewareAction {
     Rewrite,
 }
 
+/// Shared-cache declaration owned by one Cloud App manifest.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct CloudAppCacheSpec {
+    /// Named rules. The field is presence-sensitive: omission is invalid,
+    /// while an explicit empty list represents an empty managed set.
+    pub rules: Vec<CloudAppCacheRuleSpec>,
+}
+
+/// One shared-cache rule scoped to origin-relative paths on this app.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct CloudAppCacheRuleSpec {
+    #[schemars(length(min = 1))]
+    pub name: String,
+    #[schemars(length(min = 1))]
+    pub paths: Vec<CloudAppCachePathPattern>,
+    #[schemars(length(min = 1))]
+    pub methods: Vec<CloudAppCacheMethod>,
+    /// Defaults to `true`. The initial contract accepts only `true` when the
+    /// field is present.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_only_anonymous"
+    )]
+    #[schemars(with = "bool", extend("const" = true))]
+    pub only_anonymous: Option<bool>,
+    pub edge_ttl: CloudAppCacheEdgeTtl,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "UPPERCASE")]
+pub enum CloudAppCacheMethod {
+    Get,
+    Head,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum CloudAppCacheEdgeTtl {
+    RespectOrigin,
+}
+
+/// Origin-relative path pattern accepted by the shared-cache contract.
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+#[serde(transparent)]
+#[schemars(
+    transparent,
+    extend(
+        "pattern" = r"^/(?!/)(?!\.{1,2}(?:/|$))(?!.*//)(?!.*/\.{1,2}(?:/|$))(?!.*[?#\\%\s]).*$"
+    )
+)]
+pub struct CloudAppCachePathPattern(String);
+
+impl<'de> Deserialize<'de> for CloudAppCachePathPattern {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let path = String::deserialize(deserializer)?;
+        if is_safe_cache_path_pattern(&path) {
+            Ok(Self(path))
+        } else {
+            Err(serde::de::Error::custom(
+                "cache path must be an unambiguous origin-relative path pattern",
+            ))
+        }
+    }
+}
+
+pub(super) fn is_safe_cache_path_pattern(path: &str) -> bool {
+    if !path.starts_with('/')
+        || path.starts_with("//")
+        || path.contains("//")
+        || path
+            .chars()
+            .any(|character| matches!(character, '?' | '#' | '\\' | '%'))
+        || path
+            .bytes()
+            .any(|byte| byte.is_ascii_control() || byte.is_ascii_whitespace())
+    {
+        return false;
+    }
+
+    path.split('/')
+        .skip(1)
+        .all(|segment| !matches!(segment, "." | ".."))
+}
+
+fn deserialize_only_anonymous<'de, D>(deserializer: D) -> Result<Option<bool>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = bool::deserialize(deserializer)?;
+    if value {
+        Ok(Some(true))
+    } else {
+        Err(serde::de::Error::custom(
+            "onlyAnonymous must be true when present",
+        ))
+    }
+}
+
 /// Liveness/readiness probe configuration.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
@@ -917,6 +1026,64 @@ mod tests {
                 .and_then(|scaling| scaling.lambda_memory_size),
             Some(512)
         );
+    }
+
+    #[test]
+    fn cloud_app_spec_round_trips_cache_declaration() {
+        let value = serde_json::json!({
+            "cache": {
+                "rules": [{
+                    "name": "public-docs",
+                    "paths": ["/docs/*"],
+                    "methods": ["GET", "HEAD"],
+                    "edgeTtl": "respect-origin"
+                }]
+            }
+        });
+
+        let spec: CloudAppSpec = serde_json::from_value(value.clone()).unwrap();
+        assert_eq!(serde_json::to_value(spec).unwrap(), value);
+    }
+
+    #[test]
+    fn cloud_app_cache_schema_is_fail_closed() {
+        let schema = serde_json::to_value(schemars::schema_for!(CloudAppCacheRuleSpec)).unwrap();
+        let properties = &schema["properties"];
+
+        assert_eq!(properties["paths"]["minItems"], 1);
+        assert_eq!(properties["methods"]["minItems"], 1);
+        assert_eq!(properties["onlyAnonymous"]["const"], true);
+        assert_eq!(
+            properties["edgeTtl"]["$ref"],
+            "#/$defs/CloudAppCacheEdgeTtl"
+        );
+        assert!(schema["$defs"]["CloudAppCachePathPattern"]["pattern"]
+            .as_str()
+            .is_some());
+
+        let false_value = serde_yaml::from_str::<CloudAppSpec>(
+            "cache:\n  rules:\n    - name: public-docs\n      paths: ['/docs/*']\n      methods: [GET]\n      onlyAnonymous: false\n      edgeTtl: respect-origin\n",
+        )
+        .expect_err("onlyAnonymous false must fail in the CLI transport");
+        assert!(false_value
+            .to_string()
+            .contains("onlyAnonymous must be true"));
+
+        let unsafe_path = serde_yaml::from_str::<CloudAppSpec>(
+            "cache:\n  rules:\n    - name: public-docs\n      paths: ['https://other.example/docs/*']\n      methods: [GET]\n      edgeTtl: respect-origin\n",
+        )
+        .expect_err("absolute cache path must fail in the CLI transport");
+        assert!(unsafe_path
+            .to_string()
+            .contains("origin-relative path pattern"));
+    }
+
+    #[test]
+    fn cloud_app_cache_requires_rules_but_preserves_explicit_empty_set() {
+        assert!(serde_yaml::from_str::<CloudAppSpec>("cache: {}\n").is_err());
+
+        let spec = serde_yaml::from_str::<CloudAppSpec>("cache:\n  rules: []\n").unwrap();
+        assert!(spec.cache.unwrap().rules.is_empty());
     }
 
     #[test]

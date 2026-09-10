@@ -1127,6 +1127,7 @@ const ENVIRONMENT_MATERIALIZATION_KEYS: &[&str] = &[
     "speedInsights",
     "rum",
     "middleware",
+    "cache",
     "livenessProof",
     "readinessProof",
     "hooks",
