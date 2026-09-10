@@ -149,9 +149,9 @@ fn validate_cache_contract(entry: &serde_json::Value) -> Result<()> {
             .get("name")
             .and_then(serde_json::Value::as_str)
             .ok_or_else(|| anyhow!("app cache.rules[{index}].name must be a string"))?;
-        if name.trim().is_empty() || name.trim() != name {
+        if name.trim().is_empty() || name.trim() != name || name.chars().any(char::is_control) {
             return Err(anyhow!(
-                "app cache.rules[{index}].name must not be empty or padded"
+                "app cache.rules[{index}].name must not be empty, padded, or contain control characters"
             ));
         }
         if !names.insert(name) {
@@ -351,6 +351,20 @@ mod tests {
     fn validation_rejects_unsafe_cache_contracts() {
         let cases = [
             (json!({"cache": {}}), "cache.rules is required"),
+            (
+                json!({"cache": {"rules": [{
+                    "name": " public-docs", "paths": ["/docs/*"], "methods": ["GET"],
+                    "edgeTtl": "respect-origin"
+                }]}}),
+                "must not be empty, padded, or contain control characters",
+            ),
+            (
+                json!({"cache": {"rules": [{
+                    "name": "public\u{0}docs", "paths": ["/docs/*"], "methods": ["GET"],
+                    "edgeTtl": "respect-origin"
+                }]}}),
+                "must not be empty, padded, or contain control characters",
+            ),
             (
                 json!({"cache": {"rules": [{
                     "name": "public-docs", "paths": [], "methods": ["GET"],

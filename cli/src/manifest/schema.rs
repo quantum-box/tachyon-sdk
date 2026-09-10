@@ -796,7 +796,12 @@ where
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct CloudAppCacheRuleSpec {
-    #[schemars(length(min = 1))]
+    #[schemars(
+        length(min = 1),
+        extend(
+            "pattern" = r"^(?!.*[\u0000-\u001F\u007F-\u009F])\S(?:.*\S)?$"
+        )
+    )]
     pub name: String,
     #[schemars(length(min = 1))]
     pub paths: Vec<CloudAppCachePathPattern>,
@@ -833,7 +838,7 @@ pub enum CloudAppCacheEdgeTtl {
 #[schemars(
     transparent,
     extend(
-        "pattern" = r"^/(?!/)(?!\.{1,2}(?:/|$))(?!.*//)(?!.*/\.{1,2}(?:/|$))(?!.*[?#\\%\s]).*$"
+        "pattern" = r"^/(?!/)(?!\.{1,2}(?:/|$))(?!.*//)(?!.*/\.{1,2}(?:/|$))(?!.*[?#\\%\s\u0000-\u001F\u007F-\u009F]).*$"
     )
 )]
 pub struct CloudAppCachePathPattern(String);
@@ -1066,6 +1071,9 @@ mod tests {
 
         assert_eq!(properties["paths"]["minItems"], 1);
         assert_eq!(properties["methods"]["minItems"], 1);
+        assert!(properties["name"]["pattern"]
+            .as_str()
+            .is_some_and(|pattern| pattern.contains("\\S")));
         assert_eq!(properties["onlyAnonymous"]["const"], true);
         assert_eq!(
             properties["edgeTtl"]["$ref"],
@@ -1073,7 +1081,7 @@ mod tests {
         );
         assert!(schema["$defs"]["CloudAppCachePathPattern"]["pattern"]
             .as_str()
-            .is_some());
+            .is_some_and(|pattern| pattern.contains("\\u0000")));
 
         let false_value = serde_yaml::from_str::<CloudAppSpec>(
             "cache:\n  rules:\n    - name: public-docs\n      paths: ['/docs/*']\n      methods: [GET]\n      onlyAnonymous: false\n      edgeTtl: respect-origin\n",
