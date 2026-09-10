@@ -835,7 +835,7 @@ async fn run_release_checks_only(
     change_control_token: Option<&str>,
     dry_run: bool,
 ) -> Result<()> {
-    let entry = select_exactly_one_app_entry(manifest, selected_app, "release-checks-only apply")?;
+    let entry = select_release_checks_entry(manifest, selected_app)?;
     let app_name = entry
         .get("name")
         .and_then(Value::as_str)
@@ -870,6 +870,12 @@ async fn run_release_checks_only(
     apply_compute_cloud_app_manifest(api, &iac_manifest, true, change_control_token).await?;
     println!("Release-check contract reconciled for {app_name}.");
     Ok(())
+}
+
+fn select_release_checks_entry(manifest: &Value, selected_app: Option<&str>) -> Result<Value> {
+    let entry = select_exactly_one_app_entry(manifest, selected_app, "release-checks-only apply")?;
+    crate::manifest::validate::validate_cloud_app_cache_declarations(&entry)?;
+    Ok(entry)
 }
 
 /// Fail-fast verification of an optional change-control approval token
@@ -961,6 +967,7 @@ fn build_app_apply_plans(
     entries
         .into_iter()
         .map(|entry| {
+            crate::manifest::validate::validate_cloud_app_cache_declarations(&entry)?;
             let entry = resolve_app_entry_for_environment(&entry, environment)?;
             let name = entry
                 .get("name")
@@ -1127,6 +1134,7 @@ const ENVIRONMENT_MATERIALIZATION_KEYS: &[&str] = &[
     "speedInsights",
     "rum",
     "middleware",
+    "cache",
     "livenessProof",
     "readinessProof",
     "hooks",
@@ -2645,6 +2653,51 @@ spec:
                 .unwrap();
 
         assert!(plans[0].iac_manifest.is_none());
+    }
+
+    #[test]
+    fn direct_compute_apply_plan_rejects_invalid_cache_contract() {
+        let entry = json!({
+            "name": "plain-app",
+            "cache": {"rules": [{
+                "name": "public-docs",
+                "paths": ["/docs/*"],
+                "methods": ["POST"],
+                "edgeTtl": "respect-origin"
+            }]}
+        });
+
+        let error =
+            match build_app_apply_plans(vec![entry], "tn_01ks18jhh1xvggktfzjx5jqsen", "production")
+            {
+                Ok(_) => panic!("direct compute apply must validate cache declarations"),
+                Err(error) => error.to_string(),
+            };
+
+        assert!(error.contains("only GET and HEAD"), "{error}");
+    }
+
+    #[test]
+    fn release_checks_only_rejects_invalid_cache_contract_before_api_request() {
+        let manifest = json!({
+            "spec": {
+                "apps": [{
+                    "name": "plain-app",
+                    "cache": {"rules": [{
+                        "name": "public-docs",
+                        "paths": ["/docs/*"],
+                        "methods": ["POST"],
+                        "edgeTtl": "respect-origin"
+                    }]}
+                }]
+            }
+        });
+
+        let error = select_release_checks_entry(&manifest, Some("plain-app"))
+            .expect_err("release-checks-only must validate cache declarations")
+            .to_string();
+
+        assert!(error.contains("only GET and HEAD"), "{error}");
     }
 
     #[test]

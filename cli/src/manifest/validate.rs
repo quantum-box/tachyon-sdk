@@ -127,14 +127,123 @@ fn reject_removed_auth_block(entry: &serde_json::Value) -> Result<()> {
     Ok(())
 }
 
+fn validate_cache_contract(entry: &serde_json::Value) -> Result<()> {
+    let Some(cache) = entry.get("cache") else {
+        return Ok(());
+    };
+    let cache = cache
+        .as_object()
+        .ok_or_else(|| anyhow!("app cache must be an object"))?;
+    let rules = cache
+        .get("rules")
+        .ok_or_else(|| anyhow!("app cache.rules is required when cache is declared"))?
+        .as_array()
+        .ok_or_else(|| anyhow!("app cache.rules must be an array"))?;
+
+    let mut names = std::collections::BTreeSet::new();
+    for (index, rule) in rules.iter().enumerate() {
+        let rule = rule
+            .as_object()
+            .ok_or_else(|| anyhow!("app cache.rules[{index}] must be an object"))?;
+        let name = rule
+            .get("name")
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(|| anyhow!("app cache.rules[{index}].name must be a string"))?;
+        if name.trim().is_empty()
+            || name.trim() != name
+            || name
+                .chars()
+                .any(super::schema::is_disallowed_cache_character)
+        {
+            return Err(anyhow!(
+                "app cache.rules[{index}].name must not be empty, padded, or contain control or invisible characters"
+            ));
+        }
+        if !names.insert(name) {
+            return Err(anyhow!("duplicate app cache rule name '{name}'"));
+        }
+
+        let paths = rule
+            .get("paths")
+            .and_then(serde_json::Value::as_array)
+            .ok_or_else(|| anyhow!("app cache rule '{name}' paths must be an array"))?;
+        if paths.is_empty() {
+            return Err(anyhow!(
+                "app cache rule '{name}' must declare at least one path"
+            ));
+        }
+        for path in paths {
+            let path = path
+                .as_str()
+                .ok_or_else(|| anyhow!("app cache rule '{name}' paths must contain strings"))?;
+            if !super::schema::is_safe_cache_path_pattern(path) {
+                return Err(anyhow!(
+                    "app cache rule '{name}' path '{path}' must be an unambiguous origin-relative path pattern"
+                ));
+            }
+        }
+
+        let methods = rule
+            .get("methods")
+            .and_then(serde_json::Value::as_array)
+            .ok_or_else(|| anyhow!("app cache rule '{name}' methods must be an array"))?;
+        if methods.is_empty() {
+            return Err(anyhow!(
+                "app cache rule '{name}' must declare at least one method"
+            ));
+        }
+        for method in methods {
+            if !matches!(method.as_str(), Some("GET" | "HEAD")) {
+                return Err(anyhow!(
+                    "app cache rule '{name}' methods support only GET and HEAD"
+                ));
+            }
+        }
+
+        if rule
+            .get("onlyAnonymous")
+            .is_some_and(|value| value.as_bool() != Some(true))
+        {
+            return Err(anyhow!(
+                "app cache rule '{name}' onlyAnonymous must be true when present"
+            ));
+        }
+        if rule.get("edgeTtl").and_then(serde_json::Value::as_str) != Some("respect-origin") {
+            return Err(anyhow!(
+                "app cache rule '{name}' edgeTtl must be respect-origin"
+            ));
+        }
+    }
+
+    Ok(())
+}
+
+pub(crate) fn validate_cloud_app_cache_declarations(entry: &serde_json::Value) -> Result<()> {
+    validate_cache_contract(entry)?;
+    if let Some(environments) = entry.get("environments") {
+        let environments = environments
+            .as_object()
+            .ok_or_else(|| anyhow!("app environments must be an object"))?;
+        for (environment, overlay) in environments {
+            let overlay = overlay.as_object().ok_or_else(|| {
+                anyhow!("app environment overlay environments.{environment} must be an object")
+            })?;
+            validate_cache_contract(&serde_json::Value::Object(overlay.clone()))?;
+        }
+    }
+    Ok(())
+}
+
 fn validate_cloud_app_entry(entry: &serde_json::Value, environment: &str) -> Result<()> {
     reject_removed_auth_block(entry)?;
+    validate_cloud_app_cache_declarations(entry)?;
     if environment == "sandbox" {
         match entry.get("environments") {
             Some(serde_json::Value::Object(overlays)) if !overlays.is_empty() => {
                 for overlay_environment in overlays.keys() {
                     let resolved =
                         compute_cli::resolve_app_entry_for_environment(entry, overlay_environment)?;
+                    validate_cache_contract(&resolved)?;
                     let _ = compute_cli::app_entry_to_api_body(&resolved)?;
                     let _ = compute_cli::plan_env_vars(&resolved, overlay_environment)?;
                     compute_cli::validate_generated_env_target(&resolved, overlay_environment)?;
@@ -147,6 +256,7 @@ fn validate_cloud_app_entry(entry: &serde_json::Value, environment: &str) -> Res
     }
 
     let resolved = compute_cli::resolve_app_entry_for_environment(entry, environment)?;
+    validate_cache_contract(&resolved)?;
     let _ = compute_cli::app_entry_to_api_body(&resolved)?;
     let _ = compute_cli::plan_env_vars(&resolved, environment)?;
     compute_cli::validate_generated_env_target(&resolved, environment)?;
@@ -201,6 +311,178 @@ mod tests {
         });
 
         validate_cloud_app_entry(&entry, "sandbox").unwrap();
+    }
+
+    #[test]
+    fn validation_accepts_safe_cache_and_omission() {
+        let repository = json!({
+            "url": "https://github.com/example/site",
+            "owner": "example",
+            "name": "site"
+        });
+        validate_cloud_app_entry(
+            &json!({"name": "site", "repository": repository}),
+            "production",
+        )
+        .unwrap();
+        validate_cloud_app_entry(
+            &json!({
+                "name": "site",
+                "repository": repository,
+                "cache": {
+                    "rules": [{
+                        "name": "public-docs",
+                        "paths": ["/docs/*"],
+                        "methods": ["GET", "HEAD"],
+                        "edgeTtl": "respect-origin"
+                    }]
+                }
+            }),
+            "production",
+        )
+        .unwrap();
+        validate_cloud_app_entry(
+            &json!({
+                "name": "site",
+                "repository": repository,
+                "cache": {"rules": []}
+            }),
+            "production",
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn validation_rejects_unsafe_cache_contracts() {
+        let cases = [
+            (json!({"cache": {}}), "cache.rules is required"),
+            (
+                json!({"cache": {"rules": [{
+                    "name": " public-docs", "paths": ["/docs/*"], "methods": ["GET"],
+                    "edgeTtl": "respect-origin"
+                }]}}),
+                "must not be empty, padded",
+            ),
+            (
+                json!({"cache": {"rules": [{
+                    "name": "public\u{0}docs", "paths": ["/docs/*"], "methods": ["GET"],
+                    "edgeTtl": "respect-origin"
+                }]}}),
+                "must not be empty, padded, or contain control or invisible characters",
+            ),
+            (
+                json!({"cache": {"rules": [{
+                    "name": "public\u{feff}docs", "paths": ["/docs/*"], "methods": ["GET"],
+                    "edgeTtl": "respect-origin"
+                }]}}),
+                "must not be empty, padded, or contain control or invisible characters",
+            ),
+            (
+                json!({"cache": {"rules": [{
+                    "name": "public-docs", "paths": [], "methods": ["GET"],
+                    "edgeTtl": "respect-origin"
+                }]}}),
+                "at least one path",
+            ),
+            (
+                json!({"cache": {"rules": [{
+                    "name": "public-docs", "paths": ["//other.example/docs/*"],
+                    "methods": ["GET"], "edgeTtl": "respect-origin"
+                }]}}),
+                "origin-relative path pattern",
+            ),
+            (
+                json!({"cache": {"rules": [{
+                    "name": "public-docs", "paths": ["/docs/*"], "methods": ["POST"],
+                    "edgeTtl": "respect-origin"
+                }]}}),
+                "only GET and HEAD",
+            ),
+            (
+                json!({"cache": {"rules": [{
+                    "name": "public-docs", "paths": ["/docs/*"], "methods": ["GET"],
+                    "onlyAnonymous": false, "edgeTtl": "respect-origin"
+                }]}}),
+                "onlyAnonymous must be true",
+            ),
+            (
+                json!({"cache": {"rules": [
+                    {"name": "public-docs", "paths": ["/docs/*"], "methods": ["GET"],
+                     "edgeTtl": "respect-origin"},
+                    {"name": "public-docs", "paths": ["/assets/*"], "methods": ["HEAD"],
+                     "edgeTtl": "respect-origin"}
+                ]}}),
+                "duplicate app cache rule name",
+            ),
+        ];
+
+        for (cache, expected) in cases {
+            let mut entry = json!({"name": "site"});
+            entry
+                .as_object_mut()
+                .unwrap()
+                .extend(cache.as_object().unwrap().clone());
+            let error = validate_cloud_app_entry(&entry, "production")
+                .expect_err("unsafe cache contract must fail")
+                .to_string();
+            assert!(error.contains(expected), "unexpected error: {error}");
+        }
+    }
+
+    #[test]
+    fn sandbox_validation_checks_cache_in_each_overlay() {
+        let entry = json!({
+            "name": "site",
+            "repository": {
+                "url": "https://github.com/example/site",
+                "owner": "example",
+                "name": "site"
+            },
+            "cache": {"rules": []},
+            "environments": {
+                "production": {"cache": {"rules": []}},
+                "preview": {"cache": {"rules": [{
+                    "name": "preview",
+                    "paths": ["https://other.example/docs/*"],
+                    "methods": ["GET"],
+                    "edgeTtl": "respect-origin"
+                }]}}
+            }
+        });
+
+        let error = validate_cloud_app_entry(&entry, "sandbox")
+            .expect_err("unsafe overlay cache must fail")
+            .to_string();
+        assert!(
+            error.contains("origin-relative path pattern"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn validation_rejects_incomplete_raw_cache_overlay() {
+        let entry = json!({
+            "name": "site",
+            "repository": {
+                "url": "https://github.com/example/site",
+                "owner": "example",
+                "name": "site"
+            },
+            "cache": {"rules": [{
+                "name": "public-docs",
+                "paths": ["/docs/*"],
+                "methods": ["GET"],
+                "edgeTtl": "respect-origin"
+            }]},
+            "environments": {
+                "preview": {"cache": {}}
+            }
+        });
+
+        let error = validate_cloud_app_entry(&entry, "preview")
+            .expect_err("raw overlay cache must declare rules")
+            .to_string();
+        assert!(error.contains("cache.rules is required"), "{error}");
     }
 
     #[test]

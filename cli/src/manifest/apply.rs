@@ -281,6 +281,7 @@ fn validate_cloud_apps_manifest(
 ) -> Result<()> {
     let entries = compute_cli::select_app_entries(manifest, app)?;
     for entry in entries {
+        super::validate::validate_cloud_app_cache_declarations(&entry)?;
         let entry = compute_cli::resolve_app_entry_for_environment(&entry, environment)?;
         let _ = compute_cli::app_entry_to_api_body(&entry)?;
         let _ = compute_cli::plan_env_vars(&entry, environment)?;
@@ -321,5 +322,29 @@ mod tests {
         });
 
         validate_cloud_apps_manifest(&manifest, Some("fieldadmin"), "preview").unwrap();
+    }
+
+    #[test]
+    fn apply_validation_rejects_unsafe_cache_rules() {
+        let manifest = json!({
+            "spec": {
+                "apps": [{
+                    "name": "fieldadmin",
+                    "cache": {
+                        "rules": [{
+                            "name": "public-docs",
+                            "paths": ["https://other.example/docs/*"],
+                            "methods": ["GET"],
+                            "edgeTtl": "respect-origin"
+                        }]
+                    }
+                }]
+            }
+        });
+
+        let error = validate_cloud_apps_manifest(&manifest, Some("fieldadmin"), "preview")
+            .expect_err("apply must reject unsafe cache declarations")
+            .to_string();
+        assert!(error.contains("origin-relative path pattern"), "{error}");
     }
 }
