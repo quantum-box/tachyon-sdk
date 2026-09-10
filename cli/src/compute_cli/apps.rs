@@ -961,6 +961,7 @@ fn build_app_apply_plans(
     entries
         .into_iter()
         .map(|entry| {
+            crate::manifest::validate::validate_cloud_app_cache_declarations(&entry)?;
             let entry = resolve_app_entry_for_environment(&entry, environment)?;
             let name = entry
                 .get("name")
@@ -2646,6 +2647,28 @@ spec:
                 .unwrap();
 
         assert!(plans[0].iac_manifest.is_none());
+    }
+
+    #[test]
+    fn direct_compute_apply_plan_rejects_invalid_cache_contract() {
+        let entry = json!({
+            "name": "plain-app",
+            "cache": {"rules": [{
+                "name": "public-docs",
+                "paths": ["/docs/*"],
+                "methods": ["POST"],
+                "edgeTtl": "respect-origin"
+            }]}
+        });
+
+        let error =
+            match build_app_apply_plans(vec![entry], "tn_01ks18jhh1xvggktfzjx5jqsen", "production")
+            {
+                Ok(_) => panic!("direct compute apply must validate cache declarations"),
+                Err(error) => error.to_string(),
+            };
+
+        assert!(error.contains("only GET and HEAD"), "{error}");
     }
 
     #[test]

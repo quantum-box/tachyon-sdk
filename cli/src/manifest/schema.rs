@@ -236,7 +236,12 @@ pub struct CloudAppSpec {
     /// Opt-in shared-cache desired state. Omission preserves the current
     /// delivery behavior; an explicit empty `rules` list clears the managed
     /// set once reconciliation is implemented.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_optional_cache"
+    )]
+    #[schemars(with = "CloudAppCacheSpec")]
     pub cache: Option<CloudAppCacheSpec>,
     /// Production liveness probe evaluated by tachyon-reconcile.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -778,6 +783,15 @@ pub struct CloudAppCacheSpec {
     pub rules: Vec<CloudAppCacheRuleSpec>,
 }
 
+fn deserialize_optional_cache<'de, D>(
+    deserializer: D,
+) -> Result<Option<CloudAppCacheSpec>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    CloudAppCacheSpec::deserialize(deserializer).map(Some)
+}
+
 /// One shared-cache rule scoped to origin-relative paths on this app.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
@@ -848,8 +862,8 @@ pub(super) fn is_safe_cache_path_pattern(path: &str) -> bool {
             .chars()
             .any(|character| matches!(character, '?' | '#' | '\\' | '%'))
         || path
-            .bytes()
-            .any(|byte| byte.is_ascii_control() || byte.is_ascii_whitespace())
+            .chars()
+            .any(|character| character.is_control() || character.is_whitespace())
     {
         return false;
     }
@@ -1081,9 +1095,23 @@ mod tests {
     #[test]
     fn cloud_app_cache_requires_rules_but_preserves_explicit_empty_set() {
         assert!(serde_yaml::from_str::<CloudAppSpec>("cache: {}\n").is_err());
+        assert!(serde_yaml::from_str::<CloudAppSpec>("cache: null\n").is_err());
+        assert!(serde_yaml::from_str::<CloudAppSpec>(
+            "cache:\n  rules:\n    - name: public-docs\n      paths: ['/docs/\u{a0}*']\n      methods: [GET]\n      edgeTtl: respect-origin\n"
+        )
+        .is_err());
 
         let spec = serde_yaml::from_str::<CloudAppSpec>("cache:\n  rules: []\n").unwrap();
         assert!(spec.cache.unwrap().rules.is_empty());
+
+        let schema = serde_json::to_value(schemars::schema_for!(CloudAppSpec)).unwrap();
+        assert!(schema["required"]
+            .as_array()
+            .is_none_or(|required| !required.iter().any(|field| field == "cache")));
+        assert_eq!(
+            schema["properties"]["cache"]["$ref"],
+            "#/$defs/CloudAppCacheSpec"
+        );
     }
 
     #[test]

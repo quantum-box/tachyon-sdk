@@ -213,9 +213,25 @@ fn validate_cache_contract(entry: &serde_json::Value) -> Result<()> {
     Ok(())
 }
 
+pub(crate) fn validate_cloud_app_cache_declarations(entry: &serde_json::Value) -> Result<()> {
+    validate_cache_contract(entry)?;
+    if let Some(environments) = entry.get("environments") {
+        let environments = environments
+            .as_object()
+            .ok_or_else(|| anyhow!("app environments must be an object"))?;
+        for (environment, overlay) in environments {
+            let overlay = overlay.as_object().ok_or_else(|| {
+                anyhow!("app environment overlay environments.{environment} must be an object")
+            })?;
+            validate_cache_contract(&serde_json::Value::Object(overlay.clone()))?;
+        }
+    }
+    Ok(())
+}
+
 fn validate_cloud_app_entry(entry: &serde_json::Value, environment: &str) -> Result<()> {
     reject_removed_auth_block(entry)?;
-    validate_cache_contract(entry)?;
+    validate_cloud_app_cache_declarations(entry)?;
     if environment == "sandbox" {
         match entry.get("environments") {
             Some(serde_json::Value::Object(overlays)) if !overlays.is_empty() => {
@@ -415,6 +431,32 @@ mod tests {
             error.contains("origin-relative path pattern"),
             "unexpected error: {error}"
         );
+    }
+
+    #[test]
+    fn validation_rejects_incomplete_raw_cache_overlay() {
+        let entry = json!({
+            "name": "site",
+            "repository": {
+                "url": "https://github.com/example/site",
+                "owner": "example",
+                "name": "site"
+            },
+            "cache": {"rules": [{
+                "name": "public-docs",
+                "paths": ["/docs/*"],
+                "methods": ["GET"],
+                "edgeTtl": "respect-origin"
+            }]},
+            "environments": {
+                "preview": {"cache": {}}
+            }
+        });
+
+        let error = validate_cloud_app_entry(&entry, "preview")
+            .expect_err("raw overlay cache must declare rules")
+            .to_string();
+        assert!(error.contains("cache.rules is required"), "{error}");
     }
 
     #[test]
