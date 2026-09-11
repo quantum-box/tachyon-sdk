@@ -151,9 +151,7 @@ fn validate_cache_contract(entry: &serde_json::Value) -> Result<()> {
             .ok_or_else(|| anyhow!("app cache.rules[{index}].name must be a string"))?;
         if name.trim().is_empty()
             || name.trim() != name
-            || name
-                .chars()
-                .any(super::schema::is_disallowed_cache_character)
+            || super::schema::contains_disallowed_cache_character(name)
         {
             return Err(anyhow!(
                 "app cache.rules[{index}].name must not be empty, padded, or contain control or invisible characters"
@@ -373,6 +371,20 @@ mod tests {
             (
                 json!({"cache": {"rules": [{
                     "name": "public\u{feff}docs", "paths": ["/docs/*"], "methods": ["GET"],
+                    "edgeTtl": "respect-origin"
+                }]}}),
+                "must not be empty, padded, or contain control or invisible characters",
+            ),
+            (
+                json!({"cache": {"rules": [{
+                    "name": "public\u{200b}docs", "paths": ["/docs/*"], "methods": ["GET"],
+                    "edgeTtl": "respect-origin"
+                }]}}),
+                "must not be empty, padded, or contain control or invisible characters",
+            ),
+            (
+                json!({"cache": {"rules": [{
+                    "name": "public\u{180b}docs", "paths": ["/docs/*"], "methods": ["GET"],
                     "edgeTtl": "respect-origin"
                 }]}}),
                 "must not be empty, padded, or contain control or invisible characters",

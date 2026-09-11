@@ -1,6 +1,6 @@
 [package]
 name = "tachyon"
-version = "0.6.62"
+version = "0.6.63"
 edition = "2021"
 description = "CLI for the Tachyon Platform"
 license = "MIT"
@@ -23,6 +23,7 @@ http = "1"
 rand = "0.8"
 reqwest = { version = "0.13", default-features = false, features = ["json", "form", "query", "rustls"] }
 reqwest12 = { package = "reqwest", version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+regex = "1"
 rmcp = { version = "1.5", features = [
     "server",
     "macros",
