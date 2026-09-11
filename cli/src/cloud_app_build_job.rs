@@ -34,6 +34,8 @@ pub struct BuildWorkloadSpec {
     commands: BuildWorkloadCommands,
     #[serde(default)]
     env: Vec<BuildWorkloadEnvVar>,
+    #[serde(default)]
+    workers_secret_binding_keys: Vec<String>,
     artifact: BuildWorkloadArtifact,
     callback: Option<BuildWorkloadCallback>,
     deployment_target: Option<String>,
@@ -462,6 +464,7 @@ async fn run_build(
     let is_pages = !is_workers && is_cloudflare_pages(workload, &env);
     if is_workers {
         validate_workers_binding_keys(&env)?;
+        workers_secret_values(workload, &env)?;
     } else if is_pages {
         validate_pages_binding_keys(&env)?;
     }
@@ -997,10 +1000,7 @@ async fn run_cloudflare_workers_deploy(
     if let Some(name) = env_value(env, "WORKERS_SCRIPT_NAME") {
         command.arg("--name").arg(name);
     }
-    for key in validate_workers_binding_keys(env)? {
-        let value = required_env(env, &key)?;
-        command.arg("--var").arg(format!("{key}:{value}"));
-    }
+    let _secret_file = add_workers_runtime_bindings(&mut command, workload, env)?;
     command
         .current_dir(app_dir)
         .envs(env)
@@ -1008,6 +1008,64 @@ async fn run_cloudflare_workers_deploy(
         .stderr(Stdio::piped());
 
     run_command("wrangler deploy", command).await
+}
+
+fn add_workers_runtime_bindings(
+    command: &mut Command,
+    workload: &BuildWorkloadSpec,
+    env: &BTreeMap<String, String>,
+) -> Result<Option<tempfile::NamedTempFile>> {
+    for key in validate_workers_binding_keys(env)? {
+        if workload.workers_secret_binding_keys.contains(&key) {
+            continue;
+        }
+        let value = required_env(env, &key)?;
+        command.arg("--var").arg(format!("{key}:{value}"));
+    }
+    // NamedTempFile uses mode 0600, lives outside the source/cache tree,
+    // and removes the secret input on success, error, or future cancellation.
+    let secret_file = workers_secret_file(workload, env)?;
+    if let Some(file) = &secret_file {
+        command.arg("--secrets-file").arg(file.path());
+    }
+    Ok(secret_file)
+}
+
+fn workers_secret_values(
+    workload: &BuildWorkloadSpec,
+    env: &BTreeMap<String, String>,
+) -> Result<BTreeMap<String, String>> {
+    let mut secrets = BTreeMap::new();
+    for key in &workload.workers_secret_binding_keys {
+        if !is_valid_env_key(key) {
+            return Err(anyhow!("invalid Cloudflare Workers secret key: {key}"));
+        }
+        let value = env
+            .get(key)
+            .ok_or_else(|| anyhow!("Cloudflare Workers secret env var is missing: {key}"))?;
+        secrets.insert(key.clone(), value.clone());
+    }
+    Ok(secrets)
+}
+
+fn workers_secret_file(
+    workload: &BuildWorkloadSpec,
+    env: &BTreeMap<String, String>,
+) -> Result<Option<tempfile::NamedTempFile>> {
+    use std::io::Write;
+    let secrets = workers_secret_values(workload, env)?;
+    if secrets.is_empty() {
+        return Ok(None);
+    }
+    let mut file = tempfile::Builder::new()
+        .prefix("tachyon-worker-secrets-")
+        .suffix(".json")
+        .tempfile()
+        .context("failed to create Worker secret input")?;
+    serde_json::to_writer(&mut file, &secrets).context("failed to encode Worker secret input")?;
+    file.flush()
+        .context("failed to flush Worker secret input")?;
+    Ok(Some(file))
 }
 
 /// Default directory wrangler reads D1 migrations from.
@@ -2619,6 +2677,7 @@ mod tests {
             d1: None,
             iac: None,
             wrangler_config: None,
+            workers_secret_binding_keys: Vec::new(),
         }
     }
 
@@ -3965,6 +4024,7 @@ mod tests {
             d1: None,
             iac: None,
             wrangler_config: None,
+            workers_secret_binding_keys: Vec::new(),
         };
 
         assert_eq!(
@@ -4007,6 +4067,7 @@ mod tests {
             d1: None,
             iac: None,
             wrangler_config: None,
+            workers_secret_binding_keys: Vec::new(),
         };
 
         assert_eq!(
@@ -4099,6 +4160,70 @@ mod tests {
             pages_binding_keys(&env),
             vec!["API_URL".to_string(), "SECRET_TOKEN".to_string()]
         );
+    }
+
+    #[test]
+    fn worker_secret_bindings_use_private_file_and_never_plain_arguments() {
+        let mut workload = test_workload(Some("cloudflare_workers"));
+        workload.workers_secret_binding_keys = vec!["AUTH_SECRET".into()];
+        let value = " secret\nwith \"quotes\" and spaces ";
+        let env = BTreeMap::from([
+            (
+                "CF_WORKERS_BINDING_KEYS".into(),
+                "API_URL,AUTH_SECRET".into(),
+            ),
+            ("API_URL".into(), "https://example.invalid".into()),
+            ("AUTH_SECRET".into(), value.into()),
+        ]);
+        let mut command = Command::new("npx");
+        let file = add_workers_runtime_bindings(&mut command, &workload, &env)
+            .unwrap()
+            .unwrap();
+        let path = file.path().to_owned();
+        let args = command
+            .as_std()
+            .get_args()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            args,
+            vec![
+                "--var",
+                "API_URL:https://example.invalid",
+                "--secrets-file",
+                path.to_str().unwrap()
+            ]
+        );
+        assert!(!args
+            .iter()
+            .any(|arg| arg.contains(value) || arg.contains("AUTH_SECRET")));
+        let contents: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(contents, serde_json::json!({"AUTH_SECRET": value}));
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(
+                std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+                0o600
+            );
+        }
+        drop(file);
+        assert!(!path.exists());
+    }
+
+    #[test]
+    fn worker_secret_bindings_fail_closed_without_values() {
+        let mut workload = test_workload(Some("cloudflare_workers"));
+        workload.workers_secret_binding_keys = vec!["AUTH_SECRET".into()];
+        let error = workers_secret_file(&workload, &BTreeMap::new()).unwrap_err();
+        assert!(error.to_string().contains("secret env var is missing"));
+        workload.workers_secret_binding_keys = vec!["INVALID-KEY".into()];
+        assert!(workers_secret_values(&workload, &BTreeMap::new()).is_err());
+        workload.workers_secret_binding_keys.clear();
+        assert!(workers_secret_file(&workload, &BTreeMap::new())
+            .unwrap()
+            .is_none());
     }
 
     #[test]
@@ -4229,6 +4354,7 @@ mod tests {
             d1: None,
             iac: None,
             wrangler_config: None,
+            workers_secret_binding_keys: Vec::new(),
         };
 
         assert_eq!(
@@ -4272,6 +4398,7 @@ mod tests {
             d1: None,
             iac: None,
             wrangler_config: None,
+            workers_secret_binding_keys: Vec::new(),
         };
 
         assert_eq!(docker_context_path(&workload, &checkout, &app), app);
@@ -4312,6 +4439,7 @@ mod tests {
             d1: None,
             iac: None,
             wrangler_config: None,
+            workers_secret_binding_keys: Vec::new(),
         };
         let context = docker_context_path(&workload, &checkout, &app);
 
@@ -4356,6 +4484,7 @@ mod tests {
             d1: None,
             iac: None,
             wrangler_config: None,
+            workers_secret_binding_keys: Vec::new(),
         };
 
         assert_eq!(docker_context_path(&workload, &checkout, &app), checkout);
@@ -4397,6 +4526,7 @@ mod tests {
             d1: None,
             iac: None,
             wrangler_config: None,
+            workers_secret_binding_keys: Vec::new(),
         };
 
         assert_eq!(docker_context_path(&workload, &checkout, &app), context);
