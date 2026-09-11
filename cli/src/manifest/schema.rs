@@ -799,7 +799,7 @@ pub struct CloudAppCacheRuleSpec {
     #[schemars(
         length(min = 1),
         extend(
-            "pattern" = r"^(?!.*[\u0000-\u001F\u007F-\u009F\uFEFF])\S(?:.*\S)?$"
+            "pattern" = r"^(?!.*[\u0000-\u001F\u007F-\u009F])(?!.*\p{Default_Ignorable_Code_Point})\S(?:.*\S)?$"
         )
     )]
     pub name: String,
@@ -838,7 +838,7 @@ pub enum CloudAppCacheEdgeTtl {
 #[schemars(
     transparent,
     extend(
-        "pattern" = r"^/(?!/)(?!\.{1,2}(?:/|$))(?!.*//)(?!.*/\.{1,2}(?:/|$))(?!.*[?#\\%\s\u0000-\u001F\u007F-\u009F\uFEFF]).*$"
+        "pattern" = r"^/(?!/)(?!\.{1,2}(?:/|$))(?!.*//)(?!.*/\.{1,2}(?:/|$))(?!.*[?#\\%\s\u0000-\u001F\u007F-\u009F])(?!.*\p{Default_Ignorable_Code_Point}).*$"
     )
 )]
 pub struct CloudAppCachePathPattern(String);
@@ -866,7 +866,7 @@ pub(super) fn is_safe_cache_path_pattern(path: &str) -> bool {
         || path
             .chars()
             .any(|character| matches!(character, '?' | '#' | '\\' | '%'))
-        || path.chars().any(is_disallowed_cache_character)
+        || contains_disallowed_cache_character(path)
     {
         return false;
     }
@@ -876,8 +876,18 @@ pub(super) fn is_safe_cache_path_pattern(path: &str) -> bool {
         .all(|segment| !matches!(segment, "." | ".."))
 }
 
-pub(super) fn is_disallowed_cache_character(character: char) -> bool {
-    character.is_control() || character.is_whitespace() || character == '\u{feff}'
+pub(super) fn contains_disallowed_cache_character(value: &str) -> bool {
+    static DEFAULT_IGNORABLE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+
+    value
+        .chars()
+        .any(|character| character.is_control() || character.is_whitespace())
+        || DEFAULT_IGNORABLE
+            .get_or_init(|| {
+                regex::Regex::new(r"\p{Default_Ignorable_Code_Point}")
+                    .expect("default-ignorable Unicode property must compile")
+            })
+            .is_match(value)
 }
 
 fn deserialize_only_anonymous<'de, D>(deserializer: D) -> Result<Option<bool>, D::Error>
@@ -1075,7 +1085,9 @@ mod tests {
         assert_eq!(properties["methods"]["minItems"], 1);
         assert!(properties["name"]["pattern"]
             .as_str()
-            .is_some_and(|pattern| pattern.contains("\\S") && pattern.contains("\\uFEFF")));
+            .is_some_and(|pattern| {
+                pattern.contains("\\S") && pattern.contains("\\p{Default_Ignorable_Code_Point}")
+            }));
         assert_eq!(properties["onlyAnonymous"]["const"], true);
         assert_eq!(
             properties["edgeTtl"]["$ref"],
@@ -1083,7 +1095,9 @@ mod tests {
         );
         assert!(schema["$defs"]["CloudAppCachePathPattern"]["pattern"]
             .as_str()
-            .is_some_and(|pattern| { pattern.contains("\\u0000") && pattern.contains("\\uFEFF") }));
+            .is_some_and(|pattern| {
+                pattern.contains("\\u0000") && pattern.contains("\\p{Default_Ignorable_Code_Point}")
+            }));
 
         let false_value = serde_yaml::from_str::<CloudAppSpec>(
             "cache:\n  rules:\n    - name: public-docs\n      paths: ['/docs/*']\n      methods: [GET]\n      onlyAnonymous: false\n      edgeTtl: respect-origin\n",
@@ -1114,6 +1128,16 @@ mod tests {
             "cache:\n  rules:\n    - name: public-docs\n      paths: ['/docs/\u{feff}*']\n      methods: [GET]\n      edgeTtl: respect-origin\n"
         )
         .is_err());
+        for invisible in ['\u{200b}', '\u{200c}', '\u{2060}', '\u{180b}'] {
+            let manifest = format!(
+                "cache:\n  rules:\n    - name: public-docs\n      paths: ['/docs/{invisible}*']\n      methods: [GET]\n      edgeTtl: respect-origin\n"
+            );
+            assert!(
+                serde_yaml::from_str::<CloudAppSpec>(&manifest).is_err(),
+                "default-ignorable U+{:04X} must fail",
+                invisible as u32
+            );
+        }
 
         let spec = serde_yaml::from_str::<CloudAppSpec>("cache:\n  rules: []\n").unwrap();
         assert!(spec.cache.unwrap().rules.is_empty());
