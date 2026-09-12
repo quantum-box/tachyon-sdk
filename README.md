@@ -2,6 +2,12 @@
 
 Auto-generated multi-language API clients for the [Tachyon Platform](https://github.com/quantum-box/tachyon-apps) REST API, plus a standalone CLI binary.
 
+## Development
+
+Rust projects in this repository use `nightly-2026-06-04`, pinned in
+`rust-toolchain.toml`. The CLI has an additional
+`cli/rust-toolchain.toml` pin with the same version.
+
 ## CLI
 
 Latest release: **v0.6.31**
