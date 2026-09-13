@@ -150,6 +150,38 @@ PM defaults are resolved in this order:
 for the environment or profile. The same defaults apply to `tachyon pm issue`,
 `tachyon issue`, and `tachyon linear issue`.
 
+### Stripe provider credentials
+
+Register a tenant's own Stripe platform credentials with hidden terminal
+prompts. The CLI sends the values directly to Tachyon's self-scoped provider
+credential endpoint and does not write them to a manifest, local IaC state, or
+the auth profile.
+
+```sh
+tachyon provider stripe credentials set \
+  --tenant-id tn_course \
+  --platform-id tn_course
+```
+
+The tenant must be explicit either through `--tenant-id` or
+`metadata.tenantId` / `metadata.tenant_id` in the nearest `tachyon.yml`.
+The command confirms that tenant before prompting. For automation, pipe one
+JSON object and acknowledge the pre-verified target explicitly:
+
+```sh
+secret-manager read courseboard-stripe --format json \
+  | tachyon provider stripe credentials set \
+      --tenant-id tn_course \
+      --platform-id tn_course \
+      --from-stdin \
+      --yes
+```
+
+The JSON fields are `secret_key`, `publishable_key`, and optional
+`webhook_secret` / `connect_webhook_secret`. Do not place their values in CLI
+arguments, shell history, or tracked files. Tachyon stores the secret values in
+its secrets context and keeps only `$secret_ref` entries in `ProjectConfig`.
+
 ### IaC change-control approval and concurrent-update protection
 
 `tachyon iac apply`, `tachyon iac import-seed`, and `tachyon iac rollback`

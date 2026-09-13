@@ -18,6 +18,7 @@ mod ops_cli;
 mod org_cli;
 mod pm_cli;
 mod pm_resource_cli;
+mod provider_cli;
 mod reconcile_cli;
 mod resolve;
 mod response_contract;
@@ -628,6 +629,8 @@ enum Commands {
     /// Manage service-account API keys
     #[command(name = "api-key")]
     ApiKey(api_key_cli::ApiKeyArgs),
+    /// Manage external provider configuration
+    Provider(provider_cli::ProviderArgs),
     /// Manage Cloudflare Pages secrets
     Secret(secret_cli::SecretArgs),
     /// Manage agent sessions, protocols, workers, and memory
@@ -994,6 +997,17 @@ async fn run() -> Result<()> {
             let config = build_config(&cli, &active).await;
             let tenant_id = resolve::resolve_tenant_id(&config, tenant_arg, &active).await?;
             api_key_cli::run(args, &config, &tenant_id).await
+        }
+        Commands::Provider(args) => {
+            let (project_config, searched_paths) = load_project_config_for_context(&cli, None)?;
+            let tenant_arg = strict_tenant_arg(
+                &cli,
+                project_config.as_ref(),
+                &searched_paths,
+                "provider credentials",
+            )?;
+            let (config, tenant_id) = build_tenant_config(&cli, &active, tenant_arg).await?;
+            provider_cli::run(args, &config, &tenant_id).await
         }
         Commands::Secret(args) => {
             let project_config = config::loader::load(cli.config.as_deref())?;
