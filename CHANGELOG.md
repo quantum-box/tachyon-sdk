@@ -4,6 +4,12 @@
 
 ### Added
 
+- Add `tachyon provider stripe credentials set` to register a tenant's own
+  Stripe platform keys through hidden prompts or JSON stdin. The command
+  requires explicit tenant context, confirms the target, calls the self-scoped
+  credential API, and never writes key material to arguments, manifests, IaC
+  state, auth profiles, or command output. (PLT-4475)
+
 - Add the global `--platform-id` option (alias `--platform`, env `TACHYON_PLATFORM_ID`) that sends `x-platform-id` on every request. Tenants reached through a parent platform instead of direct membership, such as the system tenant that holds the host Sentry token, rejected the CLI with 401 `Operator is not registered and no validated platform scope is available` even though the same request with the header succeeds; `tachyon ops sentry issues resolve` against the system tenant is the first consumer. (PLT-4322)
 
 - Add `--json` to `tachyon tts synthesize`, printing the saved path, MIME type, byte size, and cost as JSON. (PLT-4122)
