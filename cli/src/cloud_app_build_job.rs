@@ -978,13 +978,11 @@ async fn run_cloudflare_workers_deploy(
     required_env(env, "CLOUDFLARE_ACCOUNT_ID")?;
     required_env(env, "CLOUDFLARE_API_TOKEN")?;
 
-    let has_wrangler_config = ["wrangler.toml", "wrangler.json", "wrangler.jsonc"]
-        .iter()
-        .any(|name| app_dir.join(name).exists());
-    if !has_wrangler_config {
+    if !has_workers_deploy_config(app_dir) {
         return Err(anyhow!(
             "wrangler configuration file not found: Workers deployments \
-             require wrangler.toml or wrangler.json"
+             require wrangler.toml, wrangler.json, or a build-generated \
+             {WRANGLER_DEPLOY_REDIRECT_CONFIG}"
         ));
     }
 
@@ -1008,6 +1006,22 @@ async fn run_cloudflare_workers_deploy(
         .stderr(Stdio::piped());
 
     run_command("wrangler deploy", command).await
+}
+
+/// Deploy redirect written by framework builds that generate their own
+/// Worker config (e.g. `@astrojs/cloudflare`). `wrangler deploy` follows it
+/// without `--config`.
+const WRANGLER_DEPLOY_REDIRECT_CONFIG: &str = ".wrangler/deploy/config.json";
+
+fn has_workers_deploy_config(app_dir: &Path) -> bool {
+    [
+        "wrangler.toml",
+        "wrangler.json",
+        "wrangler.jsonc",
+        WRANGLER_DEPLOY_REDIRECT_CONFIG,
+    ]
+    .iter()
+    .any(|name| app_dir.join(name).exists())
 }
 
 fn add_workers_runtime_bindings(
@@ -2679,6 +2693,28 @@ mod tests {
             wrangler_config: None,
             workers_secret_binding_keys: Vec::new(),
         }
+    }
+
+    #[test]
+    fn workers_deploy_accepts_build_generated_redirect_config() {
+        let temp = tempfile::tempdir().unwrap();
+        assert!(!has_workers_deploy_config(temp.path()));
+
+        let redirect = temp.path().join(WRANGLER_DEPLOY_REDIRECT_CONFIG);
+        std::fs::create_dir_all(redirect.parent().unwrap()).unwrap();
+        std::fs::write(
+            &redirect,
+            r#"{"configPath":"../../dist/server/wrangler.json"}"#,
+        )
+        .unwrap();
+        assert!(has_workers_deploy_config(temp.path()));
+    }
+
+    #[test]
+    fn workers_deploy_accepts_checked_in_wrangler_config() {
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::write(temp.path().join("wrangler.jsonc"), "{}").unwrap();
+        assert!(has_workers_deploy_config(temp.path()));
     }
 
     /// A generated wrangler configuration must land before the app's own

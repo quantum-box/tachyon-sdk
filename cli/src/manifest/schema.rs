@@ -349,6 +349,9 @@ pub enum Framework {
     /// Vite app built to static output.
     Vite,
     Remix,
+    /// Astro site. Static output deploys with `deploymentTarget:
+    /// cloudflare_pages`; apps using the `@astrojs/cloudflare` adapter
+    /// deploy with `deploymentTarget: cloudflare_workers`.
     Astro,
     CreateReactApp,
     /// Cloudflare Workers script (raw Workers or edge frameworks such as
@@ -372,7 +375,7 @@ pub enum DeploymentTarget {
     CloudflarePages,
     Lambda,
     /// Cloudflare Workers (edge functions). Only valid with
-    /// `framework: worker`.
+    /// `framework: worker`, `rust_worker`, or `astro`.
     CloudflareWorkers,
     /// AWS ECS. Apps on ECS are deployed externally; the Cloud App registry
     /// only records the target for visibility.
