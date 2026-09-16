@@ -280,6 +280,7 @@ pub enum SentryIssuesCommand {
     },
     /// Get Sentry issue details
     View {
+        /// Numeric Sentry issue ID or short ID (for example TACHYON-API-1A2)
         issue_id: String,
         /// Print the API response as JSON
         #[arg(long)]
@@ -287,6 +288,25 @@ pub enum SentryIssuesCommand {
     },
     /// Mark a Sentry issue as resolved
     Resolve {
+        /// Numeric Sentry issue ID or short ID (for example TACHYON-API-1A2)
+        issue_id: String,
+        /// Print the API response as JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// Reopen a resolved or archived Sentry issue
+    #[command(visible_alias = "reopen")]
+    Unresolve {
+        /// Numeric Sentry issue ID or short ID (for example TACHYON-API-1A2)
+        issue_id: String,
+        /// Print the API response as JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// Archive a Sentry issue until it is manually reopened
+    #[command(visible_alias = "ignore")]
+    Archive {
+        /// Numeric Sentry issue ID or short ID (for example TACHYON-API-1A2)
         issue_id: String,
         /// Print the API response as JSON
         #[arg(long)]
@@ -294,9 +314,18 @@ pub enum SentryIssuesCommand {
     },
     /// Assign a Sentry issue to a user
     Assign {
+        /// Numeric Sentry issue ID or short ID (for example TACHYON-API-1A2)
         issue_id: String,
         /// Sentry user id, username, or email
         user: String,
+        /// Print the API response as JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// Clear the assignee of a Sentry issue
+    Unassign {
+        /// Numeric Sentry issue ID or short ID (for example TACHYON-API-1A2)
+        issue_id: String,
         /// Print the API response as JSON
         #[arg(long)]
         json: bool,
@@ -604,6 +633,11 @@ where
 #[derive(Debug, Serialize)]
 struct SentryAssignRequest {
     user: String,
+}
+
+#[derive(Debug, Serialize)]
+struct SentryStatusRequest {
+    status: &'static str,
 }
 
 // ---- Handlers ----
@@ -1356,17 +1390,18 @@ async fn run_sentry_issues_list(
     }
 
     println!(
-        "{:<14}  {:<10}  {:<10}  {:<8}  {:<18}  TITLE",
-        "ISSUE", "PROJECT", "STATUS", "COUNT", "LAST SEEN"
+        "{:<14}  {:<12}  {:<10}  {:<10}  {:<8}  {:<18}  TITLE",
+        "ISSUE", "ID", "PROJECT", "STATUS", "COUNT", "LAST SEEN"
     );
     println!(
-        "{:-<14}  {:-<10}  {:-<10}  {:-<8}  {:-<18}  {:-<60}",
-        "", "", "", "", "", ""
+        "{:-<14}  {:-<12}  {:-<10}  {:-<10}  {:-<8}  {:-<18}  {:-<60}",
+        "", "", "", "", "", "", ""
     );
     for issue in &issues {
         println!(
-            "{:<14}  {:<10}  {:<10}  {:<8}  {:<18}  {}",
+            "{:<14}  {:<12}  {:<10}  {:<10}  {:<8}  {:<18}  {}",
             sentry_issue_label(issue),
+            issue.id,
             truncate(issue.project.as_deref().unwrap_or("-"), 10),
             issue.status.as_deref().unwrap_or("-"),
             sentry_value_label(issue.count.as_ref()),
@@ -1399,6 +1434,40 @@ async fn run_sentry_issue_resolve(api: &ApiClient, issue_id: &str, json: bool) -
         return print_json(&issue);
     }
     println!("Sentry issue {} resolved.", sentry_issue_label(&issue));
+    Ok(())
+}
+
+async fn run_sentry_issue_set_status(
+    api: &ApiClient,
+    issue_id: &str,
+    status: &'static str,
+    done_label: &str,
+    json: bool,
+) -> Result<()> {
+    let issue: SentryIssueResponse = api
+        .post(
+            &format!("/v1/ops/sentry/issues/{issue_id}/status"),
+            &SentryStatusRequest { status },
+        )
+        .await?;
+    if json {
+        return print_json(&issue);
+    }
+    println!("Sentry issue {} {done_label}.", sentry_issue_label(&issue));
+    Ok(())
+}
+
+async fn run_sentry_issue_unassign(api: &ApiClient, issue_id: &str, json: bool) -> Result<()> {
+    let issue: SentryIssueResponse = api
+        .post(
+            &format!("/v1/ops/sentry/issues/{issue_id}/unassign"),
+            &json!({}),
+        )
+        .await?;
+    if json {
+        return print_json(&issue);
+    }
+    println!("Sentry issue {} unassigned.", sentry_issue_label(&issue));
     Ok(())
 }
 
@@ -2031,6 +2100,16 @@ pub async fn run(
                     user,
                     json,
                 } => run_sentry_issue_assign(&api, issue_id, user, *json).await,
+                SentryIssuesCommand::Unresolve { issue_id, json } => {
+                    run_sentry_issue_set_status(&api, issue_id, "unresolved", "reopened", *json)
+                        .await
+                }
+                SentryIssuesCommand::Archive { issue_id, json } => {
+                    run_sentry_issue_set_status(&api, issue_id, "ignored", "archived", *json).await
+                }
+                SentryIssuesCommand::Unassign { issue_id, json } => {
+                    run_sentry_issue_unassign(&api, issue_id, *json).await
+                }
             },
         },
     }

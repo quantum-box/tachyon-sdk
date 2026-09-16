@@ -4,6 +4,13 @@
 
 ### Added
 
+- Add `tachyon ops sentry issues unresolve` (alias `reopen`), `archive` (alias
+  `ignore`), and `unassign`, and accept a Sentry short ID such as
+  `TACHYON-API-1A2` wherever an issue ID is taken. The list table now shows the
+  numeric issue ID next to the short ID. Mutations use the tenant's own Sentry
+  connection once it grants `event:write`, so resolving no longer depends on an
+  operator-managed write token.
+
 - Add `tachyon provider stripe credentials set` to register a tenant's own
   Stripe platform keys through hidden prompts or JSON stdin. The command
   requires explicit tenant context, confirms the target, calls the self-scoped
