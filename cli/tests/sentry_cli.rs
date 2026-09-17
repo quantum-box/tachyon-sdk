@@ -204,3 +204,92 @@ fn sentry_issue_assign_posts_user_body() {
         serde_json::json!({"user": "user@example.com"})
     );
 }
+
+fn run_sentry_issue_command(args: &[&str], body: &'static str) -> (String, String) {
+    let tmp = TempDir::new().unwrap();
+    let (api_url, rx, handle) = start_server(body);
+
+    let output = isolated_command(tmp.path())
+        .env("TACHYON_API_URL", api_url)
+        .args(["ops", "sentry", "issues"])
+        .args(args)
+        .output()
+        .expect("run tachyon ops sentry issues");
+
+    assert!(
+        output.status.success(),
+        "sentry issues {args:?} failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    handle.join().unwrap();
+    (
+        rx.recv().unwrap(),
+        String::from_utf8_lossy(&output.stdout).to_string(),
+    )
+}
+
+#[test]
+fn sentry_issue_resolve_accepts_short_id() {
+    let (req, stdout) = run_sentry_issue_command(
+        &["resolve", "TACHYON-API-1A2"],
+        r#"{"id":"12345","shortId":"TACHYON-API-1A2","status":"resolved"}"#,
+    );
+
+    assert!(req.starts_with("POST /v1/ops/sentry/issues/TACHYON-API-1A2/resolve "));
+    assert!(stdout.contains("Sentry issue TACHYON-API-1A2 resolved."));
+}
+
+#[test]
+fn sentry_issue_unresolve_posts_unresolved_status() {
+    let (req, stdout) = run_sentry_issue_command(
+        &["reopen", "12345"],
+        r#"{"id":"12345","shortId":"FIELDADMIN-1","status":"unresolved"}"#,
+    );
+
+    assert!(req.starts_with("POST /v1/ops/sentry/issues/12345/status "));
+    assert_eq!(
+        request_json_body(&req),
+        serde_json::json!({"status": "unresolved"})
+    );
+    assert!(stdout.contains("Sentry issue FIELDADMIN-1 reopened."));
+}
+
+#[test]
+fn sentry_issue_archive_posts_ignored_status() {
+    let (req, stdout) = run_sentry_issue_command(
+        &["archive", "12345"],
+        r#"{"id":"12345","shortId":"FIELDADMIN-1","status":"ignored"}"#,
+    );
+
+    assert!(req.starts_with("POST /v1/ops/sentry/issues/12345/status "));
+    assert_eq!(
+        request_json_body(&req),
+        serde_json::json!({"status": "ignored"})
+    );
+    assert!(stdout.contains("Sentry issue FIELDADMIN-1 archived."));
+}
+
+#[test]
+fn sentry_issue_unassign_posts_to_unassign_endpoint() {
+    let (req, stdout) = run_sentry_issue_command(
+        &["unassign", "12345", "--json"],
+        r#"{"id":"12345","shortId":"FIELDADMIN-1","assignedTo":null}"#,
+    );
+
+    assert!(req.starts_with("POST /v1/ops/sentry/issues/12345/unassign "));
+    let stdout: Value = serde_json::from_str(&stdout).unwrap();
+    assert_eq!(stdout["id"], "12345");
+}
+
+#[test]
+fn sentry_issues_list_table_shows_numeric_id() {
+    let (_, stdout) = run_sentry_issue_command(
+        &["list"],
+        r#"{"issues":[{"id":"7651276254","shortId":"FIELDADMIN-1","title":"TypeError","count":3}]}"#,
+    );
+
+    assert!(stdout.contains("FIELDADMIN-1"));
+    assert!(stdout.contains("7651276254"));
+}
