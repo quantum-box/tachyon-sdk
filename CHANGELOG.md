@@ -4,6 +4,8 @@
 
 ### Added
 
+- Add `tachyon linear project-update` (and `tachyon pm project-update`) to post, list, get, edit, and archive project status updates, the health-tagged posts on a Linear project's "Updates" tab. `create --project <id> --health on-track --body-file update.md` posts Markdown from a file (or `-` for stdin), and `list --project <id>` narrows to one project. This is separate from `project update`, which edits the project itself. Requires a Tachyon API that serves the `project-updates` PM resource and the `project_id` list filter.
+
 - Add `tachyon provider stripe credentials set` to register a tenant's own
   Stripe platform keys through hidden prompts or JSON stdin. The command
   requires explicit tenant context, confirms the target, calls the self-scoped

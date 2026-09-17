@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 use tachyon_sdk::apis::configuration::Configuration;
 
 use crate::client::{print_json, ApiClient, HttpError};
+use crate::pm_project_update_cli::{self, ProjectUpdateCommand};
 use crate::pm_resource_cli::{self, ResourceCommand};
 use crate::settings::ResolvedPmSettings;
 
@@ -61,6 +62,11 @@ pub enum PmCommand {
     Milestone {
         #[command(subcommand)]
         command: ResourceCommand,
+    },
+    /// Manage project status updates (the project's "Updates" tab)
+    ProjectUpdate {
+        #[command(subcommand)]
+        command: ProjectUpdateCommand,
     },
 }
 
@@ -1323,6 +1329,9 @@ pub async fn run(
         }
         PmCommand::Milestone { command } => {
             pm_resource_cli::run_resource("milestones", command, config, tenant_id, None).await
+        }
+        PmCommand::ProjectUpdate { command } => {
+            pm_project_update_cli::run_project_update(command, config, tenant_id, None).await
         }
     }
 }
