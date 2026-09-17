@@ -5,6 +5,7 @@ use clap::{Args, Subcommand};
 use tachyon_sdk::apis::configuration::Configuration;
 
 use crate::pm_cli::{self, IssueCommand};
+use crate::pm_project_update_cli::{self, ProjectUpdateCommand};
 use crate::pm_resource_cli::{self, ResourceCommand};
 use crate::settings::ResolvedPmSettings;
 
@@ -56,6 +57,11 @@ pub enum LinearCommand {
         #[command(subcommand)]
         command: ResourceCommand,
     },
+    /// Manage project status updates (the project's "Updates" tab)
+    ProjectUpdate {
+        #[command(subcommand)]
+        command: ProjectUpdateCommand,
+    },
 }
 
 pub async fn run(
@@ -93,6 +99,10 @@ pub async fn run(
         }
         LinearCommand::Milestone { command } => {
             pm_resource_cli::run_resource("milestones", command, config, tenant_id, Some("linear"))
+                .await
+        }
+        LinearCommand::ProjectUpdate { command } => {
+            pm_project_update_cli::run_project_update(command, config, tenant_id, Some("linear"))
                 .await
         }
     }
