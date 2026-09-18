@@ -19,7 +19,7 @@
   since those endpoints store the value verbatim and a typo would silently
   grant nothing. Both commands name the user, the policy, and the tenant they
   wrote to, report a grant that was already listed or already absent, and
-  translate 403, 404, and 400 into the check to run next.
+  translate 403, 404, and 400 into the check to run next. (PLT-4873)
 
 - Add `tachyon ops sentry issues unresolve` (alias `reopen`), `archive` (alias
   `ignore`), and `unassign`, and accept a Sentry short ID such as
