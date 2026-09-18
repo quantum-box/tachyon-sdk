@@ -1,10 +1,10 @@
-use anyhow::Result;
+use anyhow::{anyhow, Result};
 use clap::{Args, Subcommand};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use tachyon_sdk::apis::configuration::Configuration;
 
-use crate::client::{print_json, truncate, ApiClient};
+use crate::client::{http_error_status, print_json, truncate, ApiClient};
 use crate::resolve;
 use crate::response_contract::{
     registered_contract, tachyon_response_contract, ContractRegistration,
@@ -100,6 +100,32 @@ pub enum UsersCommand {
         user_id: String,
         #[arg(long)]
         json: bool,
+    },
+    /// Attach a policy to a user in the acting tenant (--tenant-id)
+    AttachPolicy {
+        /// User ID (e.g. us_xxx)
+        user_id: String,
+        /// Policy name (e.g. field:staff) or policy ID (pol_xxx)
+        #[arg(long)]
+        policy: String,
+        /// Narrow the grant to one resource, in TRN format
+        /// (e.g. trn:library:repo:rp_xxx). Omit to grant the policy
+        /// across the whole tenant.
+        #[arg(long)]
+        resource_scope: Option<String>,
+    },
+    /// Detach a policy from a user in the acting tenant (--tenant-id).
+    /// Without --resource-scope this removes every grant of the policy for
+    /// the user in that tenant, including grants narrowed to a resource.
+    DetachPolicy {
+        /// User ID (e.g. us_xxx)
+        user_id: String,
+        /// Policy name (e.g. field:staff) or policy ID (pol_xxx)
+        #[arg(long)]
+        policy: String,
+        /// Remove only the grant narrowed to this TRN resource scope
+        #[arg(long)]
+        resource_scope: Option<String>,
     },
 }
 
@@ -319,6 +345,23 @@ struct GrantTenantAccessRequest {
     platform_id: Option<String>,
 }
 
+/// Body shared by the four user-policy write endpoints. `attach` and
+/// `detach` ignore `resourceScope`; `attach-with-scope` and
+/// `detach-with-scope` require it.
+///
+/// `tenantId` is required by the API schema, but the server derives the
+/// tenant it actually writes to from the authorized `x-operator-id` scope, so
+/// this must be the same tenant the command is acting as.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct UserPolicyRequest {
+    user_id: String,
+    policy_id: String,
+    tenant_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    resource_scope: Option<String>,
+}
+
 // response-contract:auth.actions.list:start
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
@@ -519,6 +562,316 @@ async fn run_users_policies(api: &ApiClient, user_id: &str, json: bool) -> Resul
     for policy_id in &policies {
         println!("{policy_id}");
     }
+    Ok(())
+}
+
+// --- User policy attach / detach ---
+
+/// A policy resolved from `--policy`, carrying both the ID the API needs and
+/// the name the operator typed, so output can name the grant unambiguously.
+struct ResolvedPolicy {
+    id: String,
+    name: String,
+}
+
+impl std::fmt::Display for ResolvedPolicy {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{} ({})", self.name, self.id)
+    }
+}
+
+/// Describe a policy by ID and owner, for disambiguating same-named policies.
+fn describe_policy_owner(policy: &PolicyResponse) -> String {
+    let owner = policy
+        .owner_tenant_id
+        .as_deref()
+        .or(policy.tenant_id.as_deref())
+        .unwrap_or(if policy.is_system { "system" } else { "-" });
+    format!("{} (owner: {owner})", policy.id)
+}
+
+/// Resolve `--policy` to a policy the acting tenant can grant.
+///
+/// A `pol_` ID is read back so the command can print the policy's name;
+/// anything else is matched by exact name against the policies visible from
+/// the acting tenant. Names are not unique across owners — two tenants can
+/// both publish `field:admin` — so an ambiguous name fails instead of
+/// silently picking one.
+async fn resolve_policy(
+    api: &ApiClient,
+    tenant_id: &str,
+    name_or_id: &str,
+) -> Result<ResolvedPolicy> {
+    if name_or_id.starts_with("pol_") && resolve::looks_like_id(name_or_id) {
+        return resolve_policy_by_id(api, tenant_id, name_or_id).await;
+    }
+
+    let response: PolicyListResponse = api.get("/v1/auth/policies").await?;
+    let matches: Vec<&PolicyResponse> = response
+        .policies
+        .iter()
+        .filter(|policy| policy.name == name_or_id)
+        .collect();
+
+    match matches.as_slice() {
+        [] => Err(anyhow!(
+            "no policy named '{name_or_id}' is visible from tenant {tenant_id}. \
+             Run `tachyon org policies list --tenant-id {tenant_id}` to see the \
+             policies this tenant can grant, or pass the ID as `--policy pol_...`."
+        )),
+        [policy] => Ok(ResolvedPolicy {
+            id: policy.id.clone(),
+            name: policy.name.clone(),
+        }),
+        ambiguous => Err(anyhow!(
+            "policy name '{name_or_id}' is ambiguous in tenant {tenant_id}: {}. \
+             Pass the ID as `--policy pol_...` to choose one.",
+            ambiguous
+                .iter()
+                .map(|policy| describe_policy_owner(policy))
+                .collect::<Vec<_>>()
+                .join(", ")
+        )),
+    }
+}
+
+async fn resolve_policy_by_id(
+    api: &ApiClient,
+    tenant_id: &str,
+    policy_id: &str,
+) -> Result<ResolvedPolicy> {
+    match api
+        .get::<PolicyResponse>(&format!("/v1/auth/policies/{policy_id}"))
+        .await
+    {
+        Ok(policy) => Ok(ResolvedPolicy {
+            id: policy.id,
+            name: policy.name,
+        }),
+        Err(err) if http_error_status(&err) == Some(reqwest::StatusCode::NOT_FOUND) => Err(err
+            .context(format!(
+                "policy {policy_id} does not exist. Run \
+                 `tachyon org policies list --tenant-id {tenant_id}` to see the \
+                 policies this tenant can grant."
+            ))),
+        // The lookup only supplies a human-readable name for the output, so a
+        // read the caller is not allowed to make must not block the write.
+        Err(err) => {
+            eprintln!("Warning: could not read policy {policy_id}: {err}");
+            Ok(ResolvedPolicy {
+                id: policy_id.to_string(),
+                name: "-".to_string(),
+            })
+        }
+    }
+}
+
+/// Confirm the target user and return a label for the output.
+///
+/// `user_policies` has a foreign key on `user_id`, so attaching to an unknown
+/// user fails deep inside the API; a 404 here turns that into an answerable
+/// message before anything is written.
+async fn resolve_user_label(api: &ApiClient, tenant_id: &str, user_id: &str) -> Result<String> {
+    match api
+        .get::<UserResponse>(&format!("/v1/auth/users/{user_id}"))
+        .await
+    {
+        Ok(user) => Ok(user.email.or(user.name).unwrap_or_else(|| "-".to_string())),
+        Err(err) if http_error_status(&err) == Some(reqwest::StatusCode::NOT_FOUND) => Err(err
+            .context(format!(
+                "user {user_id} does not exist. Run \
+                 `tachyon org users list --tenant-id {tenant_id}` to see the users \
+                 of this tenant, or invite the user first with \
+                 `tachyon org users invite <email> --tenant-id {tenant_id}`."
+            ))),
+        Err(err) => {
+            eprintln!("Warning: could not read user {user_id}: {err}");
+            Ok("-".to_string())
+        }
+    }
+}
+
+/// Whether `policy_id` is already listed for the user in the acting tenant,
+/// or `None` when the read failed.
+///
+/// The API reports a user's policies without their resource scopes, so this
+/// answers "is this policy listed at all", not "is this exact grant present".
+async fn policy_is_listed_for_user(
+    api: &ApiClient,
+    user_id: &str,
+    policy_id: &str,
+) -> Option<bool> {
+    match api
+        .get::<UserPolicyListResponse>(&format!("/v1/auth/users/{user_id}/policies"))
+        .await
+    {
+        Ok(response) => Some(response.policy_ids.iter().any(|id| id == policy_id)),
+        Err(err) => {
+            eprintln!("Warning: could not read the current policies of user {user_id}: {err}");
+            None
+        }
+    }
+}
+
+/// Writing a grant needs an explicit tenant: the API derives the tenant it
+/// writes to from the authorized `x-operator-id` scope, and an empty value
+/// would be rejected far from its cause.
+fn require_tenant<'a>(tenant_id: &'a str, command: &str) -> Result<&'a str> {
+    if tenant_id.trim().is_empty() {
+        return Err(anyhow!(
+            "`tachyon org users {command}` needs a tenant. Pass \
+             `--tenant-id <tn_...>`, set TACHYON_TENANT_ID, or use a profile \
+             whose login carries an operator."
+        ));
+    }
+    Ok(tenant_id)
+}
+
+/// The scope endpoints store `resourceScope` verbatim without validating it,
+/// so a typo is accepted by the API and then matches nothing. Reject anything
+/// that is not a TRN before it is written.
+fn validate_resource_scope(scope: &str) -> Result<()> {
+    if scope == "*" {
+        return Ok(());
+    }
+    let parts: Vec<&str> = scope.split(':').collect();
+    if parts.len() == 4 && parts[0] == "trn" && parts[1..].iter().all(|part| !part.is_empty()) {
+        return Ok(());
+    }
+    Err(anyhow!(
+        "invalid --resource-scope '{scope}'. Expected a TRN of the form \
+         `trn:<service>:<resource-type>:<resource-id>` (for example \
+         `trn:library:repo:rp_xxx`), where any part may be `*`, or `*` on its \
+         own for every resource."
+    ))
+}
+
+/// Turn the API's status into the next thing the operator can do.
+fn user_policy_write_hint(
+    err: anyhow::Error,
+    verb: &str,
+    tenant_id: &str,
+    user_id: &str,
+    policy: &ResolvedPolicy,
+) -> anyhow::Error {
+    let hint = match http_error_status(&err) {
+        Some(reqwest::StatusCode::NOT_FOUND) => format!(
+            "could not {verb} policy {policy} for user {user_id}: the API reports \
+             the user or the policy as missing in tenant {tenant_id}. Check both \
+             with `tachyon org users list --tenant-id {tenant_id}` and \
+             `tachyon org policies list --tenant-id {tenant_id}`."
+        ),
+        Some(reqwest::StatusCode::FORBIDDEN) => format!(
+            "could not {verb} policy {policy} for user {user_id} in tenant \
+             {tenant_id}: the acting profile is not allowed to grant it. A policy \
+             can only be granted from the tenant scope that owns or inherits it, \
+             and AdministratorAccess additionally requires the caller to hold \
+             AdministratorAccess in the same tenant. Check the caller's own grants \
+             with `tachyon org users policies <your-user-id> --tenant-id \
+             {tenant_id}`, or re-run with `--profile <admin-profile>`."
+        ),
+        Some(reqwest::StatusCode::BAD_REQUEST) => format!(
+            "could not {verb} policy {policy} for user {user_id}: the API rejected \
+             the identifiers. The user argument must be a `us_...` ID rather than \
+             an email address, and `--policy` must resolve to a `pol_...` ID."
+        ),
+        _ => format!("could not {verb} policy {policy} for user {user_id} in tenant {tenant_id}."),
+    };
+    err.context(hint)
+}
+
+async fn run_users_attach_policy(
+    api: &ApiClient,
+    tenant_id: &str,
+    user_id: &str,
+    policy: &str,
+    resource_scope: Option<&str>,
+) -> Result<()> {
+    let tenant_id = require_tenant(tenant_id, "attach-policy")?;
+    if let Some(scope) = resource_scope {
+        validate_resource_scope(scope)?;
+    }
+
+    let policy = resolve_policy(api, tenant_id, policy).await?;
+    let user_label = resolve_user_label(api, tenant_id, user_id).await?;
+    let listed_before = policy_is_listed_for_user(api, user_id, &policy.id).await;
+
+    let request = UserPolicyRequest {
+        user_id: user_id.to_string(),
+        policy_id: policy.id.clone(),
+        tenant_id: tenant_id.to_string(),
+        resource_scope: resource_scope.map(str::to_string),
+    };
+    let path = if resource_scope.is_some() {
+        "/v1/auth/user-policies/attach-with-scope"
+    } else {
+        "/v1/auth/user-policies/attach"
+    };
+    let _: serde_json::Value = api
+        .post(path, &request)
+        .await
+        .map_err(|err| user_policy_write_hint(err, "attach", tenant_id, user_id, &policy))?;
+
+    println!("Attached policy {policy} to user {user_id} ({user_label}) in tenant {tenant_id}.");
+    if let Some(scope) = resource_scope {
+        println!("Resource scope: {scope}");
+    }
+    if listed_before == Some(true) {
+        println!(
+            "Note: the policy was already listed for this user in this tenant \
+             before the call, and attaching is idempotent."
+        );
+    }
+    println!("Verify with: tachyon org users policies {user_id} --tenant-id {tenant_id}");
+    Ok(())
+}
+
+async fn run_users_detach_policy(
+    api: &ApiClient,
+    tenant_id: &str,
+    user_id: &str,
+    policy: &str,
+    resource_scope: Option<&str>,
+) -> Result<()> {
+    let tenant_id = require_tenant(tenant_id, "detach-policy")?;
+    if let Some(scope) = resource_scope {
+        validate_resource_scope(scope)?;
+    }
+
+    let policy = resolve_policy(api, tenant_id, policy).await?;
+    let user_label = resolve_user_label(api, tenant_id, user_id).await?;
+    let listed_before = policy_is_listed_for_user(api, user_id, &policy.id).await;
+
+    let request = UserPolicyRequest {
+        user_id: user_id.to_string(),
+        policy_id: policy.id.clone(),
+        tenant_id: tenant_id.to_string(),
+        resource_scope: resource_scope.map(str::to_string),
+    };
+    let path = if resource_scope.is_some() {
+        "/v1/auth/user-policies/detach-with-scope"
+    } else {
+        "/v1/auth/user-policies/detach"
+    };
+    let _: serde_json::Value = api
+        .post(path, &request)
+        .await
+        .map_err(|err| user_policy_write_hint(err, "detach", tenant_id, user_id, &policy))?;
+
+    println!("Detached policy {policy} from user {user_id} ({user_label}) in tenant {tenant_id}.");
+    match resource_scope {
+        Some(scope) => {
+            println!("Resource scope: {scope} (grants with any other scope are left in place)")
+        }
+        None => println!("Every scope of this policy for the user in this tenant was removed."),
+    }
+    if listed_before == Some(false) {
+        println!(
+            "Note: the policy was not listed for this user in this tenant before \
+             the call, so nothing was removed."
+        );
+    }
+    println!("Verify with: tachyon org users policies {user_id} --tenant-id {tenant_id}");
     Ok(())
 }
 
@@ -764,6 +1117,22 @@ pub async fn run(args: &OrgArgs, config: &Configuration, tenant_id: &str) -> Res
             }
             UsersCommand::Policies { user_id, json } => {
                 run_users_policies(&api, user_id, *json).await
+            }
+            UsersCommand::AttachPolicy {
+                user_id,
+                policy,
+                resource_scope,
+            } => {
+                run_users_attach_policy(&api, tenant_id, user_id, policy, resource_scope.as_deref())
+                    .await
+            }
+            UsersCommand::DetachPolicy {
+                user_id,
+                policy,
+                resource_scope,
+            } => {
+                run_users_detach_policy(&api, tenant_id, user_id, policy, resource_scope.as_deref())
+                    .await
             }
         },
         OrgCommand::ServiceAccounts { command } => match command {
