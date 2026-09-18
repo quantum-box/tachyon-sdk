@@ -29,6 +29,45 @@ struct MockResponse {
     body: &'static str,
 }
 
+/// Read one HTTP request, including a `content-length` body that may arrive
+/// in a later segment than the headers.
+fn read_request(stream: &mut std::net::TcpStream) -> String {
+    let mut raw = Vec::new();
+    let mut buf = [0_u8; 8192];
+    loop {
+        let n = stream.read(&mut buf).unwrap();
+        if n == 0 {
+            break;
+        }
+        raw.extend_from_slice(&buf[..n]);
+        let text = String::from_utf8_lossy(&raw).to_string();
+        let Some(header_end) = text.find("\r\n\r\n") else {
+            continue;
+        };
+        let content_length = text[..header_end]
+            .lines()
+            .find_map(|line| {
+                let (name, value) = line.split_once(':')?;
+                name.trim()
+                    .eq_ignore_ascii_case("content-length")
+                    .then(|| value.trim().parse::<usize>().ok())?
+            })
+            .unwrap_or(0);
+        if raw.len() >= header_end + 4 + content_length {
+            break;
+        }
+    }
+    String::from_utf8_lossy(&raw).to_string()
+}
+
+/// The JSON body of a raw request captured by [`start_server`].
+fn request_body(request: &str) -> serde_json::Value {
+    let (_, body) = request
+        .split_once("\r\n\r\n")
+        .unwrap_or_else(|| panic!("request has no body:\n{request}"));
+    serde_json::from_str(body).unwrap_or_else(|e| panic!("body {body:?} is not JSON: {e}"))
+}
+
 fn start_server(
     responses: Vec<MockResponse>,
 ) -> (String, mpsc::Receiver<Vec<String>>, thread::JoinHandle<()>) {
@@ -39,9 +78,7 @@ fn start_server(
         let mut requests = Vec::with_capacity(responses.len());
         for response in responses {
             let (mut stream, _) = listener.accept().unwrap();
-            let mut buf = [0_u8; 8192];
-            let n = stream.read(&mut buf).unwrap();
-            requests.push(String::from_utf8_lossy(&buf[..n]).to_string());
+            requests.push(read_request(&mut stream));
 
             let raw_response = if response.body.is_empty() {
                 format!(
@@ -675,4 +712,455 @@ fn policies_delete_referenced_409_preserves_per_reference_counts() {
             "missing {count}; stderr was:\n{stderr}"
         );
     }
+}
+
+// --- org users attach-policy / detach-policy ---
+
+const USER_ID: &str = "us_123456789012";
+const POLICY_ID: &str = "pol_field1234567890";
+
+const POLICIES_WITH_FIELD_STAFF: &str = r#"{"policies":[{"id":"pol_field1234567890","name":"field:staff","description":"Field staff","isSystem":false,"tenantId":"tn_test1234567890","sharedWithDescendants":false,"ownerTenantId":"tn_test1234567890","createdAt":"2026-09-01T00:00:00Z","updatedAt":"2026-09-01T00:00:00Z"}],"totalCount":1}"#;
+
+const POLICIES_WITH_DUPLICATE_FIELD_ADMIN: &str = r#"{"policies":[{"id":"pol_owned1234567890","name":"field:admin","description":null,"isSystem":false,"tenantId":"tn_test1234567890","sharedWithDescendants":false,"ownerTenantId":"tn_test1234567890","createdAt":"2026-09-01T00:00:00Z","updatedAt":"2026-09-01T00:00:00Z"},{"id":"pol_parent123456789","name":"field:admin","description":null,"isSystem":false,"tenantId":"tn_parent123456789","sharedWithDescendants":true,"ownerTenantId":"tn_parent123456789","createdAt":"2026-09-01T00:00:00Z","updatedAt":"2026-09-01T00:00:00Z"}],"totalCount":2}"#;
+
+const USER_BODY: &str = r#"{"id":"us_123456789012","email":"member@example.invalid","name":"Member","role":"member","tenants":["tn_test1234567890"]}"#;
+
+fn ok(body: &'static str) -> MockResponse {
+    MockResponse {
+        status: "200 OK",
+        body,
+    }
+}
+
+#[test]
+fn attach_policy_resolves_name_and_posts_the_grant() {
+    let tmp = TempDir::new().unwrap();
+    let (api_url, rx, handle) = start_server(vec![
+        ok(POLICIES_WITH_FIELD_STAFF),
+        ok(USER_BODY),
+        ok(r#"{"policyIds":[]}"#),
+        ok("{}"),
+    ]);
+
+    let output = run_org(
+        tmp.path(),
+        api_url,
+        &[
+            "org",
+            "users",
+            "attach-policy",
+            USER_ID,
+            "--policy",
+            "field:staff",
+        ],
+    );
+    assert_success(&output);
+
+    let requests = finish_requests(rx, handle);
+    assert_tenant_request(&requests[0], "GET /v1/auth/policies ");
+    assert_tenant_request(&requests[1], &format!("GET /v1/auth/users/{USER_ID} "));
+    assert_tenant_request(
+        &requests[2],
+        &format!("GET /v1/auth/users/{USER_ID}/policies "),
+    );
+    assert_tenant_request(&requests[3], "POST /v1/auth/user-policies/attach ");
+    assert_eq!(
+        request_body(&requests[3]),
+        serde_json::json!({
+            "userId": USER_ID,
+            "policyId": POLICY_ID,
+            "tenantId": TENANT_ID,
+        }),
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    for expected in [
+        "field:staff",
+        POLICY_ID,
+        USER_ID,
+        "member@example.invalid",
+        TENANT_ID,
+    ] {
+        assert!(
+            stdout.contains(expected),
+            "missing {expected:?} in stdout:\n{stdout}"
+        );
+    }
+}
+
+#[test]
+fn attach_policy_uses_the_scoped_endpoint_when_a_resource_scope_is_given() {
+    let tmp = TempDir::new().unwrap();
+    let (api_url, rx, handle) = start_server(vec![
+        ok(POLICIES_WITH_FIELD_STAFF),
+        ok(USER_BODY),
+        ok(r#"{"policyIds":[]}"#),
+        ok("{}"),
+    ]);
+
+    let output = run_org(
+        tmp.path(),
+        api_url,
+        &[
+            "org",
+            "users",
+            "attach-policy",
+            USER_ID,
+            "--policy",
+            "field:staff",
+            "--resource-scope",
+            "trn:library:repo:rp_123456789012",
+        ],
+    );
+    assert_success(&output);
+
+    let requests = finish_requests(rx, handle);
+    assert_tenant_request(
+        &requests[3],
+        "POST /v1/auth/user-policies/attach-with-scope ",
+    );
+    assert_eq!(
+        request_body(&requests[3]),
+        serde_json::json!({
+            "userId": USER_ID,
+            "policyId": POLICY_ID,
+            "tenantId": TENANT_ID,
+            "resourceScope": "trn:library:repo:rp_123456789012",
+        }),
+    );
+}
+
+#[test]
+fn attach_policy_accepts_a_policy_id_without_listing_policies() {
+    let tmp = TempDir::new().unwrap();
+    let (api_url, rx, handle) = start_server(vec![
+        ok(
+            r#"{"id":"pol_field1234567890","name":"field:staff","description":null,"isSystem":false,"tenantId":"tn_test1234567890","sharedWithDescendants":false,"ownerTenantId":"tn_test1234567890","createdAt":"2026-09-01T00:00:00Z","updatedAt":"2026-09-01T00:00:00Z"}"#,
+        ),
+        ok(USER_BODY),
+        ok(r#"{"policyIds":[]}"#),
+        ok("{}"),
+    ]);
+
+    let output = run_org(
+        tmp.path(),
+        api_url,
+        &[
+            "org",
+            "users",
+            "attach-policy",
+            USER_ID,
+            "--policy",
+            POLICY_ID,
+        ],
+    );
+    assert_success(&output);
+
+    let requests = finish_requests(rx, handle);
+    assert_tenant_request(&requests[0], &format!("GET /v1/auth/policies/{POLICY_ID} "));
+    assert_tenant_request(&requests[3], "POST /v1/auth/user-policies/attach ");
+}
+
+#[test]
+fn attach_policy_reports_a_policy_that_is_already_listed() {
+    let tmp = TempDir::new().unwrap();
+    let (api_url, rx, handle) = start_server(vec![
+        ok(POLICIES_WITH_FIELD_STAFF),
+        ok(USER_BODY),
+        ok(r#"{"policyIds":["pol_field1234567890"]}"#),
+        ok("{}"),
+    ]);
+
+    let output = run_org(
+        tmp.path(),
+        api_url,
+        &[
+            "org",
+            "users",
+            "attach-policy",
+            USER_ID,
+            "--policy",
+            "field:staff",
+        ],
+    );
+    assert_success(&output);
+    finish_requests(rx, handle);
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("already listed for this user"),
+        "stdout was:\n{stdout}"
+    );
+}
+
+#[test]
+fn attach_policy_refuses_an_ambiguous_policy_name() {
+    let tmp = TempDir::new().unwrap();
+    let (api_url, rx, handle) = start_server(vec![ok(POLICIES_WITH_DUPLICATE_FIELD_ADMIN)]);
+
+    let output = run_org(
+        tmp.path(),
+        api_url,
+        &[
+            "org",
+            "users",
+            "attach-policy",
+            USER_ID,
+            "--policy",
+            "field:admin",
+        ],
+    );
+
+    let requests = finish_requests(rx, handle);
+    assert_eq!(requests.len(), 1, "the grant must not be written");
+    assert!(!output.status.success(), "an ambiguous name must fail");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    for expected in [
+        "ambiguous",
+        "pol_owned1234567890",
+        "pol_parent123456789",
+        "tn_parent123456789",
+    ] {
+        assert!(
+            stderr.contains(expected),
+            "missing {expected:?} in stderr:\n{stderr}"
+        );
+    }
+}
+
+#[test]
+fn attach_policy_explains_an_unknown_policy_name() {
+    let tmp = TempDir::new().unwrap();
+    let (api_url, rx, handle) = start_server(vec![ok(r#"{"policies":[],"totalCount":0}"#)]);
+
+    let output = run_org(
+        tmp.path(),
+        api_url,
+        &[
+            "org",
+            "users",
+            "attach-policy",
+            USER_ID,
+            "--policy",
+            "field:staff",
+        ],
+    );
+
+    let requests = finish_requests(rx, handle);
+    assert_eq!(requests.len(), 1, "the grant must not be written");
+    assert!(!output.status.success(), "an unknown policy must fail");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("tachyon org policies list"),
+        "stderr was:\n{stderr}"
+    );
+}
+
+#[test]
+fn attach_policy_explains_an_unknown_user_before_writing() {
+    let tmp = TempDir::new().unwrap();
+    let (api_url, rx, handle) = start_server(vec![
+        ok(POLICIES_WITH_FIELD_STAFF),
+        MockResponse {
+            status: "404 Not Found",
+            body: r#"{"code":"NOT_FOUND","message":"NotFound: User"}"#,
+        },
+    ]);
+
+    let output = run_org(
+        tmp.path(),
+        api_url,
+        &[
+            "org",
+            "users",
+            "attach-policy",
+            USER_ID,
+            "--policy",
+            "field:staff",
+        ],
+    );
+
+    let requests = finish_requests(rx, handle);
+    assert_eq!(requests.len(), 2, "the grant must not be written");
+    assert!(!output.status.success(), "an unknown user must fail");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("tachyon org users invite"),
+        "stderr was:\n{stderr}"
+    );
+}
+
+#[test]
+fn attach_policy_403_names_the_delegation_rule() {
+    let tmp = TempDir::new().unwrap();
+    let (api_url, rx, handle) = start_server(vec![
+        ok(POLICIES_WITH_FIELD_STAFF),
+        ok(USER_BODY),
+        ok(r#"{"policyIds":[]}"#),
+        MockResponse {
+            status: "403 Forbidden",
+            body: r#"{"code":"FORBIDDEN","message":"Forbidden: policy does not belong to the authorized tenant scope"}"#,
+        },
+    ]);
+
+    let output = run_org(
+        tmp.path(),
+        api_url,
+        &[
+            "org",
+            "users",
+            "attach-policy",
+            USER_ID,
+            "--policy",
+            "field:staff",
+        ],
+    );
+
+    finish_requests(rx, handle);
+    assert!(!output.status.success(), "403 must fail the command");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(!stdout.contains("Attached policy"), "stdout was:\n{stdout}");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    for expected in [
+        "403 Forbidden",
+        "policy does not belong to the authorized tenant scope",
+        "AdministratorAccess",
+        "--profile",
+    ] {
+        assert!(
+            stderr.contains(expected),
+            "missing {expected:?} in stderr:\n{stderr}"
+        );
+    }
+}
+
+#[test]
+fn attach_policy_rejects_a_resource_scope_that_is_not_a_trn() {
+    let tmp = TempDir::new().unwrap();
+    let output = run_org(
+        tmp.path(),
+        "http://127.0.0.1:1".to_string(),
+        &[
+            "org",
+            "users",
+            "attach-policy",
+            USER_ID,
+            "--policy",
+            "field:staff",
+            "--resource-scope",
+            "library:repo:rp_123456789012",
+        ],
+    );
+
+    assert!(!output.status.success(), "a non-TRN scope must fail");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("trn:<service>:<resource-type>:<resource-id>"),
+        "stderr was:\n{stderr}"
+    );
+}
+
+#[test]
+fn attach_policy_requires_a_tenant() {
+    let tmp = TempDir::new().unwrap();
+    let output = isolated_command(tmp.path())
+        .env("TACHYON_API_URL", "http://127.0.0.1:1")
+        .env("TACHYON_TENANT_ID", "")
+        .args([
+            "org",
+            "users",
+            "attach-policy",
+            USER_ID,
+            "--policy",
+            POLICY_ID,
+        ])
+        .output()
+        .expect("run tachyon org users attach-policy");
+
+    assert!(!output.status.success(), "a missing tenant must fail");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("--tenant-id"), "stderr was:\n{stderr}");
+}
+
+#[test]
+fn detach_policy_posts_the_detach_and_reports_a_no_op() {
+    let tmp = TempDir::new().unwrap();
+    let (api_url, rx, handle) = start_server(vec![
+        ok(POLICIES_WITH_FIELD_STAFF),
+        ok(USER_BODY),
+        ok(r#"{"policyIds":[]}"#),
+        ok("{}"),
+    ]);
+
+    let output = run_org(
+        tmp.path(),
+        api_url,
+        &[
+            "org",
+            "users",
+            "detach-policy",
+            USER_ID,
+            "--policy",
+            "field:staff",
+        ],
+    );
+    assert_success(&output);
+
+    let requests = finish_requests(rx, handle);
+    assert_tenant_request(&requests[3], "POST /v1/auth/user-policies/detach ");
+    assert_eq!(
+        request_body(&requests[3]),
+        serde_json::json!({
+            "userId": USER_ID,
+            "policyId": POLICY_ID,
+            "tenantId": TENANT_ID,
+        }),
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("was not listed for this user"),
+        "stdout was:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("Every scope of this policy"),
+        "stdout was:\n{stdout}"
+    );
+}
+
+#[test]
+fn detach_policy_with_a_resource_scope_uses_the_scoped_endpoint() {
+    let tmp = TempDir::new().unwrap();
+    let (api_url, rx, handle) = start_server(vec![
+        ok(POLICIES_WITH_FIELD_STAFF),
+        ok(USER_BODY),
+        ok(r#"{"policyIds":["pol_field1234567890"]}"#),
+        ok("{}"),
+    ]);
+
+    let output = run_org(
+        tmp.path(),
+        api_url,
+        &[
+            "org",
+            "users",
+            "detach-policy",
+            USER_ID,
+            "--policy",
+            "field:staff",
+            "--resource-scope",
+            "trn:library:repo:rp_123456789012",
+        ],
+    );
+    assert_success(&output);
+
+    let requests = finish_requests(rx, handle);
+    assert_tenant_request(
+        &requests[3],
+        "POST /v1/auth/user-policies/detach-with-scope ",
+    );
+    assert_eq!(
+        request_body(&requests[3])["resourceScope"],
+        "trn:library:repo:rp_123456789012",
+    );
 }
