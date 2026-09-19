@@ -4,6 +4,28 @@
 
 ### Added
 
+- Add `tachyon data` for Tachyon Data: `dataset list`, `dataset create --name
+  <name> --file <csv> [--purpose <purpose>]` (multipart upload with the
+  `x-data-purpose` header), `dataset get <dataset_id> [--version <id>]`, and
+  `query run --sql <sql> --bind <name>=<dataset_id>[@<version>] [--wait]`, plus
+  `query get <job_id>` to pick up a job that was submitted without `--wait`.
+  Creating a dataset used to mean `curl` and an ID token copied by hand; these
+  commands use the credentials `tachyon auth login` already stores and never
+  print or save a token.
+
+  Two behaviours of the Data API are handled for the caller. A query binds an
+  alias to a dataset *version*, so `--bind sales=ds_...` describes the dataset
+  first and reports the version it read. And `POST /data/v1/query-jobs` answers
+  `202` even when the backend refuses the query, carrying the refusal as
+  `state: "failed"` with a code such as `QUERY_TOO_EXPENSIVE` or
+  `TENANT_QUERY_CONCURRENCY` — the CLI inspects the body and exits non-zero
+  with an explanation instead of reporting the query as accepted. A `404` with
+  an empty body, which is what the `data_platform` feature-flag gate returns,
+  is reported as "Data is not enabled for this tenant" rather than as a missing
+  dataset. `--json` prints the job, the assembled provenance (query job ID,
+  read versions, SQL digest, dialect, purpose, access revision), and the rows.
+  (PLT-4874)
+
 - Add `tachyon ops sentry issues unresolve` (alias `reopen`), `archive` (alias
   `ignore`), and `unassign`, and accept a Sentry short ID such as
   `TACHYON-API-1A2` wherever an issue ID is taken. The list table now shows the
