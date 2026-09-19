@@ -109,6 +109,413 @@ fn assert_tenant_request(request: &str, request_line: &str) {
 }
 
 #[test]
+fn service_accounts_create_posts_the_acting_tenant_and_name() {
+    let tmp = TempDir::new().unwrap();
+    let (api_url, rx, handle) = start_server(vec![
+        MockResponse {
+            status: "200 OK",
+            body: r#"{"serviceAccounts":[]}"#,
+        },
+        MockResponse {
+            status: "201 Created",
+            body: r#"{"id":"sa_123456789012","tenantId":"tn_test1234567890","name":"gha.drift-guard","createdAt":"2026-09-19T00:00:00Z"}"#,
+        },
+    ]);
+
+    let output = run_org(
+        tmp.path(),
+        api_url,
+        &[
+            "org",
+            "service-accounts",
+            "create",
+            "gha.drift-guard",
+            "--json",
+        ],
+    );
+    assert_success(&output);
+
+    let requests = finish_requests(rx, handle);
+    assert_eq!(requests.len(), 2);
+    // The duplicate-name check reads the tenant's accounts first.
+    assert_tenant_request(
+        &requests[0],
+        "GET /v1/auth/service-accounts?operator_id=tn_test1234567890 ",
+    );
+    assert_tenant_request(&requests[1], "POST /v1/auth/service-accounts ");
+    assert!(
+        requests[1].contains(r#""tenantId":"tn_test1234567890""#),
+        "request was:\n{}",
+        requests[1]
+    );
+    assert!(
+        requests[1].contains(r#""name":"gha.drift-guard""#),
+        "request was:\n{}",
+        requests[1]
+    );
+
+    let sa: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("service account json");
+    assert_eq!(sa["id"], "sa_123456789012");
+    assert_eq!(sa["name"], "gha.drift-guard");
+}
+
+#[test]
+fn service_accounts_create_rejects_wrong_response_fields() {
+    let tmp = TempDir::new().unwrap();
+    let (api_url, rx, handle) = start_server(vec![
+        MockResponse {
+            status: "200 OK",
+            body: r#"{"serviceAccounts":[]}"#,
+        },
+        MockResponse {
+            status: "201 Created",
+            body: r#"{"id":"sa_123456789012","operatorId":"tn_test1234567890","name":"gha.drift-guard","createdAt":"2026-09-19T00:00:00Z"}"#,
+        },
+    ]);
+
+    let output = run_org(
+        tmp.path(),
+        api_url,
+        &[
+            "org",
+            "service-accounts",
+            "create",
+            "gha.drift-guard",
+            "--json",
+        ],
+    );
+    let requests = finish_requests(rx, handle);
+    assert_eq!(requests.len(), 2);
+    assert_decode_failure(&output, "tenantId");
+}
+
+#[test]
+fn service_accounts_create_refuses_a_name_the_tenant_already_uses() {
+    let tmp = TempDir::new().unwrap();
+    let (api_url, rx, handle) = start_server(vec![MockResponse {
+        status: "200 OK",
+        body: r#"{"serviceAccounts":[{"id":"sa_123456789012","tenantId":"tn_test1234567890","name":"gha.drift-guard","createdAt":"2026-08-01T00:00:00Z"}]}"#,
+    }]);
+
+    let output = run_org(
+        tmp.path(),
+        api_url,
+        &["org", "service-accounts", "create", "gha.drift-guard"],
+    );
+    let requests = finish_requests(rx, handle);
+
+    // The list is the only request: nothing is created.
+    assert_eq!(requests.len(), 1);
+    assert!(
+        !output.status.success(),
+        "a duplicate name was unexpectedly created\nstdout:\n{}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("already has a service account named 'gha.drift-guard'")
+            && stderr.contains("sa_123456789012"),
+        "stderr was:\n{stderr}"
+    );
+}
+
+#[test]
+fn service_accounts_create_rejects_an_empty_name_before_calling_the_api() {
+    let tmp = TempDir::new().unwrap();
+    let (api_url, rx, handle) = start_server(vec![]);
+
+    let output = run_org(
+        tmp.path(),
+        api_url,
+        &["org", "service-accounts", "create", "   "],
+    );
+    let requests = finish_requests(rx, handle);
+
+    assert!(requests.is_empty(), "requests were:\n{requests:?}");
+    assert!(!output.status.success(), "an empty name was accepted");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("must not be empty"),
+        "stderr was:\n{stderr}"
+    );
+}
+
+#[test]
+fn service_accounts_create_rejects_a_name_longer_than_the_api_accepts() {
+    let tmp = TempDir::new().unwrap();
+    let (api_url, rx, handle) = start_server(vec![]);
+
+    let name = "n".repeat(192);
+    let output = run_org(
+        tmp.path(),
+        api_url,
+        &["org", "service-accounts", "create", &name],
+    );
+    let requests = finish_requests(rx, handle);
+
+    assert!(requests.is_empty(), "requests were:\n{requests:?}");
+    assert!(!output.status.success(), "an over-long name was accepted");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("192 bytes") && stderr.contains("191"),
+        "stderr was:\n{stderr}"
+    );
+}
+
+#[test]
+fn service_accounts_create_requires_a_tenant() {
+    let tmp = TempDir::new().unwrap();
+    let (api_url, rx, handle) = start_server(vec![]);
+
+    let output = run_org(
+        tmp.path(),
+        api_url,
+        &[
+            "org",
+            "service-accounts",
+            "create",
+            "gha.drift-guard",
+            "--tenant-id",
+            "",
+        ],
+    );
+    let requests = finish_requests(rx, handle);
+
+    assert!(requests.is_empty(), "requests were:\n{requests:?}");
+    assert!(!output.status.success(), "an empty tenant was accepted");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("needs a tenant"), "stderr was:\n{stderr}");
+}
+
+#[test]
+fn service_accounts_create_explains_a_forbidden_response() {
+    let tmp = TempDir::new().unwrap();
+    let (api_url, rx, handle) = start_server(vec![
+        MockResponse {
+            status: "200 OK",
+            body: r#"{"serviceAccounts":[]}"#,
+        },
+        MockResponse {
+            status: "403 Forbidden",
+            body: r#"{"message":"Forbidden"}"#,
+        },
+    ]);
+
+    let output = run_org(
+        tmp.path(),
+        api_url,
+        &["org", "service-accounts", "create", "gha.drift-guard"],
+    );
+    let requests = finish_requests(rx, handle);
+    assert_eq!(requests.len(), 2);
+
+    assert!(!output.status.success(), "403 reported as success");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("auth:CreateServiceAccount"),
+        "stderr was:\n{stderr}"
+    );
+}
+
+#[test]
+fn service_accounts_delete_reports_the_target_without_yes() {
+    let tmp = TempDir::new().unwrap();
+    let (api_url, rx, handle) = start_server(vec![
+        MockResponse {
+            status: "200 OK",
+            body: r#"{"id":"sa_123456789012","tenantId":"tn_test1234567890","name":"gha.drift-guard","createdAt":"2026-08-01T00:00:00Z"}"#,
+        },
+        MockResponse {
+            status: "200 OK",
+            body: r#"{"apiKeys":[{"id":"key_123456789012","serviceAccountId":"sa_123456789012","name":"ci","value":"tchy_live_secret_value","createdAt":"2026-08-01T00:00:00Z","expiresAt":null}]}"#,
+        },
+    ]);
+
+    let output = run_org(
+        tmp.path(),
+        api_url,
+        &["org", "service-accounts", "delete", "sa_123456789012"],
+    );
+    assert_success(&output);
+
+    let requests = finish_requests(rx, handle);
+    // Reads only: no DELETE is sent without --yes.
+    assert_eq!(requests.len(), 2);
+    assert_tenant_request(
+        &requests[0],
+        "GET /v1/auth/service-accounts/sa_123456789012?operator_id=tn_test1234567890 ",
+    );
+    assert_tenant_request(
+        &requests[1],
+        "GET /v1/auth/service-accounts/sa_123456789012/api-keys?operator_id=tn_test1234567890 ",
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("API keys:        1") && stdout.contains("Re-run with --yes"),
+        "stdout was:\n{stdout}"
+    );
+    // The report counts keys; it must never echo key material.
+    assert!(
+        !stdout.contains("tchy_live_secret_value"),
+        "stdout leaked an API key value:\n{stdout}"
+    );
+}
+
+#[test]
+fn service_accounts_delete_sends_the_delete_with_yes() {
+    let tmp = TempDir::new().unwrap();
+    let (api_url, rx, handle) = start_server(vec![
+        MockResponse {
+            status: "200 OK",
+            body: r#"{"id":"sa_123456789012","tenantId":"tn_test1234567890","name":"gha.drift-guard","createdAt":"2026-08-01T00:00:00Z"}"#,
+        },
+        MockResponse {
+            status: "200 OK",
+            body: r#"{"apiKeys":[]}"#,
+        },
+        MockResponse {
+            status: "200 OK",
+            body: r#"{"id":"sa_123456789012"}"#,
+        },
+    ]);
+
+    let output = run_org(
+        tmp.path(),
+        api_url,
+        &[
+            "org",
+            "service-accounts",
+            "delete",
+            "sa_123456789012",
+            "--yes",
+            "--json",
+        ],
+    );
+    assert_success(&output);
+
+    let requests = finish_requests(rx, handle);
+    assert_eq!(requests.len(), 3);
+    // The delete endpoint scopes by the x-operator-id header alone.
+    assert_tenant_request(
+        &requests[2],
+        "DELETE /v1/auth/service-accounts/sa_123456789012 ",
+    );
+
+    let deleted: serde_json::Value = serde_json::from_slice(&output.stdout).expect("delete json");
+    assert_eq!(deleted["id"], "sa_123456789012");
+}
+
+#[test]
+fn service_accounts_delete_resolves_a_name_to_an_id() {
+    let tmp = TempDir::new().unwrap();
+    let (api_url, rx, handle) = start_server(vec![
+        MockResponse {
+            status: "200 OK",
+            body: r#"{"serviceAccounts":[{"id":"sa_123456789012","tenantId":"tn_test1234567890","name":"gha.drift-guard","createdAt":"2026-08-01T00:00:00Z"}]}"#,
+        },
+        MockResponse {
+            status: "200 OK",
+            body: r#"{"id":"sa_123456789012","tenantId":"tn_test1234567890","name":"gha.drift-guard","createdAt":"2026-08-01T00:00:00Z"}"#,
+        },
+        MockResponse {
+            status: "200 OK",
+            body: r#"{"apiKeys":[]}"#,
+        },
+        MockResponse {
+            status: "200 OK",
+            body: r#"{"id":"sa_123456789012"}"#,
+        },
+    ]);
+
+    let output = run_org(
+        tmp.path(),
+        api_url,
+        &[
+            "org",
+            "service-accounts",
+            "delete",
+            "gha.drift-guard",
+            "--yes",
+        ],
+    );
+    assert_success(&output);
+
+    let requests = finish_requests(rx, handle);
+    assert_eq!(requests.len(), 4);
+    assert_tenant_request(
+        &requests[0],
+        "GET /v1/auth/service-accounts?operator_id=tn_test1234567890 ",
+    );
+    assert_tenant_request(
+        &requests[3],
+        "DELETE /v1/auth/service-accounts/sa_123456789012 ",
+    );
+}
+
+#[test]
+fn service_accounts_delete_refuses_json_without_yes() {
+    let tmp = TempDir::new().unwrap();
+    let (api_url, rx, handle) = start_server(vec![]);
+
+    let output = run_org(
+        tmp.path(),
+        api_url,
+        &[
+            "org",
+            "service-accounts",
+            "delete",
+            "sa_123456789012",
+            "--json",
+        ],
+    );
+    let requests = finish_requests(rx, handle);
+
+    assert!(requests.is_empty(), "requests were:\n{requests:?}");
+    assert!(
+        !output.status.success(),
+        "--json without --yes reported success"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("--json requires --yes"),
+        "stderr was:\n{stderr}"
+    );
+}
+
+#[test]
+fn service_accounts_delete_explains_a_missing_account() {
+    let tmp = TempDir::new().unwrap();
+    let (api_url, rx, handle) = start_server(vec![MockResponse {
+        status: "404 Not Found",
+        body: r#"{"message":"Service account is not found."}"#,
+    }]);
+
+    let output = run_org(
+        tmp.path(),
+        api_url,
+        &[
+            "org",
+            "service-accounts",
+            "delete",
+            "sa_123456789012",
+            "--yes",
+        ],
+    );
+    let requests = finish_requests(rx, handle);
+    assert_eq!(requests.len(), 1);
+
+    assert!(!output.status.success(), "404 reported as success");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("has no service account sa_123456789012")
+            && stderr.contains("tachyon org service-accounts list"),
+        "stderr was:\n{stderr}"
+    );
+}
+
+#[test]
 fn service_accounts_list_sends_tenant_query_and_decodes_openapi_envelope() {
     let tmp = TempDir::new().unwrap();
     let (api_url, rx, handle) = start_server(vec![MockResponse {

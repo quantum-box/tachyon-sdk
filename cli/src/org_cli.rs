@@ -1,10 +1,10 @@
-use anyhow::Result;
+use anyhow::{anyhow, Result};
 use clap::{Args, Subcommand};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use tachyon_sdk::apis::configuration::Configuration;
 
-use crate::client::{print_json, truncate, ApiClient};
+use crate::client::{http_error_status, print_json, truncate, ApiClient};
 use crate::resolve;
 use crate::response_contract::{
     registered_contract, tachyon_response_contract, ContractRegistration,
@@ -107,6 +107,17 @@ pub enum UsersCommand {
 
 #[derive(Debug, Clone, Subcommand)]
 pub enum ServiceAccountsCommand {
+    /// Create a service account in the acting tenant (--tenant-id)
+    ///
+    /// The account is created empty: it holds no API key and no policy, so it
+    /// can do nothing until both are granted. Issue a key with
+    /// `tachyon api-key create`.
+    Create {
+        /// Display name, e.g. gha.auth-manifest-drift-guard
+        name: String,
+        #[arg(long)]
+        json: bool,
+    },
     /// List service accounts
     List {
         #[arg(long)]
@@ -123,6 +134,20 @@ pub enum ServiceAccountsCommand {
     ApiKeys {
         /// Service account ID or name
         service_account_id: String,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Delete a service account and every API key issued to it
+    ///
+    /// Destructive and immediate: anything authenticating with one of the
+    /// account's keys starts failing as soon as this returns. Without --yes
+    /// the command only reports what it would delete.
+    Delete {
+        /// Service account ID or name
+        service_account_id: String,
+        /// Delete instead of only reporting what would be deleted
+        #[arg(long)]
+        yes: bool,
         #[arg(long)]
         json: bool,
     },
@@ -233,6 +258,25 @@ struct ServiceAccountResponse {
 #[serde(rename_all = "camelCase")]
 struct ServiceAccountListResponse {
     service_accounts: Vec<ServiceAccountResponse>,
+}
+
+/// Body of `POST /v1/auth/service-accounts`.
+///
+/// `tenantId` is required by the API schema, but the server compares it with
+/// the authorized `x-operator-id` scope and answers 403 on a mismatch, so it
+/// is always the tenant the command is already acting as rather than a
+/// separate option.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CreateServiceAccountRequest {
+    tenant_id: String,
+    name: String,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DeleteServiceAccountResponse {
+    id: String,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -522,6 +566,255 @@ async fn run_users_policies(api: &ApiClient, user_id: &str, json: bool) -> Resul
     Ok(())
 }
 
+// --- Service account create / delete ---
+
+/// The API stores a service account name as a `Text` value object: non-empty
+/// after trimming, and at most this many bytes.
+const SERVICE_ACCOUNT_NAME_MAX_BYTES: usize = 191;
+
+/// Writing a service account needs an explicit tenant. The API derives the
+/// tenant it writes to from the authorized `x-operator-id` scope, and an empty
+/// scope is rejected far from its cause.
+fn require_service_account_tenant<'a>(tenant_id: &'a str, command: &str) -> Result<&'a str> {
+    if tenant_id.trim().is_empty() {
+        return Err(anyhow!(
+            "`tachyon org service-accounts {command}` needs a tenant. Pass \
+             `--tenant-id <tn_...>`, set TACHYON_TENANT_ID, or use a profile \
+             whose login carries an operator."
+        ));
+    }
+    Ok(tenant_id)
+}
+
+/// Check the name against the value object the API will parse it into.
+///
+/// The create usecase parses the name after the policy check, and that parse
+/// failure converts into a 500 rather than a 400, so an empty or over-long
+/// name comes back as an internal error that says nothing about the name.
+fn validate_service_account_name(name: &str) -> Result<()> {
+    if name.trim().is_empty() {
+        return Err(anyhow!(
+            "service account name must not be empty or only whitespace."
+        ));
+    }
+    if name.len() > SERVICE_ACCOUNT_NAME_MAX_BYTES {
+        return Err(anyhow!(
+            "service account name is {} bytes; the API accepts at most \
+             {SERVICE_ACCOUNT_NAME_MAX_BYTES}.",
+            name.len()
+        ));
+    }
+    Ok(())
+}
+
+/// The ID of a service account that already carries this exact name in the
+/// tenant, or `None` when there is none.
+///
+/// The API has no uniqueness constraint on (tenant, name), so this is a
+/// client-side check rather than a read of a constraint the server enforces.
+async fn existing_service_account_named(
+    api: &ApiClient,
+    tenant_id: &str,
+    name: &str,
+) -> Option<String> {
+    match api
+        .get_query::<ServiceAccountListResponse>(
+            "/v1/auth/service-accounts",
+            &[("operator_id", tenant_id)],
+        )
+        .await
+    {
+        Ok(response) => response
+            .service_accounts
+            .into_iter()
+            .find(|sa| sa.name == name)
+            .map(|sa| sa.id),
+        // The read exists only to catch a duplicate name early. A caller that
+        // may create an account but not list them must still be able to
+        // create one.
+        Err(err) => {
+            eprintln!("Warning: could not list the service accounts of tenant {tenant_id}: {err}");
+            None
+        }
+    }
+}
+
+/// Turn the API's status into the next thing the operator can do.
+fn create_service_account_hint(err: anyhow::Error, tenant_id: &str, name: &str) -> anyhow::Error {
+    let hint = match http_error_status(&err) {
+        Some(reqwest::StatusCode::FORBIDDEN) => format!(
+            "could not create service account '{name}' in tenant {tenant_id}: the \
+             acting profile is not allowed to. Creating one needs a policy that \
+             grants `auth:CreateServiceAccount` in this tenant, and the API also \
+             refuses a tenant other than the authorized `--tenant-id` scope. \
+             Check the caller's own grants with `tachyon org users policies \
+             <your-user-id> --tenant-id {tenant_id}`, or re-run with \
+             `--profile <admin-profile>`."
+        ),
+        Some(reqwest::StatusCode::BAD_REQUEST) => format!(
+            "could not create service account '{name}': the API rejected the \
+             request. `--tenant-id` must resolve to a `tn_...` tenant ID."
+        ),
+        _ => format!("could not create service account '{name}' in tenant {tenant_id}."),
+    };
+    err.context(hint)
+}
+
+async fn run_service_accounts_create(
+    api: &ApiClient,
+    tenant_id: &str,
+    name: &str,
+    json: bool,
+) -> Result<()> {
+    let tenant_id = require_service_account_tenant(tenant_id, "create")?;
+    validate_service_account_name(name)?;
+
+    if let Some(existing_id) = existing_service_account_named(api, tenant_id, name).await {
+        return Err(anyhow!(
+            "tenant {tenant_id} already has a service account named '{name}' \
+             ({existing_id}). The API would create a second one, and the name \
+             would then be ambiguous everywhere the CLI takes a service account \
+             by name, such as `tachyon api-key create {name}`. Reuse that \
+             account, or choose another name."
+        ));
+    }
+
+    let request = CreateServiceAccountRequest {
+        tenant_id: tenant_id.to_string(),
+        name: name.to_string(),
+    };
+    // Not idempotent: without a uniqueness constraint on (tenant, name), a
+    // replayed request creates a second account. Send it exactly once.
+    let sa: ServiceAccountResponse = api
+        .post_once("/v1/auth/service-accounts", &request)
+        .await
+        .map_err(|err| create_service_account_hint(err, tenant_id, name))?;
+
+    if json {
+        return print_json(&sa);
+    }
+    println!("Service account created.");
+    println!("ID:          {}", sa.id);
+    println!("Tenant ID:   {}", sa.tenant_id);
+    println!("Name:        {}", sa.name);
+    println!("Created:     {}", sa.created_at);
+    println!();
+    println!("The account holds no API key and no policy yet, so it cannot call anything.");
+    println!(
+        "Issue a key with: tachyon api-key create {} --name <key-name> --tenant-id {tenant_id}",
+        sa.id
+    );
+    Ok(())
+}
+
+/// Turn the API's status into the next thing the operator can do.
+fn delete_service_account_hint(err: anyhow::Error, tenant_id: &str, id: &str) -> anyhow::Error {
+    let hint = match http_error_status(&err) {
+        Some(reqwest::StatusCode::NOT_FOUND) => format!(
+            "tenant {tenant_id} has no service account {id}. The API only reads \
+             service accounts within the acting tenant, so an account of another \
+             tenant looks missing here. List this tenant's accounts with \
+             `tachyon org service-accounts list --tenant-id {tenant_id}`."
+        ),
+        Some(reqwest::StatusCode::FORBIDDEN) => format!(
+            "could not delete service account {id} in tenant {tenant_id}: the \
+             acting profile is not allowed to. Deleting one needs a policy that \
+             grants `auth:DeleteServiceAccount` in this tenant. Check the \
+             caller's own grants with `tachyon org users policies <your-user-id> \
+             --tenant-id {tenant_id}`, or re-run with `--profile <admin-profile>`."
+        ),
+        _ => format!("could not delete service account {id} in tenant {tenant_id}."),
+    };
+    err.context(hint)
+}
+
+/// How many API keys the account currently has, or `None` when the list could
+/// not be read. Only the count is reported; key material is never read back
+/// into the output.
+async fn service_account_api_key_count(
+    api: &ApiClient,
+    tenant_id: &str,
+    id: &str,
+) -> Option<usize> {
+    match api
+        .get_query::<ApiKeyListResponse>(
+            &format!("/v1/auth/service-accounts/{id}/api-keys"),
+            &[("operator_id", tenant_id)],
+        )
+        .await
+    {
+        Ok(response) => Some(response.api_keys.len()),
+        Err(err) => {
+            eprintln!("Warning: could not list the API keys of service account {id}: {err}");
+            None
+        }
+    }
+}
+
+async fn run_service_accounts_delete(
+    api: &ApiClient,
+    tenant_id: &str,
+    name_or_id: &str,
+    assume_yes: bool,
+    json: bool,
+) -> Result<()> {
+    let tenant_id = require_service_account_tenant(tenant_id, "delete")?;
+    if json && !assume_yes {
+        // The confirmation step reports in prose, so --json without --yes
+        // would hand a script something it cannot parse and a zero exit code.
+        return Err(anyhow!(
+            "--json requires --yes. Without --yes the command only reports what \
+             it would delete, and that report is not JSON."
+        ));
+    }
+    // Resolved here rather than by the caller so the tenant is checked before
+    // a name lookup that needs it.
+    let id = &resolve::resolve_service_account_id(api, tenant_id, name_or_id).await?;
+
+    let sa: ServiceAccountResponse = api
+        .get_query(
+            &format!("/v1/auth/service-accounts/{id}"),
+            &[("operator_id", tenant_id)],
+        )
+        .await
+        .map_err(|err| delete_service_account_hint(err, tenant_id, id))?;
+    let key_count = service_account_api_key_count(api, tenant_id, &sa.id).await;
+
+    if !assume_yes {
+        println!("Service account: {} ({})", sa.name, sa.id);
+        println!("Tenant ID:       {}", sa.tenant_id);
+        println!("Created:         {}", sa.created_at);
+        match key_count {
+            Some(count) => println!("API keys:        {count} (all destroyed with the account)"),
+            None => println!("API keys:        unknown (the list could not be read)"),
+        }
+        println!();
+        println!("Deleting the account also deletes every API key issued to it, and any");
+        println!("caller still presenting one of those keys starts failing immediately.");
+        println!("Revoking a single key instead: tachyon api-key revoke {} <api-key-id> --tenant-id {tenant_id}", sa.id);
+        println!();
+        println!("No changes made. Re-run with --yes to delete.");
+        return Ok(());
+    }
+
+    let deleted: DeleteServiceAccountResponse = api
+        .delete_json(&format!("/v1/auth/service-accounts/{}", sa.id))
+        .await
+        .map_err(|err| delete_service_account_hint(err, tenant_id, &sa.id))?;
+
+    if json {
+        return print_json(&deleted);
+    }
+    println!(
+        "Service account {} ({}) deleted from tenant {tenant_id}.",
+        sa.name, deleted.id
+    );
+    if let Some(count) = key_count {
+        println!("{count} API key(s) issued to it were deleted with it.");
+    }
+    Ok(())
+}
+
 async fn run_service_accounts_list(api: &ApiClient, tenant_id: &str, json: bool) -> Result<()> {
     let response: ServiceAccountListResponse = api
         .get_query("/v1/auth/service-accounts", &[("operator_id", tenant_id)])
@@ -767,6 +1060,9 @@ pub async fn run(args: &OrgArgs, config: &Configuration, tenant_id: &str) -> Res
             }
         },
         OrgCommand::ServiceAccounts { command } => match command {
+            ServiceAccountsCommand::Create { name, json } => {
+                run_service_accounts_create(&api, tenant_id, name, *json).await
+            }
             ServiceAccountsCommand::List { json } => {
                 run_service_accounts_list(&api, tenant_id, *json).await
             }
@@ -785,6 +1081,13 @@ pub async fn run(args: &OrgArgs, config: &Configuration, tenant_id: &str) -> Res
                 let id = resolve::resolve_service_account_id(&api, tenant_id, service_account_id)
                     .await?;
                 run_service_accounts_api_keys(&api, tenant_id, &id, *json).await
+            }
+            ServiceAccountsCommand::Delete {
+                service_account_id,
+                yes,
+                json,
+            } => {
+                run_service_accounts_delete(&api, tenant_id, service_account_id, *yes, *json).await
             }
         },
         OrgCommand::Policies { command } => match command {
