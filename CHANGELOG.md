@@ -4,6 +4,26 @@
 
 ### Added
 
+- Add `tachyon org service-accounts create` and `tachyon org service-accounts
+  delete`, so a service account can be issued and removed from the CLI instead
+  of by driving `POST /v1/auth/service-accounts` by hand. `org
+  service-accounts` only had read commands, so every new machine identity —
+  the read-only GitHub Actions account a drift guard authenticates with, for
+  one — meant a hand-rolled REST call, as
+  `quantum-box/tachyon-apps`'s
+  `docs/src/tasks/completed/v0.29.18/plt-2974-freshness-gate-credentials/design.md`
+  documents. `create` sends the acting `--tenant-id` as the body's `tenantId`,
+  which is the only tenant the API accepts from that scope, and refuses a name
+  the tenant already uses, because the API has no uniqueness constraint on
+  (tenant, name) and a second account of the same name makes that name
+  ambiguous wherever the CLI takes a service account by name. An empty or
+  over-191-byte name is rejected client-side, where the API answers it with a
+  500 that says nothing about the name. `delete` takes a name or ID, reports
+  the account and how many API keys would go with it, and only deletes with
+  `--yes`; deleting cascades to every key, so a caller still presenting one
+  starts failing immediately. Neither command prints key material: issuing a
+  key remains `tachyon api-key create`.
+
 - Add `tachyon ops sentry issues unresolve` (alias `reopen`), `archive` (alias
   `ignore`), and `unassign`, and accept a Sentry short ID such as
   `TACHYON-API-1A2` wherever an issue ID is taken. The list table now shows the
