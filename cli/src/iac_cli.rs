@@ -648,6 +648,10 @@ fn compute_change(state: &IacState, identity: &ManifestIdentity, manifest: &Valu
     }
 }
 
+fn should_save_manifest(action: &ChangeAction, prompted_secrets: &[PromptedSecret]) -> bool {
+    *action != ChangeAction::NoChange || !prompted_secrets.is_empty()
+}
+
 fn load_manifest_files(path: &str, app: Option<&str>) -> Result<Vec<Value>> {
     let content = fs::read_to_string(path).with_context(|| format!("read {path}"))?;
     let path_lower = path.to_lowercase();
@@ -885,6 +889,10 @@ fn collect_secret_prompt_candidates(
     candidates
 }
 
+fn nonempty_secret_input(value: String) -> Option<String> {
+    (!value.is_empty()).then_some(value)
+}
+
 fn prompt_for_manifest_secrets(
     manifest: &mut Value,
     current_manifest: Option<&Value>,
@@ -911,14 +919,13 @@ fn prompt_for_manifest_secrets(
             .allow_empty_password(true)
             .interact()
             .with_context(|| format!("read secret for {}", candidate.secret_ref))?;
-        let value = value.trim().to_string();
-        if value.is_empty() {
+        let Some(value) = nonempty_secret_input(value) else {
             println!(
                 "Skipped {}; the reference will be kept.",
                 candidate.secret_ref
             );
             continue;
-        }
+        };
 
         let Some(provider) = manifest
             .pointer_mut("/spec/providers")
@@ -1310,7 +1317,7 @@ async fn run_apply(
             prompted_secrets,
         } = plan.write;
         let action = plan.action;
-        if action != ChangeAction::NoChange {
+        if should_save_manifest(&action, &prompted_secrets) {
             save_manifest(
                 api,
                 tenant_id,
@@ -1810,5 +1817,26 @@ spec:
             json!({ "$secret_ref": "typesafeai/api_key" })
         );
         assert!(!manifest.to_string().contains("in-memory-only"));
+    }
+
+    #[test]
+    fn nonempty_secret_input_preserves_whitespace() {
+        let value = "  secret with whitespace  ".to_string();
+
+        assert_eq!(nonempty_secret_input(value.clone()), Some(value));
+        assert_eq!(nonempty_secret_input(String::new()), None);
+    }
+
+    #[test]
+    fn prompted_secret_forces_save_when_manifest_matches_local_state() {
+        let prompted = vec![PromptedSecret {
+            provider_index: 0,
+            field: "api_key".to_string(),
+            secret_ref: "typesafeai/api_key".to_string(),
+        }];
+
+        assert!(should_save_manifest(&ChangeAction::NoChange, &prompted));
+        assert!(!should_save_manifest(&ChangeAction::NoChange, &[]));
+        assert!(should_save_manifest(&ChangeAction::Create, &[]));
     }
 }
