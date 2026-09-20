@@ -53,6 +53,27 @@ CLI `0.6.12` does not support this field. Run `tachyon self-update` or install
 `@tachyon-sdk/cli@0.6.13` before applying manifests that depend on internal
 Cloud App service URLs.
 
+## Interactive IaC provider secrets
+
+Keep provider manifests free of plaintext credentials by using a
+`$secret_ref` and opt into a hidden prompt when adding or changing a provider
+secret:
+
+```sh
+tachyon iac apply \
+  --tenant-id tn_platform \
+  --file typesafeai.yaml \
+  --prompt-secrets
+```
+
+The CLI prompts only for new or changed secret references under
+`spec.providers`. Pressing Enter keeps the reference unchanged. Entered values
+are held in memory for the `SaveManifest` request; the server-side secret
+extractor stores them under the provider-scoped secret path, and the CLI
+restores `$secret_ref` before writing local `tachyon.tfstate`. The flag
+requires an interactive terminal and is opt-in so existing automation remains
+non-interactive.
+
 ## Alternative Install
 
 The standalone installer remains available:
