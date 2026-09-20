@@ -1,11 +1,13 @@
 use anyhow::{anyhow, Context, Result};
 use chrono::{DateTime, Utc};
 use clap::{Args, Subcommand};
+use dialoguer::{theme::ColorfulTheme, Password};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::collections::HashSet;
 use std::fs;
+use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 use tachyon_sdk::apis::configuration::Configuration;
 
@@ -68,6 +70,11 @@ pub enum IacCommand {
         /// Override state file path
         #[arg(long)]
         state: Option<String>,
+        /// Prompt interactively for newly added or changed `$secret_ref` values.
+        /// Values are sent only in memory; the server stores them and the
+        /// local IaC state keeps the reference instead of the value.
+        #[arg(long)]
+        prompt_secrets: bool,
         /// Change-control approval token for protected production mutations.
         ///
         /// Prefer TACHYON_CHANGE_CONTROL_APPROVAL_TOKEN so the token does not
@@ -287,17 +294,30 @@ struct ManifestIdentity {
     name: String,
 }
 
-#[derive(Debug)]
 struct PlannedManifestWrite {
     manifest: Value,
     identity: ManifestIdentity,
     expected_revision: i32,
+    prompted_secrets: Vec<PromptedSecret>,
 }
 
-#[derive(Debug)]
 struct PlannedManifestApply {
     write: PlannedManifestWrite,
     action: ChangeAction,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SecretPromptCandidate {
+    provider_index: usize,
+    field: String,
+    secret_ref: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PromptedSecret {
+    provider_index: usize,
+    field: String,
+    secret_ref: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -803,6 +823,150 @@ fn inject_tenant_id(manifest: &Value, tenant_id: &str) -> Value {
     manifest
 }
 
+fn find_provider<'a>(manifest: Option<&'a Value>, provider_name: &str) -> Option<&'a Value> {
+    manifest
+        .and_then(|manifest| manifest.pointer("/spec/providers"))
+        .and_then(Value::as_array)
+        .and_then(|providers| {
+            providers.iter().find(|provider| {
+                provider.get("name").and_then(Value::as_str) == Some(provider_name)
+            })
+        })
+}
+
+fn collect_secret_prompt_candidates(
+    manifest: &Value,
+    current_manifest: Option<&Value>,
+) -> Vec<SecretPromptCandidate> {
+    let Some(providers) = manifest
+        .pointer("/spec/providers")
+        .and_then(Value::as_array)
+    else {
+        return Vec::new();
+    };
+
+    let mut candidates = Vec::new();
+    for (provider_index, provider) in providers.iter().enumerate() {
+        let Some(provider_name) = provider.get("name").and_then(Value::as_str) else {
+            continue;
+        };
+        let Some(config) = provider.get("config").and_then(Value::as_object) else {
+            continue;
+        };
+        let current_provider = find_provider(current_manifest, provider_name);
+
+        for (field, value) in config {
+            let Some(secret_ref) = value.get("$secret_ref").and_then(Value::as_str) else {
+                continue;
+            };
+
+            let current_ref = current_provider
+                .and_then(|provider| provider.get("config"))
+                .and_then(Value::as_object)
+                .and_then(|config| config.get(field))
+                .and_then(|value| value.get("$secret_ref"))
+                .and_then(Value::as_str);
+
+            // Existing references are intentionally left untouched. This
+            // makes re-applying a full manifest non-interactive for secrets
+            // that are already part of the current desired state.
+            if current_ref == Some(secret_ref) {
+                continue;
+            }
+
+            candidates.push(SecretPromptCandidate {
+                provider_index,
+                field: field.clone(),
+                secret_ref: secret_ref.to_string(),
+            });
+        }
+    }
+
+    candidates
+}
+
+fn prompt_for_manifest_secrets(
+    manifest: &mut Value,
+    current_manifest: Option<&Value>,
+) -> Result<Vec<PromptedSecret>> {
+    let candidates = collect_secret_prompt_candidates(manifest, current_manifest);
+    if candidates.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    if !std::io::stdin().is_terminal() {
+        return Err(anyhow!(
+            "--prompt-secrets requires an interactive terminal; omit the flag for non-interactive apply"
+        ));
+    }
+
+    let theme = ColorfulTheme::default();
+    let mut prompted = Vec::new();
+    for candidate in candidates {
+        let value = Password::with_theme(&theme)
+            .with_prompt(format!(
+                "Secret for {} (hidden; Enter keeps the $secret_ref)",
+                candidate.secret_ref
+            ))
+            .allow_empty_password(true)
+            .interact()
+            .with_context(|| format!("read secret for {}", candidate.secret_ref))?;
+        let value = value.trim().to_string();
+        if value.is_empty() {
+            println!(
+                "Skipped {}; the reference will be kept.",
+                candidate.secret_ref
+            );
+            continue;
+        }
+
+        let Some(provider) = manifest
+            .pointer_mut("/spec/providers")
+            .and_then(Value::as_array_mut)
+            .and_then(|providers| providers.get_mut(candidate.provider_index))
+        else {
+            return Err(anyhow!(
+                "provider index {} disappeared while prompting for {}",
+                candidate.provider_index,
+                candidate.secret_ref
+            ));
+        };
+        let Some(config) = provider.get_mut("config").and_then(Value::as_object_mut) else {
+            return Err(anyhow!(
+                "provider config disappeared while prompting for {}",
+                candidate.secret_ref
+            ));
+        };
+        config.insert(candidate.field.clone(), Value::String(value));
+        prompted.push(PromptedSecret {
+            provider_index: candidate.provider_index,
+            field: candidate.field,
+            secret_ref: candidate.secret_ref,
+        });
+    }
+
+    Ok(prompted)
+}
+
+fn restore_prompted_secret_refs(manifest: &mut Value, prompted: &[PromptedSecret]) {
+    for secret in prompted {
+        let Some(provider) = manifest
+            .pointer_mut("/spec/providers")
+            .and_then(Value::as_array_mut)
+            .and_then(|providers| providers.get_mut(secret.provider_index))
+        else {
+            continue;
+        };
+        let Some(config) = provider.get_mut("config").and_then(Value::as_object_mut) else {
+            continue;
+        };
+        config.insert(
+            secret.field.clone(),
+            json!({ "$secret_ref": secret.secret_ref }),
+        );
+    }
+}
+
 async fn graphql_request(api: &ApiClient, body: Value) -> Result<Value> {
     graphql_request_with_change_control(api, body, None).await
 }
@@ -902,8 +1066,25 @@ async fn fetch_expected_revision(
     tenant_id: &str,
     identity: &ManifestIdentity,
 ) -> Result<i32> {
+    Ok(fetch_latest_manifest(api, tenant_id, identity).await?.0)
+}
+
+async fn fetch_latest_manifest(
+    api: &ApiClient,
+    tenant_id: &str,
+    identity: &ManifestIdentity,
+) -> Result<(i32, Option<Value>)> {
     let history = fetch_history(api, tenant_id, &identity.kind, &identity.name, 1).await?;
-    Ok(history.first().map(|item| item.revision).unwrap_or(0))
+    let Some(item) = history.first() else {
+        return Ok((0, None));
+    };
+    let manifest = serde_json::from_str(&item.manifest).with_context(|| {
+        format!(
+            "parse latest manifest {} / {}",
+            identity.kind, identity.name
+        )
+    })?;
+    Ok((item.revision, Some(manifest)))
 }
 
 async fn save_manifest(
@@ -1087,6 +1268,7 @@ async fn run_apply(
     file: &str,
     app: Option<&str>,
     state: Option<&str>,
+    prompt_secrets: bool,
     change_control_token: Option<&str>,
 ) -> Result<()> {
     verify_iac_change_control_token(change_control_token)?;
@@ -1099,15 +1281,22 @@ async fn run_apply(
     // update after this planning window is rejected by the server-side CAS.
     let mut planned = Vec::with_capacity(manifests.len());
     for manifest in manifests {
-        let manifest = inject_tenant_id(&manifest, tenant_id);
+        let mut manifest = inject_tenant_id(&manifest, tenant_id);
         let identity = infer_identity(&manifest, None, None)?;
+        let (expected_revision, current_manifest) =
+            fetch_latest_manifest(api, tenant_id, &identity).await?;
+        let prompted_secrets = if prompt_secrets {
+            prompt_for_manifest_secrets(&mut manifest, current_manifest.as_ref())?
+        } else {
+            Vec::new()
+        };
         let action = compute_change(&iac_state, &identity, &manifest);
-        let expected_revision = fetch_expected_revision(api, tenant_id, &identity).await?;
         planned.push(PlannedManifestApply {
             write: PlannedManifestWrite {
                 manifest,
                 identity,
                 expected_revision,
+                prompted_secrets,
             },
             action,
         });
@@ -1115,9 +1304,10 @@ async fn run_apply(
 
     for plan in planned {
         let PlannedManifestWrite {
-            manifest,
+            mut manifest,
             identity,
             expected_revision,
+            prompted_secrets,
         } = plan.write;
         let action = plan.action;
         if action != ChangeAction::NoChange {
@@ -1133,6 +1323,7 @@ async fn run_apply(
         let result =
             apply_manifest_resource(api, &identity.kind, &identity.name, change_control_token)
                 .await?;
+        restore_prompted_secret_refs(&mut manifest, &prompted_secrets);
         iac_state.upsert_resource(&identity, manifest);
         if action == ChangeAction::NoChange {
             println!(
@@ -1179,6 +1370,7 @@ async fn run_import_seed(
             manifest,
             identity,
             expected_revision,
+            prompted_secrets: Vec::new(),
         });
     }
 
@@ -1302,6 +1494,7 @@ pub async fn run(args: &IacArgs, config: &Configuration, tenant_id: &str) -> Res
             file,
             app,
             state,
+            prompt_secrets,
             change_control_token,
         } => {
             run_apply(
@@ -1310,6 +1503,7 @@ pub async fn run(args: &IacArgs, config: &Configuration, tenant_id: &str) -> Res
                 file,
                 app.as_deref(),
                 state.as_deref(),
+                *prompt_secrets,
                 change_control_token.as_deref(),
             )
             .await
@@ -1553,5 +1747,68 @@ spec:
             .map(|manifest| manifest.get("kind").and_then(Value::as_str).unwrap())
             .collect::<Vec<_>>();
         assert_eq!(kinds, vec!["OAuth2Client", "CloudApp"]);
+    }
+
+    #[test]
+    fn secret_prompt_candidates_only_include_new_or_changed_references() {
+        let current = json!({
+            "spec": {
+                "providers": [{
+                    "name": "openai",
+                    "config": {
+                        "api_key": { "$secret_ref": "openai/api_key" }
+                    }
+                }]
+            }
+        });
+        let desired = json!({
+            "spec": {
+                "providers": [{
+                    "name": "openai",
+                    "config": {
+                        "api_key": { "$secret_ref": "openai/api_key" }
+                    }
+                }, {
+                    "name": "typesafeai",
+                    "config": {
+                        "api_key": { "$secret_ref": "typesafeai/api_key" }
+                    }
+                }]
+            }
+        });
+
+        assert_eq!(
+            collect_secret_prompt_candidates(&desired, Some(&current)),
+            vec![SecretPromptCandidate {
+                provider_index: 1,
+                field: "api_key".to_string(),
+                secret_ref: "typesafeai/api_key".to_string(),
+            }]
+        );
+    }
+
+    #[test]
+    fn prompted_secret_is_restored_to_a_reference_before_local_state_save() {
+        let mut manifest = json!({
+            "spec": {
+                "providers": [{
+                    "name": "typesafeai",
+                    "config": { "api_key": "in-memory-only" }
+                }]
+            }
+        });
+        let prompted = vec![PromptedSecret {
+            provider_index: 0,
+            field: "api_key".to_string(),
+            secret_ref: "typesafeai/api_key".to_string(),
+        }];
+
+        restore_prompted_secret_refs(&mut manifest, &prompted);
+
+        assert_eq!(
+            manifest["spec"]["providers"][0]["config"]["api_key"],
+            json!({ "$secret_ref": "typesafeai/api_key" })
+        );
+        assert!(!manifest.to_string().contains("in-memory-only"));
     }
 }
