@@ -467,7 +467,7 @@ pub fn explain_http_error(err: anyhow::Error, tenant_id: &str) -> anyhow::Error 
     };
 
     let hint = match status.as_u16() {
-        404 if envelope.is_none() => format!(
+        404 if envelope.is_none() && http.body.trim().is_empty() => format!(
             "Tachyon Data is not enabled for tenant {tenant_id}. `/data/v1/*` is gated by \
              the `data_platform` feature flag, and a tenant without it gets 404 before \
              authentication. Ask an operator to enable the flag, or check that \
@@ -1373,6 +1373,14 @@ mod tests {
         let err = explain_http_error(http_err(404, body, None), "tn_abc");
         let message = err.to_string();
         assert!(message.contains("dataset ds_x was not found"), "{message}");
+        assert!(!message.contains("data_platform"), "{message}");
+    }
+
+    #[test]
+    fn a_404_with_a_non_json_body_stays_a_not_found() {
+        let err = explain_http_error(http_err(404, "upstream route not found", None), "tn_abc");
+        let message = err.to_string();
+        assert!(message.contains("upstream route not found"), "{message}");
         assert!(!message.contains("data_platform"), "{message}");
     }
 
