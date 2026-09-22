@@ -126,13 +126,18 @@ mod tests {
     }
 
     #[test]
-    fn parses_atomic_github_allowlist_append() {
+    fn parses_tenant_grant_create_with_repository_scope() {
         let cli = Cli::try_parse_from([
             "tachyon",
             "iac",
-            "connections",
-            "add-allowed-repositories",
-            "con_test",
+            "grants",
+            "create",
+            "--provider",
+            "github",
+            "--installation-id",
+            "12345",
+            "--verification",
+            "gv1_test",
             "--repo",
             "quantum-box/tachyon-apps",
             "--repo",
@@ -144,12 +149,22 @@ mod tests {
         match cli.command {
             Commands::Iac(iac_cli::IacArgs {
                 command:
-                    iac_cli::IacCommand::Connections {
+                    iac_cli::IacCommand::Grants {
                         command:
-                            iac_cli::ConnectionsCommand::AddAllowedRepositories { id, repos, json },
+                            iac_cli::GrantsCommand::Create {
+                                provider,
+                                installation_id,
+                                verification,
+                                all,
+                                repos,
+                                json,
+                            },
                     },
             }) => {
-                assert_eq!(id, "con_test");
+                assert_eq!(provider, "github");
+                assert_eq!(installation_id, "12345");
+                assert_eq!(verification, "gv1_test");
+                assert!(!all);
                 assert_eq!(
                     repos,
                     vec![

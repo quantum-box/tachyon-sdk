@@ -105,60 +105,178 @@ fn request_json(request: &str) -> serde_json::Value {
 }
 
 #[test]
-fn add_allowed_repositories_posts_atomic_append_contract() {
+fn grants_list_reads_tenant_grants() {
     let tmp = TempDir::new().unwrap();
     let response = json!({
-        "connection_id": "con_test",
-        "added": ["quantum-box/bernard-square"],
-        "already_present": ["quantum-box/tachyon-apps"],
-        "allowed_repositories": [
-            "quantum-box/tachyon-apps",
-            "quantum-box/bernard-square"
-        ]
+        "grants": [{
+            "id": "igr_test",
+            "status": "active",
+            "resource_scope": {"kind": "list", "resources": ["quantum-box/tachyon-apps"]},
+            "managed_by_connection": false,
+            "installation": {
+                "id": "ins_test",
+                "provider": "github",
+                "kind": "organization",
+                "status": "active",
+                "external_installation_id": "12345",
+                "external_account_name": "quantum-box"
+            },
+            "created_at": "2026-09-22T00:00:00Z",
+            "updated_at": "2026-09-22T00:00:00Z",
+            "revoked_at": null
+        }]
     })
     .to_string();
     let (api_url, rx, handle) = start_graphql_server(vec![response]);
 
     let output = isolated_command(tmp.path())
         .env("TACHYON_API_URL", api_url)
-        .args([
-            "iac",
-            "connections",
-            "add-allowed-repositories",
-            "con_test",
-            "--repo",
-            "quantum-box/tachyon-apps",
-            "--repo",
-            "quantum-box/bernard-square",
-            "--json",
-        ])
+        .args(["iac", "grants", "list", "--json"])
         .output()
-        .expect("run atomic allowlist append");
+        .expect("list tenant grants");
 
     assert!(
         output.status.success(),
-        "allowlist append failed\nstdout:\n{}\nstderr:\n{}",
+        "grant list failed\nstdout:\n{}\nstderr:\n{}",
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
     let request = rx.recv_timeout(Duration::from_secs(1)).unwrap();
     handle.join().unwrap();
-    assert!(request.starts_with("POST /v1/integrations/connections/con_test/allowed-repositories "));
+    assert!(request.starts_with("GET /v1/integrations/grants "));
+    let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(stdout[0]["id"], "igr_test");
+    assert_eq!(stdout[0]["resource_scope"]["kind"], "list");
+}
+
+#[test]
+fn grants_create_posts_tenant_grant_contract() {
+    let tmp = TempDir::new().unwrap();
+    let response = json!({
+        "id": "igr_test",
+        "status": "active",
+        "resource_scope": {"kind": "list", "resources": ["quantum-box/tachyon-apps"]},
+        "managed_by_connection": false,
+        "installation": {
+            "id": "ins_test",
+            "provider": "github",
+            "kind": "organization",
+            "status": "active",
+            "external_installation_id": "12345",
+            "external_account_name": "quantum-box"
+        },
+        "created_at": "2026-09-22T00:00:00Z",
+        "updated_at": "2026-09-22T00:00:00Z",
+        "revoked_at": null
+    })
+    .to_string();
+    let (api_url, rx, handle) = start_graphql_server(vec![response]);
+    let output = isolated_command(tmp.path())
+        .env("TACHYON_API_URL", api_url)
+        .args([
+            "iac",
+            "grants",
+            "create",
+            "--provider",
+            "github",
+            "--installation-id",
+            "12345",
+            "--verification",
+            "gv1_test",
+            "--repo",
+            "quantum-box/tachyon-apps",
+            "--json",
+        ])
+        .output()
+        .expect("create tenant grant");
+    assert!(output.status.success(), "grant create failed: {output:?}");
+    let request = rx.recv_timeout(Duration::from_secs(1)).unwrap();
+    handle.join().unwrap();
+    assert!(request.starts_with("POST /v1/integrations/grants "));
     assert_eq!(
         request_json(&request),
         json!({
-            "repositories": [
-                "quantum-box/tachyon-apps",
-                "quantum-box/bernard-square"
-            ]
+            "provider": "github",
+            "installation_id": "12345",
+            "verification": "gv1_test",
+            "resource_scope": {
+                "kind": "list",
+                "resources": ["quantum-box/tachyon-apps"]
+            }
         })
     );
-    let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(stdout["added"], json!(["quantum-box/bernard-square"]));
+}
+
+#[test]
+fn grants_set_scope_patches_scope_contract() {
+    let tmp = TempDir::new().unwrap();
+    let response = json!({
+        "id": "igr_test",
+        "status": "active",
+        "resource_scope": {"kind": "all"},
+        "managed_by_connection": false,
+        "installation": {
+            "id": "ins_test",
+            "provider": "github",
+            "kind": "organization",
+            "status": "active",
+            "external_installation_id": "12345",
+            "external_account_name": "quantum-box"
+        },
+        "created_at": "2026-09-22T00:00:00Z",
+        "updated_at": "2026-09-22T00:00:00Z",
+        "revoked_at": null
+    })
+    .to_string();
+    let (api_url, rx, handle) = start_graphql_server(vec![response]);
+    let output = isolated_command(tmp.path())
+        .env("TACHYON_API_URL", api_url)
+        .args(["iac", "grants", "set-scope", "igr_test", "--all", "--json"])
+        .output()
+        .expect("set tenant grant scope");
+    assert!(output.status.success(), "grant scope failed: {output:?}");
+    let request = rx.recv_timeout(Duration::from_secs(1)).unwrap();
+    handle.join().unwrap();
+    assert!(request.starts_with("PATCH /v1/integrations/grants/igr_test/scope "));
     assert_eq!(
-        stdout["already_present"],
-        json!(["quantum-box/tachyon-apps"])
+        request_json(&request),
+        json!({"resource_scope": {"kind": "all"}})
     );
+}
+
+#[test]
+fn grants_revoke_deletes_tenant_grant() {
+    let tmp = TempDir::new().unwrap();
+    let response = json!({
+        "id": "igr_test",
+        "status": "revoked",
+        "resource_scope": {"kind": "all"},
+        "managed_by_connection": false,
+        "installation": {
+            "id": "ins_test",
+            "provider": "github",
+            "kind": "organization",
+            "status": "active",
+            "external_installation_id": "12345",
+            "external_account_name": "quantum-box"
+        },
+        "created_at": "2026-09-22T00:00:00Z",
+        "updated_at": "2026-09-22T00:00:00Z",
+        "revoked_at": "2026-09-22T00:00:00Z"
+    })
+    .to_string();
+    let (api_url, rx, handle) = start_graphql_server(vec![response]);
+    let output = isolated_command(tmp.path())
+        .env("TACHYON_API_URL", api_url)
+        .args(["iac", "grants", "revoke", "igr_test", "--json"])
+        .output()
+        .expect("revoke tenant grant");
+    assert!(output.status.success(), "grant revoke failed: {output:?}");
+    let request = rx.recv_timeout(Duration::from_secs(1)).unwrap();
+    handle.join().unwrap();
+    assert!(request.starts_with("DELETE /v1/integrations/grants/igr_test "));
+    let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(stdout["status"], "revoked");
 }
 
 fn has_change_control_header(request: &str) -> bool {
