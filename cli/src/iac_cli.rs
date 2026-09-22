@@ -157,6 +157,11 @@ pub enum IacCommand {
         #[command(subcommand)]
         command: ConnectionsCommand,
     },
+    /// Manage tenant grants on integration installations
+    Grants {
+        #[command(subcommand)]
+        command: GrantsCommand,
+    },
 }
 
 #[derive(Debug, Clone, Subcommand)]
@@ -190,21 +195,47 @@ pub enum ConnectionsCommand {
     },
     /// Disconnect an integration
     Disconnect { id: String },
-    /// Atomically append repositories to a shared GitHub connection allowlist
-    AddAllowedRepositories {
-        id: String,
-        /// owner/repo, repeatable
-        #[arg(long = "repo", required = true)]
+}
+
+#[derive(Debug, Clone, Subcommand)]
+pub enum GrantsCommand {
+    /// List tenant grants on integration installations
+    List {
+        #[arg(long)]
+        json: bool,
+    },
+    /// Create a tenant grant for an installation verified by the caller
+    Create {
+        #[arg(long)]
+        provider: String,
+        #[arg(long)]
+        installation_id: String,
+        /// Value of github_verification returned after GitHub OAuth
+        #[arg(long)]
+        verification: String,
+        /// Grant every resource reachable by the installation
+        #[arg(long, conflicts_with = "repos", required_unless_present = "repos")]
+        all: bool,
+        /// owner/repo, repeatable; an empty list is not a valid CLI scope
+        #[arg(long = "repo", conflicts_with = "all", required_unless_present = "all")]
         repos: Vec<String>,
         #[arg(long)]
         json: bool,
     },
-    /// Set the repository allowlist on a shared GitHub connection
-    SetAllowedRepositories {
+    /// Change the resource scope of a tenant grant
+    SetScope {
         id: String,
-        /// owner/repo, repeatable
-        #[arg(long = "repo", required = true)]
+        #[arg(long, conflicts_with = "repos", required_unless_present = "repos")]
+        all: bool,
+        /// owner/repo, repeatable; an empty list is not a valid CLI scope
+        #[arg(long = "repo", conflicts_with = "all", required_unless_present = "all")]
         repos: Vec<String>,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Revoke a tenant grant
+    Revoke {
+        id: String,
         #[arg(long)]
         json: bool,
     },
@@ -276,6 +307,53 @@ struct ConnectionResponse {
 #[derive(Debug, Deserialize)]
 struct ConnectionListResponse {
     connections: Vec<ConnectionResponse>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+enum ResourceScope {
+    All,
+    List { resources: Vec<String> },
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct TenantGrantResponse {
+    id: String,
+    status: String,
+    resource_scope: ResourceScope,
+    managed_by_connection: bool,
+    installation: InstallationResponse,
+    created_at: DateTime<Utc>,
+    updated_at: DateTime<Utc>,
+    revoked_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct InstallationResponse {
+    id: String,
+    provider: String,
+    kind: String,
+    status: String,
+    external_installation_id: Option<String>,
+    external_account_name: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct TenantGrantListResponse {
+    grants: Vec<TenantGrantResponse>,
+}
+
+#[derive(Debug, Serialize)]
+struct CreateTenantGrantRequest<'a> {
+    provider: &'a str,
+    installation_id: &'a str,
+    verification: &'a str,
+    resource_scope: ResourceScope,
+}
+
+#[derive(Debug, Serialize)]
+struct UpdateTenantGrantScopeRequest {
+    resource_scope: ResourceScope,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -521,85 +599,135 @@ async fn run_connections_get(api: &ApiClient, id: &str, json: bool) -> Result<()
     Ok(())
 }
 
-#[derive(Debug, Serialize)]
-struct SetAllowedRepositoriesRequest<'a> {
-    allowed_repositories: &'a [String],
+fn resource_scope(all: bool, repos: &[String]) -> Result<ResourceScope> {
+    if all {
+        return Ok(ResourceScope::All);
+    }
+    if repos.is_empty() {
+        return Err(anyhow!("at least one --repo is required for a list scope"));
+    }
+    Ok(ResourceScope::List {
+        resources: repos.to_vec(),
+    })
 }
 
-#[derive(Debug, Deserialize, Serialize)]
-struct SetAllowedRepositoriesResponse {
-    connection_id: String,
-    allowed_repositories: Vec<String>,
+fn render_resource_scope(scope: &ResourceScope) -> String {
+    match scope {
+        ResourceScope::All => "all".to_string(),
+        ResourceScope::List { resources } => format!("list({})", resources.join(",")),
+    }
 }
 
-#[derive(Debug, Serialize)]
-struct AddAllowedRepositoriesRequest<'a> {
-    repositories: &'a [String],
+fn print_grant(grant: &TenantGrantResponse) {
+    println!("ID:        {}", grant.id);
+    println!("Provider:  {}", grant.installation.provider);
+    println!(
+        "Account:   {}",
+        grant
+            .installation
+            .external_account_name
+            .as_deref()
+            .unwrap_or("-")
+    );
+    println!("Status:    {}", grant.status);
+    println!(
+        "Scope:     {}",
+        render_resource_scope(&grant.resource_scope)
+    );
+    println!("Managed:   {}", grant.managed_by_connection);
 }
 
-#[derive(Debug, Deserialize, Serialize)]
-struct AddAllowedRepositoriesResponse {
-    connection_id: String,
-    added: Vec<String>,
-    already_present: Vec<String>,
-    allowed_repositories: Vec<String>,
-}
-
-async fn run_connections_add_allowed_repositories(
-    api: &ApiClient,
-    id: &str,
-    repos: &[String],
-    json: bool,
-) -> Result<()> {
-    let response: AddAllowedRepositoriesResponse = api
-        .post(
-            &format!("/v1/integrations/connections/{id}/allowed-repositories"),
-            &AddAllowedRepositoriesRequest {
-                repositories: repos,
-            },
-        )
-        .await?;
+async fn run_grants_list(api: &ApiClient, json: bool) -> Result<()> {
+    let response: TenantGrantListResponse = api.get("/v1/integrations/grants").await?;
     if json {
-        return print_json(&response);
+        return print_json(&response.grants);
     }
-    println!("Connection: {}", response.connection_id);
-    println!("Added:");
-    for repo in &response.added {
-        println!("  {repo}");
+    if response.grants.is_empty() {
+        println!("No tenant grants found.");
+        return Ok(());
     }
-    println!("Already present:");
-    for repo in &response.already_present {
-        println!("  {repo}");
-    }
-    println!("Allowed repositories:");
-    for repo in &response.allowed_repositories {
-        println!("  {repo}");
+    println!(
+        "{:<28}  {:<16}  {:<12}  {:<24}  SCOPE",
+        "ID", "PROVIDER", "STATUS", "ACCOUNT"
+    );
+    println!(
+        "{:-<28}  {:-<16}  {:-<12}  {:-<24}  {:-<20}",
+        "", "", "", "", ""
+    );
+    for grant in &response.grants {
+        println!(
+            "{:<28}  {:<16}  {:<12}  {:<24}  {}",
+            grant.id,
+            grant.installation.provider,
+            grant.status,
+            grant
+                .installation
+                .external_account_name
+                .as_deref()
+                .unwrap_or("-"),
+            render_resource_scope(&grant.resource_scope),
+        );
     }
     Ok(())
 }
 
-async fn run_connections_set_allowed_repositories(
+async fn run_grants_create(
     api: &ApiClient,
-    id: &str,
+    provider: &str,
+    installation_id: &str,
+    verification: &str,
+    all: bool,
     repos: &[String],
     json: bool,
 ) -> Result<()> {
-    let response: SetAllowedRepositoriesResponse = api
-        .patch(
-            &format!("/v1/integrations/connections/{id}/allowed-repositories"),
-            &SetAllowedRepositoriesRequest {
-                allowed_repositories: repos,
+    let response: TenantGrantResponse = api
+        .post(
+            "/v1/integrations/grants",
+            &CreateTenantGrantRequest {
+                provider,
+                installation_id,
+                verification,
+                resource_scope: resource_scope(all, repos)?,
             },
         )
         .await?;
     if json {
         return print_json(&response);
     }
-    println!("Connection: {}", response.connection_id);
-    println!("Allowed repositories:");
-    for repo in &response.allowed_repositories {
-        println!("  {repo}");
+    print_grant(&response);
+    Ok(())
+}
+
+async fn run_grants_set_scope(
+    api: &ApiClient,
+    id: &str,
+    all: bool,
+    repos: &[String],
+    json: bool,
+) -> Result<()> {
+    let response: TenantGrantResponse = api
+        .patch(
+            &format!("/v1/integrations/grants/{id}/scope"),
+            &UpdateTenantGrantScopeRequest {
+                resource_scope: resource_scope(all, repos)?,
+            },
+        )
+        .await?;
+    if json {
+        return print_json(&response);
     }
+    print_grant(&response);
+    Ok(())
+}
+
+async fn run_grants_revoke(api: &ApiClient, id: &str, json: bool) -> Result<()> {
+    let response: TenantGrantResponse = api
+        .delete_json(&format!("/v1/integrations/grants/{id}"))
+        .await?;
+    if json {
+        return print_json(&response);
+    }
+    println!("Tenant grant {id} revoked.");
     Ok(())
 }
 
@@ -1570,12 +1698,35 @@ pub async fn run(args: &IacArgs, config: &Configuration, tenant_id: &str) -> Res
             ConnectionsCommand::List { json } => run_connections_list(&api, *json).await,
             ConnectionsCommand::Get { id, json } => run_connections_get(&api, id, *json).await,
             ConnectionsCommand::Disconnect { id } => run_connections_disconnect(&api, id).await,
-            ConnectionsCommand::AddAllowedRepositories { id, repos, json } => {
-                run_connections_add_allowed_repositories(&api, id, repos, *json).await
+        },
+        IacCommand::Grants { command } => match command {
+            GrantsCommand::List { json } => run_grants_list(&api, *json).await,
+            GrantsCommand::Create {
+                provider,
+                installation_id,
+                verification,
+                all,
+                repos,
+                json,
+            } => {
+                run_grants_create(
+                    &api,
+                    provider,
+                    installation_id,
+                    verification,
+                    *all,
+                    repos,
+                    *json,
+                )
+                .await
             }
-            ConnectionsCommand::SetAllowedRepositories { id, repos, json } => {
-                run_connections_set_allowed_repositories(&api, id, repos, *json).await
-            }
+            GrantsCommand::SetScope {
+                id,
+                all,
+                repos,
+                json,
+            } => run_grants_set_scope(&api, id, *all, repos, *json).await,
+            GrantsCommand::Revoke { id, json } => run_grants_revoke(&api, id, *json).await,
         },
     }
 }
