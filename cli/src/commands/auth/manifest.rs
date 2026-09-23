@@ -618,9 +618,7 @@ fn load_single_manifest(path: &Path) -> Result<LoadedManifest> {
         }
     }
 
-    let value: serde_yaml::Value =
-        serde_yaml::from_str(&raw).with_context(|| format!("parse manifest {}", path.display()))?;
-    let manifest = parse_manifest_value(value)
+    let manifest = parse_manifest_stream(&raw)
         .with_context(|| format!("parse manifest {}", path.display()))?;
     Ok(LoadedManifest {
         path: path.to_path_buf(),
@@ -644,6 +642,33 @@ pub(crate) fn parse_manifest_document_value(value: serde_yaml::Value) -> Result<
         }
     }
     parse_manifest_value(value)
+}
+
+fn parse_manifest_stream(raw: &str) -> Result<AuthManifest> {
+    let mut manifest = AuthManifest::default();
+    let mut document_count = 0;
+
+    for (index, document) in serde_yaml::Deserializer::from_str(raw).enumerate() {
+        let value = serde_yaml::Value::deserialize(document)
+            .with_context(|| format!("parse YAML document {}", index + 1))?;
+        if value == serde_yaml::Value::Null {
+            continue;
+        }
+
+        let parsed = parse_manifest_document_value(value)
+            .with_context(|| format!("parse auth manifest document {}", index + 1))?;
+        manifest.actions.extend(parsed.actions);
+        manifest.policies.extend(parsed.policies);
+        document_count += 1;
+    }
+
+    if document_count == 0 {
+        return Err(anyhow!(
+            "auth manifest must contain at least one flat or k8s style document"
+        ));
+    }
+
+    Ok(manifest)
 }
 
 fn parse_manifest_value(value: serde_yaml::Value) -> Result<AuthManifest> {
