@@ -585,6 +585,12 @@ struct SentryIssueResponse {
     assigned_to: Option<SentryAssignedTo>,
     #[serde(default, alias = "latestEvent")]
     latest_event: Option<SentryEventResponse>,
+    #[serde(
+        default,
+        alias = "latestEventDetails",
+        skip_serializing_if = "Option::is_none"
+    )]
+    latest_event_details: Option<SentryEventDetails>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -615,6 +621,110 @@ struct SentryEventResponse {
     level: Option<String>,
     #[serde(default, deserialize_with = "deserialize_sentry_event_tags")]
     tags: BTreeMap<String, String>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct SentryEventDetails {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    platform: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    environment: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    release: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    transaction: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    exceptions: Vec<SentryExceptionDetails>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    breadcrumbs: Vec<SentryBreadcrumbDetails>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    request: Option<SentryRequestDetails>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    contexts: Option<SentryEventContexts>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct SentryExceptionDetails {
+    #[serde(default, rename = "type", skip_serializing_if = "Option::is_none")]
+    exception_type: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    value: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    mechanism: Option<SentryExceptionMechanism>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    frames: Vec<SentryStackFrame>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct SentryExceptionMechanism {
+    #[serde(default, rename = "type", skip_serializing_if = "Option::is_none")]
+    mechanism_type: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    handled: Option<bool>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct SentryStackFrame {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    function: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    module: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    filename: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    line: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    column: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    in_app: Option<bool>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct SentryBreadcrumbDetails {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    timestamp: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    category: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    r#type: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    level: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    message: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct SentryRequestDetails {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    method: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    url: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct SentryEventContexts {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    browser: Option<SentryContextDetails>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    os: Option<SentryContextDetails>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    device: Option<SentryContextDetails>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    runtime: Option<SentryContextDetails>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct SentryContextDetails {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    version: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    family: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    brand: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    model: Option<String>,
 }
 
 fn deserialize_sentry_event_tags<'de, D>(
@@ -1587,6 +1697,120 @@ fn print_sentry_issue(issue: &SentryIssueResponse) {
         "Permalink:    {}",
         issue.permalink.as_deref().unwrap_or("-")
     );
+    if let Some(details) = issue.latest_event_details.as_ref() {
+        print_sentry_event_details(details);
+    }
+}
+
+fn print_sentry_event_details(details: &SentryEventDetails) {
+    println!("Latest Event Details:");
+    for (label, value) in [
+        ("Platform", details.platform.as_deref()),
+        ("Environment", details.environment.as_deref()),
+        ("Release", details.release.as_deref()),
+        ("Transaction", details.transaction.as_deref()),
+    ] {
+        if let Some(value) = value {
+            println!("  {label}: {value}");
+        }
+    }
+
+    for (exception_index, exception) in details.exceptions.iter().enumerate() {
+        println!(
+            "  Exception {}: {}{}",
+            exception_index + 1,
+            exception.exception_type.as_deref().unwrap_or("Unknown"),
+            exception
+                .value
+                .as_deref()
+                .map(|value| format!(": {value}"))
+                .unwrap_or_default()
+        );
+        if let Some(mechanism) = exception.mechanism.as_ref() {
+            println!(
+                "    Mechanism: {}{}",
+                mechanism.mechanism_type.as_deref().unwrap_or("-"),
+                mechanism
+                    .handled
+                    .map(|handled| format!(" (handled: {handled})"))
+                    .unwrap_or_default()
+            );
+        }
+        for (frame_index, frame) in exception.frames.iter().enumerate() {
+            let location = match (frame.filename.as_deref(), frame.line, frame.column) {
+                (Some(filename), Some(line), Some(column)) => {
+                    format!("{filename}:{line}:{column}")
+                }
+                (Some(filename), Some(line), None) => format!("{filename}:{line}"),
+                (Some(filename), None, _) => filename.to_string(),
+                (None, Some(line), Some(column)) => format!("{line}:{column}"),
+                (None, Some(line), None) => line.to_string(),
+                (None, None, _) => "<unknown location>".to_string(),
+            };
+            let function = frame
+                .function
+                .as_deref()
+                .or(frame.module.as_deref())
+                .unwrap_or("<anonymous>");
+            let in_app = if frame.in_app == Some(true) {
+                " [in-app]"
+            } else {
+                ""
+            };
+            println!(
+                "    Frame {:>2}: {function} at {location}{in_app}",
+                frame_index + 1
+            );
+        }
+    }
+
+    if !details.breadcrumbs.is_empty() {
+        println!("  Breadcrumbs:");
+        for breadcrumb in &details.breadcrumbs {
+            let timestamp = breadcrumb.timestamp.as_deref().unwrap_or("-");
+            let category = breadcrumb.category.as_deref().unwrap_or("-");
+            let level = breadcrumb.level.as_deref().unwrap_or("-");
+            let breadcrumb_type = breadcrumb.r#type.as_deref().unwrap_or("-");
+            let message = breadcrumb.message.as_deref().unwrap_or("");
+            println!("    {timestamp}  {level}  {category} ({breadcrumb_type})  {message}");
+        }
+    }
+
+    if let Some(request) = details.request.as_ref() {
+        if request.method.is_some() || request.url.is_some() {
+            println!(
+                "  Request: {} {}",
+                request.method.as_deref().unwrap_or("-"),
+                request.url.as_deref().unwrap_or("-")
+            );
+        }
+    }
+
+    if let Some(contexts) = details.contexts.as_ref() {
+        for (label, context) in [
+            ("Browser", contexts.browser.as_ref()),
+            ("OS", contexts.os.as_ref()),
+            ("Device", contexts.device.as_ref()),
+            ("Runtime", contexts.runtime.as_ref()),
+        ] {
+            if let Some(context) = context {
+                let description = [
+                    context.name.as_deref(),
+                    context.version.as_deref(),
+                    context.family.as_deref(),
+                    context.brand.as_deref(),
+                    context.model.as_deref(),
+                ]
+                .into_iter()
+                .flatten()
+                .collect::<Vec<_>>()
+                .join(" ");
+                if !description.is_empty() {
+                    println!("  {label}: {description}");
+                }
+            }
+        }
+    }
 }
 
 fn normalize_mentions(mentions: &[String]) -> Result<Vec<String>> {
