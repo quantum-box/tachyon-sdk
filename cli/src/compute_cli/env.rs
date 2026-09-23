@@ -1,4 +1,7 @@
 use super::*;
+use std::str::FromStr;
+
+use yaml_edit::{Mapping, Sequence, YamlFile};
 
 // --- Env subcommands ---
 
@@ -109,6 +112,7 @@ struct SetAppSecretRequest {
 struct SetAppSecretResponse {
     key: String,
     target: String,
+    secret_ref: String,
 }
 
 #[derive(Debug, Serialize, Clone)]
@@ -234,9 +238,10 @@ pub(super) async fn run_env_set_secret(
         .post(&format!("/v1/apps/{app_id}/secrets"), &req)
         .await?;
 
-    update_manifest_secret_ref(config_flag, &resp.key, &resp.target)?;
+    let secret_path = manifest_secret_path(&resp.secret_ref, &resp.key)?;
+    update_manifest_secret_ref(config_flag, &resp.key, &resp.target, secret_path)?;
     println!("Set secret {} for target {}.", resp.key, resp.target);
-    println!("Updated tachyon.yml with valueFrom.secret: {}", resp.key);
+    println!("Updated tachyon.yml with valueFrom.secret: {secret_path}");
     Ok(())
 }
 
@@ -316,136 +321,149 @@ fn read_secret_value_from_stdin() -> Result<String> {
     Ok(value)
 }
 
-fn update_manifest_secret_ref(config_flag: Option<&Path>, key: &str, target: &str) -> Result<()> {
-    let loaded = crate::config::loader::load_with_path(config_flag)?
-        .ok_or_else(|| anyhow!("tachyon.yml not found. Run `tachyon init` first."))?;
-    upsert_manifest_secret_ref(&loaded.path, key, target)
+fn manifest_secret_path<'a>(secret_ref: &'a str, key: &str) -> Result<&'a str> {
+    let path = secret_ref
+        .strip_prefix("$secret_ref:")
+        .ok_or_else(|| anyhow!("API returned an invalid app secret reference"))?;
+    let mut parts = path.split('/');
+    let app_name = parts.next().unwrap_or_default();
+    let secret_key = parts.next().unwrap_or_default();
+    if app_name.is_empty() || secret_key != key || parts.next().is_some() {
+        return Err(anyhow!(
+            "API returned an invalid app secret reference for {key}"
+        ));
+    }
+    Ok(path)
 }
 
-fn upsert_manifest_secret_ref(path: &Path, key: &str, target: &str) -> Result<()> {
-    let raw = std::fs::read_to_string(path)?;
-    let mut doc: serde_yaml::Value = serde_yaml::from_str(&raw)?;
-    let kind = doc
-        .get("kind")
-        .and_then(serde_yaml::Value::as_str)
-        .unwrap_or("CloudApp");
+fn update_manifest_secret_ref(
+    config_flag: Option<&Path>,
+    key: &str,
+    target: &str,
+    secret_path: &str,
+) -> Result<()> {
+    let loaded = crate::config::loader::load_with_path(config_flag)?
+        .ok_or_else(|| anyhow!("tachyon.yml not found. Run `tachyon init` first."))?;
+    upsert_manifest_secret_ref(&loaded.path, key, target, secret_path)
+}
 
-    match kind {
+fn upsert_manifest_secret_ref(
+    path: &Path,
+    key: &str,
+    target: &str,
+    secret_path: &str,
+) -> Result<()> {
+    let raw = std::fs::read_to_string(path)?;
+    let file = YamlFile::from_str(&raw)?;
+    let doc = file
+        .document()
+        .ok_or_else(|| anyhow!("manifest must contain a YAML document"))?;
+    let root = doc
+        .as_mapping()
+        .ok_or_else(|| anyhow!("manifest root must be an object"))?;
+    let kind = yaml_mapping_string(&root, "kind").unwrap_or_else(|| "CloudApp".to_string());
+
+    match kind.as_str() {
         "CloudApp" => {
-            let spec = ensure_mapping_child(&mut doc, "spec")?;
-            upsert_env_var_ref(spec, key, target)?;
+            let spec = ensure_mapping_child(&root, "spec")?;
+            upsert_env_var_ref(&spec, key, target, secret_path)?;
         }
         "CloudApps" => {
-            let app_name = doc
-                .get("metadata")
-                .and_then(|m| m.get("name"))
-                .and_then(serde_yaml::Value::as_str)
-                .map(ToString::to_string);
-            let apps = doc
-                .get_mut("spec")
-                .and_then(|s| s.get_mut("apps"))
-                .and_then(serde_yaml::Value::as_sequence_mut)
+            let app_name = root
+                .get_mapping("metadata")
+                .and_then(|metadata| yaml_mapping_string(&metadata, "name"));
+            let apps = root
+                .get_mapping("spec")
+                .and_then(|spec| spec.get_sequence("apps"))
                 .ok_or_else(|| anyhow!("CloudApps manifest is missing spec.apps"))?;
             let entry_index = app_name
                 .as_deref()
                 .and_then(|name| {
-                    apps.iter().position(|app| {
-                        app.get("name").and_then(serde_yaml::Value::as_str) == Some(name)
+                    (0..apps.len()).find(|index| {
+                        apps.get(*index)
+                            .and_then(|app| {
+                                app.as_mapping()
+                                    .and_then(|app| yaml_mapping_string(app, "name"))
+                            })
+                            .as_deref()
+                            == Some(name)
                     })
                 })
                 .unwrap_or(0);
             let entry = apps
-                .get_mut(entry_index)
+                .get(entry_index)
                 .ok_or_else(|| anyhow!("CloudApps manifest has no apps"))?;
             let mapping = entry
-                .as_mapping_mut()
+                .as_mapping()
                 .ok_or_else(|| anyhow!("CloudApps spec.apps entry must be an object"))?;
-            upsert_env_var_ref(mapping, key, target)?;
+            upsert_env_var_ref(mapping, key, target, secret_path)?;
         }
         other => return Err(anyhow!("unsupported manifest kind: {other}")),
     }
 
-    let next = serde_yaml::to_string(&doc)?;
-    std::fs::write(path, next)?;
+    std::fs::write(path, file.to_string())?;
     Ok(())
 }
 
-fn ensure_mapping_child<'a>(
-    value: &'a mut serde_yaml::Value,
-    key: &str,
-) -> Result<&'a mut serde_yaml::Mapping> {
-    let mapping = value
-        .as_mapping_mut()
-        .ok_or_else(|| anyhow!("manifest root must be an object"))?;
-    let key_value = serde_yaml::Value::String(key.to_string());
-    if !mapping.contains_key(&key_value) {
-        mapping.insert(
-            key_value.clone(),
-            serde_yaml::Value::Mapping(serde_yaml::Mapping::new()),
-        );
-    }
+fn yaml_mapping_string(mapping: &Mapping, key: &str) -> Option<String> {
     mapping
-        .get_mut(&key_value)
-        .and_then(serde_yaml::Value::as_mapping_mut)
+        .get(key)
+        .and_then(|value| value.as_scalar().map(|scalar| scalar.as_string()))
+}
+
+fn ensure_mapping_child(value: &Mapping, key: &str) -> Result<Mapping> {
+    if !value.contains_key(key) {
+        value.set(key, Mapping::new_pending_block());
+    }
+    value
+        .get_mapping(key)
         .ok_or_else(|| anyhow!("{key} must be an object"))
 }
 
-fn upsert_env_var_ref(spec: &mut serde_yaml::Mapping, key: &str, target: &str) -> Result<()> {
-    let env_key = serde_yaml::Value::String("envVars".to_string());
-    if !spec.contains_key(&env_key) {
-        spec.insert(env_key.clone(), serde_yaml::Value::Sequence(Vec::new()));
+fn ensure_sequence_child(value: &Mapping, key: &str) -> Result<Sequence> {
+    if !value.contains_key(key) {
+        value.set(key, Sequence::new_pending_block());
     }
-    let env_vars = spec
-        .get_mut(&env_key)
-        .and_then(serde_yaml::Value::as_sequence_mut)
-        .ok_or_else(|| anyhow!("spec.envVars must be an array"))?;
+    value
+        .get_sequence(key)
+        .ok_or_else(|| anyhow!("{key} must be an array"))
+}
 
-    if let Some(existing) = env_vars
-        .iter_mut()
-        .find(|env| env.get("name").and_then(serde_yaml::Value::as_str) == Some(key))
-    {
-        let mapping = existing
-            .as_mapping_mut()
-            .ok_or_else(|| anyhow!("spec.envVars entries must be objects"))?;
-        set_secret_env_mapping(mapping, key, target);
-        return Ok(());
+fn upsert_env_var_ref(spec: &Mapping, key: &str, target: &str, secret_path: &str) -> Result<()> {
+    let env_vars = ensure_sequence_child(spec, "envVars")?;
+
+    for index in 0..env_vars.len() {
+        let Some(existing) = env_vars.get(index) else {
+            continue;
+        };
+        let Some(mapping) = existing.as_mapping() else {
+            continue;
+        };
+        if yaml_mapping_string(mapping, "name").as_deref() == Some(key) {
+            set_secret_env_mapping(mapping, key, target, secret_path);
+            return Ok(());
+        }
     }
 
-    let mut mapping = serde_yaml::Mapping::new();
-    set_secret_env_mapping(&mut mapping, key, target);
-    env_vars.push(serde_yaml::Value::Mapping(mapping));
+    let mapping = Mapping::new_pending_block();
+    set_secret_env_mapping(&mapping, key, target, secret_path);
+    env_vars.push(mapping);
     Ok(())
 }
 
-fn set_secret_env_mapping(mapping: &mut serde_yaml::Mapping, key: &str, target: &str) {
-    mapping.insert(yaml_key("name"), serde_yaml::Value::String(key.to_string()));
-    mapping.insert(
-        yaml_key("type"),
-        serde_yaml::Value::String("credential".to_string()),
-    );
-    mapping.remove(yaml_key("value"));
+fn set_secret_env_mapping(mapping: &Mapping, key: &str, target: &str, secret_path: &str) {
+    mapping.set("name", key);
+    mapping.set("type", "credential");
+    mapping.remove("value");
     if target == "all" {
-        mapping.remove(yaml_key("target"));
+        mapping.remove("target");
     } else {
-        mapping.insert(
-            yaml_key("target"),
-            serde_yaml::Value::String(target.to_string()),
-        );
+        mapping.set("target", target);
     }
 
-    let mut value_from = serde_yaml::Mapping::new();
-    value_from.insert(
-        yaml_key("secret"),
-        serde_yaml::Value::String(key.to_string()),
-    );
-    mapping.insert(
-        yaml_key("valueFrom"),
-        serde_yaml::Value::Mapping(value_from),
-    );
-}
-
-fn yaml_key(key: &str) -> serde_yaml::Value {
-    serde_yaml::Value::String(key.to_string())
+    let value_from = Mapping::new_pending_block();
+    value_from.set("secret", secret_path);
+    mapping.set("valueFrom", value_from);
 }
 
 pub(super) async fn run_env_delete(api: &ApiClient, app_id: &str, env_id: &str) -> Result<()> {
