@@ -1,7 +1,7 @@
 use super::*;
 use std::str::FromStr;
 
-use yaml_edit::{Document, Mapping, Sequence};
+use yaml_edit::{Mapping, Sequence, YamlFile};
 
 // --- Env subcommands ---
 
@@ -354,7 +354,10 @@ fn upsert_manifest_secret_ref(
     secret_path: &str,
 ) -> Result<()> {
     let raw = std::fs::read_to_string(path)?;
-    let doc = Document::from_str(&raw)?;
+    let file = YamlFile::from_str(&raw)?;
+    let doc = file
+        .document()
+        .ok_or_else(|| anyhow!("manifest must contain a YAML document"))?;
     let root = doc
         .as_mapping()
         .ok_or_else(|| anyhow!("manifest root must be an object"))?;
@@ -398,7 +401,7 @@ fn upsert_manifest_secret_ref(
         other => return Err(anyhow!("unsupported manifest kind: {other}")),
     }
 
-    std::fs::write(path, doc.to_string())?;
+    std::fs::write(path, file.to_string())?;
     Ok(())
 }
 
@@ -458,15 +461,9 @@ fn set_secret_env_mapping(mapping: &Mapping, key: &str, target: &str, secret_pat
         mapping.set("target", target);
     }
 
-    let value_from = match mapping.get_mapping("valueFrom") {
-        Some(value_from) => value_from,
-        None => {
-            let value_from = Mapping::new_pending_block();
-            mapping.set("valueFrom", value_from.clone());
-            value_from
-        }
-    };
+    let value_from = Mapping::new_pending_block();
     value_from.set("secret", secret_path);
+    mapping.set("valueFrom", value_from);
 }
 
 pub(super) async fn run_env_delete(api: &ApiClient, app_id: &str, env_id: &str) -> Result<()> {
