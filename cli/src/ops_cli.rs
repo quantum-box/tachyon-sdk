@@ -675,7 +675,12 @@ struct SentryStackFrame {
     line: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     column: Option<u64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        rename = "in_app",
+        alias = "inApp",
+        skip_serializing_if = "Option::is_none"
+    )]
     in_app: Option<bool>,
 }
 
