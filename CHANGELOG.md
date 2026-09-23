@@ -59,6 +59,11 @@
 
 ### Fixed
 
+- Write the API's canonical `app/key` secret reference to `tachyon.yml` after
+  `tachyon env set --secret`, preserving the manifest's comments and formatting.
+  The CLI previously wrote only the key, which the manifest parser rejects and
+  which cannot identify the stored app secret. (PLT-5249)
+
 - `tachyon tts synthesize` now saves a playable file. Gemini TTS returns raw 16-bit PCM, and the command used to write those bytes verbatim to a `.mp3` path, producing a file no player could open. The default `--format` is now `wav`, the output path defaults to `speech.<ext>` derived from the returned MIME type, an extension/MIME mismatch is warned on stderr, and a raw PCM response from an older API is wrapped in a WAV header locally. (PLT-4122)
 
 - Correct the Gemini 3.1 TTS model name in `tachyon tts` help and `tachyon tts models` to `gemini-3.1-flash-tts-preview`. The previous `gemini-3.1-flash-tts` does not exist in the Gemini API and always failed with 404. (PLT-4122)
