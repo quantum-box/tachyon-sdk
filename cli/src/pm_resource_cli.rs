@@ -110,21 +110,37 @@ fn with_provider(path: String, provider: Option<&str>) -> String {
 
 const MAX_RESOURCE_PAGES: usize = 100;
 
+struct ResourceListOptions<'a> {
+    provider: Option<String>,
+    project_id: Option<&'a str>,
+    team_id: Option<&'a str>,
+    lead_id: Option<&'a str>,
+    status_id: Option<&'a str>,
+    include_archived: bool,
+    limit: Option<u32>,
+    cursor: Option<&'a str>,
+    all: bool,
+    json: bool,
+}
+
 async fn run_list(
     api: &ApiClient,
     tenant_id: &str,
     resource: &str,
-    provider: Option<String>,
-    project_id: Option<&str>,
-    team_id: Option<&str>,
-    lead_id: Option<&str>,
-    status_id: Option<&str>,
-    include_archived: bool,
-    limit: Option<u32>,
-    cursor: Option<&str>,
-    all: bool,
-    json: bool,
+    options: ResourceListOptions<'_>,
 ) -> Result<()> {
+    let ResourceListOptions {
+        provider,
+        project_id,
+        team_id,
+        lead_id,
+        status_id,
+        include_archived,
+        limit,
+        cursor,
+        all,
+        json,
+    } = options;
     let mut base_query = Vec::new();
     if let Some(provider) = provider {
         base_query.push(("provider", provider));
@@ -308,16 +324,18 @@ pub async fn run_resource(
                 &api,
                 tenant_id,
                 resource,
-                provider,
-                project_id.as_deref(),
-                team_id.as_deref(),
-                lead_id.as_deref(),
-                status_id.as_deref(),
-                *include_archived,
-                *limit,
-                cursor.as_deref(),
-                *all,
-                *json,
+                ResourceListOptions {
+                    provider,
+                    project_id: project_id.as_deref(),
+                    team_id: team_id.as_deref(),
+                    lead_id: lead_id.as_deref(),
+                    status_id: status_id.as_deref(),
+                    include_archived: *include_archived,
+                    limit: *limit,
+                    cursor: cursor.as_deref(),
+                    all: *all,
+                    json: *json,
+                },
             )
             .await
         }
