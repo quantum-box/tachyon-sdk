@@ -27,6 +27,30 @@ pub enum ResourceCommand {
     List {
         #[arg(long)]
         provider: Option<String>,
+        /// Project UUID; used to list project milestones or project updates
+        #[arg(long = "project-id", visible_alias = "project")]
+        project_id: Option<String>,
+        /// Lead team UUID when listing projects
+        #[arg(long = "team-id", visible_alias = "team")]
+        team_id: Option<String>,
+        /// Project lead user UUID
+        #[arg(long = "lead-id", visible_alias = "lead")]
+        lead_id: Option<String>,
+        /// Project status UUID
+        #[arg(long = "status-id", visible_alias = "status")]
+        status_id: Option<String>,
+        /// Include archived projects or milestones
+        #[arg(long)]
+        include_archived: bool,
+        /// Maximum resources per page (1-100)
+        #[arg(long)]
+        limit: Option<u32>,
+        /// Opaque cursor returned by a previous page
+        #[arg(long)]
+        cursor: Option<String>,
+        /// Follow pagination until every matching resource is fetched
+        #[arg(long)]
+        all: bool,
         #[arg(long)]
         json: bool,
     },
@@ -82,6 +106,143 @@ fn with_provider(path: String, provider: Option<&str>) -> String {
         Some(provider) => format!("{path}?provider={}", urlencoding::encode(provider)),
         None => path,
     }
+}
+
+const MAX_RESOURCE_PAGES: usize = 100;
+
+struct ResourceListOptions<'a> {
+    provider: Option<String>,
+    project_id: Option<&'a str>,
+    team_id: Option<&'a str>,
+    lead_id: Option<&'a str>,
+    status_id: Option<&'a str>,
+    include_archived: bool,
+    limit: Option<u32>,
+    cursor: Option<&'a str>,
+    all: bool,
+    json: bool,
+}
+
+async fn run_list(
+    api: &ApiClient,
+    tenant_id: &str,
+    resource: &str,
+    options: ResourceListOptions<'_>,
+) -> Result<()> {
+    let ResourceListOptions {
+        provider,
+        project_id,
+        team_id,
+        lead_id,
+        status_id,
+        include_archived,
+        limit,
+        cursor,
+        all,
+        json,
+    } = options;
+    let mut base_query = Vec::new();
+    if let Some(provider) = provider {
+        base_query.push(("provider", provider));
+    }
+    for (key, value) in [
+        ("project_id", project_id),
+        ("team_id", team_id),
+        ("lead_id", lead_id),
+        ("status_id", status_id),
+    ] {
+        if let Some(value) = value {
+            base_query.push((key, value.to_string()));
+        }
+    }
+    if include_archived {
+        base_query.push(("include_archived", "true".to_string()));
+    }
+
+    let mut items = Vec::new();
+    let mut next_cursor = cursor.map(str::to_string);
+    let mut has_next_page;
+    let mut pages = 0usize;
+    loop {
+        let mut query = base_query.clone();
+        if let Some(limit) = limit {
+            query.push(("limit", limit.to_string()));
+        }
+        if let Some(cursor) = &next_cursor {
+            query.push(("cursor", cursor.clone()));
+        }
+        let query_refs = query
+            .iter()
+            .map(|(key, value)| (*key, value.as_str()))
+            .collect::<Vec<_>>();
+        let response: Value = api
+            .get_query(&collection_path(tenant_id, resource), &query_refs)
+            .await?;
+        items.extend(
+            response
+                .get("items")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .cloned(),
+        );
+        has_next_page = response
+            .get("has_next_page")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+        next_cursor = response
+            .get("next_cursor")
+            .and_then(Value::as_str)
+            .map(str::to_string);
+        pages += 1;
+
+        if !all || !has_next_page {
+            break;
+        }
+        if next_cursor.is_none() || pages >= MAX_RESOURCE_PAGES {
+            break;
+        }
+    }
+
+    let response = serde_json::json!({
+        "count": items.len(),
+        "items": items,
+        "has_next_page": has_next_page,
+        "next_cursor": next_cursor,
+    });
+    if json {
+        print_json(&response)?;
+    } else {
+        for item in response
+            .get("items")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+        {
+            let id = item.get("id").and_then(Value::as_str).unwrap_or("-");
+            let name = item.get("name").and_then(Value::as_str).unwrap_or("-");
+            println!("{id}\t{name}");
+        }
+    }
+
+    if has_next_page {
+        let mut warning = format!(
+            "warning: results were truncated at {} resources; more resources exist.",
+            items.len()
+        );
+        if all {
+            warning.push_str(&format!(
+                "\n         stopped after the {MAX_RESOURCE_PAGES}-page limit."
+            ));
+        } else {
+            warning.push_str("\n         re-run with --all to fetch every page.");
+        }
+        if let Some(cursor) = next_cursor {
+            warning.push_str(&format!("\n         resume with --cursor {cursor}"));
+        }
+        eprintln!("{warning}");
+    }
+    Ok(())
 }
 
 fn merge_fields(input_json: Option<&str>, field_args: &[String]) -> Result<Map<String, Value>> {
@@ -146,29 +307,37 @@ pub async fn run_resource(
                 .await?;
             print_resource(&response, *json)
         }
-        ResourceCommand::List { provider, json } => {
+        ResourceCommand::List {
+            provider,
+            project_id,
+            team_id,
+            lead_id,
+            status_id,
+            include_archived,
+            limit,
+            cursor,
+            all,
+            json,
+        } => {
             let provider = provider_with_alias(provider, provider_alias);
-            let query = provider
-                .as_deref()
-                .map(|value| vec![("provider", value)])
-                .unwrap_or_default();
-            let response: Value = api
-                .get_query(&collection_path(tenant_id, resource), &query)
-                .await?;
-            if *json {
-                return print_json(&response);
-            }
-            for item in response
-                .get("items")
-                .and_then(Value::as_array)
-                .into_iter()
-                .flatten()
-            {
-                let id = item.get("id").and_then(Value::as_str).unwrap_or("-");
-                let name = item.get("name").and_then(Value::as_str).unwrap_or("-");
-                println!("{id}\t{name}");
-            }
-            Ok(())
+            run_list(
+                &api,
+                tenant_id,
+                resource,
+                ResourceListOptions {
+                    provider,
+                    project_id: project_id.as_deref(),
+                    team_id: team_id.as_deref(),
+                    lead_id: lead_id.as_deref(),
+                    status_id: status_id.as_deref(),
+                    include_archived: *include_archived,
+                    limit: *limit,
+                    cursor: cursor.as_deref(),
+                    all: *all,
+                    json: *json,
+                },
+            )
+            .await
         }
         ResourceCommand::Get {
             resource_id,
