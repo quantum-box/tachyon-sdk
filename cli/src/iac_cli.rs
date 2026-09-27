@@ -1366,16 +1366,28 @@ async fn run_plan(
     Ok(())
 }
 
+struct ApplyOptions<'a> {
+    tenant_id: &'a str,
+    file: &'a str,
+    app: Option<&'a str>,
+    state: Option<&'a str>,
+    prompt_secrets: bool,
+    change_control_token: Option<&'a str>,
+}
+
 async fn run_apply(
     read_api: &ApiClient,
     write_api: &ApiClient,
-    tenant_id: &str,
-    file: &str,
-    app: Option<&str>,
-    state: Option<&str>,
-    prompt_secrets: bool,
-    change_control_token: Option<&str>,
+    options: ApplyOptions<'_>,
 ) -> Result<()> {
+    let ApplyOptions {
+        tenant_id,
+        file,
+        app,
+        state,
+        prompt_secrets,
+        change_control_token,
+    } = options;
     verify_iac_change_control_token(change_control_token)?;
     let state_path = state_path(state);
     let mut iac_state = load_state(&state_path)?;
@@ -1544,12 +1556,14 @@ pub async fn run(args: &IacArgs, config: &Configuration, tenant_id: &str) -> Res
             run_apply(
                 &api,
                 apply_api.as_ref().unwrap_or(&api),
-                tenant_id,
-                file,
-                app.as_deref(),
-                state.as_deref(),
-                *prompt_secrets,
-                change_control_token.as_deref(),
+                ApplyOptions {
+                    tenant_id,
+                    file,
+                    app: app.as_deref(),
+                    state: state.as_deref(),
+                    prompt_secrets: *prompt_secrets,
+                    change_control_token: change_control_token.as_deref(),
+                },
             )
             .await
         }
