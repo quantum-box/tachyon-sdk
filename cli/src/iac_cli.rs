@@ -14,6 +14,8 @@ use tachyon_sdk::apis::configuration::Configuration;
 use crate::client::{print_json, ApiClient};
 use crate::resolve;
 
+const HOST_TENANT_ID: &str = "tn_01jcjtqxah6mhyw4e5mahg02nd";
+
 #[derive(Debug, Clone, Args)]
 pub struct IacArgs {
     #[command(subcommand)]
@@ -22,6 +24,11 @@ pub struct IacArgs {
 
 #[derive(Debug, Clone, Subcommand)]
 pub enum IacCommand {
+    /// Show the bundled Host IaC configuration digest
+    HostConfig {
+        #[arg(long)]
+        json: bool,
+    },
     /// Show manifest revision history
     History {
         #[arg(long)]
@@ -108,30 +115,6 @@ pub enum IacCommand {
             hide_env_values = true
         )]
         change_control_token: Option<String>,
-    },
-    /// Import IAC manifests from 003-iac-manifests.yaml through the API
-    ImportSeed {
-        #[arg(long)]
-        file: String,
-        #[arg(long, default_value_t = false)]
-        dry_run: bool,
-        /// Change-control approval token for protected production mutations.
-        ///
-        /// Prefer TACHYON_CHANGE_CONTROL_APPROVAL_TOKEN so the token does not
-        /// appear in shell history or process arguments. Optional during the
-        /// compatibility rollout; ignored for --dry-run because no API
-        /// mutation is sent.
-        #[arg(
-            long = "change-control-token",
-            env = "TACHYON_CHANGE_CONTROL_APPROVAL_TOKEN",
-            hide_env_values = true
-        )]
-        change_control_token: Option<String>,
-    },
-    /// Verify drift between seed manifests and current IAC API state
-    VerifySeed {
-        #[arg(long)]
-        file: String,
     },
     /// Show the current local IaC state file contents
     State {
@@ -366,6 +349,13 @@ struct ManifestHistoryItem {
     manifest: String,
 }
 
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct HostIacConfigResponse {
+    environment: String,
+    host_config_digest: String,
+}
+
 #[derive(Debug, Clone)]
 struct ManifestIdentity {
     kind: String,
@@ -396,22 +386,6 @@ struct PromptedSecret {
     provider_index: usize,
     field: String,
     secret_ref: String,
-}
-
-#[derive(Debug, Deserialize)]
-struct SeedFile {
-    tables: Vec<SeedTable>,
-}
-
-#[derive(Debug, Deserialize)]
-struct SeedTable {
-    name: String,
-    rows: Vec<SeedRow>,
-}
-
-#[derive(Debug, Deserialize)]
-struct SeedRow {
-    manifest: Value,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -480,6 +454,17 @@ enum ChangeAction {
 }
 
 // ---- Handlers ----
+
+async fn run_host_config(api: &ApiClient, json: bool) -> Result<()> {
+    let response: HostIacConfigResponse = api.get("/v1/iac/host-config").await?;
+    if json {
+        return print_json(&response);
+    }
+
+    println!("Environment: {}", response.environment);
+    println!("Host config digest: {}", response.host_config_digest);
+    Ok(())
+}
 
 async fn run_oauth_providers(
     api: &ApiClient,
@@ -1306,22 +1291,6 @@ async fn rollback_manifest(
     Ok(())
 }
 
-fn extract_iac_manifests(seed_file: SeedFile) -> Vec<Value> {
-    seed_file
-        .tables
-        .into_iter()
-        .filter(|table| table.name == "tachyon_apps_iac.manifests")
-        .flat_map(|table| table.rows.into_iter().map(|row| row.manifest))
-        .collect()
-}
-
-fn load_seed_manifests(file: &str) -> Result<Vec<Value>> {
-    let content = fs::read_to_string(file).with_context(|| format!("read {file}"))?;
-    let seed_file: SeedFile =
-        serde_yaml::from_str(&content).with_context(|| format!("parse yaml {file}"))?;
-    Ok(extract_iac_manifests(seed_file))
-}
-
 async fn run_history(
     api: &ApiClient,
     tenant_id: &str,
@@ -1398,7 +1367,8 @@ async fn run_plan(
 }
 
 async fn run_apply(
-    api: &ApiClient,
+    read_api: &ApiClient,
+    write_api: &ApiClient,
     tenant_id: &str,
     file: &str,
     app: Option<&str>,
@@ -1419,7 +1389,7 @@ async fn run_apply(
         let mut manifest = inject_tenant_id(&manifest, tenant_id);
         let identity = infer_identity(&manifest, None, None)?;
         let (expected_revision, current_manifest) =
-            fetch_latest_manifest(api, tenant_id, &identity).await?;
+            fetch_latest_manifest(read_api, tenant_id, &identity).await?;
         let prompted_secrets = if prompt_secrets {
             prompt_for_manifest_secrets(&mut manifest, current_manifest.as_ref())?
         } else {
@@ -1447,7 +1417,7 @@ async fn run_apply(
         let action = plan.action;
         if should_save_manifest(&action, &prompted_secrets) {
             save_manifest(
-                api,
+                write_api,
                 tenant_id,
                 &manifest,
                 expected_revision,
@@ -1455,9 +1425,13 @@ async fn run_apply(
             )
             .await?;
         }
-        let result =
-            apply_manifest_resource(api, &identity.kind, &identity.name, change_control_token)
-                .await?;
+        let result = apply_manifest_resource(
+            write_api,
+            &identity.kind,
+            &identity.name,
+            change_control_token,
+        )
+        .await?;
         restore_prompted_secret_refs(&mut manifest, &prompted_secrets);
         iac_state.upsert_resource(&identity, manifest);
         if action == ChangeAction::NoChange {
@@ -1475,90 +1449,6 @@ async fn run_apply(
     }
     save_state(&state_path, &iac_state)?;
     Ok(())
-}
-
-async fn run_import_seed(
-    api: &ApiClient,
-    tenant_id: &str,
-    file: &str,
-    dry_run: bool,
-    change_control_token: Option<&str>,
-) -> Result<()> {
-    let manifests = load_seed_manifests(file)?;
-    if dry_run {
-        println!(
-            "Import dry-run completed: {} manifests found.",
-            manifests.len()
-        );
-        return Ok(());
-    }
-    verify_iac_change_control_token(change_control_token)?;
-
-    // Preflight the complete seed set before any mutation. Later concurrent
-    // changes are detected by each SaveManifest CAS instead of overwritten.
-    let mut planned = Vec::with_capacity(manifests.len());
-    for manifest in manifests {
-        let manifest = inject_tenant_id(&manifest, tenant_id);
-        let identity = infer_identity(&manifest, None, None)?;
-        let expected_revision = fetch_expected_revision(api, tenant_id, &identity).await?;
-        planned.push(PlannedManifestWrite {
-            manifest,
-            identity,
-            expected_revision,
-            prompted_secrets: Vec::new(),
-        });
-    }
-
-    let manifest_count = planned.len();
-    for plan in planned {
-        save_manifest(
-            api,
-            tenant_id,
-            &plan.manifest,
-            plan.expected_revision,
-            change_control_token,
-        )
-        .await?;
-        let identity = plan.identity;
-        println!("Imported: {} / {}", identity.kind, identity.name);
-    }
-    println!("Import completed: {manifest_count} manifests saved.");
-    Ok(())
-}
-
-async fn run_verify_seed(api: &ApiClient, tenant_id: &str, file: &str) -> Result<()> {
-    let manifests = load_seed_manifests(file)?;
-    let mut drift_messages = Vec::new();
-    for expected in manifests {
-        let expected = inject_tenant_id(&expected, tenant_id);
-        let identity = infer_identity(&expected, None, None)?;
-        let history = fetch_history(api, tenant_id, &identity.kind, &identity.name, 1).await?;
-        let Some(latest) = history.first() else {
-            drift_messages.push(format!(
-                "missing manifest: kind={} name={}",
-                identity.kind, identity.name
-            ));
-            continue;
-        };
-        let actual: Value = serde_json::from_str(&latest.manifest)?;
-        if actual != expected {
-            drift_messages.push(format!(
-                "content drift: kind={} name={}",
-                identity.kind, identity.name
-            ));
-        }
-    }
-    if drift_messages.is_empty() {
-        println!("Drift check passed.");
-        return Ok(());
-    }
-    for message in &drift_messages {
-        eprintln!("drift: {message}");
-    }
-    Err(anyhow!(
-        "detected {} IAC manifest drift(s)",
-        drift_messages.len()
-    ))
 }
 
 fn run_state(state: Option<&str>) -> Result<()> {
@@ -1583,9 +1473,28 @@ fn run_state(state: Option<&str>) -> Result<()> {
 // ---- Entry point ----
 
 pub async fn run(args: &IacArgs, config: &Configuration, tenant_id: &str) -> Result<()> {
-    let api = ApiClient::new(config, tenant_id)?;
+    let api_tenant_id = if matches!(&args.command, IacCommand::HostConfig { .. }) {
+        HOST_TENANT_ID
+    } else {
+        tenant_id
+    };
+    let api = ApiClient::new(config, api_tenant_id)?;
+    let apply_api = if matches!(&args.command, IacCommand::Apply { .. }) {
+        std::env::var("TACHYON_IAC_APPLY_API_KEY")
+            .ok()
+            .filter(|token| !token.trim().is_empty())
+            .map(|token| {
+                let mut apply_config = config.clone();
+                apply_config.bearer_access_token = Some(token);
+                ApiClient::new(&apply_config, api_tenant_id)
+            })
+            .transpose()?
+    } else {
+        None
+    };
 
     match &args.command {
+        IacCommand::HostConfig { json } => run_host_config(&api, *json).await,
         IacCommand::History {
             kind,
             name,
@@ -1634,6 +1543,7 @@ pub async fn run(args: &IacArgs, config: &Configuration, tenant_id: &str) -> Res
         } => {
             run_apply(
                 &api,
+                apply_api.as_ref().unwrap_or(&api),
                 tenant_id,
                 file,
                 app.as_deref(),
@@ -1667,21 +1577,6 @@ pub async fn run(args: &IacArgs, config: &Configuration, tenant_id: &str) -> Res
             println!("Rollback completed: {kind} / {name} => revision {revision}");
             Ok(())
         }
-        IacCommand::ImportSeed {
-            file,
-            dry_run,
-            change_control_token,
-        } => {
-            run_import_seed(
-                &api,
-                tenant_id,
-                file,
-                *dry_run,
-                change_control_token.as_deref(),
-            )
-            .await
-        }
-        IacCommand::VerifySeed { file } => run_verify_seed(&api, tenant_id, file).await,
         IacCommand::State { state } => run_state(state.as_deref()),
         IacCommand::OauthProviders {
             tenant_id: tid,

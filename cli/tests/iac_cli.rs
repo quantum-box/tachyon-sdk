@@ -20,6 +20,7 @@ fn isolated_command(home: &Path) -> Command {
         .env("XDG_CONFIG_HOME", home.join(".config"))
         .env("TACHYON_TENANT_ID", "tn_test1234567890")
         .env("TACHYON_API_KEY", "test-token")
+        .env_remove("TACHYON_IAC_APPLY_API_KEY")
         .env_remove("TACHYON_CONFIG")
         .env_remove("TACHYON_PROFILE")
         .env_remove("TACHYON_CHANGE_CONTROL_APPROVAL_TOKEN")
@@ -98,6 +99,15 @@ fn request_body(request: &str) -> &str {
         .split_once("\r\n\r\n")
         .map(|(_, body)| body)
         .unwrap()
+}
+
+fn has_bearer_token(request: &str, token: &str) -> bool {
+    let expected = format!("Bearer {token}");
+    request.lines().any(|line| {
+        line.split_once(':').is_some_and(|(name, value)| {
+            name.eq_ignore_ascii_case("authorization") && value.trim() == expected
+        })
+    })
 }
 
 fn request_json(request: &str) -> serde_json::Value {
@@ -392,7 +402,7 @@ fn iac_apply_reconciles_no_change_manifest() {
     assert!(stdout.contains("Reconciled: CloudApp / fieldadmin (no manifest changes)"));
 }
 
-fn run_iac_apply_contract(token: Option<&str>) {
+fn run_iac_apply_contract(token: Option<&str>, apply_api_key: Option<&str>) {
     let tmp = TempDir::new().unwrap();
     let manifest_path = tmp.path().join("tachyon.json");
     fs::write(
@@ -425,6 +435,9 @@ fn run_iac_apply_contract(token: Option<&str>) {
     if let Some(token) = token {
         command.env("TACHYON_CHANGE_CONTROL_APPROVAL_TOKEN", token);
     }
+    if let Some(apply_api_key) = apply_api_key {
+        command.env("TACHYON_IAC_APPLY_API_KEY", apply_api_key);
+    }
     let output = command.output().expect("run tachyon iac apply");
     assert!(
         output.status.success(),
@@ -438,7 +451,11 @@ fn run_iac_apply_contract(token: Option<&str>) {
     let apply = rx.recv_timeout(Duration::from_secs(1)).unwrap();
     handle.join().unwrap();
     assert!(request_body(&preflight).contains("manifestHistory"));
+    assert!(has_bearer_token(&preflight, "test-token"));
     assert!(!has_change_control_header(&preflight));
+    let expected_write_key = apply_api_key.unwrap_or("test-token");
+    assert!(has_bearer_token(&save, expected_write_key));
+    assert!(has_bearer_token(&apply, expected_write_key));
     assert_mutation_contract(&save, "saveManifest", Some(7), token);
     assert_mutation_contract(&apply, "applyManifest", None, token);
     if let Some(token) = token {
@@ -450,91 +467,17 @@ fn run_iac_apply_contract(token: Option<&str>) {
 #[test]
 fn iac_apply_forwards_token_and_expected_revision() {
     let token = production_change_control_token();
-    run_iac_apply_contract(Some(&token));
+    run_iac_apply_contract(Some(&token), None);
 }
 
 #[test]
 fn iac_apply_without_token_keeps_compatibility_and_sends_revision() {
-    run_iac_apply_contract(None);
-}
-
-fn run_iac_import_seed_contract(token: Option<&str>) {
-    let tmp = TempDir::new().unwrap();
-    let seed_path = tmp.path().join("003-iac-manifests.yaml");
-    fs::write(
-        &seed_path,
-        r#"
-tables:
-  - name: tachyon_apps_iac.manifests
-    rows:
-      - manifest:
-          apiVersion: apps.tachy.one/v1alpha
-          kind: CloudApp
-          metadata:
-            name: seeded-app
-          spec:
-            envVars: []
-      - manifest:
-          apiVersion: apps.tachy.one/v1alpha
-          kind: ProjectConfig
-          metadata:
-            name: seeded-project-config
-          spec:
-            providers: []
-"#,
-    )
-    .unwrap();
-    let (api_url, rx, handle) = start_graphql_server(vec![
-        history_response(Some(3)),
-        history_response(None),
-        r#"{"data":{"saveManifest":{"kind":"CloudApp"}}}"#.to_string(),
-        r#"{"data":{"saveManifest":{"kind":"ProjectConfig"}}}"#.to_string(),
-    ]);
-
-    let mut command = isolated_command(tmp.path());
-    command.env("TACHYON_API_URL", api_url).args([
-        "iac",
-        "import-seed",
-        "--file",
-        seed_path.to_str().unwrap(),
-    ]);
-    if let Some(token) = token {
-        command.env("TACHYON_CHANGE_CONTROL_APPROVAL_TOKEN", token);
-    }
-    let output = command.output().expect("run tachyon iac import-seed");
-    assert!(
-        output.status.success(),
-        "iac import-seed failed\nstdout:\n{}\nstderr:\n{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-
-    let preflight = rx.recv_timeout(Duration::from_secs(1)).unwrap();
-    let second_preflight = rx.recv_timeout(Duration::from_secs(1)).unwrap();
-    let save = rx.recv_timeout(Duration::from_secs(1)).unwrap();
-    let second_save = rx.recv_timeout(Duration::from_secs(1)).unwrap();
-    handle.join().unwrap();
-    assert!(request_body(&preflight).contains("manifestHistory"));
-    assert!(request_body(&second_preflight).contains("manifestHistory"));
-    assert!(!has_change_control_header(&preflight));
-    assert!(!has_change_control_header(&second_preflight));
-    assert_mutation_contract(&save, "saveManifest", Some(3), token);
-    assert_mutation_contract(&second_save, "saveManifest", Some(0), token);
-    if let Some(token) = token {
-        assert!(!String::from_utf8_lossy(&output.stdout).contains(token));
-        assert!(!String::from_utf8_lossy(&output.stderr).contains(token));
-    }
+    run_iac_apply_contract(None, None);
 }
 
 #[test]
-fn iac_import_seed_forwards_token_and_expected_revision() {
-    let token = production_change_control_token();
-    run_iac_import_seed_contract(Some(&token));
-}
-
-#[test]
-fn iac_import_seed_without_token_keeps_compatibility_and_sends_revision() {
-    run_iac_import_seed_contract(None);
+fn iac_apply_uses_separate_read_and_write_api_keys() {
+    run_iac_apply_contract(None, Some("apply-only-token"));
 }
 
 fn run_iac_rollback_contract(token: Option<&str>) {
@@ -592,7 +535,7 @@ fn iac_rollback_without_token_keeps_compatibility_and_sends_revision() {
 #[test]
 fn iac_mutation_help_documents_safe_token_input() {
     let tmp = TempDir::new().unwrap();
-    for command in ["apply", "import-seed", "rollback"] {
+    for command in ["apply", "rollback"] {
         let output = isolated_command(tmp.path())
             .env(
                 "TACHYON_CHANGE_CONTROL_APPROVAL_TOKEN",
@@ -608,6 +551,19 @@ fn iac_mutation_help_documents_safe_token_input() {
         assert!(stdout.contains("Optional during the compatibility rollout"));
         assert!(!stdout.contains("help-secret-marker"));
     }
+}
+
+#[test]
+fn iac_help_omits_retired_seed_commands() {
+    let tmp = TempDir::new().unwrap();
+    let output = isolated_command(tmp.path())
+        .args(["iac", "--help"])
+        .output()
+        .expect("show iac help");
+    assert!(output.status.success());
+    let help = String::from_utf8_lossy(&output.stdout);
+    assert!(!help.contains("import-seed"));
+    assert!(!help.contains("verify-seed"));
 }
 
 #[test]
