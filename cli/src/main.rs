@@ -1053,11 +1053,15 @@ async fn run() -> Result<()> {
             worker_cli::run(args, &config, &tenant_id, &active).await
         }
         Commands::Iac(args) => {
-            let project_config = config::loader::load(cli.config.as_deref())?;
-            let tenant_arg = tenant_arg(&cli, project_config.as_ref());
             let config = build_config(&cli, &active).await;
-            let tenant_id = resolve::resolve_tenant_id(&config, tenant_arg, &active).await?;
-            iac_cli::run(args, &config, &tenant_id).await
+            if matches!(&args.command, iac_cli::IacCommand::HostConfig { .. }) {
+                iac_cli::run(args, &config, "").await
+            } else {
+                let project_config = config::loader::load(cli.config.as_deref())?;
+                let tenant_arg = tenant_arg(&cli, project_config.as_ref());
+                let tenant_id = resolve::resolve_tenant_id(&config, tenant_arg, &active).await?;
+                iac_cli::run(args, &config, &tenant_id).await
+            }
         }
         Commands::Manifest(args) => {
             if manifest::needs_tenant(args) {
