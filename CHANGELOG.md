@@ -4,6 +4,10 @@
 
 ### Added
 
+- Add Gemini 3.8 Flash and Flash-Lite TTS models to `tachyon tts models`, list
+  the same IDs in `tachyon tts synthesize --help`, and reject model IDs outside
+  the catalog. Mark Gemini 3.1 Flash TTS Preview as legacy. (PLT-5411)
+
 - Add `tachyon data` for Tachyon Data: `dataset list`, `dataset create --name
   <name> --file <csv> [--purpose <purpose>]` (multipart upload with the
   `x-data-purpose` header), `dataset get <dataset_id> [--version <id>]`, and
