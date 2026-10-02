@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### Fixed
+
+- Pass `--commit-hash` to `wrangler pages deploy` in the Cloud App build job.
+  The job runs wrangler outside the git checkout, so wrangler could not detect
+  the commit and uploaded Pages deployments with an empty commit. The control
+  plane treats an empty commit as unverifiable and fails the preview check when
+  a push-triggered build is reused for the same head. (PLT-5540)
+
 ### Added
 
 - Add Gemini 3.8 Flash and Flash-Lite TTS models to `tachyon tts models`, list
