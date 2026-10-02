@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
     collections::BTreeMap,
-    ffi::OsStr,
+    ffi::{OsStr, OsString},
     path::{Path, PathBuf},
     process::Stdio,
     time::{Duration, Instant, SystemTime},
@@ -909,6 +909,36 @@ fn is_lambda(workload: &BuildWorkloadSpec) -> bool {
 /// change CLI behavior mid-pipeline. Bump deliberately.
 const WRANGLER_NPM_SPEC: &str = "wrangler@4.100.0";
 
+/// Arguments after the wrangler spec for `wrangler pages deploy`.
+///
+/// The commit is passed explicitly: the process working directory is not the
+/// git checkout, so wrangler cannot detect it and would upload the deployment
+/// with an empty commit. The control plane treats an empty commit as
+/// unverifiable and refuses to reuse that deployment for a preview.
+fn pages_deploy_args(
+    workload: &BuildWorkloadSpec,
+    output_dir: &Path,
+    project_name: &str,
+    commit_message: &str,
+) -> Vec<OsString> {
+    let mut args: Vec<OsString> = vec![
+        "pages".into(),
+        "deploy".into(),
+        output_dir.into(),
+        "--project-name".into(),
+        project_name.into(),
+        "--branch".into(),
+        workload.source.branch.as_str().into(),
+    ];
+    if let Some(commit) = requested_commit(&workload.source) {
+        args.push("--commit-hash".into());
+        args.push(commit.into());
+    }
+    args.push("--commit-message".into());
+    args.push(commit_message.into());
+    args
+}
+
 async fn run_cloudflare_pages_deploy(
     workload: &BuildWorkloadSpec,
     checkout_dir: &Path,
@@ -947,15 +977,12 @@ async fn run_cloudflare_pages_deploy(
     command
         .arg("--yes")
         .arg(WRANGLER_NPM_SPEC)
-        .arg("pages")
-        .arg("deploy")
-        .arg(&output_dir)
-        .arg("--project-name")
-        .arg(project_name)
-        .arg("--branch")
-        .arg(&workload.source.branch)
-        .arg("--commit-message")
-        .arg(commit_message)
+        .args(pages_deploy_args(
+            workload,
+            &output_dir,
+            project_name,
+            &commit_message,
+        ))
         .envs(env)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
@@ -3394,6 +3421,48 @@ mod tests {
 
         assert_eq!(requested_commit(&workload.source), None);
         assert_eq!(initial_clone_branch(&workload.source), Some("feature/demo"));
+    }
+
+    fn pages_args(workload: &BuildWorkloadSpec) -> Vec<String> {
+        pages_deploy_args(workload, Path::new("/out"), "my-app", "msg")
+            .into_iter()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect()
+    }
+
+    #[test]
+    fn pages_deploy_passes_the_pinned_commit_to_wrangler() {
+        let workload = test_workload(None);
+
+        assert_eq!(
+            pages_args(&workload),
+            [
+                "pages",
+                "deploy",
+                "/out",
+                "--project-name",
+                "my-app",
+                "--branch",
+                "feature/demo",
+                "--commit-hash",
+                "abc",
+                "--commit-message",
+                "msg",
+            ]
+        );
+    }
+
+    #[test]
+    fn pages_deploy_omits_commit_hash_when_the_commit_is_unresolved() {
+        for unresolved in ["", "  ", "HEAD"] {
+            let mut workload = test_workload(None);
+            workload.source.commit_sha = unresolved.to_string();
+
+            assert!(
+                !pages_args(&workload).contains(&"--commit-hash".to_string()),
+                "commit {unresolved:?} must not be sent as a commit hash"
+            );
+        }
     }
 
     #[test]
