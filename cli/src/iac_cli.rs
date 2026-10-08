@@ -1232,36 +1232,150 @@ async fn save_manifest(
     Ok(())
 }
 
+const APPLY_MANIFEST_BASE_SELECTION: &str = "
+              success
+              serviceAccountsCreated
+              serviceAccountsModified
+              providersApplied
+              seedDataTables { tableName created updated skipped }";
+
+/// Per-entry FeatureFlags result (tachyon-api PLT-3399, slice S3399-1).
+const APPLY_MANIFEST_FEATURE_FLAG_SELECTION: &str = "
+              featureFlagEntries {
+                manifestName tenantId flagKey outcome enabled
+                inactiveReason reason fields
+              }";
+
+fn apply_manifest_query(with_feature_flag_entries: bool) -> String {
+    let feature_flags = if with_feature_flag_entries {
+        APPLY_MANIFEST_FEATURE_FLAG_SELECTION
+    } else {
+        ""
+    };
+    format!(
+        "mutation ApplyManifest($input: ApplyManifestInput!) {{\n  \
+         applyManifest(input: $input) {{{APPLY_MANIFEST_BASE_SELECTION}{feature_flags}\n  }}\n}}\n"
+    )
+}
+
+/// True when the server rejected the query because it predates
+/// `featureFlagEntries`. GraphQL validates a document before executing it,
+/// so nothing was applied and the request can be sent again without it.
+fn is_unknown_feature_flag_entries_field(error: &anyhow::Error) -> bool {
+    let message = error.to_string();
+    message.contains("Unknown field") && message.contains("featureFlagEntries")
+}
+
 async fn apply_manifest_resource(
     api: &ApiClient,
     kind: &str,
     name: &str,
     change_control_token: Option<&str>,
 ) -> Result<Value> {
-    let body = json!({
-        "query": r#"
-          mutation ApplyManifest($input: ApplyManifestInput!) {
-            applyManifest(input: $input) {
-              success
-              serviceAccountsCreated
-              serviceAccountsModified
-              providersApplied
-              seedDataTables { tableName created updated skipped }
+    let request = |with_feature_flag_entries: bool| {
+        json!({
+            "query": apply_manifest_query(with_feature_flag_entries),
+            "variables": {
+                "input": {
+                    "kind": kind,
+                    "name": name,
+                    "dryRun": false,
+                }
             }
-          }
-        "#,
-        "variables": {
-            "input": {
-                "kind": kind,
-                "name": name,
-                "dryRun": false,
-            }
+        })
+    };
+    let with_feature_flag_entries = kind == "FeatureFlags";
+    let data = match graphql_request_with_change_control(
+        api,
+        request(with_feature_flag_entries),
+        change_control_token,
+    )
+    .await
+    {
+        Err(error)
+            if with_feature_flag_entries && is_unknown_feature_flag_entries_field(&error) =>
+        {
+            eprintln!(
+                "Note: this tachyon-api does not report FeatureFlags entries yet; \
+                 applying without the per-entry result."
+            );
+            graphql_request_with_change_control(api, request(false), change_control_token).await?
         }
-    });
-    let data = graphql_request_with_change_control(api, body, change_control_token).await?;
+        result => result?,
+    };
     data.get("applyManifest")
         .cloned()
         .ok_or_else(|| anyhow!("applyManifest not found in response"))
+}
+
+/// Human-readable summary of `featureFlagEntries`: one line per entry, then
+/// a warning for refused entries and a note for flags left OFF. A manifest
+/// never publishes a flag, so `Applied` alone does not mean a flag is on.
+fn feature_flag_entry_report(result: &Value) -> Vec<String> {
+    let Some(entries) = result.get("featureFlagEntries").and_then(Value::as_array) else {
+        return Vec::new();
+    };
+    let text = |entry: &Value, field: &str| {
+        entry
+            .get(field)
+            .and_then(Value::as_str)
+            .unwrap_or("-")
+            .to_string()
+    };
+
+    let mut lines = vec![format!("FeatureFlags entries ({}):", entries.len())];
+    let mut refused = 0;
+    let mut left_off = 0;
+    for entry in entries {
+        let outcome = text(entry, "outcome");
+        let enabled = entry
+            .get("enabled")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+        let mut line = format!(
+            "  {outcome:<19} {} {}",
+            text(entry, "flagKey"),
+            if enabled { "ON" } else { "OFF" }
+        );
+        if let Some(reason) = entry.get("inactiveReason").and_then(Value::as_str) {
+            line.push_str(&format!(" ({reason})"));
+        }
+        if outcome == "REFUSED_PUBLICATION" {
+            refused += 1;
+            let fields = entry
+                .get("fields")
+                .and_then(Value::as_array)
+                .map(|fields| {
+                    fields
+                        .iter()
+                        .filter_map(Value::as_str)
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                })
+                .unwrap_or_default();
+            line.push_str(&format!(" refused: {} [{fields}]", text(entry, "reason")));
+        }
+        if !enabled && outcome != "PRUNED" {
+            left_off += 1;
+        }
+        lines.push(line);
+    }
+    if refused > 0 {
+        lines.push(format!(
+            "Warning: {refused} FeatureFlags entr{} refused and not written: a manifest \
+             never changes enabled/defaultValue of an existing flag. Use a Delivery \
+             command or a stop, or declare the current value.",
+            if refused == 1 { "y was" } else { "ies were" }
+        ));
+    }
+    if left_off > 0 {
+        lines.push(format!(
+            "Note: {left_off} declared flag{} OFF after this apply. A manifest never \
+             publishes a flag; open it with a Delivery command.",
+            if left_off == 1 { " is" } else { "s are" }
+        ));
+    }
+    lines
 }
 
 async fn rollback_manifest(
@@ -1458,6 +1572,9 @@ async fn run_apply(
             );
         }
         println!("{}", serde_json::to_string_pretty(&result)?);
+        for line in feature_flag_entry_report(&result) {
+            println!("{line}");
+        }
     }
     save_state(&state_path, &iac_state)?;
     Ok(())
@@ -1644,6 +1761,71 @@ pub async fn run(args: &IacArgs, config: &Configuration, tenant_id: &str) -> Res
 mod tests {
     use super::*;
     use tempfile::TempDir;
+
+    #[test]
+    fn apply_query_selects_feature_flag_entries_only_when_asked() {
+        assert!(apply_manifest_query(true).contains("featureFlagEntries"));
+        assert!(!apply_manifest_query(false).contains("featureFlagEntries"));
+        for query in [apply_manifest_query(true), apply_manifest_query(false)] {
+            assert!(query.contains("applyManifest(input: $input)"));
+            assert!(query.contains("seedDataTables { tableName created updated skipped }"));
+        }
+    }
+
+    #[test]
+    fn unknown_field_error_is_detected_for_older_servers() {
+        let older = anyhow!(
+            r#"graphql error: [{{"message":"Unknown field \"featureFlagEntries\" on type \"ApplyManifestResult\"."}}]"#
+        );
+        assert!(is_unknown_feature_flag_entries_field(&older));
+        let other = anyhow!("graphql error: FeatureFlags manifest rejected 1 entry");
+        assert!(!is_unknown_feature_flag_entries_field(&other));
+    }
+
+    #[test]
+    fn feature_flag_entry_report_flags_refused_and_off_entries() {
+        let result = json!({
+            "success": true,
+            "featureFlagEntries": [
+                {"flagKey": "feature.a", "outcome": "CREATED", "enabled": false,
+                 "inactiveReason": "INSERTED_OFF", "reason": null, "fields": []},
+                {"flagKey": "feature.b", "outcome": "REFUSED_PUBLICATION", "enabled": true,
+                 "inactiveReason": null, "reason": "MANIFEST_PUBLICATION_REFUSED",
+                 "fields": ["enabled", "defaultValue"]},
+                {"flagKey": "feature.c", "outcome": "UNCHANGED", "enabled": true,
+                 "inactiveReason": null, "reason": null, "fields": []},
+                {"flagKey": "feature.d", "outcome": "PRUNED", "enabled": false,
+                 "inactiveReason": "PRUNED", "reason": null, "fields": []}
+            ]
+        });
+
+        let report = feature_flag_entry_report(&result);
+
+        assert_eq!(
+            report,
+            vec![
+                "FeatureFlags entries (4):".to_string(),
+                "  CREATED             feature.a OFF (INSERTED_OFF)".to_string(),
+                "  REFUSED_PUBLICATION feature.b ON refused: MANIFEST_PUBLICATION_REFUSED \
+                 [enabled, defaultValue]"
+                    .to_string(),
+                "  UNCHANGED           feature.c ON".to_string(),
+                "  PRUNED              feature.d OFF (PRUNED)".to_string(),
+                "Warning: 1 FeatureFlags entry was refused and not written: a manifest never \
+                 changes enabled/defaultValue of an existing flag. Use a Delivery command or a \
+                 stop, or declare the current value."
+                    .to_string(),
+                "Note: 1 declared flag is OFF after this apply. A manifest never publishes a \
+                 flag; open it with a Delivery command."
+                    .to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn feature_flag_entry_report_is_empty_without_entries() {
+        assert!(feature_flag_entry_report(&json!({"success": true})).is_empty());
+    }
 
     #[test]
     fn load_manifest_files_selects_app_across_multi_document_cloudapps() {

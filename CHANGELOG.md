@@ -12,6 +12,18 @@
 
 ### Added
 
+- `tachyon iac apply` prints what a `kind: FeatureFlags` manifest did to each
+  flag: one line per entry with its outcome (`CREATED`, `UPDATED`,
+  `UNCHANGED`, `PRUNED`, `REFUSED_PUBLICATION`), whether the flag is ON or OFF
+  after the apply and why it is OFF (`INSERTED_OFF`, `ROW_OFF`, `PRUNED`),
+  followed by a warning for refused entries and a note for declared flags left
+  OFF. A manifest never publishes a flag, so `Applied` alone used to read as
+  "the flag is live" when it had been created OFF. The CLI selects the new
+  `featureFlagEntries` field only for FeatureFlags manifests; against a
+  tachyon-api that predates it, the server rejects the document before
+  executing anything and the CLI applies again without it. Exit status is
+  unchanged. (PLT-3399, slice S3399-2)
+
 - Add Gemini 3.8 Flash and Flash-Lite TTS models to `tachyon tts models`, list
   the same IDs in `tachyon tts synthesize --help`, and reject model IDs outside
   the catalog. Mark Gemini 3.1 Flash TTS Preview as legacy. (PLT-5411)

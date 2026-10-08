@@ -630,3 +630,191 @@ fn iac_apply_cas_conflict_does_not_update_local_state() {
     assert!(!state_path.exists());
     assert!(String::from_utf8_lossy(&output.stderr).contains("re-plan"));
 }
+
+fn write_feature_flags_manifest(dir: &Path) -> std::path::PathBuf {
+    let manifest_path = dir.join("tachyon.json");
+    fs::write(
+        &manifest_path,
+        serde_json::to_string_pretty(&json!({
+            "apiVersion": "apps.tachy.one/v1alpha",
+            "kind": "FeatureFlags",
+            "metadata": { "name": "field-flags" },
+            "spec": { "flags": [
+                { "key": "feature.field.smoke", "name": "Smoke", "enabled": true }
+            ] }
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    manifest_path
+}
+
+fn run_iac_apply_with(
+    manifest_path: &Path,
+    home: &Path,
+    responses: Vec<String>,
+) -> (std::process::Output, Vec<String>) {
+    let state_path = home.join("tachyon.tfstate");
+    let expected_requests = responses.len();
+    let (api_url, rx, handle) = start_graphql_server(responses);
+    let output = isolated_command(home)
+        .env("TACHYON_API_URL", api_url)
+        .args([
+            "iac",
+            "apply",
+            "--file",
+            manifest_path.to_str().unwrap(),
+            "--state",
+            state_path.to_str().unwrap(),
+        ])
+        .output()
+        .expect("run tachyon iac apply");
+    let requests = (0..expected_requests)
+        .map(|_| rx.recv_timeout(Duration::from_secs(1)).unwrap())
+        .collect();
+    handle.join().unwrap();
+    (output, requests)
+}
+
+// PLT-3399 (S3399-2): a FeatureFlags apply prints each entry, so a flag that
+// was created OFF or refused is visible next to "Applied".
+#[test]
+fn iac_apply_prints_feature_flag_entries() {
+    let tmp = TempDir::new().unwrap();
+    let manifest_path = write_feature_flags_manifest(tmp.path());
+    let (output, requests) = run_iac_apply_with(
+        &manifest_path,
+        tmp.path(),
+        vec![
+            history_response(None),
+            r#"{"data":{"saveManifest":{"kind":"FeatureFlags"}}}"#.to_string(),
+            json!({"data": {"applyManifest": {
+                "success": true,
+                "serviceAccountsCreated": 0,
+                "serviceAccountsModified": 0,
+                "providersApplied": [],
+                "seedDataTables": [],
+                "featureFlagEntries": [{
+                    "manifestName": "field-flags",
+                    "tenantId": "tn_test1234567890",
+                    "flagKey": "feature.field.smoke",
+                    "outcome": "CREATED",
+                    "enabled": false,
+                    "inactiveReason": "INSERTED_OFF",
+                    "reason": null,
+                    "fields": []
+                }]
+            }}})
+            .to_string(),
+        ],
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success(),
+        "iac apply failed\nstdout:\n{stdout}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(request_body(&requests[2]).contains("featureFlagEntries"));
+    assert!(stdout.contains("Applied: FeatureFlags / field-flags"));
+    assert!(stdout.contains("FeatureFlags entries (1):"), "{stdout}");
+    assert!(
+        stdout.contains("CREATED             feature.field.smoke OFF (INSERTED_OFF)"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("Note: 1 declared flag is OFF after this apply."),
+        "{stdout}"
+    );
+}
+
+// An older tachyon-api rejects the unknown field while validating the
+// document, before executing anything, so the CLI applies again without it
+// instead of failing the apply.
+#[test]
+fn iac_apply_falls_back_when_server_lacks_feature_flag_entries() {
+    let tmp = TempDir::new().unwrap();
+    let manifest_path = write_feature_flags_manifest(tmp.path());
+    let (output, requests) = run_iac_apply_with(
+        &manifest_path,
+        tmp.path(),
+        vec![
+            history_response(None),
+            r#"{"data":{"saveManifest":{"kind":"FeatureFlags"}}}"#.to_string(),
+            json!({"data": null, "errors": [{
+                "message": "Unknown field \"featureFlagEntries\" on type \"ApplyManifestResult\"."
+            }]})
+            .to_string(),
+            r#"{"data":{"applyManifest":{"success":true,"serviceAccountsCreated":0,"serviceAccountsModified":0,"providersApplied":[],"seedDataTables":[]}}}"#.to_string(),
+        ],
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success(),
+        "iac apply failed\nstdout:\n{stdout}\nstderr:\n{stderr}"
+    );
+    assert!(request_body(&requests[2]).contains("featureFlagEntries"));
+    assert!(!request_body(&requests[3]).contains("featureFlagEntries"));
+    assert!(
+        stderr.contains("does not report FeatureFlags entries"),
+        "{stderr}"
+    );
+    assert!(stdout.contains("Applied: FeatureFlags / field-flags"));
+    assert!(!stdout.contains("FeatureFlags entries"), "{stdout}");
+}
+
+// Any other apply error is not retried.
+#[test]
+fn iac_apply_does_not_retry_other_feature_flag_errors() {
+    let tmp = TempDir::new().unwrap();
+    let manifest_path = write_feature_flags_manifest(tmp.path());
+    let (output, _requests) = run_iac_apply_with(
+        &manifest_path,
+        tmp.path(),
+        vec![
+            history_response(None),
+            r#"{"data":{"saveManifest":{"kind":"FeatureFlags"}}}"#.to_string(),
+            json!({"data": null, "errors": [{
+                "message": "FeatureFlags manifest rejected 1 entry; the apply stopped before applying any resource:\n- field-flags/feature.field.smoke: UNSUPPORTED (UNSUPPORTED_STRATEGY_REJECTED): ..."
+            }]})
+            .to_string(),
+        ],
+    );
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!output.status.success());
+    assert!(stderr.contains("UNSUPPORTED_STRATEGY_REJECTED"), "{stderr}");
+    assert!(!String::from_utf8_lossy(&output.stdout).contains("Applied:"));
+}
+
+// Other kinds keep the query every server understands.
+#[test]
+fn iac_apply_other_kinds_do_not_select_feature_flag_entries() {
+    let tmp = TempDir::new().unwrap();
+    let manifest_path = tmp.path().join("tachyon.json");
+    fs::write(
+        &manifest_path,
+        serde_json::to_string_pretty(&json!({
+            "apiVersion": "apps.tachy.one/v1alpha",
+            "kind": "CloudApp",
+            "metadata": { "name": "fieldadmin" },
+            "spec": { "envVars": [] }
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    let (output, requests) = run_iac_apply_with(
+        &manifest_path,
+        tmp.path(),
+        vec![
+            history_response(Some(7)),
+            r#"{"data":{"saveManifest":{"kind":"CloudApp"}}}"#.to_string(),
+            r#"{"data":{"applyManifest":{"success":true,"serviceAccountsCreated":0,"serviceAccountsModified":0,"providersApplied":[],"seedDataTables":[]}}}"#.to_string(),
+        ],
+    );
+    assert!(output.status.success());
+    assert!(request_body(&requests[2]).contains("applyManifest"));
+    assert!(!request_body(&requests[2]).contains("featureFlagEntries"));
+}
