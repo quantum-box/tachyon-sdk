@@ -7,7 +7,23 @@ export type Usage = {
 
 /** Sub-agent source metadata */
 export type AgentSource = {
+	session_id?: string
 	chatroom_id: string
+}
+
+/** A conversation object independent of the legacy ChatRoom API. */
+export type AgentSession = {
+	id: string
+	name?: string | null
+	metadata?: Record<string, unknown> | null
+	created_at: string
+	updated_at: string
+}
+
+export type CreateAgentSessionResponse = {
+	session_id: string
+	name?: string | null
+	created_at: string
 }
 
 /** A chunk of agent output (streaming or stored) */

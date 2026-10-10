@@ -6335,7 +6335,15 @@
                 ],
                 "properties": {
                     "chatroom_id": {
-                        "type": "string"
+                        "type": "string",
+                        "description": "Compatibility key for clients that predate Session objects."
+                    },
+                    "session_id": {
+                        "type": [
+                            "string",
+                            "null"
+                        ],
+                        "description": "Canonical conversation ID for new Session-based agents."
                     }
                 }
             },

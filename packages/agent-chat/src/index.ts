@@ -4,6 +4,7 @@ export type { AgentChatClientConfig } from './client/AgentChatClient'
 
 // API factory functions
 export { createChatroomApi } from './client/chatroom-api'
+export { createSessionApi } from './client/session-api'
 export { createAgentApi } from './client/agent-api'
 export { createMemoryApi } from './client/memory-api'
 export { createProtocolApi } from './client/protocol-api'
@@ -13,6 +14,8 @@ export { createToolSearchApi } from './client/tool-search-api'
 
 // Types
 export type {
+	AgentSession,
+	CreateAgentSessionResponse,
 	AgentChunk,
 	AgentSource,
 	ClientToolDefinition,
@@ -75,6 +78,7 @@ export type {
 
 // --- Hooks ---
 export { useAgentChat } from './hooks/useAgentChat'
+export { useAgentSessions } from './hooks/useAgentSessions'
 export { useAgentStream } from './hooks/useAgentStream'
 export type { UseAgentStreamOptions } from './hooks/useAgentStream'
 export { useChatRoom } from './hooks/useChatRoom'
