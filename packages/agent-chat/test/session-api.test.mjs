@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
 import { afterEach, test } from 'node:test'
 import { AgentChatClient } from '../src/client/AgentChatClient.ts'
 
@@ -53,4 +54,14 @@ test('failed Session creation never falls back to creating a ChatRoom', async ()
   }
   await assert.rejects(client().createSession(), /403.*denied/)
   assert.deepEqual(urls, ['https://api.example.test/v1/llms/sessions'])
+})
+
+
+test('exported Session methods exist in the shipped API contract', () => {
+  const contract = JSON.parse(readFileSync(new URL('../../../openapi.json', import.meta.url), 'utf8'))
+  assert.ok(contract.paths['/v1/llms/sessions'].post)
+  assert.ok(contract.paths['/v1/llms/sessions'].get)
+  const session = contract.paths['/v1/llms/sessions/{session_id}']
+  assert.ok(session.get)
+  assert.ok(session.delete.responses['204'])
 })

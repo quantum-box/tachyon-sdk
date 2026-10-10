@@ -3468,7 +3468,7 @@
                     {
                         "name": "limit",
                         "in": "query",
-                        "description": "Maximum number of sessions",
+                        "description": "Maximum number of sessions to return.",
                         "required": false,
                         "schema": {
                             "type": [
@@ -3482,7 +3482,7 @@
                     {
                         "name": "offset",
                         "in": "query",
-                        "description": "Offset",
+                        "description": "Offset for pagination.",
                         "required": false,
                         "schema": {
                             "type": [
@@ -3494,24 +3494,16 @@
                         }
                     },
                     {
-                        "name": "x-operator-id",
-                        "in": "header",
-                        "description": "Operator ID",
-                        "required": true,
+                        "name": "metadata_user_id",
+                        "in": "query",
+                        "description": "Filter sessions by `user_id` stored in metadata JSON.",
+                        "required": false,
                         "schema": {
-                            "type": "string"
-                        },
-                        "example": "tn_xxxxxx"
-                    },
-                    {
-                        "name": "Authorization",
-                        "in": "header",
-                        "description": "Authorization",
-                        "required": true,
-                        "schema": {
-                            "type": "string"
-                        },
-                        "example": "Bearer xxxxx"
+                            "type": [
+                                "string",
+                                "null"
+                            ]
+                        }
                     }
                 ],
                 "responses": {
@@ -3534,28 +3526,6 @@
                 "summary": "Create a new independent agent session.",
                 "description": "Returns a session with an `as_`-prefixed ID that can be\nused with the session agent endpoints.",
                 "operationId": "create_agent_session",
-                "parameters": [
-                    {
-                        "name": "x-operator-id",
-                        "in": "header",
-                        "description": "Operator ID",
-                        "required": true,
-                        "schema": {
-                            "type": "string"
-                        },
-                        "example": "tn_xxxxxx"
-                    },
-                    {
-                        "name": "Authorization",
-                        "in": "header",
-                        "description": "Authorization",
-                        "required": true,
-                        "schema": {
-                            "type": "string"
-                        },
-                        "example": "Bearer xxxxx"
-                    }
-                ],
                 "requestBody": {
                     "content": {
                         "application/json": {
@@ -5644,6 +5614,86 @@
                     },
                     "503": {
                         "description": "Policy evaluation unavailable"
+                    }
+                }
+            }
+        },
+        "/v1/llms/sessions/{session_id}": {
+            "get": {
+                "tags": [
+                    "agent"
+                ],
+                "summary": "Get an agent session by ID.",
+                "operationId": "get_agent_session",
+                "parameters": [
+                    {
+                        "name": "session_id",
+                        "in": "path",
+                        "description": "Session ID",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Session detail",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/GetAgentSessionOutputData"
+                                }
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Session not found"
+                    }
+                }
+            },
+            "delete": {
+                "tags": [
+                    "agent"
+                ],
+                "operationId": "delete_agent_session",
+                "parameters": [
+                    {
+                        "name": "session_id",
+                        "in": "path",
+                        "description": "Session ID",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "name": "x-operator-id",
+                        "in": "header",
+                        "description": "Operator ID",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        },
+                        "example": "tn_xxxxxx"
+                    },
+                    {
+                        "name": "Authorization",
+                        "in": "header",
+                        "description": "Authorization",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        },
+                        "example": "Bearer xxxxx"
+                    }
+                ],
+                "responses": {
+                    "204": {
+                        "description": "Session deleted"
+                    },
+                    "404": {
+                        "description": "Session not found"
                     }
                 }
             }
@@ -11693,6 +11743,35 @@
                         "items": {
                             "$ref": "#/components/schemas/AllowedTenantResponse"
                         }
+                    }
+                }
+            },
+            "GetAgentSessionOutputData": {
+                "type": "object",
+                "description": "Output containing the session detail.",
+                "required": [
+                    "id",
+                    "created_at",
+                    "updated_at"
+                ],
+                "properties": {
+                    "created_at": {
+                        "type": "string",
+                        "format": "date-time"
+                    },
+                    "id": {
+                        "type": "string"
+                    },
+                    "metadata": {},
+                    "name": {
+                        "type": [
+                            "string",
+                            "null"
+                        ]
+                    },
+                    "updated_at": {
+                        "type": "string",
+                        "format": "date-time"
                     }
                 }
             }
