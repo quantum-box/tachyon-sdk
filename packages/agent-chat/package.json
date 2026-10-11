@@ -1,6 +1,6 @@
 {
 	"name": "@tachyon-sdk/agent-chat",
-	"version": "0.2.3",
+	"version": "0.2.4",
 	"description": "React component library for Tachyon agent chat, plus agent skill definitions",
 	"type": "module",
 	"main": "./src/index.ts",
