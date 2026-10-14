@@ -752,9 +752,9 @@ async fn resolve_policy(
     tenant_id: &str,
     policy: &str,
 ) -> Result<(String, Option<String>)> {
-    // Only `pol_` IDs skip the lookup: names such as `team_policy123456`
-    // also look like generated IDs to `looks_like_id`.
-    if policy.starts_with("pol_") && resolve::looks_like_id(policy) {
+    // Names are free-form (`pol_financereader` is a valid name), so only the
+    // exact generated-ID shape skips the lookup.
+    if resolve::is_canonical_id(policy, "pol_") {
         return Ok((policy.to_string(), None));
     }
     let response: PolicyListResponse = api.get("/v1/auth/policies").await?;

@@ -55,7 +55,7 @@ fn api_key_create_posts_service_account_request() {
     let tmp = TempDir::new().unwrap();
     let (api_url, rx, handle) = start_server(
         "201 Created",
-        r#"{"id":"key_123456789012","serviceAccountId":"sa_123456789012","name":"CEO key","value":"tchy_live_secret_value","createdAt":"2026-05-21T00:00:00Z"}"#,
+        r#"{"id":"key_123456789012","serviceAccountId":"sa_01jz0aaaaaaaaaaaaaaaaaaaaa","name":"CEO key","value":"tchy_live_secret_value","createdAt":"2026-05-21T00:00:00Z"}"#,
     );
 
     let output = isolated_command(tmp.path())
@@ -63,7 +63,7 @@ fn api_key_create_posts_service_account_request() {
         .args([
             "api-key",
             "create",
-            "sa_123456789012",
+            "sa_01jz0aaaaaaaaaaaaaaaaaaaaa",
             "--name",
             "CEO key",
             "--json",
@@ -80,7 +80,9 @@ fn api_key_create_posts_service_account_request() {
 
     let req = rx.recv().unwrap();
     handle.join().unwrap();
-    assert!(req.starts_with("POST /v1/auth/service-accounts/sa_123456789012/api-keys "));
+    assert!(
+        req.starts_with("POST /v1/auth/service-accounts/sa_01jz0aaaaaaaaaaaaaaaaaaaaa/api-keys ")
+    );
     assert!(req.contains("authorization: Bearer test-token"));
     assert!(req.contains("x-operator-id: tn_test1234567890"));
     assert!(req.contains(r#""name":"CEO key""#));
@@ -97,7 +99,7 @@ fn api_key_create_sends_ttl_seconds() {
     let tmp = TempDir::new().unwrap();
     let (api_url, rx, handle) = start_server(
         "201 Created",
-        r#"{"id":"key_123456789012","serviceAccountId":"sa_123456789012","name":"iac","value":"tchy_live_secret_value","createdAt":"2026-10-14T00:00:00Z","expiresAt":"2026-10-15T00:00:00Z"}"#,
+        r#"{"id":"key_123456789012","serviceAccountId":"sa_01jz0aaaaaaaaaaaaaaaaaaaaa","name":"iac","value":"tchy_live_secret_value","createdAt":"2026-10-14T00:00:00Z","expiresAt":"2026-10-15T00:00:00Z"}"#,
     );
 
     let output = isolated_command(tmp.path())
@@ -105,7 +107,7 @@ fn api_key_create_sends_ttl_seconds() {
         .args([
             "api-key",
             "create",
-            "sa_123456789012",
+            "sa_01jz0aaaaaaaaaaaaaaaaaaaaa",
             "--name",
             "iac",
             "--ttl-seconds",
@@ -138,7 +140,7 @@ fn api_key_create_rejects_non_positive_ttl_seconds() {
         .args([
             "api-key",
             "create",
-            "sa_123456789012",
+            "sa_01jz0aaaaaaaaaaaaaaaaaaaaa",
             "--name",
             "iac",
             "--ttl-seconds",
@@ -157,12 +159,12 @@ fn api_key_list_decodes_openapi_envelope() {
     let tmp = TempDir::new().unwrap();
     let (api_url, rx, handle) = start_server(
         "200 OK",
-        r#"{"apiKeys":[{"id":"key_123456789012","serviceAccountId":"sa_123456789012","name":"CEO key","value":"pk_****","createdAt":"2026-05-21T00:00:00Z","expiresAt":null}]}"#,
+        r#"{"apiKeys":[{"id":"key_123456789012","serviceAccountId":"sa_01jz0aaaaaaaaaaaaaaaaaaaaa","name":"CEO key","value":"pk_****","createdAt":"2026-05-21T00:00:00Z","expiresAt":null}]}"#,
     );
 
     let output = isolated_command(tmp.path())
         .env("TACHYON_API_URL", api_url)
-        .args(["api-key", "list", "sa_123456789012", "--json"])
+        .args(["api-key", "list", "sa_01jz0aaaaaaaaaaaaaaaaaaaaa", "--json"])
         .output()
         .expect("run tachyon api-key list");
 
@@ -176,7 +178,7 @@ fn api_key_list_decodes_openapi_envelope() {
     let req = rx.recv().unwrap();
     handle.join().unwrap();
     assert!(req.starts_with(
-        "GET /v1/auth/service-accounts/sa_123456789012/api-keys?operator_id=tn_test1234567890 "
+        "GET /v1/auth/service-accounts/sa_01jz0aaaaaaaaaaaaaaaaaaaaa/api-keys?operator_id=tn_test1234567890 "
     ));
 
     let keys: Vec<serde_json::Value> = serde_json::from_slice(&output.stdout).expect("keys json");
@@ -189,19 +191,19 @@ fn api_key_list_rejects_wrong_value_field_name() {
     let tmp = TempDir::new().unwrap();
     let (api_url, rx, handle) = start_server(
         "200 OK",
-        r#"{"apiKeys":[{"id":"key_123456789012","serviceAccountId":"sa_123456789012","name":"CEO key","prefix":"pk_legacy","createdAt":"2026-05-21T00:00:00Z","expiresAt":null}]}"#,
+        r#"{"apiKeys":[{"id":"key_123456789012","serviceAccountId":"sa_01jz0aaaaaaaaaaaaaaaaaaaaa","name":"CEO key","prefix":"pk_legacy","createdAt":"2026-05-21T00:00:00Z","expiresAt":null}]}"#,
     );
 
     let output = isolated_command(tmp.path())
         .env("TACHYON_API_URL", api_url)
-        .args(["api-key", "list", "sa_123456789012", "--json"])
+        .args(["api-key", "list", "sa_01jz0aaaaaaaaaaaaaaaaaaaaa", "--json"])
         .output()
         .expect("run tachyon api-key list");
 
     let req = rx.recv().unwrap();
     handle.join().unwrap();
     assert!(req.starts_with(
-        "GET /v1/auth/service-accounts/sa_123456789012/api-keys?operator_id=tn_test1234567890 "
+        "GET /v1/auth/service-accounts/sa_01jz0aaaaaaaaaaaaaaaaaaaaa/api-keys?operator_id=tn_test1234567890 "
     ));
     assert!(
         !output.status.success(),
@@ -221,7 +223,7 @@ fn api_key_revoke_posts_documented_revoke_contract() {
         .args([
             "api-key",
             "revoke",
-            "sa_123456789012",
+            "sa_01jz0aaaaaaaaaaaaaaaaaaaaa",
             "key_123456789012",
             "--json",
         ])
@@ -238,7 +240,7 @@ fn api_key_revoke_posts_documented_revoke_contract() {
     let req = rx.recv().unwrap();
     handle.join().unwrap();
     assert!(req.starts_with(
-        "POST /v1/auth/service-accounts/sa_123456789012/api-keys/key_123456789012/revoke "
+        "POST /v1/auth/service-accounts/sa_01jz0aaaaaaaaaaaaaaaaaaaaa/api-keys/key_123456789012/revoke "
     ));
     assert!(req.contains(r#""operatorId":"tn_test1234567890""#));
 

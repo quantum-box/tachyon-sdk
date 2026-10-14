@@ -6,13 +6,26 @@ use tachyon_sdk::apis::configuration::Configuration;
 
 /// Returns true if the value looks like a Tachyon resource ID.
 /// Tachyon IDs follow the pattern: prefix_base32chars (e.g., app_01km2dr0f6hvgj0qvcteyydfbe)
-pub(crate) fn looks_like_id(value: &str) -> bool {
+fn looks_like_id(value: &str) -> bool {
     if let Some(pos) = value.find('_') {
         let after = &value[pos + 1..];
         after.len() > 10 && after.chars().all(|c| c.is_ascii_alphanumeric())
     } else {
         false
     }
+}
+
+/// Returns true if `value` is `prefix` followed by a 26-character lowercase
+/// ULID, the exact shape of generated Tachyon IDs such as
+/// `sa_01m4wc9n8za0dwvgbkye2efpvm`. Unlike [`looks_like_id`], this does not
+/// match human-chosen names like `sa_marketingteam`.
+pub(crate) fn is_canonical_id(value: &str, prefix: &str) -> bool {
+    value.strip_prefix(prefix).is_some_and(|ulid| {
+        ulid.len() == 26
+            && ulid
+                .chars()
+                .all(|c| c.is_ascii_digit() || c.is_ascii_lowercase())
+    })
 }
 
 // --- Minimal response types for resolution ---
@@ -286,9 +299,9 @@ pub async fn resolve_service_account_id(
     tenant_id: &str,
     name_or_id: &str,
 ) -> Result<String> {
-    // Only `sa_` IDs skip the lookup: names such as `team_account123456`
-    // also look like generated IDs to `looks_like_id`.
-    if name_or_id.starts_with("sa_") && looks_like_id(name_or_id) {
+    // Names are free-form (`sa_marketingteam` is a valid name), so only the
+    // exact generated-ID shape skips the lookup.
+    if is_canonical_id(name_or_id, "sa_") {
         return Ok(name_or_id.to_string());
     }
 
@@ -296,6 +309,9 @@ pub async fn resolve_service_account_id(
         .get_query("/v1/auth/service-accounts", &[("operator_id", tenant_id)])
         .await?;
     let accounts = response.into_vec();
+    if let Some(account) = accounts.iter().find(|s| s.id == name_or_id) {
+        return Ok(account.id.clone());
+    }
     let matches: Vec<_> = accounts
         .iter()
         .filter(|s| s.name.as_deref() == Some(name_or_id))
@@ -324,7 +340,16 @@ pub async fn resolve_service_account_id(
 
 #[cfg(test)]
 mod response_contract_tests {
-    use super::{OperatorEntry, ProtocolEntry};
+    use super::{is_canonical_id, OperatorEntry, ProtocolEntry};
+
+    #[test]
+    fn canonical_id_requires_prefix_and_26_char_ulid() {
+        assert!(is_canonical_id("sa_01m4wc9n8za0dwvgbkye2efpvm", "sa_"));
+        assert!(!is_canonical_id("sa_marketingteam", "sa_"));
+        assert!(!is_canonical_id("pol_01m4wc9n8za0dwvgbkye2efpvm", "sa_"));
+        assert!(!is_canonical_id("sa_01M4WC9N8ZA0DWVGBKYE2EFPVM", "sa_"));
+        assert!(!is_canonical_id("pol_financereader", "pol_"));
+    }
 
     #[test]
     fn operator_entry_uses_api_field_names() {
