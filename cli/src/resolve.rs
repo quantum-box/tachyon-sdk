@@ -16,15 +16,16 @@ fn looks_like_id(value: &str) -> bool {
 }
 
 /// Returns true if `value` is `prefix` followed by a 26-character lowercase
-/// ULID, the exact shape of generated Tachyon IDs such as
-/// `sa_01m4wc9n8za0dwvgbkye2efpvm`. Unlike [`looks_like_id`], this does not
-/// match human-chosen names like `sa_marketingteam`.
+/// Crockford-base32 ULID, the shape of generated Tachyon IDs such as
+/// `sa_01m4wc9n8za0dwvgbkye2efpvm`. A name can have this shape too, so
+/// callers check names first and use this only as a last resort.
 pub(crate) fn is_canonical_id(value: &str, prefix: &str) -> bool {
     value.strip_prefix(prefix).is_some_and(|ulid| {
         ulid.len() == 26
-            && ulid
-                .chars()
-                .all(|c| c.is_ascii_digit() || c.is_ascii_lowercase())
+            && ulid.chars().all(|c| {
+                c.is_ascii_digit()
+                    || (c.is_ascii_lowercase() && !matches!(c, 'i' | 'l' | 'o' | 'u'))
+            })
     })
 }
 
@@ -299,12 +300,8 @@ pub async fn resolve_service_account_id(
     tenant_id: &str,
     name_or_id: &str,
 ) -> Result<String> {
-    // Names are free-form (`sa_marketingteam` is a valid name), so only the
-    // exact generated-ID shape skips the lookup.
-    if is_canonical_id(name_or_id, "sa_") {
-        return Ok(name_or_id.to_string());
-    }
-
+    // Names are free-form and may look like IDs (`sa_marketingteam`), so
+    // always consult the list: exact ID first, then name.
     let response: ServiceAccountListResponse = api
         .get_query("/v1/auth/service-accounts", &[("operator_id", tenant_id)])
         .await?;
@@ -318,6 +315,8 @@ pub async fn resolve_service_account_id(
         .collect();
 
     match matches.len() {
+        // An ID the list does not show is left for the server to judge.
+        0 if is_canonical_id(name_or_id, "sa_") => Ok(name_or_id.to_string()),
         0 => Err(anyhow!("no service account found with name '{name_or_id}'")),
         1 => {
             eprintln!(
@@ -349,6 +348,7 @@ mod response_contract_tests {
         assert!(!is_canonical_id("pol_01m4wc9n8za0dwvgbkye2efpvm", "sa_"));
         assert!(!is_canonical_id("sa_01M4WC9N8ZA0DWVGBKYE2EFPVM", "sa_"));
         assert!(!is_canonical_id("pol_financereader", "pol_"));
+        assert!(!is_canonical_id("sa_abcdefghijklmnopqrstuvwxyz", "sa_"));
     }
 
     #[test]

@@ -752,16 +752,17 @@ async fn resolve_policy(
     tenant_id: &str,
     policy: &str,
 ) -> Result<(String, Option<String>)> {
-    // Names are free-form (`pol_financereader` is a valid name), so only the
-    // exact generated-ID shape skips the lookup.
-    if resolve::is_canonical_id(policy, "pol_") {
-        return Ok((policy.to_string(), None));
-    }
+    // Names are free-form and may look like IDs (`pol_financereader`), so
+    // always consult the list: exact ID first, then name.
     let response: PolicyListResponse = api.get("/v1/auth/policies").await?;
-    // Some system policy IDs (e.g. `pol_field_public_payment`) do not look
-    // like generated IDs, so accept an exact ID match before trying names.
     if let Some(p) = response.policies.iter().find(|p| p.id == policy) {
         return Ok((p.id.clone(), Some(p.name.clone())));
+    }
+    if !response.policies.iter().any(|p| p.name == policy)
+        && resolve::is_canonical_id(policy, "pol_")
+    {
+        // An ID the list does not show is left for the server to judge.
+        return Ok((policy.to_string(), None));
     }
     let selected = select_policy_by_name(&response.policies, tenant_id, policy)?;
     eprintln!("Resolved policy '{}' → {}", policy, selected.id);

@@ -22,6 +22,23 @@ fn isolated_command(home: &Path) -> Command {
     cmd
 }
 
+const SA_LIST: &str = r#"{"serviceAccounts":[{"id":"sa_01jz0aaaaaaaaaaaaaaaaaaaaa","tenantId":"tn_test1234567890","name":"iac","createdAt":"2026-08-01T00:00:00Z"}]}"#;
+
+fn write_response(stream: &mut std::net::TcpStream, status: &str, body: &str) {
+    let response = if body.is_empty() {
+        format!("HTTP/1.1 {status}\r\ncontent-length: 0\r\nconnection: close\r\n\r\n")
+    } else {
+        format!(
+            "HTTP/1.1 {status}\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+            body.len(),
+            body
+        )
+    };
+    stream.write_all(response.as_bytes()).unwrap();
+}
+
+/// Serves the service-account lookup the CLI always performs, then
+/// `status`/`body` for the API-key request, which is what `rx` receives.
 fn start_server(
     status: &'static str,
     body: &'static str,
@@ -30,22 +47,22 @@ fn start_server(
     let url = format!("http://{}", listener.local_addr().unwrap());
     let (tx, rx) = mpsc::channel();
     let handle = thread::spawn(move || {
-        let (mut stream, _) = listener.accept().unwrap();
         let mut buf = [0_u8; 8192];
+
+        let (mut stream, _) = listener.accept().unwrap();
+        let n = stream.read(&mut buf).unwrap();
+        assert!(
+            String::from_utf8_lossy(&buf[..n])
+                .starts_with("GET /v1/auth/service-accounts?operator_id=tn_test1234567890 "),
+            "first request must be the service account lookup"
+        );
+        write_response(&mut stream, "200 OK", SA_LIST);
+
+        let (mut stream, _) = listener.accept().unwrap();
         let n = stream.read(&mut buf).unwrap();
         tx.send(String::from_utf8_lossy(&buf[..n]).to_string())
             .unwrap();
-
-        let response = if body.is_empty() {
-            format!("HTTP/1.1 {status}\r\ncontent-length: 0\r\nconnection: close\r\n\r\n")
-        } else {
-            format!(
-                "HTTP/1.1 {status}\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
-                body.len(),
-                body
-            )
-        };
-        stream.write_all(response.as_bytes()).unwrap();
+        write_response(&mut stream, status, body);
     });
     (url, rx, handle)
 }
