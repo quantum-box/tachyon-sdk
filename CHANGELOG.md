@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+### Changed
+
+- When a service account name matches more than one service account, the error
+  now tells you to pass one of the listed IDs.
+
 ### Fixed
 
 - Pass `--commit-hash` to `wrangler pages deploy` in the Cloud App build job.
@@ -11,6 +16,18 @@
   a push-triggered build is reused for the same head. (PLT-5540)
 
 ### Added
+
+- Add `tachyon org service-accounts create <name>`, `delete <sa>`,
+  `attach-policy <sa> <policy>` and `detach-policy <sa> <policy>`. Creating a
+  service account and attaching a policy used to require platform-ui.
+  `<sa>` and `<policy>` accept an ID or a name. A policy name prefers the policy
+  owned by the current tenant and stops when the name is ambiguous. `create`
+  refuses a name that already exists in the tenant, because name resolution
+  fails once two service accounts share a name. `attach-policy` and
+  `detach-policy` call the existing `attachServiceAccountPolicy` /
+  `detachServiceAccountPolicy` GraphQL mutations, so they need no API update.
+- Add `--ttl-seconds` to `tachyon api-key create`. Without it the key still
+  never expires.
 
 - `tachyon iac apply` prints what a `kind: FeatureFlags` manifest did to each
   flag: one line per entry with its outcome (`CREATED`, `UPDATED`,

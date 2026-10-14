@@ -89,6 +89,67 @@ fn api_key_create_posts_service_account_request() {
     let key: serde_json::Value = serde_json::from_slice(&output.stdout).expect("key json");
     assert_eq!(key["id"], "key_123456789012");
     assert_eq!(key["value"], "tchy_live_secret_value");
+    assert!(!req.contains("ttlSeconds"));
+}
+
+#[test]
+fn api_key_create_sends_ttl_seconds() {
+    let tmp = TempDir::new().unwrap();
+    let (api_url, rx, handle) = start_server(
+        "201 Created",
+        r#"{"id":"key_123456789012","serviceAccountId":"sa_123456789012","name":"iac","value":"tchy_live_secret_value","createdAt":"2026-10-14T00:00:00Z","expiresAt":"2026-10-15T00:00:00Z"}"#,
+    );
+
+    let output = isolated_command(tmp.path())
+        .env("TACHYON_API_URL", api_url)
+        .args([
+            "api-key",
+            "create",
+            "sa_123456789012",
+            "--name",
+            "iac",
+            "--ttl-seconds",
+            "86400",
+            "--json",
+        ])
+        .output()
+        .expect("run tachyon api-key create");
+
+    assert!(
+        output.status.success(),
+        "api-key create failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let req = rx.recv().unwrap();
+    handle.join().unwrap();
+    assert!(req.contains(r#""ttlSeconds":86400"#));
+
+    let key: serde_json::Value = serde_json::from_slice(&output.stdout).expect("key json");
+    assert_eq!(key["expiresAt"], "2026-10-15T00:00:00Z");
+}
+
+#[test]
+fn api_key_create_rejects_non_positive_ttl_seconds() {
+    let tmp = TempDir::new().unwrap();
+    let output = isolated_command(tmp.path())
+        .env("TACHYON_API_URL", "http://127.0.0.1:9")
+        .args([
+            "api-key",
+            "create",
+            "sa_123456789012",
+            "--name",
+            "iac",
+            "--ttl-seconds",
+            "0",
+        ])
+        .output()
+        .expect("run tachyon api-key create");
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("--ttl-seconds"), "stderr was:\n{stderr}");
 }
 
 #[test]

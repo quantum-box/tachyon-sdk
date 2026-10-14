@@ -1,7 +1,8 @@
-use anyhow::Result;
+use anyhow::{anyhow, Result};
 use clap::{Args, Subcommand};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
 use tachyon_sdk::apis::configuration::Configuration;
 
 use crate::client::{print_json, truncate, ApiClient};
@@ -126,6 +127,40 @@ pub enum ServiceAccountsCommand {
         #[arg(long)]
         json: bool,
     },
+    /// Create a service account in the current tenant
+    Create {
+        /// Service account name (must be unique within the tenant)
+        name: String,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Delete a service account. Its API keys are deleted with it.
+    Delete {
+        /// Service account ID or name
+        service_account: String,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Attach a policy to a service account
+    AttachPolicy {
+        /// Service account ID or name
+        service_account: String,
+        /// Policy ID or name. A name prefers the policy owned by the current
+        /// tenant and fails when it is ambiguous.
+        policy: String,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Detach a policy from a service account
+    DetachPolicy {
+        /// Service account ID or name
+        service_account: String,
+        /// Policy ID or name. A name prefers the policy owned by the current
+        /// tenant and fails when it is ambiguous.
+        policy: String,
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 // --- Policies ---
@@ -233,6 +268,35 @@ struct ServiceAccountResponse {
 #[serde(rename_all = "camelCase")]
 struct ServiceAccountListResponse {
     service_accounts: Vec<ServiceAccountResponse>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CreateServiceAccountRequest {
+    tenant_id: String,
+    name: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DeleteServiceAccountResponse {
+    id: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DeleteServiceAccountOutput {
+    id: String,
+    deleted: bool,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ServiceAccountPolicyOutput {
+    service_account_id: String,
+    policy_id: String,
+    policy_name: Option<String>,
+    attached: bool,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -604,6 +668,183 @@ async fn run_service_accounts_api_keys(
     Ok(())
 }
 
+async fn run_service_accounts_create(
+    api: &ApiClient,
+    tenant_id: &str,
+    name: &str,
+    json: bool,
+) -> Result<()> {
+    // Names are how the CLI resolves service accounts, so refuse to create a
+    // second one with the same name instead of making later lookups ambiguous.
+    let existing: ServiceAccountListResponse = api
+        .get_query("/v1/auth/service-accounts", &[("operator_id", tenant_id)])
+        .await?;
+    if let Some(sa) = existing.service_accounts.iter().find(|sa| sa.name == name) {
+        return Err(anyhow!(
+            "service account '{name}' already exists in tenant {tenant_id}: {}",
+            sa.id
+        ));
+    }
+
+    let request = CreateServiceAccountRequest {
+        tenant_id: tenant_id.to_string(),
+        name: name.to_string(),
+    };
+    let sa: ServiceAccountResponse = api.post("/v1/auth/service-accounts", &request).await?;
+    if json {
+        return print_json(&sa);
+    }
+    println!("Service account created.");
+    println!("ID:          {}", sa.id);
+    println!("Tenant ID:   {}", sa.tenant_id);
+    println!("Name:        {}", sa.name);
+    println!("Created:     {}", sa.created_at);
+    Ok(())
+}
+
+async fn run_service_accounts_delete(api: &ApiClient, id: &str, json: bool) -> Result<()> {
+    let response: DeleteServiceAccountResponse = api
+        .delete_json(&format!("/v1/auth/service-accounts/{id}"))
+        .await?;
+    if json {
+        return print_json(&DeleteServiceAccountOutput {
+            id: response.id,
+            deleted: true,
+        });
+    }
+    println!("Service account {} deleted.", response.id);
+    Ok(())
+}
+
+/// Picks the policy a name refers to. A policy owned by `tenant_id` wins over
+/// system policies and policies shared from an ancestor tenant; more than one
+/// match at the winning level is an error.
+fn select_policy_by_name<'a>(
+    policies: &'a [PolicyResponse],
+    tenant_id: &str,
+    name: &str,
+) -> Result<&'a PolicyResponse> {
+    let (owned, others): (Vec<_>, Vec<_>) =
+        policies.iter().filter(|p| p.name == name).partition(|p| {
+            p.tenant_id.as_deref() == Some(tenant_id)
+                || p.owner_tenant_id.as_deref() == Some(tenant_id)
+        });
+    let candidates = if owned.is_empty() { others } else { owned };
+    match candidates.as_slice() {
+        [] => Err(anyhow!(
+            "no policy named '{name}' is visible to tenant {tenant_id}"
+        )),
+        [policy] => Ok(policy),
+        many => {
+            let ids: Vec<_> = many.iter().map(|p| p.id.as_str()).collect();
+            Err(anyhow!(
+                "multiple policies match name '{name}': {}. Pass a policy ID instead",
+                ids.join(", ")
+            ))
+        }
+    }
+}
+
+/// Resolves a policy ID or name to `(id, name)`. The name is `None` when an ID
+/// was given, because the CLI then sends it without a lookup.
+async fn resolve_policy(
+    api: &ApiClient,
+    tenant_id: &str,
+    policy: &str,
+) -> Result<(String, Option<String>)> {
+    if resolve::looks_like_id(policy) {
+        return Ok((policy.to_string(), None));
+    }
+    let response: PolicyListResponse = api.get("/v1/auth/policies").await?;
+    // Some system policy IDs (e.g. `pol_field_public_payment`) do not look
+    // like generated IDs, so accept an exact ID match before trying names.
+    if let Some(p) = response.policies.iter().find(|p| p.id == policy) {
+        return Ok((p.id.clone(), Some(p.name.clone())));
+    }
+    let selected = select_policy_by_name(&response.policies, tenant_id, policy)?;
+    eprintln!("Resolved policy '{}' → {}", policy, selected.id);
+    Ok((selected.id.clone(), Some(selected.name.clone())))
+}
+
+async fn graphql_mutation(api: &ApiClient, query: &str, variables: Value) -> Result<Value> {
+    let url = format!("{}/v1/graphql", api.base_url);
+    let response = api
+        .client
+        .post(url)
+        .json(&json!({ "query": query, "variables": variables }))
+        .send()
+        .await?;
+    let status = response.status();
+    let payload: Value = response.json().await?;
+    if !status.is_success() {
+        return Err(anyhow!(
+            "graphql request failed: status={status}, body={payload}"
+        ));
+    }
+    if let Some(errors) = payload.get("errors") {
+        return Err(anyhow!("graphql error: {errors}"));
+    }
+    payload
+        .get("data")
+        .cloned()
+        .ok_or_else(|| anyhow!("missing data in graphql response"))
+}
+
+const ATTACH_SERVICE_ACCOUNT_POLICY: &str = "mutation AttachServiceAccountPolicy($input: AttachServiceAccountPolicyInput!) { attachServiceAccountPolicy(input: $input) { success message } }";
+const DETACH_SERVICE_ACCOUNT_POLICY: &str = "mutation DetachServiceAccountPolicy($input: DetachServiceAccountPolicyInput!) { detachServiceAccountPolicy(input: $input) { success message } }";
+
+async fn run_service_accounts_policy(
+    api: &ApiClient,
+    tenant_id: &str,
+    service_account: &str,
+    policy: &str,
+    attach: bool,
+    json: bool,
+) -> Result<()> {
+    let service_account_id =
+        resolve::resolve_service_account_id(api, tenant_id, service_account).await?;
+    let (policy_id, policy_name) = resolve_policy(api, tenant_id, policy).await?;
+
+    let (query, field) = if attach {
+        (ATTACH_SERVICE_ACCOUNT_POLICY, "attachServiceAccountPolicy")
+    } else {
+        (DETACH_SERVICE_ACCOUNT_POLICY, "detachServiceAccountPolicy")
+    };
+    let data = graphql_mutation(
+        api,
+        query,
+        json!({
+            "input": {
+                "serviceAccountId": service_account_id,
+                "policyId": policy_id,
+            }
+        }),
+    )
+    .await?;
+    if data.pointer(&format!("/{field}/success")) != Some(&Value::Bool(true)) {
+        return Err(anyhow!("{field} did not succeed: {data}"));
+    }
+
+    if json {
+        return print_json(&ServiceAccountPolicyOutput {
+            service_account_id,
+            policy_id,
+            policy_name,
+            attached: attach,
+        });
+    }
+    let label = match &policy_name {
+        Some(name) => format!("{name} ({policy_id})"),
+        None => policy_id.clone(),
+    };
+    if attach {
+        println!("Policy {label} attached to service account {service_account_id}.");
+    } else {
+        println!("Policy {label} detached from service account {service_account_id}.");
+    }
+    Ok(())
+}
+
 async fn run_policies_list(api: &ApiClient, json: bool) -> Result<()> {
     let response: PolicyListResponse = api.get("/v1/auth/policies").await?;
     let PolicyListResponse {
@@ -786,6 +1027,33 @@ pub async fn run(args: &OrgArgs, config: &Configuration, tenant_id: &str) -> Res
                     .await?;
                 run_service_accounts_api_keys(&api, tenant_id, &id, *json).await
             }
+            ServiceAccountsCommand::Create { name, json } => {
+                run_service_accounts_create(&api, tenant_id, name, *json).await
+            }
+            ServiceAccountsCommand::Delete {
+                service_account,
+                json,
+            } => {
+                let id =
+                    resolve::resolve_service_account_id(&api, tenant_id, service_account).await?;
+                run_service_accounts_delete(&api, &id, *json).await
+            }
+            ServiceAccountsCommand::AttachPolicy {
+                service_account,
+                policy,
+                json,
+            } => {
+                run_service_accounts_policy(&api, tenant_id, service_account, policy, true, *json)
+                    .await
+            }
+            ServiceAccountsCommand::DetachPolicy {
+                service_account,
+                policy,
+                json,
+            } => {
+                run_service_accounts_policy(&api, tenant_id, service_account, policy, false, *json)
+                    .await
+            }
         },
         OrgCommand::Policies { command } => match command {
             PoliciesCommand::List { json } => run_policies_list(&api, *json).await,
@@ -799,5 +1067,105 @@ pub async fn run(args: &OrgArgs, config: &Configuration, tenant_id: &str) -> Res
                 json,
             } => run_policy_mappings(&api, tenant_id, resource_scope, *json).await,
         },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const TENANT: &str = "tn_tenant1234567890";
+
+    fn policy(
+        id: &str,
+        name: &str,
+        tenant_id: Option<&str>,
+        owner: Option<&str>,
+    ) -> PolicyResponse {
+        PolicyResponse {
+            id: id.to_string(),
+            name: name.to_string(),
+            description: None,
+            is_system: tenant_id.is_none() && owner.is_none(),
+            tenant_id: tenant_id.map(str::to_string),
+            shared_with_descendants: false,
+            owner_tenant_id: owner.map(str::to_string),
+            created_at: "2026-10-14T00:00:00Z".to_string(),
+            updated_at: "2026-10-14T00:00:00Z".to_string(),
+        }
+    }
+
+    #[test]
+    fn select_policy_prefers_policy_owned_by_tenant() {
+        let policies = vec![
+            policy("pol_system000000001", "IacApply", None, None),
+            policy(
+                "pol_parent000000001",
+                "IacApply",
+                Some("tn_parent12345678901"),
+                None,
+            ),
+            policy("pol_owned0000000001", "IacApply", Some(TENANT), None),
+        ];
+        let selected = select_policy_by_name(&policies, TENANT, "IacApply").unwrap();
+        assert_eq!(selected.id, "pol_owned0000000001");
+    }
+
+    #[test]
+    fn select_policy_treats_owner_tenant_as_owned() {
+        let policies = vec![
+            policy("pol_system000000001", "IacApply", None, None),
+            policy("pol_global000000001", "IacApply", None, Some(TENANT)),
+        ];
+        let selected = select_policy_by_name(&policies, TENANT, "IacApply").unwrap();
+        assert_eq!(selected.id, "pol_global000000001");
+    }
+
+    #[test]
+    fn select_policy_falls_back_to_single_visible_policy() {
+        let policies = vec![
+            policy("pol_system000000001", "AdminPolicy", None, None),
+            policy("pol_other0000000001", "Other", Some(TENANT), None),
+        ];
+        let selected = select_policy_by_name(&policies, TENANT, "AdminPolicy").unwrap();
+        assert_eq!(selected.id, "pol_system000000001");
+    }
+
+    #[test]
+    fn select_policy_rejects_ambiguous_owned_names() {
+        let policies = vec![
+            policy("pol_owned0000000001", "IacApply", Some(TENANT), None),
+            policy("pol_owned0000000002", "IacApply", Some(TENANT), None),
+        ];
+        let err = select_policy_by_name(&policies, TENANT, "IacApply").unwrap_err();
+        let message = err.to_string();
+        assert!(message.contains("pol_owned0000000001"), "{message}");
+        assert!(message.contains("pol_owned0000000002"), "{message}");
+    }
+
+    #[test]
+    fn select_policy_rejects_ambiguous_names_without_owned_match() {
+        let policies = vec![
+            policy("pol_system000000001", "IacApply", None, None),
+            policy(
+                "pol_parent000000001",
+                "IacApply",
+                Some("tn_parent12345678901"),
+                None,
+            ),
+        ];
+        assert!(select_policy_by_name(&policies, TENANT, "IacApply").is_err());
+    }
+
+    #[test]
+    fn select_policy_reports_missing_name() {
+        let policies = vec![policy(
+            "pol_owned0000000001",
+            "IacApply",
+            Some(TENANT),
+            None,
+        )];
+        let err = select_policy_by_name(&policies, TENANT, "Missing").unwrap_err();
+        assert!(err.to_string().contains("no policy named 'Missing'"));
     }
 }
