@@ -21,6 +21,9 @@ pub enum ApiKeyCommand {
         /// Display name for the API key
         #[arg(long)]
         name: String,
+        /// Expire the key after this many seconds. Omit for a non-expiring key.
+        #[arg(long, value_parser = clap::value_parser!(i64).range(1..))]
+        ttl_seconds: Option<i64>,
         #[arg(long)]
         json: bool,
     },
@@ -47,6 +50,8 @@ pub enum ApiKeyCommand {
 struct CreateApiKeyRequest {
     name: String,
     operator_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    ttl_seconds: Option<i64>,
 }
 
 #[derive(Debug, Serialize)]
@@ -85,11 +90,13 @@ async fn run_create(
     tenant_id: &str,
     service_account_id: &str,
     name: &str,
+    ttl_seconds: Option<i64>,
     json: bool,
 ) -> Result<()> {
     let request = CreateApiKeyRequest {
         name: name.to_string(),
         operator_id: tenant_id.to_string(),
+        ttl_seconds,
     };
     let key: ApiKeyResponse = api
         .post(
@@ -106,6 +113,10 @@ async fn run_create(
     println!("Service Account:   {}", key.service_account_id);
     println!("Name:              {}", key.name);
     println!("Created:           {}", key.created_at);
+    println!(
+        "Expires:           {}",
+        key.expires_at.as_deref().unwrap_or("never")
+    );
     println!("Value:             {}", key.value);
     println!("Store this value now. It may not be shown again.");
     Ok(())
@@ -192,10 +203,11 @@ pub async fn run(args: &ApiKeyArgs, config: &Configuration, tenant_id: &str) -> 
         ApiKeyCommand::Create {
             service_account,
             name,
+            ttl_seconds,
             json,
         } => {
             let id = resolve::resolve_service_account_id(&api, tenant_id, service_account).await?;
-            run_create(&api, tenant_id, &id, name, *json).await
+            run_create(&api, tenant_id, &id, name, *ttl_seconds, *json).await
         }
         ApiKeyCommand::List {
             service_account,

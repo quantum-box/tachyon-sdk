@@ -528,11 +528,13 @@ mod tests {
                     api_key_cli::ApiKeyCommand::Create {
                         service_account,
                         name,
+                        ttl_seconds,
                         json,
                     },
             }) => {
                 assert_eq!(service_account, "sa_123456789012");
                 assert_eq!(name, "CEO key");
+                assert_eq!(ttl_seconds, None);
                 assert!(json);
             }
             _ => panic!("expected api-key create command"),

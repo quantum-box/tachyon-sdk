@@ -15,6 +15,20 @@ fn looks_like_id(value: &str) -> bool {
     }
 }
 
+/// Returns true if `value` is `prefix` followed by a 26-character lowercase
+/// Crockford-base32 ULID, the shape of generated Tachyon IDs such as
+/// `sa_01m4wc9n8za0dwvgbkye2efpvm`. A name can have this shape too, so
+/// callers check names first and use this only as a last resort.
+pub(crate) fn is_canonical_id(value: &str, prefix: &str) -> bool {
+    value.strip_prefix(prefix).is_some_and(|ulid| {
+        ulid.len() == 26
+            && ulid.chars().all(|c| {
+                c.is_ascii_digit()
+                    || (c.is_ascii_lowercase() && !matches!(c, 'i' | 'l' | 'o' | 'u'))
+            })
+    })
+}
+
 // --- Minimal response types for resolution ---
 
 #[derive(Debug, Deserialize)]
@@ -286,20 +300,23 @@ pub async fn resolve_service_account_id(
     tenant_id: &str,
     name_or_id: &str,
 ) -> Result<String> {
-    if looks_like_id(name_or_id) {
-        return Ok(name_or_id.to_string());
-    }
-
+    // Names are free-form and may look like IDs (`sa_marketingteam`), so
+    // always consult the list: exact ID first, then name.
     let response: ServiceAccountListResponse = api
         .get_query("/v1/auth/service-accounts", &[("operator_id", tenant_id)])
         .await?;
     let accounts = response.into_vec();
+    if let Some(account) = accounts.iter().find(|s| s.id == name_or_id) {
+        return Ok(account.id.clone());
+    }
     let matches: Vec<_> = accounts
         .iter()
         .filter(|s| s.name.as_deref() == Some(name_or_id))
         .collect();
 
     match matches.len() {
+        // An ID the list does not show is left for the server to judge.
+        0 if is_canonical_id(name_or_id, "sa_") => Ok(name_or_id.to_string()),
         0 => Err(anyhow!("no service account found with name '{name_or_id}'")),
         1 => {
             eprintln!(
@@ -311,7 +328,9 @@ pub async fn resolve_service_account_id(
         _ => {
             let ids: Vec<_> = matches.iter().map(|s| s.id.as_str()).collect();
             Err(anyhow!(
-                "multiple service accounts match name '{name_or_id}': {}",
+                "multiple service accounts match name '{name_or_id}': {}. \
+                 Pass one of these IDs instead of the name; \
+                 `tachyon org service-accounts list` shows when each was created",
                 ids.join(", ")
             ))
         }
@@ -320,7 +339,17 @@ pub async fn resolve_service_account_id(
 
 #[cfg(test)]
 mod response_contract_tests {
-    use super::{OperatorEntry, ProtocolEntry};
+    use super::{is_canonical_id, OperatorEntry, ProtocolEntry};
+
+    #[test]
+    fn canonical_id_requires_prefix_and_26_char_ulid() {
+        assert!(is_canonical_id("sa_01m4wc9n8za0dwvgbkye2efpvm", "sa_"));
+        assert!(!is_canonical_id("sa_marketingteam", "sa_"));
+        assert!(!is_canonical_id("pol_01m4wc9n8za0dwvgbkye2efpvm", "sa_"));
+        assert!(!is_canonical_id("sa_01M4WC9N8ZA0DWVGBKYE2EFPVM", "sa_"));
+        assert!(!is_canonical_id("pol_financereader", "pol_"));
+        assert!(!is_canonical_id("sa_abcdefghijklmnopqrstuvwxyz", "sa_"));
+    }
 
     #[test]
     fn operator_entry_uses_api_field_names() {

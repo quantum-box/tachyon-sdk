@@ -22,6 +22,23 @@ fn isolated_command(home: &Path) -> Command {
     cmd
 }
 
+const SA_LIST: &str = r#"{"serviceAccounts":[{"id":"sa_01jz0aaaaaaaaaaaaaaaaaaaaa","tenantId":"tn_test1234567890","name":"iac","createdAt":"2026-08-01T00:00:00Z"}]}"#;
+
+fn write_response(stream: &mut std::net::TcpStream, status: &str, body: &str) {
+    let response = if body.is_empty() {
+        format!("HTTP/1.1 {status}\r\ncontent-length: 0\r\nconnection: close\r\n\r\n")
+    } else {
+        format!(
+            "HTTP/1.1 {status}\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+            body.len(),
+            body
+        )
+    };
+    stream.write_all(response.as_bytes()).unwrap();
+}
+
+/// Serves the service-account lookup the CLI always performs, then
+/// `status`/`body` for the API-key request, which is what `rx` receives.
 fn start_server(
     status: &'static str,
     body: &'static str,
@@ -30,22 +47,22 @@ fn start_server(
     let url = format!("http://{}", listener.local_addr().unwrap());
     let (tx, rx) = mpsc::channel();
     let handle = thread::spawn(move || {
-        let (mut stream, _) = listener.accept().unwrap();
         let mut buf = [0_u8; 8192];
+
+        let (mut stream, _) = listener.accept().unwrap();
+        let n = stream.read(&mut buf).unwrap();
+        assert!(
+            String::from_utf8_lossy(&buf[..n])
+                .starts_with("GET /v1/auth/service-accounts?operator_id=tn_test1234567890 "),
+            "first request must be the service account lookup"
+        );
+        write_response(&mut stream, "200 OK", SA_LIST);
+
+        let (mut stream, _) = listener.accept().unwrap();
         let n = stream.read(&mut buf).unwrap();
         tx.send(String::from_utf8_lossy(&buf[..n]).to_string())
             .unwrap();
-
-        let response = if body.is_empty() {
-            format!("HTTP/1.1 {status}\r\ncontent-length: 0\r\nconnection: close\r\n\r\n")
-        } else {
-            format!(
-                "HTTP/1.1 {status}\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
-                body.len(),
-                body
-            )
-        };
-        stream.write_all(response.as_bytes()).unwrap();
+        write_response(&mut stream, status, body);
     });
     (url, rx, handle)
 }
@@ -55,7 +72,7 @@ fn api_key_create_posts_service_account_request() {
     let tmp = TempDir::new().unwrap();
     let (api_url, rx, handle) = start_server(
         "201 Created",
-        r#"{"id":"key_123456789012","serviceAccountId":"sa_123456789012","name":"CEO key","value":"tchy_live_secret_value","createdAt":"2026-05-21T00:00:00Z"}"#,
+        r#"{"id":"key_123456789012","serviceAccountId":"sa_01jz0aaaaaaaaaaaaaaaaaaaaa","name":"CEO key","value":"tchy_live_secret_value","createdAt":"2026-05-21T00:00:00Z"}"#,
     );
 
     let output = isolated_command(tmp.path())
@@ -63,7 +80,7 @@ fn api_key_create_posts_service_account_request() {
         .args([
             "api-key",
             "create",
-            "sa_123456789012",
+            "sa_01jz0aaaaaaaaaaaaaaaaaaaaa",
             "--name",
             "CEO key",
             "--json",
@@ -80,7 +97,9 @@ fn api_key_create_posts_service_account_request() {
 
     let req = rx.recv().unwrap();
     handle.join().unwrap();
-    assert!(req.starts_with("POST /v1/auth/service-accounts/sa_123456789012/api-keys "));
+    assert!(
+        req.starts_with("POST /v1/auth/service-accounts/sa_01jz0aaaaaaaaaaaaaaaaaaaaa/api-keys ")
+    );
     assert!(req.contains("authorization: Bearer test-token"));
     assert!(req.contains("x-operator-id: tn_test1234567890"));
     assert!(req.contains(r#""name":"CEO key""#));
@@ -89,6 +108,67 @@ fn api_key_create_posts_service_account_request() {
     let key: serde_json::Value = serde_json::from_slice(&output.stdout).expect("key json");
     assert_eq!(key["id"], "key_123456789012");
     assert_eq!(key["value"], "tchy_live_secret_value");
+    assert!(!req.contains("ttlSeconds"));
+}
+
+#[test]
+fn api_key_create_sends_ttl_seconds() {
+    let tmp = TempDir::new().unwrap();
+    let (api_url, rx, handle) = start_server(
+        "201 Created",
+        r#"{"id":"key_123456789012","serviceAccountId":"sa_01jz0aaaaaaaaaaaaaaaaaaaaa","name":"iac","value":"tchy_live_secret_value","createdAt":"2026-10-14T00:00:00Z","expiresAt":"2026-10-15T00:00:00Z"}"#,
+    );
+
+    let output = isolated_command(tmp.path())
+        .env("TACHYON_API_URL", api_url)
+        .args([
+            "api-key",
+            "create",
+            "sa_01jz0aaaaaaaaaaaaaaaaaaaaa",
+            "--name",
+            "iac",
+            "--ttl-seconds",
+            "86400",
+            "--json",
+        ])
+        .output()
+        .expect("run tachyon api-key create");
+
+    assert!(
+        output.status.success(),
+        "api-key create failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let req = rx.recv().unwrap();
+    handle.join().unwrap();
+    assert!(req.contains(r#""ttlSeconds":86400"#));
+
+    let key: serde_json::Value = serde_json::from_slice(&output.stdout).expect("key json");
+    assert_eq!(key["expiresAt"], "2026-10-15T00:00:00Z");
+}
+
+#[test]
+fn api_key_create_rejects_non_positive_ttl_seconds() {
+    let tmp = TempDir::new().unwrap();
+    let output = isolated_command(tmp.path())
+        .env("TACHYON_API_URL", "http://127.0.0.1:9")
+        .args([
+            "api-key",
+            "create",
+            "sa_01jz0aaaaaaaaaaaaaaaaaaaaa",
+            "--name",
+            "iac",
+            "--ttl-seconds",
+            "0",
+        ])
+        .output()
+        .expect("run tachyon api-key create");
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("--ttl-seconds"), "stderr was:\n{stderr}");
 }
 
 #[test]
@@ -96,12 +176,12 @@ fn api_key_list_decodes_openapi_envelope() {
     let tmp = TempDir::new().unwrap();
     let (api_url, rx, handle) = start_server(
         "200 OK",
-        r#"{"apiKeys":[{"id":"key_123456789012","serviceAccountId":"sa_123456789012","name":"CEO key","value":"pk_****","createdAt":"2026-05-21T00:00:00Z","expiresAt":null}]}"#,
+        r#"{"apiKeys":[{"id":"key_123456789012","serviceAccountId":"sa_01jz0aaaaaaaaaaaaaaaaaaaaa","name":"CEO key","value":"pk_****","createdAt":"2026-05-21T00:00:00Z","expiresAt":null}]}"#,
     );
 
     let output = isolated_command(tmp.path())
         .env("TACHYON_API_URL", api_url)
-        .args(["api-key", "list", "sa_123456789012", "--json"])
+        .args(["api-key", "list", "sa_01jz0aaaaaaaaaaaaaaaaaaaaa", "--json"])
         .output()
         .expect("run tachyon api-key list");
 
@@ -115,7 +195,7 @@ fn api_key_list_decodes_openapi_envelope() {
     let req = rx.recv().unwrap();
     handle.join().unwrap();
     assert!(req.starts_with(
-        "GET /v1/auth/service-accounts/sa_123456789012/api-keys?operator_id=tn_test1234567890 "
+        "GET /v1/auth/service-accounts/sa_01jz0aaaaaaaaaaaaaaaaaaaaa/api-keys?operator_id=tn_test1234567890 "
     ));
 
     let keys: Vec<serde_json::Value> = serde_json::from_slice(&output.stdout).expect("keys json");
@@ -128,19 +208,19 @@ fn api_key_list_rejects_wrong_value_field_name() {
     let tmp = TempDir::new().unwrap();
     let (api_url, rx, handle) = start_server(
         "200 OK",
-        r#"{"apiKeys":[{"id":"key_123456789012","serviceAccountId":"sa_123456789012","name":"CEO key","prefix":"pk_legacy","createdAt":"2026-05-21T00:00:00Z","expiresAt":null}]}"#,
+        r#"{"apiKeys":[{"id":"key_123456789012","serviceAccountId":"sa_01jz0aaaaaaaaaaaaaaaaaaaaa","name":"CEO key","prefix":"pk_legacy","createdAt":"2026-05-21T00:00:00Z","expiresAt":null}]}"#,
     );
 
     let output = isolated_command(tmp.path())
         .env("TACHYON_API_URL", api_url)
-        .args(["api-key", "list", "sa_123456789012", "--json"])
+        .args(["api-key", "list", "sa_01jz0aaaaaaaaaaaaaaaaaaaaa", "--json"])
         .output()
         .expect("run tachyon api-key list");
 
     let req = rx.recv().unwrap();
     handle.join().unwrap();
     assert!(req.starts_with(
-        "GET /v1/auth/service-accounts/sa_123456789012/api-keys?operator_id=tn_test1234567890 "
+        "GET /v1/auth/service-accounts/sa_01jz0aaaaaaaaaaaaaaaaaaaaa/api-keys?operator_id=tn_test1234567890 "
     ));
     assert!(
         !output.status.success(),
@@ -160,7 +240,7 @@ fn api_key_revoke_posts_documented_revoke_contract() {
         .args([
             "api-key",
             "revoke",
-            "sa_123456789012",
+            "sa_01jz0aaaaaaaaaaaaaaaaaaaaa",
             "key_123456789012",
             "--json",
         ])
@@ -177,7 +257,7 @@ fn api_key_revoke_posts_documented_revoke_contract() {
     let req = rx.recv().unwrap();
     handle.join().unwrap();
     assert!(req.starts_with(
-        "POST /v1/auth/service-accounts/sa_123456789012/api-keys/key_123456789012/revoke "
+        "POST /v1/auth/service-accounts/sa_01jz0aaaaaaaaaaaaaaaaaaaaa/api-keys/key_123456789012/revoke "
     ));
     assert!(req.contains(r#""operatorId":"tn_test1234567890""#));
 

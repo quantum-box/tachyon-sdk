@@ -94,6 +94,22 @@ fn assert_decode_failure(output: &Output, missing_field: &str) {
     );
 }
 
+/// Service-account list the CLI fetches before every name-or-ID argument.
+fn sa_lookup() -> MockResponse {
+    MockResponse {
+        status: "200 OK",
+        body: r#"{"serviceAccounts":[{"id":"sa_01jz0aaaaaaaaaaaaaaaaaaaaa","tenantId":"tn_test1234567890","name":"inventory","createdAt":"2026-08-01T00:00:00Z"}]}"#,
+    }
+}
+
+/// Policy list the CLI fetches before every policy name-or-ID argument.
+fn policy_lookup() -> MockResponse {
+    MockResponse {
+        status: "200 OK",
+        body: r#"{"policies":[{"id":"pol_01jz0bbbbbbbbbbbbbbbbbbbbb","name":"IacApply","description":null,"isSystem":false,"tenantId":"tn_test1234567890","sharedWithDescendants":false,"ownerTenantId":null,"createdAt":"2026-10-14T00:00:00Z","updatedAt":"2026-10-14T00:00:00Z"}],"totalCount":1}"#,
+    }
+}
+
 fn finish_requests(rx: mpsc::Receiver<Vec<String>>, handle: thread::JoinHandle<()>) -> Vec<String> {
     let requests = rx.recv().unwrap();
     handle.join().unwrap();
@@ -113,7 +129,7 @@ fn service_accounts_list_sends_tenant_query_and_decodes_openapi_envelope() {
     let tmp = TempDir::new().unwrap();
     let (api_url, rx, handle) = start_server(vec![MockResponse {
         status: "200 OK",
-        body: r#"{"serviceAccounts":[{"id":"sa_123456789012","tenantId":"tn_test1234567890","name":"inventory","createdAt":"2026-08-01T00:00:00Z"}]}"#,
+        body: r#"{"serviceAccounts":[{"id":"sa_01jz0aaaaaaaaaaaaaaaaaaaaa","tenantId":"tn_test1234567890","name":"inventory","createdAt":"2026-08-01T00:00:00Z"}]}"#,
     }]);
 
     let output = run_org(
@@ -131,7 +147,7 @@ fn service_accounts_list_sends_tenant_query_and_decodes_openapi_envelope() {
     let accounts: Vec<serde_json::Value> =
         serde_json::from_slice(&output.stdout).expect("service accounts json");
     assert_eq!(accounts.len(), 1);
-    assert_eq!(accounts[0]["id"], "sa_123456789012");
+    assert_eq!(accounts[0]["id"], "sa_01jz0aaaaaaaaaaaaaaaaaaaaa");
 }
 
 #[test]
@@ -139,7 +155,7 @@ fn service_accounts_list_rejects_wrong_item_fields() {
     let tmp = TempDir::new().unwrap();
     let (api_url, rx, handle) = start_server(vec![MockResponse {
         status: "200 OK",
-        body: r#"{"serviceAccounts":[{"id":"sa_123456789012","name":"legacy","description":"old field","createdAt":"2026-08-01T00:00:00Z"}]}"#,
+        body: r#"{"serviceAccounts":[{"id":"sa_01jz0aaaaaaaaaaaaaaaaaaaaa","name":"legacy","description":"old field","createdAt":"2026-08-01T00:00:00Z"}]}"#,
     }]);
 
     let output = run_org(
@@ -158,10 +174,13 @@ fn service_accounts_list_rejects_wrong_item_fields() {
 #[test]
 fn service_accounts_get_sends_tenant_query_and_header() {
     let tmp = TempDir::new().unwrap();
-    let (api_url, rx, handle) = start_server(vec![MockResponse {
-        status: "200 OK",
-        body: r#"{"id":"sa_123456789012","tenantId":"tn_test1234567890","name":"inventory","createdAt":"2026-08-01T00:00:00Z"}"#,
-    }]);
+    let (api_url, rx, handle) = start_server(vec![
+        sa_lookup(),
+        MockResponse {
+            status: "200 OK",
+            body: r#"{"id":"sa_01jz0aaaaaaaaaaaaaaaaaaaaa","tenantId":"tn_test1234567890","name":"inventory","createdAt":"2026-08-01T00:00:00Z"}"#,
+        },
+    ]);
 
     let output = run_org(
         tmp.path(),
@@ -170,7 +189,7 @@ fn service_accounts_get_sends_tenant_query_and_header() {
             "org",
             "service-accounts",
             "get",
-            "sa_123456789012",
+            "sa_01jz0aaaaaaaaaaaaaaaaaaaaa",
             "--json",
         ],
     );
@@ -178,18 +197,21 @@ fn service_accounts_get_sends_tenant_query_and_header() {
 
     let requests = finish_requests(rx, handle);
     assert_tenant_request(
-        &requests[0],
-        "GET /v1/auth/service-accounts/sa_123456789012?operator_id=tn_test1234567890 ",
+        &requests[1],
+        "GET /v1/auth/service-accounts/sa_01jz0aaaaaaaaaaaaaaaaaaaaa?operator_id=tn_test1234567890 ",
     );
 }
 
 #[test]
 fn service_account_api_keys_sends_tenant_query_and_decodes_openapi_envelope() {
     let tmp = TempDir::new().unwrap();
-    let (api_url, rx, handle) = start_server(vec![MockResponse {
-        status: "200 OK",
-        body: r#"{"apiKeys":[{"id":"key_123456789012","serviceAccountId":"sa_123456789012","name":"audit","value":"pk_****","createdAt":"2026-08-01T00:00:00Z","expiresAt":null}]}"#,
-    }]);
+    let (api_url, rx, handle) = start_server(vec![
+        sa_lookup(),
+        MockResponse {
+            status: "200 OK",
+            body: r#"{"apiKeys":[{"id":"key_123456789012","serviceAccountId":"sa_01jz0aaaaaaaaaaaaaaaaaaaaa","name":"audit","value":"pk_****","createdAt":"2026-08-01T00:00:00Z","expiresAt":null}]}"#,
+        },
+    ]);
 
     let output = run_org(
         tmp.path(),
@@ -198,7 +220,7 @@ fn service_account_api_keys_sends_tenant_query_and_decodes_openapi_envelope() {
             "org",
             "service-accounts",
             "api-keys",
-            "sa_123456789012",
+            "sa_01jz0aaaaaaaaaaaaaaaaaaaaa",
             "--json",
         ],
     );
@@ -206,8 +228,8 @@ fn service_account_api_keys_sends_tenant_query_and_decodes_openapi_envelope() {
 
     let requests = finish_requests(rx, handle);
     assert_tenant_request(
-        &requests[0],
-        "GET /v1/auth/service-accounts/sa_123456789012/api-keys?operator_id=tn_test1234567890 ",
+        &requests[1],
+        "GET /v1/auth/service-accounts/sa_01jz0aaaaaaaaaaaaaaaaaaaaa/api-keys?operator_id=tn_test1234567890 ",
     );
     let keys: Vec<serde_json::Value> =
         serde_json::from_slice(&output.stdout).expect("api keys json");
@@ -218,10 +240,13 @@ fn service_account_api_keys_sends_tenant_query_and_decodes_openapi_envelope() {
 #[test]
 fn service_account_api_keys_reject_wrong_item_fields() {
     let tmp = TempDir::new().unwrap();
-    let (api_url, rx, handle) = start_server(vec![MockResponse {
-        status: "200 OK",
-        body: r#"{"apiKeys":[{"id":"key_123456789012","serviceAccountId":"sa_123456789012","name":"legacy","prefix":"pk_legacy","createdAt":"2026-08-01T00:00:00Z","expiresAt":null}]}"#,
-    }]);
+    let (api_url, rx, handle) = start_server(vec![
+        sa_lookup(),
+        MockResponse {
+            status: "200 OK",
+            body: r#"{"apiKeys":[{"id":"key_123456789012","serviceAccountId":"sa_01jz0aaaaaaaaaaaaaaaaaaaaa","name":"legacy","prefix":"pk_legacy","createdAt":"2026-08-01T00:00:00Z","expiresAt":null}]}"#,
+        },
+    ]);
 
     let output = run_org(
         tmp.path(),
@@ -230,14 +255,14 @@ fn service_account_api_keys_reject_wrong_item_fields() {
             "org",
             "service-accounts",
             "api-keys",
-            "sa_123456789012",
+            "sa_01jz0aaaaaaaaaaaaaaaaaaaaa",
             "--json",
         ],
     );
     let requests = finish_requests(rx, handle);
     assert_tenant_request(
-        &requests[0],
-        "GET /v1/auth/service-accounts/sa_123456789012/api-keys?operator_id=tn_test1234567890 ",
+        &requests[1],
+        "GET /v1/auth/service-accounts/sa_01jz0aaaaaaaaaaaaaaaaaaaaa/api-keys?operator_id=tn_test1234567890 ",
     );
     assert_decode_failure(&output, "value");
 }
@@ -248,7 +273,7 @@ fn api_key_name_resolution_uses_tenant_query() {
     let (api_url, rx, handle) = start_server(vec![
         MockResponse {
             status: "200 OK",
-            body: r#"{"serviceAccounts":[{"id":"sa_123456789012","tenantId":"tn_test1234567890","name":"inventory","createdAt":"2026-08-01T00:00:00Z"}]}"#,
+            body: r#"{"serviceAccounts":[{"id":"sa_01jz0aaaaaaaaaaaaaaaaaaaaa","tenantId":"tn_test1234567890","name":"inventory","createdAt":"2026-08-01T00:00:00Z"}]}"#,
         },
         MockResponse {
             status: "200 OK",
@@ -271,7 +296,7 @@ fn api_key_name_resolution_uses_tenant_query() {
     );
     assert_tenant_request(
         &requests[1],
-        "GET /v1/auth/service-accounts/sa_123456789012/api-keys?operator_id=tn_test1234567890 ",
+        "GET /v1/auth/service-accounts/sa_01jz0aaaaaaaaaaaaaaaaaaaaa/api-keys?operator_id=tn_test1234567890 ",
     );
 }
 
@@ -675,4 +700,404 @@ fn policies_delete_referenced_409_preserves_per_reference_counts() {
             "missing {count}; stderr was:\n{stderr}"
         );
     }
+}
+
+const POLICIES_BODY: &str = r#"{"policies":[{"id":"pol_system000000001","name":"IacApply","description":null,"isSystem":true,"tenantId":null,"sharedWithDescendants":false,"ownerTenantId":null,"createdAt":"2026-10-14T00:00:00Z","updatedAt":"2026-10-14T00:00:00Z"},{"id":"pol_01jz0bbbbbbbbbbbbbbbbbbbbb","name":"IacApply","description":null,"isSystem":false,"tenantId":"tn_test1234567890","sharedWithDescendants":false,"ownerTenantId":null,"createdAt":"2026-10-14T00:00:00Z","updatedAt":"2026-10-14T00:00:00Z"}],"totalCount":2}"#;
+
+#[test]
+fn service_accounts_create_checks_name_then_posts_tenant_request() {
+    let tmp = TempDir::new().unwrap();
+    let (api_url, rx, handle) = start_server(vec![
+        MockResponse {
+            status: "200 OK",
+            body: r#"{"serviceAccounts":[{"id":"sa_000000000001","tenantId":"tn_test1234567890","name":"other","createdAt":"2026-08-01T00:00:00Z"}]}"#,
+        },
+        MockResponse {
+            status: "201 Created",
+            body: r#"{"id":"sa_01jz0aaaaaaaaaaaaaaaaaaaaa","tenantId":"tn_test1234567890","name":"iac-apply","createdAt":"2026-10-14T00:00:00Z"}"#,
+        },
+    ]);
+
+    let output = run_org(
+        tmp.path(),
+        api_url,
+        &["org", "service-accounts", "create", "iac-apply", "--json"],
+    );
+    assert_success(&output);
+
+    let requests = finish_requests(rx, handle);
+    assert_tenant_request(
+        &requests[0],
+        "GET /v1/auth/service-accounts?operator_id=tn_test1234567890 ",
+    );
+    assert_tenant_request(&requests[1], "POST /v1/auth/service-accounts ");
+    assert!(requests[1].contains(r#""tenantId":"tn_test1234567890""#));
+    assert!(requests[1].contains(r#""name":"iac-apply""#));
+
+    let sa: serde_json::Value = serde_json::from_slice(&output.stdout).expect("sa json");
+    assert_eq!(sa["id"], "sa_01jz0aaaaaaaaaaaaaaaaaaaaa");
+    assert_eq!(sa["name"], "iac-apply");
+}
+
+#[test]
+fn service_accounts_create_refuses_duplicate_name() {
+    let tmp = TempDir::new().unwrap();
+    let (api_url, rx, handle) = start_server(vec![MockResponse {
+        status: "200 OK",
+        body: r#"{"serviceAccounts":[{"id":"sa_01jz0aaaaaaaaaaaaaaaaaaaaa","tenantId":"tn_test1234567890","name":"iac-apply","createdAt":"2026-08-01T00:00:00Z"}]}"#,
+    }]);
+
+    let output = run_org(
+        tmp.path(),
+        api_url,
+        &["org", "service-accounts", "create", "iac-apply"],
+    );
+    let requests = finish_requests(rx, handle);
+    assert_eq!(requests.len(), 1);
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("already exists"), "stderr was:\n{stderr}");
+    assert!(
+        stderr.contains("sa_01jz0aaaaaaaaaaaaaaaaaaaaa"),
+        "stderr was:\n{stderr}"
+    );
+}
+
+#[test]
+fn service_accounts_attach_policy_resolves_names_and_sends_mutation() {
+    let tmp = TempDir::new().unwrap();
+    let (api_url, rx, handle) = start_server(vec![
+        MockResponse {
+            status: "200 OK",
+            body: r#"{"serviceAccounts":[{"id":"sa_01jz0aaaaaaaaaaaaaaaaaaaaa","tenantId":"tn_test1234567890","name":"iac-apply","createdAt":"2026-08-01T00:00:00Z"}]}"#,
+        },
+        MockResponse {
+            status: "200 OK",
+            body: POLICIES_BODY,
+        },
+        MockResponse {
+            status: "200 OK",
+            body: r#"{"data":{"attachServiceAccountPolicy":{"success":true,"message":"ok"}}}"#,
+        },
+    ]);
+
+    let output = run_org(
+        tmp.path(),
+        api_url,
+        &[
+            "org",
+            "service-accounts",
+            "attach-policy",
+            "iac-apply",
+            "IacApply",
+            "--json",
+        ],
+    );
+    assert_success(&output);
+
+    let requests = finish_requests(rx, handle);
+    assert_tenant_request(
+        &requests[0],
+        "GET /v1/auth/service-accounts?operator_id=tn_test1234567890 ",
+    );
+    assert_tenant_request(&requests[1], "GET /v1/auth/policies ");
+    assert_tenant_request(&requests[2], "POST /v1/graphql ");
+    assert!(requests[2].contains("attachServiceAccountPolicy(input: $input)"));
+    assert!(requests[2].contains(r#""serviceAccountId":"sa_01jz0aaaaaaaaaaaaaaaaaaaaa""#));
+    assert!(requests[2].contains(r#""policyId":"pol_01jz0bbbbbbbbbbbbbbbbbbbbb""#));
+
+    let body: serde_json::Value = serde_json::from_slice(&output.stdout).expect("attach json");
+    assert_eq!(body["serviceAccountId"], "sa_01jz0aaaaaaaaaaaaaaaaaaaaa");
+    assert_eq!(body["policyId"], "pol_01jz0bbbbbbbbbbbbbbbbbbbbb");
+    assert_eq!(body["policyName"], "IacApply");
+    assert_eq!(body["attached"], true);
+}
+
+#[test]
+fn service_accounts_detach_policy_by_ids_matches_listed_ids() {
+    let tmp = TempDir::new().unwrap();
+    let (api_url, rx, handle) = start_server(vec![
+        sa_lookup(),
+        policy_lookup(),
+        MockResponse {
+            status: "200 OK",
+            body: r#"{"data":{"detachServiceAccountPolicy":{"success":true,"message":"ok"}}}"#,
+        },
+    ]);
+
+    let output = run_org(
+        tmp.path(),
+        api_url,
+        &[
+            "org",
+            "service-accounts",
+            "detach-policy",
+            "sa_01jz0aaaaaaaaaaaaaaaaaaaaa",
+            "pol_01jz0bbbbbbbbbbbbbbbbbbbbb",
+            "--json",
+        ],
+    );
+    assert_success(&output);
+
+    let requests = finish_requests(rx, handle);
+    assert_eq!(requests.len(), 3);
+    assert_tenant_request(&requests[2], "POST /v1/graphql ");
+    assert!(requests[2].contains("detachServiceAccountPolicy(input: $input)"));
+    assert!(requests[2].contains(r#""policyId":"pol_01jz0bbbbbbbbbbbbbbbbbbbbb""#));
+
+    let body: serde_json::Value = serde_json::from_slice(&output.stdout).expect("detach json");
+    assert_eq!(body["attached"], false);
+    assert_eq!(body["policyName"], "IacApply");
+}
+
+#[test]
+fn service_accounts_attach_policy_reports_graphql_errors() {
+    let tmp = TempDir::new().unwrap();
+    let (api_url, rx, handle) = start_server(vec![
+        sa_lookup(),
+        policy_lookup(),
+        MockResponse {
+            status: "200 OK",
+            body: r#"{"data":null,"errors":[{"message":"policy does not belong to the authorized tenant scope"}]}"#,
+        },
+    ]);
+
+    let output = run_org(
+        tmp.path(),
+        api_url,
+        &[
+            "org",
+            "service-accounts",
+            "attach-policy",
+            "sa_01jz0aaaaaaaaaaaaaaaaaaaaa",
+            "pol_01jz0bbbbbbbbbbbbbbbbbbbbb",
+        ],
+    );
+    finish_requests(rx, handle);
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("authorized tenant scope"),
+        "stderr was:\n{stderr}"
+    );
+}
+
+#[test]
+fn service_accounts_delete_resolves_name_and_sends_delete() {
+    let tmp = TempDir::new().unwrap();
+    let (api_url, rx, handle) = start_server(vec![
+        MockResponse {
+            status: "200 OK",
+            body: r#"{"serviceAccounts":[{"id":"sa_01jz0aaaaaaaaaaaaaaaaaaaaa","tenantId":"tn_test1234567890","name":"iac-apply","createdAt":"2026-08-01T00:00:00Z"}]}"#,
+        },
+        MockResponse {
+            status: "200 OK",
+            body: r#"{"id":"sa_01jz0aaaaaaaaaaaaaaaaaaaaa"}"#,
+        },
+    ]);
+
+    let output = run_org(
+        tmp.path(),
+        api_url,
+        &["org", "service-accounts", "delete", "iac-apply", "--json"],
+    );
+    assert_success(&output);
+
+    let requests = finish_requests(rx, handle);
+    assert_tenant_request(
+        &requests[1],
+        "DELETE /v1/auth/service-accounts/sa_01jz0aaaaaaaaaaaaaaaaaaaaa ",
+    );
+    let body: serde_json::Value = serde_json::from_slice(&output.stdout).expect("delete json");
+    assert_eq!(body["id"], "sa_01jz0aaaaaaaaaaaaaaaaaaaaa");
+    assert_eq!(body["deleted"], true);
+}
+
+#[test]
+fn service_account_name_ambiguity_suggests_ids() {
+    let tmp = TempDir::new().unwrap();
+    let (api_url, rx, handle) = start_server(vec![MockResponse {
+        status: "200 OK",
+        body: r#"{"serviceAccounts":[{"id":"sa_000000000001","tenantId":"tn_test1234567890","name":"gha.iac-apply.write","createdAt":"2026-10-14T00:00:00Z"},{"id":"sa_000000000002","tenantId":"tn_test1234567890","name":"gha.iac-apply.write","createdAt":"2026-10-14T00:01:00Z"}]}"#,
+    }]);
+
+    let output = run_org(
+        tmp.path(),
+        api_url,
+        &["org", "service-accounts", "delete", "gha.iac-apply.write"],
+    );
+    let requests = finish_requests(rx, handle);
+    assert_eq!(requests.len(), 1, "nothing may be deleted on ambiguity");
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("sa_000000000001"), "stderr was:\n{stderr}");
+    assert!(stderr.contains("sa_000000000002"), "stderr was:\n{stderr}");
+    assert!(
+        stderr.contains("Pass one of these IDs"),
+        "stderr was:\n{stderr}"
+    );
+}
+
+#[test]
+fn service_accounts_attach_policy_resolves_id_shaped_policy_names() {
+    let tmp = TempDir::new().unwrap();
+    let (api_url, rx, handle) = start_server(vec![
+        sa_lookup(),
+        MockResponse {
+            status: "200 OK",
+            body: r#"{"policies":[{"id":"pol_team000000001","name":"team_policy123456","description":null,"isSystem":false,"tenantId":"tn_test1234567890","sharedWithDescendants":false,"ownerTenantId":null,"createdAt":"2026-10-14T00:00:00Z","updatedAt":"2026-10-14T00:00:00Z"}],"totalCount":1}"#,
+        },
+        MockResponse {
+            status: "200 OK",
+            body: r#"{"data":{"attachServiceAccountPolicy":{"success":true,"message":"ok"}}}"#,
+        },
+    ]);
+
+    let output = run_org(
+        tmp.path(),
+        api_url,
+        &[
+            "org",
+            "service-accounts",
+            "attach-policy",
+            "sa_01jz0aaaaaaaaaaaaaaaaaaaaa",
+            "team_policy123456",
+            "--json",
+        ],
+    );
+    assert_success(&output);
+
+    let requests = finish_requests(rx, handle);
+    assert_tenant_request(&requests[1], "GET /v1/auth/policies ");
+    assert!(requests[2].contains(r#""policyId":"pol_team000000001""#));
+}
+
+#[test]
+fn service_accounts_delete_resolves_id_shaped_service_account_names() {
+    let tmp = TempDir::new().unwrap();
+    let (api_url, rx, handle) = start_server(vec![
+        MockResponse {
+            status: "200 OK",
+            body: r#"{"serviceAccounts":[{"id":"sa_01jz0aaaaaaaaaaaaaaaaaaaaa","tenantId":"tn_test1234567890","name":"team_account123456","createdAt":"2026-08-01T00:00:00Z"}]}"#,
+        },
+        MockResponse {
+            status: "200 OK",
+            body: r#"{"id":"sa_01jz0aaaaaaaaaaaaaaaaaaaaa"}"#,
+        },
+    ]);
+
+    let output = run_org(
+        tmp.path(),
+        api_url,
+        &["org", "service-accounts", "delete", "team_account123456"],
+    );
+    assert_success(&output);
+
+    let requests = finish_requests(rx, handle);
+    assert_tenant_request(
+        &requests[0],
+        "GET /v1/auth/service-accounts?operator_id=tn_test1234567890 ",
+    );
+    assert_tenant_request(
+        &requests[1],
+        "DELETE /v1/auth/service-accounts/sa_01jz0aaaaaaaaaaaaaaaaaaaaa ",
+    );
+}
+
+#[test]
+fn service_accounts_attach_policy_resolves_prefixed_names() {
+    let tmp = TempDir::new().unwrap();
+    let (api_url, rx, handle) = start_server(vec![
+        MockResponse {
+            status: "200 OK",
+            body: r#"{"serviceAccounts":[{"id":"sa_01jz0aaaaaaaaaaaaaaaaaaaaa","tenantId":"tn_test1234567890","name":"sa_marketingteam","createdAt":"2026-08-01T00:00:00Z"}]}"#,
+        },
+        MockResponse {
+            status: "200 OK",
+            body: r#"{"policies":[{"id":"pol_01jz0ccccccccccccccccccccc","name":"pol_financereader","description":null,"isSystem":false,"tenantId":"tn_test1234567890","sharedWithDescendants":false,"ownerTenantId":null,"createdAt":"2026-10-14T00:00:00Z","updatedAt":"2026-10-14T00:00:00Z"}],"totalCount":1}"#,
+        },
+        MockResponse {
+            status: "200 OK",
+            body: r#"{"data":{"attachServiceAccountPolicy":{"success":true,"message":"ok"}}}"#,
+        },
+    ]);
+
+    let output = run_org(
+        tmp.path(),
+        api_url,
+        &[
+            "org",
+            "service-accounts",
+            "attach-policy",
+            "sa_marketingteam",
+            "pol_financereader",
+        ],
+    );
+    assert_success(&output);
+
+    let requests = finish_requests(rx, handle);
+    assert!(requests[2].contains(r#""serviceAccountId":"sa_01jz0aaaaaaaaaaaaaaaaaaaaa""#));
+    assert!(requests[2].contains(r#""policyId":"pol_01jz0ccccccccccccccccccccc""#));
+}
+
+#[test]
+fn service_accounts_delete_prefers_name_over_canonical_id_shape() {
+    let tmp = TempDir::new().unwrap();
+    let (api_url, rx, handle) = start_server(vec![
+        MockResponse {
+            status: "200 OK",
+            body: r#"{"serviceAccounts":[{"id":"sa_01jz0aaaaaaaaaaaaaaaaaaaaa","tenantId":"tn_test1234567890","name":"sa_01jz0ddddddddddddddddddddd","createdAt":"2026-08-01T00:00:00Z"}]}"#,
+        },
+        MockResponse {
+            status: "200 OK",
+            body: r#"{"id":"sa_01jz0aaaaaaaaaaaaaaaaaaaaa"}"#,
+        },
+    ]);
+
+    let output = run_org(
+        tmp.path(),
+        api_url,
+        &[
+            "org",
+            "service-accounts",
+            "delete",
+            "sa_01jz0ddddddddddddddddddddd",
+        ],
+    );
+    assert_success(&output);
+
+    let requests = finish_requests(rx, handle);
+    assert_tenant_request(
+        &requests[1],
+        "DELETE /v1/auth/service-accounts/sa_01jz0aaaaaaaaaaaaaaaaaaaaa ",
+    );
+}
+
+#[test]
+fn service_accounts_delete_passes_unlisted_canonical_id_to_server() {
+    let tmp = TempDir::new().unwrap();
+    let (api_url, rx, handle) = start_server(vec![
+        sa_lookup(),
+        MockResponse {
+            status: "404 Not Found",
+            body: r#"{"message":"Service account is not found."}"#,
+        },
+    ]);
+
+    let output = run_org(
+        tmp.path(),
+        api_url,
+        &[
+            "org",
+            "service-accounts",
+            "delete",
+            "sa_01jz0eeeeeeeeeeeeeeeeeeeee",
+        ],
+    );
+    let requests = finish_requests(rx, handle);
+    assert_tenant_request(
+        &requests[1],
+        "DELETE /v1/auth/service-accounts/sa_01jz0eeeeeeeeeeeeeeeeeeeee ",
+    );
+    assert!(!output.status.success());
 }

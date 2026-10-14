@@ -300,6 +300,34 @@ cancelled, and timed-out builds return non-zero so automation can stop early.
 > container. Phase 1 requires `--mock <path>`; the live build-config endpoint
 > (PLT-913) lands in Phase 2.
 
+### Service accounts and API keys
+
+Set up a service account for automation (for example an IaC apply job) in the
+tenant selected by `TACHYON_TENANT_ID` / `--tenant-id`:
+
+```sh
+# Create the service account. Names must be unique within the tenant; the
+# command stops if one with the same name already exists.
+tachyon org service-accounts create gha.iac-apply.write
+
+# Attach a policy. Both arguments accept an ID or a name.
+tachyon org service-accounts attach-policy gha.iac-apply.write IacApplyWrite
+
+# Issue a key that expires after 90 days (omit --ttl-seconds for no expiry).
+tachyon api-key create gha.iac-apply.write --name github-actions \
+  --ttl-seconds 7776000 --json
+
+# Detach a policy, or delete the service account together with its API keys.
+tachyon org service-accounts detach-policy gha.iac-apply.write IacApplyWrite
+tachyon org service-accounts delete gha.iac-apply.write
+```
+
+A policy name resolves to the policy owned by the current tenant first, then to
+a system policy or a policy shared from an ancestor tenant. If more than one
+policy or service account matches a name, the command stops and lists the
+matching IDs; pass one of those IDs instead. All of these commands accept
+`--json`.
+
 ### Slack notifications
 
 Use `--mention` more than once to mix Slack users, Teams (User Groups),
