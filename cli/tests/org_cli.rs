@@ -934,3 +934,35 @@ fn service_accounts_attach_policy_resolves_id_shaped_policy_names() {
     assert_tenant_request(&requests[0], "GET /v1/auth/policies ");
     assert!(requests[1].contains(r#""policyId":"pol_team000000001""#));
 }
+
+#[test]
+fn service_accounts_delete_resolves_id_shaped_service_account_names() {
+    let tmp = TempDir::new().unwrap();
+    let (api_url, rx, handle) = start_server(vec![
+        MockResponse {
+            status: "200 OK",
+            body: r#"{"serviceAccounts":[{"id":"sa_123456789012","tenantId":"tn_test1234567890","name":"team_account123456","createdAt":"2026-08-01T00:00:00Z"}]}"#,
+        },
+        MockResponse {
+            status: "200 OK",
+            body: r#"{"id":"sa_123456789012"}"#,
+        },
+    ]);
+
+    let output = run_org(
+        tmp.path(),
+        api_url,
+        &["org", "service-accounts", "delete", "team_account123456"],
+    );
+    assert_success(&output);
+
+    let requests = finish_requests(rx, handle);
+    assert_tenant_request(
+        &requests[0],
+        "GET /v1/auth/service-accounts?operator_id=tn_test1234567890 ",
+    );
+    assert_tenant_request(
+        &requests[1],
+        "DELETE /v1/auth/service-accounts/sa_123456789012 ",
+    );
+}

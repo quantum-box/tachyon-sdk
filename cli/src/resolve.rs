@@ -286,7 +286,9 @@ pub async fn resolve_service_account_id(
     tenant_id: &str,
     name_or_id: &str,
 ) -> Result<String> {
-    if looks_like_id(name_or_id) {
+    // Only `sa_` IDs skip the lookup: names such as `team_account123456`
+    // also look like generated IDs to `looks_like_id`.
+    if name_or_id.starts_with("sa_") && looks_like_id(name_or_id) {
         return Ok(name_or_id.to_string());
     }
 
