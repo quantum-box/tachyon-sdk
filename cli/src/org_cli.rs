@@ -752,7 +752,9 @@ async fn resolve_policy(
     tenant_id: &str,
     policy: &str,
 ) -> Result<(String, Option<String>)> {
-    if resolve::looks_like_id(policy) {
+    // Only `pol_` IDs skip the lookup: names such as `team_policy123456`
+    // also look like generated IDs to `looks_like_id`.
+    if policy.starts_with("pol_") && resolve::looks_like_id(policy) {
         return Ok((policy.to_string(), None));
     }
     let response: PolicyListResponse = api.get("/v1/auth/policies").await?;
@@ -767,20 +769,14 @@ async fn resolve_policy(
 }
 
 async fn graphql_mutation(api: &ApiClient, query: &str, variables: Value) -> Result<Value> {
-    let url = format!("{}/v1/graphql", api.base_url);
-    let response = api
-        .client
-        .post(url)
-        .json(&json!({ "query": query, "variables": variables }))
-        .send()
+    // `ApiClient::post` refreshes an expired OAuth token and retries once.
+    // Attach and detach are idempotent, so the replay is safe.
+    let payload: Value = api
+        .post(
+            "/v1/graphql",
+            &json!({ "query": query, "variables": variables }),
+        )
         .await?;
-    let status = response.status();
-    let payload: Value = response.json().await?;
-    if !status.is_success() {
-        return Err(anyhow!(
-            "graphql request failed: status={status}, body={payload}"
-        ));
-    }
     if let Some(errors) = payload.get("errors") {
         return Err(anyhow!("graphql error: {errors}"));
     }

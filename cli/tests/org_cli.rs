@@ -901,3 +901,36 @@ fn service_account_name_ambiguity_suggests_ids() {
         "stderr was:\n{stderr}"
     );
 }
+
+#[test]
+fn service_accounts_attach_policy_resolves_id_shaped_policy_names() {
+    let tmp = TempDir::new().unwrap();
+    let (api_url, rx, handle) = start_server(vec![
+        MockResponse {
+            status: "200 OK",
+            body: r#"{"policies":[{"id":"pol_team000000001","name":"team_policy123456","description":null,"isSystem":false,"tenantId":"tn_test1234567890","sharedWithDescendants":false,"ownerTenantId":null,"createdAt":"2026-10-14T00:00:00Z","updatedAt":"2026-10-14T00:00:00Z"}],"totalCount":1}"#,
+        },
+        MockResponse {
+            status: "200 OK",
+            body: r#"{"data":{"attachServiceAccountPolicy":{"success":true,"message":"ok"}}}"#,
+        },
+    ]);
+
+    let output = run_org(
+        tmp.path(),
+        api_url,
+        &[
+            "org",
+            "service-accounts",
+            "attach-policy",
+            "sa_123456789012",
+            "team_policy123456",
+            "--json",
+        ],
+    );
+    assert_success(&output);
+
+    let requests = finish_requests(rx, handle);
+    assert_tenant_request(&requests[0], "GET /v1/auth/policies ");
+    assert!(requests[1].contains(r#""policyId":"pol_team000000001""#));
+}
