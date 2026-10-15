@@ -676,8 +676,7 @@ async fn run_iac_step(
         .arg(operation)
         .arg("--file")
         .arg(&manifest_path)
-        .arg("--app")
-        .arg(&iac.app_name)
+        .arg(iac_app_arg(&iac.app_name))
         .current_dir(checkout_dir)
         .env(TACHYON_API_URL_ENV, &api_url)
         // `TACHYON_API_KEY` takes precedence over profile auth, so the
@@ -717,6 +716,10 @@ fn validate_iac_operation(operation: &str) -> Result<&str> {
         "plan" | "apply" => Ok(operation),
         other => Err(anyhow!("unsupported Tachyon IaC operation: {other}")),
     }
+}
+
+fn iac_app_arg(app_name: &str) -> OsString {
+    format!("--app={app_name}").into()
 }
 
 /// Resolve the manifest path following the same candidate order as
@@ -908,8 +911,33 @@ fn is_lambda(workload: &BuildWorkloadSpec) -> bool {
 /// not depend on wrangler itself, so an upstream release can
 /// change CLI behavior mid-pipeline. Bump deliberately.
 const WRANGLER_NPM_SPEC: &str = "wrangler@4.100.0";
+const MAX_COMMIT_MESSAGE_LENGTH: usize = 2048;
+
+/// Build an attached Wrangler string option while preserving matching outer
+/// quotes through the pinned parser's `stripQuotes` behavior.
+///
+/// Wrangler 4.100.0 pins yargs-parser 21.1.1, whose attached-value path strips
+/// one matching pair of outer quotes. Values with matching quote edges get an
+/// extra double-quote pair so the parser restores the original value. Recheck
+/// this behavior when bumping `WRANGLER_NPM_SPEC`; see
+/// <https://github.com/yargs/yargs-parser/blob/yargs-parser-v21.1.1/lib/yargs-parser.ts#L1033-L1040>.
+fn wrangler_string_option(name: &str, value: &str) -> OsString {
+    let first = value.chars().next();
+    let last = value.chars().last();
+    let encoded = if matches!(first, Some('\'') | Some('"')) && first == last {
+        format!("\"{value}\"")
+    } else {
+        value.to_string()
+    };
+
+    format!("--{name}={encoded}").into()
+}
 
 /// Arguments after the wrangler spec for `wrangler pages deploy`.
+///
+/// Wrangler requires `--key=value` for dash-leading values. Its pinned parser
+/// also strips matching outer quotes from attached values; see
+/// `wrangler_string_option` for the quote-preserving encoding.
 ///
 /// The commit is passed explicitly: the process working directory is not the
 /// git checkout, so wrangler cannot detect it and would upload the deployment
@@ -925,17 +953,13 @@ fn pages_deploy_args(
         "pages".into(),
         "deploy".into(),
         output_dir.into(),
-        "--project-name".into(),
-        project_name.into(),
-        "--branch".into(),
-        workload.source.branch.as_str().into(),
+        wrangler_string_option("project-name", project_name),
+        wrangler_string_option("branch", &workload.source.branch),
     ];
     if let Some(commit) = requested_commit(&workload.source) {
-        args.push("--commit-hash".into());
-        args.push(commit.into());
+        args.push(wrangler_string_option("commit-hash", commit));
     }
-    args.push("--commit-message".into());
-    args.push(commit_message.into());
+    args.push(wrangler_string_option("commit-message", commit_message));
     args
 }
 
@@ -1021,10 +1045,10 @@ async fn run_cloudflare_workers_deploy(
     );
 
     let mut command = Command::new("npx");
-    command.arg("--yes").arg(WRANGLER_NPM_SPEC).arg("deploy");
-    if let Some(name) = env_value(env, "WORKERS_SCRIPT_NAME") {
-        command.arg("--name").arg(name);
-    }
+    command
+        .arg("--yes")
+        .arg(WRANGLER_NPM_SPEC)
+        .args(workers_deploy_args(env_value(env, "WORKERS_SCRIPT_NAME")));
     let _secret_file = add_workers_runtime_bindings(&mut command, workload, env)?;
     command
         .current_dir(app_dir)
@@ -1033,6 +1057,14 @@ async fn run_cloudflare_workers_deploy(
         .stderr(Stdio::piped());
 
     run_command("wrangler deploy", command).await
+}
+
+fn workers_deploy_args(script_name: Option<&str>) -> Vec<OsString> {
+    let mut args = vec!["deploy".into()];
+    if let Some(name) = script_name {
+        args.push(wrangler_string_option("name", name));
+    }
+    args
 }
 
 /// Deploy redirect written by framework builds that generate their own
@@ -1980,7 +2012,7 @@ fn ascii_commit_message(env: &BTreeMap<String, String>) -> String {
     if normalized.is_empty() {
         "Tachyon Cloud App build".to_string()
     } else {
-        normalized
+        normalized.chars().take(MAX_COMMIT_MESSAGE_LENGTH).collect()
     }
 }
 
@@ -2744,6 +2776,22 @@ mod tests {
         assert!(has_workers_deploy_config(temp.path()));
     }
 
+    #[test]
+    fn workers_deploy_name_is_attached_to_its_option() {
+        let args = workers_deploy_args(Some("--synthetic-worker"));
+        assert_eq!(
+            args,
+            vec![
+                OsString::from("deploy"),
+                OsString::from("--name=--synthetic-worker"),
+            ]
+        );
+        assert_eq!(
+            model_pinned_yargs_parser_21_1_1_attached_value(&args[1]),
+            Some(("name".to_string(), "--synthetic-worker".to_string()))
+        );
+    }
+
     /// A generated wrangler configuration must land before the app's own
     /// install and build run, because the framework build reads it.
     #[test]
@@ -2901,6 +2949,14 @@ mod tests {
         assert_eq!(validate_iac_operation("apply").unwrap(), "apply");
         let error = validate_iac_operation("destroy").unwrap_err();
         assert!(error.to_string().contains("unsupported"), "got: {error}");
+    }
+
+    #[test]
+    fn iac_app_name_is_attached_to_its_option() {
+        assert_eq!(
+            iac_app_arg("--synthetic-app"),
+            OsString::from("--app=--synthetic-app")
+        );
     }
 
     #[test]
@@ -3423,11 +3479,108 @@ mod tests {
         assert_eq!(initial_clone_branch(&workload.source), Some("feature/demo"));
     }
 
-    fn pages_args(workload: &BuildWorkloadSpec) -> Vec<String> {
-        pages_deploy_args(workload, Path::new("/out"), "my-app", "msg")
+    fn pages_args_with_message(workload: &BuildWorkloadSpec, message: &str) -> Vec<String> {
+        pages_deploy_args(workload, Path::new("/out"), "my-app", message)
             .into_iter()
             .map(|arg| arg.to_string_lossy().into_owned())
             .collect()
+    }
+
+    fn pages_args(workload: &BuildWorkloadSpec) -> Vec<String> {
+        pages_args_with_message(workload, "msg")
+    }
+
+    /// Model yargs-parser 21.1.1's attached `--key=value` handling, including
+    /// its one-pair `stripQuotes` behavior. Keep this aligned with the parser
+    /// pinned by `WRANGLER_NPM_SPEC`.
+    fn model_pinned_yargs_parser_21_1_1_attached_value(arg: &OsStr) -> Option<(String, String)> {
+        let arg = arg.to_str()?;
+        let (name, value) = arg.split_once('=')?;
+        let name = name.strip_prefix("--")?;
+        let chars = value.chars().collect::<Vec<_>>();
+        let parsed_value = if chars.len() > 1
+            && matches!(chars.first(), Some('\'') | Some('"'))
+            && chars.first() == chars.last()
+        {
+            chars[1..chars.len() - 1].iter().collect()
+        } else {
+            value.to_string()
+        };
+
+        Some((name.to_string(), parsed_value))
+    }
+
+    fn parsed_attached_option(args: &[OsString], expected_name: &str) -> String {
+        let values = args
+            .iter()
+            .filter_map(|arg| model_pinned_yargs_parser_21_1_1_attached_value(arg))
+            .filter_map(|(name, value)| (name == expected_name).then_some(value))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            values.len(),
+            1,
+            "expected exactly one --{expected_name}= option"
+        );
+        values.into_iter().next().unwrap()
+    }
+
+    #[test]
+    fn wrangler_string_option_preserves_matching_outer_quotes_only() {
+        for (value, expected) in [
+            ("\"outer quotes\"", "--probe=\"\"outer quotes\"\""),
+            ("'outer quotes'", "--probe=\"'outer quotes'\""),
+            ("\"", "--probe=\"\"\""),
+            ("\"\"", "--probe=\"\"\"\""),
+            ("''", "--probe=\"''\""),
+            ("\"main\"", "--probe=\"\"main\"\""),
+            ("'main'", "--probe=\"'main'\""),
+        ] {
+            assert_eq!(
+                wrangler_string_option("probe", value),
+                OsString::from(expected)
+            );
+        }
+
+        for value in [
+            "a\"b",
+            "\"a",
+            "- foo_bar_baz",
+            "--",
+            "--foo",
+            "",
+            "plain text",
+        ] {
+            assert_eq!(
+                wrangler_string_option("probe", value),
+                OsString::from(format!("--probe={value}"))
+            );
+        }
+    }
+
+    fn assert_pages_commit_message_arg(raw: &str, expected: &str) {
+        let env = BTreeMap::from([("COMMIT_MESSAGE".to_string(), raw.to_string())]);
+        let message = ascii_commit_message(&env);
+        assert_eq!(message, expected);
+
+        let args = pages_deploy_args(&test_workload(None), Path::new("/out"), "my-app", &message);
+        let message_args = args
+            .iter()
+            .filter(|arg| arg.to_string_lossy().starts_with("--commit-message="))
+            .collect::<Vec<_>>();
+        assert_eq!(message_args.len(), 1);
+        let expected_arg = wrangler_string_option("commit-message", expected);
+        assert_eq!(message_args[0].as_os_str(), expected_arg.as_os_str());
+        assert!(!args
+            .iter()
+            .any(|arg| arg.as_os_str() == OsStr::new(expected)));
+        assert_eq!(parsed_attached_option(&args, "commit-message"), expected);
+
+        let worker_args = workers_deploy_args(Some(expected));
+        assert_eq!(
+            parsed_attached_option(&worker_args, "name"),
+            expected,
+            "Workers name should round-trip for commit-message fixture {raw:?}"
+        );
     }
 
     #[test]
@@ -3440,16 +3593,74 @@ mod tests {
                 "pages",
                 "deploy",
                 "/out",
-                "--project-name",
-                "my-app",
-                "--branch",
-                "feature/demo",
-                "--commit-hash",
-                "abc",
-                "--commit-message",
-                "msg",
+                "--project-name=my-app",
+                "--branch=feature/demo",
+                "--commit-hash=abc",
+                "--commit-message=msg",
             ]
         );
+    }
+
+    #[test]
+    fn pages_commit_messages_are_passed_as_single_option_values() {
+        for (raw, expected) in [
+            ("候補の読みを更新", "Tachyon Cloud App build"),
+            (
+                "設定を更新する\n\n- 候補の読みが使う foo_bar_baz に処理を足す",
+                "- foo_bar_baz",
+            ),
+            ("--foo", "--foo"),
+            ("--", "--"),
+            ("--foo with trailing text", "--foo with trailing text"),
+            ("* leading line", "* leading line"),
+            ("\"outer quotes\"", "\"outer quotes\""),
+            ("'outer quotes'", "'outer quotes'"),
+            ("\"", "\""),
+            ("\"\"", "\"\""),
+            ("''", "''"),
+            ("\"main\"", "\"main\""),
+            ("'main'", "'main'"),
+            (
+                "quotes: \"double\" and 'single'",
+                "quotes: \"double\" and 'single'",
+            ),
+            ("equals=inside=message", "equals=inside=message"),
+            (
+                "backticks `literal` and $(not-a-command)",
+                "backticks `literal` and $(not-a-command)",
+            ),
+            ("", "Tachyon Cloud App build"),
+            (" \t\n ", "Tachyon Cloud App build"),
+        ] {
+            assert_pages_commit_message_arg(raw, expected);
+        }
+    }
+
+    #[test]
+    fn quoted_pages_branch_names_round_trip_through_pinned_parser_model() {
+        for branch in ["\"main\"", "'main'"] {
+            let mut workload = test_workload(None);
+            workload.source.branch = branch.to_string();
+            let args = pages_deploy_args(&workload, Path::new("/out"), "my-app", "msg");
+
+            let branch_args = args
+                .iter()
+                .filter(|arg| arg.to_string_lossy().starts_with("--branch="))
+                .collect::<Vec<_>>();
+            assert_eq!(branch_args.len(), 1);
+            assert_eq!(
+                branch_args[0].as_os_str(),
+                wrangler_string_option("branch", branch).as_os_str()
+            );
+            assert_eq!(parsed_attached_option(&args, "branch"), branch);
+        }
+    }
+
+    #[test]
+    fn pages_commit_message_is_capped_at_2048_characters() {
+        let raw = "x".repeat(2049);
+        let expected = "x".repeat(2048);
+        assert_pages_commit_message_arg(&raw, &expected);
     }
 
     #[test]
@@ -3459,7 +3670,9 @@ mod tests {
             workload.source.commit_sha = unresolved.to_string();
 
             assert!(
-                !pages_args(&workload).contains(&"--commit-hash".to_string()),
+                !pages_args(&workload)
+                    .iter()
+                    .any(|arg| arg.starts_with("--commit-hash=")),
                 "commit {unresolved:?} must not be sent as a commit hash"
             );
         }

@@ -9,6 +9,10 @@
 
 ### Fixed
 
+- Pass Cloud App Pages deploy string options as attached values, preserving
+  matching outer quotes through Wrangler's pinned parser. Workers `--name` and
+  IaC `--app` values are attached too, so dash-leading values stay intact.
+  (PLT-5893)
 - Pass `--commit-hash` to `wrangler pages deploy` in the Cloud App build job.
   The job runs wrangler outside the git checkout, so wrangler could not detect
   the commit and uploaded Pages deployments with an empty commit. The control
