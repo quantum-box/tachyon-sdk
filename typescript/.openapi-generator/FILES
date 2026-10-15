@@ -39,6 +39,7 @@ docs/AttachUserPolicyRequest.md
 docs/AttachUserPolicyWithScopeRequest.md
 docs/AttemptCompletionResult.md
 docs/AuthAPIKeysApi.md
+docs/AuthContractAuthorityApi.md
 docs/AuthOAuth2ClientsApi.md
 docs/AuthOAuth2ConsentsApi.md
 docs/AuthOAuthTokensApi.md
@@ -49,7 +50,13 @@ docs/AuthUrlResponse.md
 docs/AuthUserPoliciesApi.md
 docs/AuthUsersApi.md
 docs/AuthVerifyApi.md
+docs/AuthorityActor.md
+docs/AuthorityIssuer.md
+docs/AuthorityPartyRef.md
 docs/BillingAddressRequest.md
+docs/BindingReference.md
+docs/BindingSlot.md
+docs/BindingSlotRole.md
 docs/CRMObjectMappingsApi.md
 docs/ChatApi.md
 docs/ChatCompletionChunkResponse.md
@@ -78,6 +85,9 @@ docs/ConnectionResponse.md
 docs/ConsentListResponse.md
 docs/ConsentResponse.md
 docs/ContentPart.md
+docs/ContractAuthorityEvidence.md
+docs/ContractAuthorityResolveRequest.md
+docs/ContractAuthorityResolveResponse.md
 docs/CreateAgentSessionOutputData.md
 docs/CreateAgentSessionRequest.md
 docs/CreateApiKeyRequest.md
@@ -113,6 +123,7 @@ docs/FeatureFlagsApi.md
 docs/Function.md
 docs/FunctionCall.md
 docs/FunctionCallResponse.md
+docs/GetAgentSessionOutputData.md
 docs/GetChatroomsResponse.md
 docs/IntegrationDetailResponse.md
 docs/IntegrationResponse.md
@@ -238,6 +249,7 @@ docs/VerifyResponse.md
 package.json
 src/apis/AgentApi.ts
 src/apis/AuthAPIKeysApi.ts
+src/apis/AuthContractAuthorityApi.ts
 src/apis/AuthOAuth2ClientsApi.ts
 src/apis/AuthOAuth2ConsentsApi.ts
 src/apis/AuthOAuthTokensApi.ts
@@ -306,7 +318,13 @@ src/models/AttachUserPolicyRequest.ts
 src/models/AttachUserPolicyWithScopeRequest.ts
 src/models/AttemptCompletionResult.ts
 src/models/AuthUrlResponse.ts
+src/models/AuthorityActor.ts
+src/models/AuthorityIssuer.ts
+src/models/AuthorityPartyRef.ts
 src/models/BillingAddressRequest.ts
+src/models/BindingReference.ts
+src/models/BindingSlot.ts
+src/models/BindingSlotRole.ts
 src/models/ChatCompletionChunkResponse.ts
 src/models/ChatCompletionRequest.ts
 src/models/ChatCompletionResponse.ts
@@ -332,6 +350,9 @@ src/models/ConnectionResponse.ts
 src/models/ConsentListResponse.ts
 src/models/ConsentResponse.ts
 src/models/ContentPart.ts
+src/models/ContractAuthorityEvidence.ts
+src/models/ContractAuthorityResolveRequest.ts
+src/models/ContractAuthorityResolveResponse.ts
 src/models/CreateAgentSessionOutputData.ts
 src/models/CreateAgentSessionRequest.ts
 src/models/CreateApiKeyRequest.ts
@@ -363,6 +384,7 @@ src/models/EvaluatePoliciesBatchResponse.ts
 src/models/Function.ts
 src/models/FunctionCall.ts
 src/models/FunctionCallResponse.ts
+src/models/GetAgentSessionOutputData.ts
 src/models/GetChatroomsResponse.ts
 src/models/IntegrationDetailResponse.ts
 src/models/IntegrationResponse.ts

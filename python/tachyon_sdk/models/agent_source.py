@@ -17,8 +17,8 @@ import pprint
 import re  # noqa: F401
 import json
 
-from pydantic import BaseModel, ConfigDict, StrictStr
-from typing import Any, ClassVar, Dict, List
+from pydantic import BaseModel, ConfigDict, Field, StrictStr
+from typing import Any, ClassVar, Dict, List, Optional
 from typing import Optional, Set
 from typing_extensions import Self
 
@@ -26,8 +26,9 @@ class AgentSource(BaseModel):
     """
     Identifies which agent produced a chunk.
     """ # noqa: E501
-    chatroom_id: StrictStr
-    __properties: ClassVar[List[str]] = ["chatroom_id"]
+    chatroom_id: StrictStr = Field(description="Compatibility key for clients that predate Session objects.")
+    session_id: Optional[StrictStr] = Field(default=None, description="Canonical conversation ID for new Session-based agents.")
+    __properties: ClassVar[List[str]] = ["chatroom_id", "session_id"]
 
     model_config = ConfigDict(
         populate_by_name=True,
@@ -68,6 +69,11 @@ class AgentSource(BaseModel):
             exclude=excluded_fields,
             exclude_none=True,
         )
+        # set to None if session_id (nullable) is None
+        # and model_fields_set contains the field
+        if self.session_id is None and "session_id" in self.model_fields_set:
+            _dict['session_id'] = None
+
         return _dict
 
     @classmethod
@@ -80,7 +86,8 @@ class AgentSource(BaseModel):
             return cls.model_validate(obj)
 
         _obj = cls.model_validate({
-            "chatroom_id": obj.get("chatroom_id")
+            "chatroom_id": obj.get("chatroom_id"),
+            "session_id": obj.get("session_id")
         })
         return _obj
 

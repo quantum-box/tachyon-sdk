@@ -6,8 +6,8 @@ Policy action entry
 
 Name | Type | Description | Notes
 ------------ | ------------- | ------------- | -------------
-**action_full_name** | **str** | Action full name |
-**effect** | **str** | Policy effect. Supported values are \&quot;allow\&quot; and \&quot;deny\&quot; |
+**action_full_name** | **str** | Action full name | 
+**effect** | **str** | Policy effect. Supported values are \&quot;allow\&quot; and \&quot;deny\&quot; | 
 
 ## Example
 

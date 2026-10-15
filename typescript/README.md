@@ -25,10 +25,6 @@ async function example() {
   const api = new AgentApi();
 
   const body = {
-    // string | Operator ID
-    xOperatorId: tn_xxxxxx,
-    // string | Authorization
-    authorization: Bearer xxxxx,
     // CreateAgentSessionRequest
     createAgentSessionRequest: ...,
   } satisfies CreateAgentSessionOperationRequest;
@@ -55,10 +51,12 @@ All URIs are relative to *http://localhost*
 | Class | Method | HTTP request | Description
 | ----- | ------ | ------------ | -------------
 *AgentApi* | [**createAgentSession**](docs/AgentApi.md#createagentsessionoperation) | **POST** /v1/llms/sessions | Create a new independent agent session.
+*AgentApi* | [**deleteAgentSession**](docs/AgentApi.md#deleteagentsession) | **DELETE** /v1/llms/sessions/{session_id} | 
 *AgentApi* | [**executeAgent**](docs/AgentApi.md#executeagent) | **POST** /v1/llms/chatrooms/{chatroom_id}/agent/execute | Execute agent
 *AgentApi* | [**executeAgentSession**](docs/AgentApi.md#executeagentsession) | **POST** /v1/llms/sessions/{session_id}/agent/execute | Execute agent via session endpoint.
 *AgentApi* | [**getAgentMessages**](docs/AgentApi.md#getagentmessages) | **GET** /v1/llms/chatrooms/{chatroom_id}/agent/messages | Get agent message log
 *AgentApi* | [**getAgentMessagesSession**](docs/AgentApi.md#getagentmessagessession) | **GET** /v1/llms/sessions/{session_id}/agent/messages | Get agent message log (session alias)
+*AgentApi* | [**getAgentSession**](docs/AgentApi.md#getagentsession) | **GET** /v1/llms/sessions/{session_id} | Get an agent session by ID.
 *AgentApi* | [**getAgentStatus**](docs/AgentApi.md#getagentstatus) | **GET** /v1/llms/chatrooms/{chatroom_id}/agent/status | Get agent status
 *AgentApi* | [**getAgentStatusSession**](docs/AgentApi.md#getagentstatussession) | **GET** /v1/llms/sessions/{session_id}/agent/status | Get agent status (session alias)
 *AgentApi* | [**listAgentSessions**](docs/AgentApi.md#listagentsessions) | **GET** /v1/llms/sessions | List agent sessions for the current tenant.
@@ -67,6 +65,7 @@ All URIs are relative to *http://localhost*
 *AuthAPIKeysApi* | [**createApiKey**](docs/AuthAPIKeysApi.md#createapikeyoperation) | **POST** /v1/auth/service-accounts/{service_account_id}/api-keys | Create a new API key for a service account
 *AuthAPIKeysApi* | [**listApiKeys**](docs/AuthAPIKeysApi.md#listapikeys) | **GET** /v1/auth/service-accounts/{service_account_id}/api-keys | List API keys for a service account
 *AuthAPIKeysApi* | [**verifyApiKey**](docs/AuthAPIKeysApi.md#verifyapikeyoperation) | **POST** /v1/auth/api-keys/verify | Verify a public API key
+*AuthContractAuthorityApi* | [**resolve**](docs/AuthContractAuthorityApi.md#resolve) | **POST** /v1/auth/contract-authority/resolve | 
 *AuthOAuth2ClientsApi* | [**createOauth2Client**](docs/AuthOAuth2ClientsApi.md#createoauth2client) | **POST** /v1/auth/oauth2-clients | Create a new OAuth2 client
 *AuthOAuth2ClientsApi* | [**getOauth2Client**](docs/AuthOAuth2ClientsApi.md#getoauth2client) | **GET** /v1/auth/oauth2-clients/{id} | Get an OAuth2 client by ID
 *AuthOAuth2ClientsApi* | [**listOauth2Clients**](docs/AuthOAuth2ClientsApi.md#listoauth2clients) | **GET** /v1/auth/oauth2-clients | List all OAuth2 clients for the current tenant
@@ -105,14 +104,14 @@ All URIs are relative to *http://localhost*
 *AuthUserPoliciesApi* | [**findUserPolicyMappings**](docs/AuthUserPoliciesApi.md#finduserpolicymappings) | **GET** /v1/auth/user-policy-mappings | Find user policy mappings by resource scope
 *AuthUserPoliciesApi* | [**listUserPolicies**](docs/AuthUserPoliciesApi.md#listuserpolicies) | **GET** /v1/auth/users/{user_id}/policies | List policies attached to a user
 *AuthUsersApi* | [**addUserToTenant**](docs/AuthUsersApi.md#addusertotenantoperation) | **POST** /v1/auth/users/{user_id}/tenants | Add a user to a tenant (grant tenant access)
-*AuthUsersApi* | [**createUser**](docs/AuthUsersApi.md#createuseroperation) | **POST** /auth/v1beta/users |
+*AuthUsersApi* | [**createUser**](docs/AuthUsersApi.md#createuseroperation) | **POST** /auth/v1beta/users | 
 *AuthUsersApi* | [**findUserByUsername**](docs/AuthUsersApi.md#finduserbyusername) | **GET** /v1/auth/users/search/by-username | Find a user by username
 *AuthUsersApi* | [**getUser**](docs/AuthUsersApi.md#getuser) | **GET** /v1/auth/users/{id} | Get a user by ID
 *AuthUsersApi* | [**inviteUser**](docs/AuthUsersApi.md#inviteuseroperation) | **POST** /v1/auth/users/invite | Invite a user to a tenant
 *AuthUsersApi* | [**listUsers**](docs/AuthUsersApi.md#listusers) | **GET** /v1/auth/users | List all users in an operator
 *AuthUsersApi* | [**updateUserRole**](docs/AuthUsersApi.md#updateuserroleoperation) | **PUT** /v1/auth/users/{user_id}/role | Update a user\&#39;s role in a specific tenant
-*AuthVerifyApi* | [**signInWithPlatform**](docs/AuthVerifyApi.md#signinwithplatformoperation) | **POST** /auth/v1beta/sign-in-with-platform |
-*AuthVerifyApi* | [**verify**](docs/AuthVerifyApi.md#verifyoperation) | **POST** /auth/v1beta/verify |
+*AuthVerifyApi* | [**signInWithPlatform**](docs/AuthVerifyApi.md#signinwithplatformoperation) | **POST** /auth/v1beta/sign-in-with-platform | 
+*AuthVerifyApi* | [**verify**](docs/AuthVerifyApi.md#verifyoperation) | **POST** /auth/v1beta/verify | 
 *CRMObjectMappingsApi* | [**createObjectMapping**](docs/CRMObjectMappingsApi.md#createobjectmappingoperation) | **POST** /v1/crm/object-mappings | Create an object mapping
 *CRMObjectMappingsApi* | [**getObjectMappings**](docs/CRMObjectMappingsApi.md#getobjectmappings) | **GET** /v1/crm/object-mappings | Get object mappings by entity ID and object name
 *ChatApi* | [**chatCompletion**](docs/ChatApi.md#chatcompletionoperation) | **POST** /v1/llms/chat/completions | Create a chat completion
@@ -199,7 +198,13 @@ All URIs are relative to *http://localhost*
 - [AttachUserPolicyWithScopeRequest](docs/AttachUserPolicyWithScopeRequest.md)
 - [AttemptCompletionResult](docs/AttemptCompletionResult.md)
 - [AuthUrlResponse](docs/AuthUrlResponse.md)
+- [AuthorityActor](docs/AuthorityActor.md)
+- [AuthorityIssuer](docs/AuthorityIssuer.md)
+- [AuthorityPartyRef](docs/AuthorityPartyRef.md)
 - [BillingAddressRequest](docs/BillingAddressRequest.md)
+- [BindingReference](docs/BindingReference.md)
+- [BindingSlot](docs/BindingSlot.md)
+- [BindingSlotRole](docs/BindingSlotRole.md)
 - [ChatCompletionChunkResponse](docs/ChatCompletionChunkResponse.md)
 - [ChatCompletionRequest](docs/ChatCompletionRequest.md)
 - [ChatCompletionResponse](docs/ChatCompletionResponse.md)
@@ -225,6 +230,9 @@ All URIs are relative to *http://localhost*
 - [ConsentListResponse](docs/ConsentListResponse.md)
 - [ConsentResponse](docs/ConsentResponse.md)
 - [ContentPart](docs/ContentPart.md)
+- [ContractAuthorityEvidence](docs/ContractAuthorityEvidence.md)
+- [ContractAuthorityResolveRequest](docs/ContractAuthorityResolveRequest.md)
+- [ContractAuthorityResolveResponse](docs/ContractAuthorityResolveResponse.md)
 - [CreateAgentSessionOutputData](docs/CreateAgentSessionOutputData.md)
 - [CreateAgentSessionRequest](docs/CreateAgentSessionRequest.md)
 - [CreateApiKeyRequest](docs/CreateApiKeyRequest.md)
@@ -256,6 +264,7 @@ All URIs are relative to *http://localhost*
 - [Function](docs/Function.md)
 - [FunctionCall](docs/FunctionCall.md)
 - [FunctionCallResponse](docs/FunctionCallResponse.md)
+- [GetAgentSessionOutputData](docs/GetAgentSessionOutputData.md)
 - [GetChatroomsResponse](docs/GetChatroomsResponse.md)
 - [IntegrationDetailResponse](docs/IntegrationDetailResponse.md)
 - [IntegrationResponse](docs/IntegrationResponse.md)

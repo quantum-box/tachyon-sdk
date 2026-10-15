@@ -10,7 +10,7 @@ Name | Type | Description | Notes
 **action_patterns_to_remove** | [**List[RemovePolicyActionPatternRequest]**](RemovePolicyActionPatternRequest.md) |  | [optional] [default to []]
 **actions_to_add** | [**List[PolicyActionRequest]**](PolicyActionRequest.md) |  | [optional] [default to []]
 **actions_to_remove** | **List[str]** |  | [optional] [default to []]
-**description** | **str** | Policy description | [optional]
+**description** | **str** | Policy description | [optional] 
 
 ## Example
 

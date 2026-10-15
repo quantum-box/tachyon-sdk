@@ -6,7 +6,7 @@ OAuth2 client list response
 
 Name | Type | Description | Notes
 ------------ | ------------- | ------------- | -------------
-**clients** | [**List[OAuth2ClientResponse]**](OAuth2ClientResponse.md) |  |
+**clients** | [**List[OAuth2ClientResponse]**](OAuth2ClientResponse.md) |  | 
 
 ## Example
 

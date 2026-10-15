@@ -24,6 +24,7 @@ from tachyon_sdk.models.agent_messages_response import AgentMessagesResponse
 from tachyon_sdk.models.agent_status_response import AgentStatusResponse
 from tachyon_sdk.models.create_agent_session_output_data import CreateAgentSessionOutputData
 from tachyon_sdk.models.create_agent_session_request import CreateAgentSessionRequest
+from tachyon_sdk.models.get_agent_session_output_data import GetAgentSessionOutputData
 from tachyon_sdk.models.list_agent_sessions_output_data import ListAgentSessionsOutputData
 from tachyon_sdk.models.tool_result_submission import ToolResultSubmission
 
@@ -48,8 +49,6 @@ class AgentApi:
     @validate_call
     def create_agent_session(
         self,
-        x_operator_id: Annotated[StrictStr, Field(description="Operator ID")],
-        authorization: Annotated[StrictStr, Field(description="Authorization")],
         create_agent_session_request: CreateAgentSessionRequest,
         _request_timeout: Union[
             None,
@@ -68,10 +67,6 @@ class AgentApi:
 
         Returns a session with an `as_`-prefixed ID that can be used with the session agent endpoints.
 
-        :param x_operator_id: Operator ID (required)
-        :type x_operator_id: str
-        :param authorization: Authorization (required)
-        :type authorization: str
         :param create_agent_session_request: (required)
         :type create_agent_session_request: CreateAgentSessionRequest
         :param _request_timeout: timeout setting for this request. If one
@@ -97,8 +92,6 @@ class AgentApi:
         """ # noqa: E501
 
         _param = self._create_agent_session_serialize(
-            x_operator_id=x_operator_id,
-            authorization=authorization,
             create_agent_session_request=create_agent_session_request,
             _request_auth=_request_auth,
             _content_type=_content_type,
@@ -123,8 +116,6 @@ class AgentApi:
     @validate_call
     def create_agent_session_with_http_info(
         self,
-        x_operator_id: Annotated[StrictStr, Field(description="Operator ID")],
-        authorization: Annotated[StrictStr, Field(description="Authorization")],
         create_agent_session_request: CreateAgentSessionRequest,
         _request_timeout: Union[
             None,
@@ -143,10 +134,6 @@ class AgentApi:
 
         Returns a session with an `as_`-prefixed ID that can be used with the session agent endpoints.
 
-        :param x_operator_id: Operator ID (required)
-        :type x_operator_id: str
-        :param authorization: Authorization (required)
-        :type authorization: str
         :param create_agent_session_request: (required)
         :type create_agent_session_request: CreateAgentSessionRequest
         :param _request_timeout: timeout setting for this request. If one
@@ -172,8 +159,6 @@ class AgentApi:
         """ # noqa: E501
 
         _param = self._create_agent_session_serialize(
-            x_operator_id=x_operator_id,
-            authorization=authorization,
             create_agent_session_request=create_agent_session_request,
             _request_auth=_request_auth,
             _content_type=_content_type,
@@ -198,8 +183,6 @@ class AgentApi:
     @validate_call
     def create_agent_session_without_preload_content(
         self,
-        x_operator_id: Annotated[StrictStr, Field(description="Operator ID")],
-        authorization: Annotated[StrictStr, Field(description="Authorization")],
         create_agent_session_request: CreateAgentSessionRequest,
         _request_timeout: Union[
             None,
@@ -218,10 +201,6 @@ class AgentApi:
 
         Returns a session with an `as_`-prefixed ID that can be used with the session agent endpoints.
 
-        :param x_operator_id: Operator ID (required)
-        :type x_operator_id: str
-        :param authorization: Authorization (required)
-        :type authorization: str
         :param create_agent_session_request: (required)
         :type create_agent_session_request: CreateAgentSessionRequest
         :param _request_timeout: timeout setting for this request. If one
@@ -247,8 +226,6 @@ class AgentApi:
         """ # noqa: E501
 
         _param = self._create_agent_session_serialize(
-            x_operator_id=x_operator_id,
-            authorization=authorization,
             create_agent_session_request=create_agent_session_request,
             _request_auth=_request_auth,
             _content_type=_content_type,
@@ -268,8 +245,6 @@ class AgentApi:
 
     def _create_agent_session_serialize(
         self,
-        x_operator_id,
-        authorization,
         create_agent_session_request,
         _request_auth,
         _content_type,
@@ -294,10 +269,6 @@ class AgentApi:
         # process the path parameters
         # process the query parameters
         # process the header parameters
-        if x_operator_id is not None:
-            _header_params['x-operator-id'] = x_operator_id
-        if authorization is not None:
-            _header_params['Authorization'] = authorization
         # process the form parameters
         # process the body parameter
         if create_agent_session_request is not None:
@@ -333,6 +304,289 @@ class AgentApi:
         return self.api_client.param_serialize(
             method='POST',
             resource_path='/v1/llms/sessions',
+            path_params=_path_params,
+            query_params=_query_params,
+            header_params=_header_params,
+            body=_body_params,
+            post_params=_form_params,
+            files=_files,
+            auth_settings=_auth_settings,
+            collection_formats=_collection_formats,
+            _host=_host,
+            _request_auth=_request_auth
+        )
+
+
+
+
+    @validate_call
+    def delete_agent_session(
+        self,
+        session_id: Annotated[StrictStr, Field(description="Session ID")],
+        x_operator_id: Annotated[StrictStr, Field(description="Operator ID")],
+        authorization: Annotated[StrictStr, Field(description="Authorization")],
+        _request_timeout: Union[
+            None,
+            Annotated[StrictFloat, Field(gt=0)],
+            Tuple[
+                Annotated[StrictFloat, Field(gt=0)],
+                Annotated[StrictFloat, Field(gt=0)]
+            ]
+        ] = None,
+        _request_auth: Optional[Dict[StrictStr, Any]] = None,
+        _content_type: Optional[StrictStr] = None,
+        _headers: Optional[Dict[StrictStr, Any]] = None,
+        _host_index: Annotated[StrictInt, Field(ge=0, le=0)] = 0,
+    ) -> None:
+        """delete_agent_session
+
+
+        :param session_id: Session ID (required)
+        :type session_id: str
+        :param x_operator_id: Operator ID (required)
+        :type x_operator_id: str
+        :param authorization: Authorization (required)
+        :type authorization: str
+        :param _request_timeout: timeout setting for this request. If one
+                                 number provided, it will be total request
+                                 timeout. It can also be a pair (tuple) of
+                                 (connection, read) timeouts.
+        :type _request_timeout: int, tuple(int, int), optional
+        :param _request_auth: set to override the auth_settings for an a single
+                              request; this effectively ignores the
+                              authentication in the spec for a single request.
+        :type _request_auth: dict, optional
+        :param _content_type: force content-type for the request.
+        :type _content_type: str, Optional
+        :param _headers: set to override the headers for a single
+                         request; this effectively ignores the headers
+                         in the spec for a single request.
+        :type _headers: dict, optional
+        :param _host_index: set to override the host_index for a single
+                            request; this effectively ignores the host_index
+                            in the spec for a single request.
+        :type _host_index: int, optional
+        :return: Returns the result object.
+        """ # noqa: E501
+
+        _param = self._delete_agent_session_serialize(
+            session_id=session_id,
+            x_operator_id=x_operator_id,
+            authorization=authorization,
+            _request_auth=_request_auth,
+            _content_type=_content_type,
+            _headers=_headers,
+            _host_index=_host_index
+        )
+
+        _response_types_map: Dict[str, Optional[str]] = {
+            '204': None,
+            '404': None,
+        }
+        response_data = self.api_client.call_api(
+            *_param,
+            _request_timeout=_request_timeout
+        )
+        response_data.read()
+        return self.api_client.response_deserialize(
+            response_data=response_data,
+            response_types_map=_response_types_map,
+        ).data
+
+
+    @validate_call
+    def delete_agent_session_with_http_info(
+        self,
+        session_id: Annotated[StrictStr, Field(description="Session ID")],
+        x_operator_id: Annotated[StrictStr, Field(description="Operator ID")],
+        authorization: Annotated[StrictStr, Field(description="Authorization")],
+        _request_timeout: Union[
+            None,
+            Annotated[StrictFloat, Field(gt=0)],
+            Tuple[
+                Annotated[StrictFloat, Field(gt=0)],
+                Annotated[StrictFloat, Field(gt=0)]
+            ]
+        ] = None,
+        _request_auth: Optional[Dict[StrictStr, Any]] = None,
+        _content_type: Optional[StrictStr] = None,
+        _headers: Optional[Dict[StrictStr, Any]] = None,
+        _host_index: Annotated[StrictInt, Field(ge=0, le=0)] = 0,
+    ) -> ApiResponse[None]:
+        """delete_agent_session
+
+
+        :param session_id: Session ID (required)
+        :type session_id: str
+        :param x_operator_id: Operator ID (required)
+        :type x_operator_id: str
+        :param authorization: Authorization (required)
+        :type authorization: str
+        :param _request_timeout: timeout setting for this request. If one
+                                 number provided, it will be total request
+                                 timeout. It can also be a pair (tuple) of
+                                 (connection, read) timeouts.
+        :type _request_timeout: int, tuple(int, int), optional
+        :param _request_auth: set to override the auth_settings for an a single
+                              request; this effectively ignores the
+                              authentication in the spec for a single request.
+        :type _request_auth: dict, optional
+        :param _content_type: force content-type for the request.
+        :type _content_type: str, Optional
+        :param _headers: set to override the headers for a single
+                         request; this effectively ignores the headers
+                         in the spec for a single request.
+        :type _headers: dict, optional
+        :param _host_index: set to override the host_index for a single
+                            request; this effectively ignores the host_index
+                            in the spec for a single request.
+        :type _host_index: int, optional
+        :return: Returns the result object.
+        """ # noqa: E501
+
+        _param = self._delete_agent_session_serialize(
+            session_id=session_id,
+            x_operator_id=x_operator_id,
+            authorization=authorization,
+            _request_auth=_request_auth,
+            _content_type=_content_type,
+            _headers=_headers,
+            _host_index=_host_index
+        )
+
+        _response_types_map: Dict[str, Optional[str]] = {
+            '204': None,
+            '404': None,
+        }
+        response_data = self.api_client.call_api(
+            *_param,
+            _request_timeout=_request_timeout
+        )
+        response_data.read()
+        return self.api_client.response_deserialize(
+            response_data=response_data,
+            response_types_map=_response_types_map,
+        )
+
+
+    @validate_call
+    def delete_agent_session_without_preload_content(
+        self,
+        session_id: Annotated[StrictStr, Field(description="Session ID")],
+        x_operator_id: Annotated[StrictStr, Field(description="Operator ID")],
+        authorization: Annotated[StrictStr, Field(description="Authorization")],
+        _request_timeout: Union[
+            None,
+            Annotated[StrictFloat, Field(gt=0)],
+            Tuple[
+                Annotated[StrictFloat, Field(gt=0)],
+                Annotated[StrictFloat, Field(gt=0)]
+            ]
+        ] = None,
+        _request_auth: Optional[Dict[StrictStr, Any]] = None,
+        _content_type: Optional[StrictStr] = None,
+        _headers: Optional[Dict[StrictStr, Any]] = None,
+        _host_index: Annotated[StrictInt, Field(ge=0, le=0)] = 0,
+    ) -> RESTResponseType:
+        """delete_agent_session
+
+
+        :param session_id: Session ID (required)
+        :type session_id: str
+        :param x_operator_id: Operator ID (required)
+        :type x_operator_id: str
+        :param authorization: Authorization (required)
+        :type authorization: str
+        :param _request_timeout: timeout setting for this request. If one
+                                 number provided, it will be total request
+                                 timeout. It can also be a pair (tuple) of
+                                 (connection, read) timeouts.
+        :type _request_timeout: int, tuple(int, int), optional
+        :param _request_auth: set to override the auth_settings for an a single
+                              request; this effectively ignores the
+                              authentication in the spec for a single request.
+        :type _request_auth: dict, optional
+        :param _content_type: force content-type for the request.
+        :type _content_type: str, Optional
+        :param _headers: set to override the headers for a single
+                         request; this effectively ignores the headers
+                         in the spec for a single request.
+        :type _headers: dict, optional
+        :param _host_index: set to override the host_index for a single
+                            request; this effectively ignores the host_index
+                            in the spec for a single request.
+        :type _host_index: int, optional
+        :return: Returns the result object.
+        """ # noqa: E501
+
+        _param = self._delete_agent_session_serialize(
+            session_id=session_id,
+            x_operator_id=x_operator_id,
+            authorization=authorization,
+            _request_auth=_request_auth,
+            _content_type=_content_type,
+            _headers=_headers,
+            _host_index=_host_index
+        )
+
+        _response_types_map: Dict[str, Optional[str]] = {
+            '204': None,
+            '404': None,
+        }
+        response_data = self.api_client.call_api(
+            *_param,
+            _request_timeout=_request_timeout
+        )
+        return response_data.response
+
+
+    def _delete_agent_session_serialize(
+        self,
+        session_id,
+        x_operator_id,
+        authorization,
+        _request_auth,
+        _content_type,
+        _headers,
+        _host_index,
+    ) -> RequestSerialized:
+
+        _host = None
+
+        _collection_formats: Dict[str, str] = {
+        }
+
+        _path_params: Dict[str, str] = {}
+        _query_params: List[Tuple[str, str]] = []
+        _header_params: Dict[str, Optional[str]] = _headers or {}
+        _form_params: List[Tuple[str, str]] = []
+        _files: Dict[
+            str, Union[str, bytes, List[str], List[bytes], List[Tuple[str, bytes]]]
+        ] = {}
+        _body_params: Optional[bytes] = None
+
+        # process the path parameters
+        if session_id is not None:
+            _path_params['session_id'] = session_id
+        # process the query parameters
+        # process the header parameters
+        if x_operator_id is not None:
+            _header_params['x-operator-id'] = x_operator_id
+        if authorization is not None:
+            _header_params['Authorization'] = authorization
+        # process the form parameters
+        # process the body parameter
+
+
+
+
+        # authentication setting
+        _auth_settings: List[str] = [
+        ]
+
+        return self.api_client.param_serialize(
+            method='DELETE',
+            resource_path='/v1/llms/sessions/{session_id}',
             path_params=_path_params,
             query_params=_query_params,
             header_params=_header_params,
@@ -1642,6 +1896,266 @@ class AgentApi:
 
 
     @validate_call
+    def get_agent_session(
+        self,
+        session_id: Annotated[StrictStr, Field(description="Session ID")],
+        _request_timeout: Union[
+            None,
+            Annotated[StrictFloat, Field(gt=0)],
+            Tuple[
+                Annotated[StrictFloat, Field(gt=0)],
+                Annotated[StrictFloat, Field(gt=0)]
+            ]
+        ] = None,
+        _request_auth: Optional[Dict[StrictStr, Any]] = None,
+        _content_type: Optional[StrictStr] = None,
+        _headers: Optional[Dict[StrictStr, Any]] = None,
+        _host_index: Annotated[StrictInt, Field(ge=0, le=0)] = 0,
+    ) -> GetAgentSessionOutputData:
+        """Get an agent session by ID.
+
+
+        :param session_id: Session ID (required)
+        :type session_id: str
+        :param _request_timeout: timeout setting for this request. If one
+                                 number provided, it will be total request
+                                 timeout. It can also be a pair (tuple) of
+                                 (connection, read) timeouts.
+        :type _request_timeout: int, tuple(int, int), optional
+        :param _request_auth: set to override the auth_settings for an a single
+                              request; this effectively ignores the
+                              authentication in the spec for a single request.
+        :type _request_auth: dict, optional
+        :param _content_type: force content-type for the request.
+        :type _content_type: str, Optional
+        :param _headers: set to override the headers for a single
+                         request; this effectively ignores the headers
+                         in the spec for a single request.
+        :type _headers: dict, optional
+        :param _host_index: set to override the host_index for a single
+                            request; this effectively ignores the host_index
+                            in the spec for a single request.
+        :type _host_index: int, optional
+        :return: Returns the result object.
+        """ # noqa: E501
+
+        _param = self._get_agent_session_serialize(
+            session_id=session_id,
+            _request_auth=_request_auth,
+            _content_type=_content_type,
+            _headers=_headers,
+            _host_index=_host_index
+        )
+
+        _response_types_map: Dict[str, Optional[str]] = {
+            '200': "GetAgentSessionOutputData",
+            '404': None,
+        }
+        response_data = self.api_client.call_api(
+            *_param,
+            _request_timeout=_request_timeout
+        )
+        response_data.read()
+        return self.api_client.response_deserialize(
+            response_data=response_data,
+            response_types_map=_response_types_map,
+        ).data
+
+
+    @validate_call
+    def get_agent_session_with_http_info(
+        self,
+        session_id: Annotated[StrictStr, Field(description="Session ID")],
+        _request_timeout: Union[
+            None,
+            Annotated[StrictFloat, Field(gt=0)],
+            Tuple[
+                Annotated[StrictFloat, Field(gt=0)],
+                Annotated[StrictFloat, Field(gt=0)]
+            ]
+        ] = None,
+        _request_auth: Optional[Dict[StrictStr, Any]] = None,
+        _content_type: Optional[StrictStr] = None,
+        _headers: Optional[Dict[StrictStr, Any]] = None,
+        _host_index: Annotated[StrictInt, Field(ge=0, le=0)] = 0,
+    ) -> ApiResponse[GetAgentSessionOutputData]:
+        """Get an agent session by ID.
+
+
+        :param session_id: Session ID (required)
+        :type session_id: str
+        :param _request_timeout: timeout setting for this request. If one
+                                 number provided, it will be total request
+                                 timeout. It can also be a pair (tuple) of
+                                 (connection, read) timeouts.
+        :type _request_timeout: int, tuple(int, int), optional
+        :param _request_auth: set to override the auth_settings for an a single
+                              request; this effectively ignores the
+                              authentication in the spec for a single request.
+        :type _request_auth: dict, optional
+        :param _content_type: force content-type for the request.
+        :type _content_type: str, Optional
+        :param _headers: set to override the headers for a single
+                         request; this effectively ignores the headers
+                         in the spec for a single request.
+        :type _headers: dict, optional
+        :param _host_index: set to override the host_index for a single
+                            request; this effectively ignores the host_index
+                            in the spec for a single request.
+        :type _host_index: int, optional
+        :return: Returns the result object.
+        """ # noqa: E501
+
+        _param = self._get_agent_session_serialize(
+            session_id=session_id,
+            _request_auth=_request_auth,
+            _content_type=_content_type,
+            _headers=_headers,
+            _host_index=_host_index
+        )
+
+        _response_types_map: Dict[str, Optional[str]] = {
+            '200': "GetAgentSessionOutputData",
+            '404': None,
+        }
+        response_data = self.api_client.call_api(
+            *_param,
+            _request_timeout=_request_timeout
+        )
+        response_data.read()
+        return self.api_client.response_deserialize(
+            response_data=response_data,
+            response_types_map=_response_types_map,
+        )
+
+
+    @validate_call
+    def get_agent_session_without_preload_content(
+        self,
+        session_id: Annotated[StrictStr, Field(description="Session ID")],
+        _request_timeout: Union[
+            None,
+            Annotated[StrictFloat, Field(gt=0)],
+            Tuple[
+                Annotated[StrictFloat, Field(gt=0)],
+                Annotated[StrictFloat, Field(gt=0)]
+            ]
+        ] = None,
+        _request_auth: Optional[Dict[StrictStr, Any]] = None,
+        _content_type: Optional[StrictStr] = None,
+        _headers: Optional[Dict[StrictStr, Any]] = None,
+        _host_index: Annotated[StrictInt, Field(ge=0, le=0)] = 0,
+    ) -> RESTResponseType:
+        """Get an agent session by ID.
+
+
+        :param session_id: Session ID (required)
+        :type session_id: str
+        :param _request_timeout: timeout setting for this request. If one
+                                 number provided, it will be total request
+                                 timeout. It can also be a pair (tuple) of
+                                 (connection, read) timeouts.
+        :type _request_timeout: int, tuple(int, int), optional
+        :param _request_auth: set to override the auth_settings for an a single
+                              request; this effectively ignores the
+                              authentication in the spec for a single request.
+        :type _request_auth: dict, optional
+        :param _content_type: force content-type for the request.
+        :type _content_type: str, Optional
+        :param _headers: set to override the headers for a single
+                         request; this effectively ignores the headers
+                         in the spec for a single request.
+        :type _headers: dict, optional
+        :param _host_index: set to override the host_index for a single
+                            request; this effectively ignores the host_index
+                            in the spec for a single request.
+        :type _host_index: int, optional
+        :return: Returns the result object.
+        """ # noqa: E501
+
+        _param = self._get_agent_session_serialize(
+            session_id=session_id,
+            _request_auth=_request_auth,
+            _content_type=_content_type,
+            _headers=_headers,
+            _host_index=_host_index
+        )
+
+        _response_types_map: Dict[str, Optional[str]] = {
+            '200': "GetAgentSessionOutputData",
+            '404': None,
+        }
+        response_data = self.api_client.call_api(
+            *_param,
+            _request_timeout=_request_timeout
+        )
+        return response_data.response
+
+
+    def _get_agent_session_serialize(
+        self,
+        session_id,
+        _request_auth,
+        _content_type,
+        _headers,
+        _host_index,
+    ) -> RequestSerialized:
+
+        _host = None
+
+        _collection_formats: Dict[str, str] = {
+        }
+
+        _path_params: Dict[str, str] = {}
+        _query_params: List[Tuple[str, str]] = []
+        _header_params: Dict[str, Optional[str]] = _headers or {}
+        _form_params: List[Tuple[str, str]] = []
+        _files: Dict[
+            str, Union[str, bytes, List[str], List[bytes], List[Tuple[str, bytes]]]
+        ] = {}
+        _body_params: Optional[bytes] = None
+
+        # process the path parameters
+        if session_id is not None:
+            _path_params['session_id'] = session_id
+        # process the query parameters
+        # process the header parameters
+        # process the form parameters
+        # process the body parameter
+
+
+        # set the HTTP header `Accept`
+        if 'Accept' not in _header_params:
+            _header_params['Accept'] = self.api_client.select_header_accept(
+                [
+                    'application/json'
+                ]
+            )
+
+
+        # authentication setting
+        _auth_settings: List[str] = [
+        ]
+
+        return self.api_client.param_serialize(
+            method='GET',
+            resource_path='/v1/llms/sessions/{session_id}',
+            path_params=_path_params,
+            query_params=_query_params,
+            header_params=_header_params,
+            body=_body_params,
+            post_params=_form_params,
+            files=_files,
+            auth_settings=_auth_settings,
+            collection_formats=_collection_formats,
+            _host=_host,
+            _request_auth=_request_auth
+        )
+
+
+
+
+    @validate_call
     def get_agent_status(
         self,
         chatroom_id: Annotated[StrictStr, Field(description="Chatroom ID")],
@@ -2224,10 +2738,9 @@ class AgentApi:
     @validate_call
     def list_agent_sessions(
         self,
-        x_operator_id: Annotated[StrictStr, Field(description="Operator ID")],
-        authorization: Annotated[StrictStr, Field(description="Authorization")],
-        limit: Annotated[Optional[Annotated[int, Field(strict=True, ge=0)]], Field(description="Maximum number of sessions")] = None,
-        offset: Annotated[Optional[Annotated[int, Field(strict=True, ge=0)]], Field(description="Offset")] = None,
+        limit: Annotated[Optional[Annotated[int, Field(strict=True, ge=0)]], Field(description="Maximum number of sessions to return.")] = None,
+        offset: Annotated[Optional[Annotated[int, Field(strict=True, ge=0)]], Field(description="Offset for pagination.")] = None,
+        metadata_user_id: Annotated[Optional[StrictStr], Field(description="Filter sessions by `user_id` stored in metadata JSON.")] = None,
         _request_timeout: Union[
             None,
             Annotated[StrictFloat, Field(gt=0)],
@@ -2244,14 +2757,12 @@ class AgentApi:
         """List agent sessions for the current tenant.
 
 
-        :param x_operator_id: Operator ID (required)
-        :type x_operator_id: str
-        :param authorization: Authorization (required)
-        :type authorization: str
-        :param limit: Maximum number of sessions
+        :param limit: Maximum number of sessions to return.
         :type limit: int
-        :param offset: Offset
+        :param offset: Offset for pagination.
         :type offset: int
+        :param metadata_user_id: Filter sessions by `user_id` stored in metadata JSON.
+        :type metadata_user_id: str
         :param _request_timeout: timeout setting for this request. If one
                                  number provided, it will be total request
                                  timeout. It can also be a pair (tuple) of
@@ -2275,10 +2786,9 @@ class AgentApi:
         """ # noqa: E501
 
         _param = self._list_agent_sessions_serialize(
-            x_operator_id=x_operator_id,
-            authorization=authorization,
             limit=limit,
             offset=offset,
+            metadata_user_id=metadata_user_id,
             _request_auth=_request_auth,
             _content_type=_content_type,
             _headers=_headers,
@@ -2302,10 +2812,9 @@ class AgentApi:
     @validate_call
     def list_agent_sessions_with_http_info(
         self,
-        x_operator_id: Annotated[StrictStr, Field(description="Operator ID")],
-        authorization: Annotated[StrictStr, Field(description="Authorization")],
-        limit: Annotated[Optional[Annotated[int, Field(strict=True, ge=0)]], Field(description="Maximum number of sessions")] = None,
-        offset: Annotated[Optional[Annotated[int, Field(strict=True, ge=0)]], Field(description="Offset")] = None,
+        limit: Annotated[Optional[Annotated[int, Field(strict=True, ge=0)]], Field(description="Maximum number of sessions to return.")] = None,
+        offset: Annotated[Optional[Annotated[int, Field(strict=True, ge=0)]], Field(description="Offset for pagination.")] = None,
+        metadata_user_id: Annotated[Optional[StrictStr], Field(description="Filter sessions by `user_id` stored in metadata JSON.")] = None,
         _request_timeout: Union[
             None,
             Annotated[StrictFloat, Field(gt=0)],
@@ -2322,14 +2831,12 @@ class AgentApi:
         """List agent sessions for the current tenant.
 
 
-        :param x_operator_id: Operator ID (required)
-        :type x_operator_id: str
-        :param authorization: Authorization (required)
-        :type authorization: str
-        :param limit: Maximum number of sessions
+        :param limit: Maximum number of sessions to return.
         :type limit: int
-        :param offset: Offset
+        :param offset: Offset for pagination.
         :type offset: int
+        :param metadata_user_id: Filter sessions by `user_id` stored in metadata JSON.
+        :type metadata_user_id: str
         :param _request_timeout: timeout setting for this request. If one
                                  number provided, it will be total request
                                  timeout. It can also be a pair (tuple) of
@@ -2353,10 +2860,9 @@ class AgentApi:
         """ # noqa: E501
 
         _param = self._list_agent_sessions_serialize(
-            x_operator_id=x_operator_id,
-            authorization=authorization,
             limit=limit,
             offset=offset,
+            metadata_user_id=metadata_user_id,
             _request_auth=_request_auth,
             _content_type=_content_type,
             _headers=_headers,
@@ -2380,10 +2886,9 @@ class AgentApi:
     @validate_call
     def list_agent_sessions_without_preload_content(
         self,
-        x_operator_id: Annotated[StrictStr, Field(description="Operator ID")],
-        authorization: Annotated[StrictStr, Field(description="Authorization")],
-        limit: Annotated[Optional[Annotated[int, Field(strict=True, ge=0)]], Field(description="Maximum number of sessions")] = None,
-        offset: Annotated[Optional[Annotated[int, Field(strict=True, ge=0)]], Field(description="Offset")] = None,
+        limit: Annotated[Optional[Annotated[int, Field(strict=True, ge=0)]], Field(description="Maximum number of sessions to return.")] = None,
+        offset: Annotated[Optional[Annotated[int, Field(strict=True, ge=0)]], Field(description="Offset for pagination.")] = None,
+        metadata_user_id: Annotated[Optional[StrictStr], Field(description="Filter sessions by `user_id` stored in metadata JSON.")] = None,
         _request_timeout: Union[
             None,
             Annotated[StrictFloat, Field(gt=0)],
@@ -2400,14 +2905,12 @@ class AgentApi:
         """List agent sessions for the current tenant.
 
 
-        :param x_operator_id: Operator ID (required)
-        :type x_operator_id: str
-        :param authorization: Authorization (required)
-        :type authorization: str
-        :param limit: Maximum number of sessions
+        :param limit: Maximum number of sessions to return.
         :type limit: int
-        :param offset: Offset
+        :param offset: Offset for pagination.
         :type offset: int
+        :param metadata_user_id: Filter sessions by `user_id` stored in metadata JSON.
+        :type metadata_user_id: str
         :param _request_timeout: timeout setting for this request. If one
                                  number provided, it will be total request
                                  timeout. It can also be a pair (tuple) of
@@ -2431,10 +2934,9 @@ class AgentApi:
         """ # noqa: E501
 
         _param = self._list_agent_sessions_serialize(
-            x_operator_id=x_operator_id,
-            authorization=authorization,
             limit=limit,
             offset=offset,
+            metadata_user_id=metadata_user_id,
             _request_auth=_request_auth,
             _content_type=_content_type,
             _headers=_headers,
@@ -2453,10 +2955,9 @@ class AgentApi:
 
     def _list_agent_sessions_serialize(
         self,
-        x_operator_id,
-        authorization,
         limit,
         offset,
+        metadata_user_id,
         _request_auth,
         _content_type,
         _headers,
@@ -2487,11 +2988,11 @@ class AgentApi:
             
             _query_params.append(('offset', offset))
             
+        if metadata_user_id is not None:
+            
+            _query_params.append(('metadata_user_id', metadata_user_id))
+            
         # process the header parameters
-        if x_operator_id is not None:
-            _header_params['x-operator-id'] = x_operator_id
-        if authorization is not None:
-            _header_params['Authorization'] = authorization
         # process the form parameters
         # process the body parameter
 

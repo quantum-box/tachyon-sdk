@@ -50,7 +50,13 @@ from tachyon_sdk.models.attach_user_policy_request import AttachUserPolicyReques
 from tachyon_sdk.models.attach_user_policy_with_scope_request import AttachUserPolicyWithScopeRequest
 from tachyon_sdk.models.attempt_completion_result import AttemptCompletionResult
 from tachyon_sdk.models.auth_url_response import AuthUrlResponse
+from tachyon_sdk.models.authority_actor import AuthorityActor
+from tachyon_sdk.models.authority_issuer import AuthorityIssuer
+from tachyon_sdk.models.authority_party_ref import AuthorityPartyRef
 from tachyon_sdk.models.billing_address_request import BillingAddressRequest
+from tachyon_sdk.models.binding_reference import BindingReference
+from tachyon_sdk.models.binding_slot import BindingSlot
+from tachyon_sdk.models.binding_slot_role import BindingSlotRole
 from tachyon_sdk.models.chat_completion_chunk_response import ChatCompletionChunkResponse
 from tachyon_sdk.models.chat_completion_request import ChatCompletionRequest
 from tachyon_sdk.models.chat_completion_response import ChatCompletionResponse
@@ -76,6 +82,9 @@ from tachyon_sdk.models.connection_response import ConnectionResponse
 from tachyon_sdk.models.consent_list_response import ConsentListResponse
 from tachyon_sdk.models.consent_response import ConsentResponse
 from tachyon_sdk.models.content_part import ContentPart
+from tachyon_sdk.models.contract_authority_evidence import ContractAuthorityEvidence
+from tachyon_sdk.models.contract_authority_resolve_request import ContractAuthorityResolveRequest
+from tachyon_sdk.models.contract_authority_resolve_response import ContractAuthorityResolveResponse
 from tachyon_sdk.models.create_agent_session_output_data import CreateAgentSessionOutputData
 from tachyon_sdk.models.create_agent_session_request import CreateAgentSessionRequest
 from tachyon_sdk.models.create_api_key_request import CreateApiKeyRequest
@@ -107,6 +116,7 @@ from tachyon_sdk.models.evaluate_policies_batch_response import EvaluatePolicies
 from tachyon_sdk.models.function import Function
 from tachyon_sdk.models.function_call import FunctionCall
 from tachyon_sdk.models.function_call_response import FunctionCallResponse
+from tachyon_sdk.models.get_agent_session_output_data import GetAgentSessionOutputData
 from tachyon_sdk.models.get_chatrooms_response import GetChatroomsResponse
 from tachyon_sdk.models.integration_detail_response import IntegrationDetailResponse
 from tachyon_sdk.models.integration_response import IntegrationResponse

@@ -68,7 +68,7 @@ with tachyon_sdk.ApiClient(configuration) as api_client:
     # Create an instance of the API class
     api_instance = tachyon_sdk.AuthAPIKeysApi(api_client)
     service_account_id = 'service_account_id_example' # str | Service account ID
-    create_api_key_request = tachyon_sdk.CreateApiKeyRequest() # CreateApiKeyRequest |
+    create_api_key_request = tachyon_sdk.CreateApiKeyRequest() # CreateApiKeyRequest | 
 
     try:
         # Create a new API key for a service account
@@ -89,6 +89,7 @@ Class | Method | HTTP request | Description
 *AuthAPIKeysApi* | [**create_api_key**](docs/AuthAPIKeysApi.md#create_api_key) | **POST** /v1/auth/service-accounts/{service_account_id}/api-keys | Create a new API key for a service account
 *AuthAPIKeysApi* | [**list_api_keys**](docs/AuthAPIKeysApi.md#list_api_keys) | **GET** /v1/auth/service-accounts/{service_account_id}/api-keys | List API keys for a service account
 *AuthAPIKeysApi* | [**verify_api_key**](docs/AuthAPIKeysApi.md#verify_api_key) | **POST** /v1/auth/api-keys/verify | Verify a public API key
+*AuthContractAuthorityApi* | [**resolve**](docs/AuthContractAuthorityApi.md#resolve) | **POST** /v1/auth/contract-authority/resolve | 
 *AuthOAuth2ClientsApi* | [**create_oauth2_client**](docs/AuthOAuth2ClientsApi.md#create_oauth2_client) | **POST** /v1/auth/oauth2-clients | Create a new OAuth2 client
 *AuthOAuth2ClientsApi* | [**get_oauth2_client**](docs/AuthOAuth2ClientsApi.md#get_oauth2_client) | **GET** /v1/auth/oauth2-clients/{id} | Get an OAuth2 client by ID
 *AuthOAuth2ClientsApi* | [**list_oauth2_clients**](docs/AuthOAuth2ClientsApi.md#list_oauth2_clients) | **GET** /v1/auth/oauth2-clients | List all OAuth2 clients for the current tenant
@@ -127,14 +128,14 @@ Class | Method | HTTP request | Description
 *AuthUserPoliciesApi* | [**find_user_policy_mappings**](docs/AuthUserPoliciesApi.md#find_user_policy_mappings) | **GET** /v1/auth/user-policy-mappings | Find user policy mappings by resource scope
 *AuthUserPoliciesApi* | [**list_user_policies**](docs/AuthUserPoliciesApi.md#list_user_policies) | **GET** /v1/auth/users/{user_id}/policies | List policies attached to a user
 *AuthUsersApi* | [**add_user_to_tenant**](docs/AuthUsersApi.md#add_user_to_tenant) | **POST** /v1/auth/users/{user_id}/tenants | Add a user to a tenant (grant tenant access)
-*AuthUsersApi* | [**create_user**](docs/AuthUsersApi.md#create_user) | **POST** /auth/v1beta/users |
+*AuthUsersApi* | [**create_user**](docs/AuthUsersApi.md#create_user) | **POST** /auth/v1beta/users | 
 *AuthUsersApi* | [**find_user_by_username**](docs/AuthUsersApi.md#find_user_by_username) | **GET** /v1/auth/users/search/by-username | Find a user by username
 *AuthUsersApi* | [**get_user**](docs/AuthUsersApi.md#get_user) | **GET** /v1/auth/users/{id} | Get a user by ID
 *AuthUsersApi* | [**invite_user**](docs/AuthUsersApi.md#invite_user) | **POST** /v1/auth/users/invite | Invite a user to a tenant
 *AuthUsersApi* | [**list_users**](docs/AuthUsersApi.md#list_users) | **GET** /v1/auth/users | List all users in an operator
 *AuthUsersApi* | [**update_user_role**](docs/AuthUsersApi.md#update_user_role) | **PUT** /v1/auth/users/{user_id}/role | Update a user&#39;s role in a specific tenant
-*AuthVerifyApi* | [**sign_in_with_platform**](docs/AuthVerifyApi.md#sign_in_with_platform) | **POST** /auth/v1beta/sign-in-with-platform |
-*AuthVerifyApi* | [**verify**](docs/AuthVerifyApi.md#verify) | **POST** /auth/v1beta/verify |
+*AuthVerifyApi* | [**sign_in_with_platform**](docs/AuthVerifyApi.md#sign_in_with_platform) | **POST** /auth/v1beta/sign-in-with-platform | 
+*AuthVerifyApi* | [**verify**](docs/AuthVerifyApi.md#verify) | **POST** /auth/v1beta/verify | 
 *CRMObjectMappingsApi* | [**create_object_mapping**](docs/CRMObjectMappingsApi.md#create_object_mapping) | **POST** /v1/crm/object-mappings | Create an object mapping
 *CRMObjectMappingsApi* | [**get_object_mappings**](docs/CRMObjectMappingsApi.md#get_object_mappings) | **GET** /v1/crm/object-mappings | Get object mappings by entity ID and object name
 *DeliveryShippingApi* | [**check_shipping_availability**](docs/DeliveryShippingApi.md#check_shipping_availability) | **GET** /v1/delivery/shipping-destinations/{id}/availability | Check physical shipping availability
@@ -170,10 +171,12 @@ Class | Method | HTTP request | Description
 *ProcurementApi* | [**delete_variant_link**](docs/ProcurementApi.md#delete_variant_link) | **DELETE** /v1/procurement/variant-links/{id} | Delete a variant procurement link
 *ProcurementApi* | [**upsert_variant_link**](docs/ProcurementApi.md#upsert_variant_link) | **POST** /v1/procurement/variant-links | Upsert a variant procurement link
 *AgentApi* | [**create_agent_session**](docs/AgentApi.md#create_agent_session) | **POST** /v1/llms/sessions | Create a new independent agent session.
+*AgentApi* | [**delete_agent_session**](docs/AgentApi.md#delete_agent_session) | **DELETE** /v1/llms/sessions/{session_id} | 
 *AgentApi* | [**execute_agent**](docs/AgentApi.md#execute_agent) | **POST** /v1/llms/chatrooms/{chatroom_id}/agent/execute | Execute agent
 *AgentApi* | [**execute_agent_session**](docs/AgentApi.md#execute_agent_session) | **POST** /v1/llms/sessions/{session_id}/agent/execute | Execute agent via session endpoint.
 *AgentApi* | [**get_agent_messages**](docs/AgentApi.md#get_agent_messages) | **GET** /v1/llms/chatrooms/{chatroom_id}/agent/messages | Get agent message log
 *AgentApi* | [**get_agent_messages_session**](docs/AgentApi.md#get_agent_messages_session) | **GET** /v1/llms/sessions/{session_id}/agent/messages | Get agent message log (session alias)
+*AgentApi* | [**get_agent_session**](docs/AgentApi.md#get_agent_session) | **GET** /v1/llms/sessions/{session_id} | Get an agent session by ID.
 *AgentApi* | [**get_agent_status**](docs/AgentApi.md#get_agent_status) | **GET** /v1/llms/chatrooms/{chatroom_id}/agent/status | Get agent status
 *AgentApi* | [**get_agent_status_session**](docs/AgentApi.md#get_agent_status_session) | **GET** /v1/llms/sessions/{session_id}/agent/status | Get agent status (session alias)
 *AgentApi* | [**list_agent_sessions**](docs/AgentApi.md#list_agent_sessions) | **GET** /v1/llms/sessions | List agent sessions for the current tenant.
@@ -231,7 +234,13 @@ Class | Method | HTTP request | Description
  - [AttachUserPolicyWithScopeRequest](docs/AttachUserPolicyWithScopeRequest.md)
  - [AttemptCompletionResult](docs/AttemptCompletionResult.md)
  - [AuthUrlResponse](docs/AuthUrlResponse.md)
+ - [AuthorityActor](docs/AuthorityActor.md)
+ - [AuthorityIssuer](docs/AuthorityIssuer.md)
+ - [AuthorityPartyRef](docs/AuthorityPartyRef.md)
  - [BillingAddressRequest](docs/BillingAddressRequest.md)
+ - [BindingReference](docs/BindingReference.md)
+ - [BindingSlot](docs/BindingSlot.md)
+ - [BindingSlotRole](docs/BindingSlotRole.md)
  - [ChatCompletionChunkResponse](docs/ChatCompletionChunkResponse.md)
  - [ChatCompletionRequest](docs/ChatCompletionRequest.md)
  - [ChatCompletionResponse](docs/ChatCompletionResponse.md)
@@ -257,6 +266,9 @@ Class | Method | HTTP request | Description
  - [ConsentListResponse](docs/ConsentListResponse.md)
  - [ConsentResponse](docs/ConsentResponse.md)
  - [ContentPart](docs/ContentPart.md)
+ - [ContractAuthorityEvidence](docs/ContractAuthorityEvidence.md)
+ - [ContractAuthorityResolveRequest](docs/ContractAuthorityResolveRequest.md)
+ - [ContractAuthorityResolveResponse](docs/ContractAuthorityResolveResponse.md)
  - [CreateAgentSessionOutputData](docs/CreateAgentSessionOutputData.md)
  - [CreateAgentSessionRequest](docs/CreateAgentSessionRequest.md)
  - [CreateApiKeyRequest](docs/CreateApiKeyRequest.md)
@@ -288,6 +300,7 @@ Class | Method | HTTP request | Description
  - [Function](docs/Function.md)
  - [FunctionCall](docs/FunctionCall.md)
  - [FunctionCallResponse](docs/FunctionCallResponse.md)
+ - [GetAgentSessionOutputData](docs/GetAgentSessionOutputData.md)
  - [GetChatroomsResponse](docs/GetChatroomsResponse.md)
  - [IntegrationDetailResponse](docs/IntegrationDetailResponse.md)
  - [IntegrationResponse](docs/IntegrationResponse.md)

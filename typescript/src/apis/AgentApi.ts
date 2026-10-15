@@ -21,6 +21,7 @@ import type {
   AgentStatusResponse,
   CreateAgentSessionOutputData,
   CreateAgentSessionRequest,
+  GetAgentSessionOutputData,
   ListAgentSessionsOutputData,
   ToolResultSubmission,
 } from '../models/index';
@@ -37,6 +38,8 @@ import {
     CreateAgentSessionOutputDataToJSON,
     CreateAgentSessionRequestFromJSON,
     CreateAgentSessionRequestToJSON,
+    GetAgentSessionOutputDataFromJSON,
+    GetAgentSessionOutputDataToJSON,
     ListAgentSessionsOutputDataFromJSON,
     ListAgentSessionsOutputDataToJSON,
     ToolResultSubmissionFromJSON,
@@ -44,9 +47,13 @@ import {
 } from '../models/index';
 
 export interface CreateAgentSessionOperationRequest {
+    createAgentSessionRequest: CreateAgentSessionRequest;
+}
+
+export interface DeleteAgentSessionRequest {
+    sessionId: string;
     xOperatorId: string;
     authorization: string;
-    createAgentSessionRequest: CreateAgentSessionRequest;
 }
 
 export interface ExecuteAgentRequest {
@@ -79,6 +86,10 @@ export interface GetAgentMessagesSessionRequest {
     offset?: number | null;
 }
 
+export interface GetAgentSessionRequest {
+    sessionId: string;
+}
+
 export interface GetAgentStatusRequest {
     chatroomId: string;
     xOperatorId: string;
@@ -92,10 +103,9 @@ export interface GetAgentStatusSessionRequest {
 }
 
 export interface ListAgentSessionsRequest {
-    xOperatorId: string;
-    authorization: string;
     limit?: number | null;
     offset?: number | null;
+    metadataUserId?: string | null;
 }
 
 export interface SubmitToolResultRequest {
@@ -121,20 +131,6 @@ export class AgentApi extends runtime.BaseAPI {
      * Creates request options for createAgentSession without sending the request
      */
     async createAgentSessionRequestOpts(requestParameters: CreateAgentSessionOperationRequest): Promise<runtime.RequestOpts> {
-        if (requestParameters['xOperatorId'] == null) {
-            throw new runtime.RequiredError(
-                'xOperatorId',
-                'Required parameter "xOperatorId" was null or undefined when calling createAgentSession().'
-            );
-        }
-
-        if (requestParameters['authorization'] == null) {
-            throw new runtime.RequiredError(
-                'authorization',
-                'Required parameter "authorization" was null or undefined when calling createAgentSession().'
-            );
-        }
-
         if (requestParameters['createAgentSessionRequest'] == null) {
             throw new runtime.RequiredError(
                 'createAgentSessionRequest',
@@ -147,14 +143,6 @@ export class AgentApi extends runtime.BaseAPI {
         const headerParameters: runtime.HTTPHeaders = {};
 
         headerParameters['Content-Type'] = 'application/json';
-
-        if (requestParameters['xOperatorId'] != null) {
-            headerParameters['x-operator-id'] = String(requestParameters['xOperatorId']);
-        }
-
-        if (requestParameters['authorization'] != null) {
-            headerParameters['Authorization'] = String(requestParameters['authorization']);
-        }
 
 
         let urlPath = `/v1/llms/sessions`;
@@ -186,6 +174,70 @@ export class AgentApi extends runtime.BaseAPI {
     async createAgentSession(requestParameters: CreateAgentSessionOperationRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<CreateAgentSessionOutputData> {
         const response = await this.createAgentSessionRaw(requestParameters, initOverrides);
         return await response.value();
+    }
+
+    /**
+     * Creates request options for deleteAgentSession without sending the request
+     */
+    async deleteAgentSessionRequestOpts(requestParameters: DeleteAgentSessionRequest): Promise<runtime.RequestOpts> {
+        if (requestParameters['sessionId'] == null) {
+            throw new runtime.RequiredError(
+                'sessionId',
+                'Required parameter "sessionId" was null or undefined when calling deleteAgentSession().'
+            );
+        }
+
+        if (requestParameters['xOperatorId'] == null) {
+            throw new runtime.RequiredError(
+                'xOperatorId',
+                'Required parameter "xOperatorId" was null or undefined when calling deleteAgentSession().'
+            );
+        }
+
+        if (requestParameters['authorization'] == null) {
+            throw new runtime.RequiredError(
+                'authorization',
+                'Required parameter "authorization" was null or undefined when calling deleteAgentSession().'
+            );
+        }
+
+        const queryParameters: any = {};
+
+        const headerParameters: runtime.HTTPHeaders = {};
+
+        if (requestParameters['xOperatorId'] != null) {
+            headerParameters['x-operator-id'] = String(requestParameters['xOperatorId']);
+        }
+
+        if (requestParameters['authorization'] != null) {
+            headerParameters['Authorization'] = String(requestParameters['authorization']);
+        }
+
+
+        let urlPath = `/v1/llms/sessions/{session_id}`;
+        urlPath = urlPath.replace(`{${"session_id"}}`, encodeURIComponent(String(requestParameters['sessionId'])));
+
+        return {
+            path: urlPath,
+            method: 'DELETE',
+            headers: headerParameters,
+            query: queryParameters,
+        };
+    }
+
+    /**
+     */
+    async deleteAgentSessionRaw(requestParameters: DeleteAgentSessionRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<void>> {
+        const requestOptions = await this.deleteAgentSessionRequestOpts(requestParameters);
+        const response = await this.request(requestOptions, initOverrides);
+
+        return new runtime.VoidApiResponse(response);
+    }
+
+    /**
+     */
+    async deleteAgentSession(requestParameters: DeleteAgentSessionRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<void> {
+        await this.deleteAgentSessionRaw(requestParameters, initOverrides);
     }
 
     /**
@@ -501,6 +553,51 @@ export class AgentApi extends runtime.BaseAPI {
     }
 
     /**
+     * Creates request options for getAgentSession without sending the request
+     */
+    async getAgentSessionRequestOpts(requestParameters: GetAgentSessionRequest): Promise<runtime.RequestOpts> {
+        if (requestParameters['sessionId'] == null) {
+            throw new runtime.RequiredError(
+                'sessionId',
+                'Required parameter "sessionId" was null or undefined when calling getAgentSession().'
+            );
+        }
+
+        const queryParameters: any = {};
+
+        const headerParameters: runtime.HTTPHeaders = {};
+
+
+        let urlPath = `/v1/llms/sessions/{session_id}`;
+        urlPath = urlPath.replace(`{${"session_id"}}`, encodeURIComponent(String(requestParameters['sessionId'])));
+
+        return {
+            path: urlPath,
+            method: 'GET',
+            headers: headerParameters,
+            query: queryParameters,
+        };
+    }
+
+    /**
+     * Get an agent session by ID.
+     */
+    async getAgentSessionRaw(requestParameters: GetAgentSessionRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<GetAgentSessionOutputData>> {
+        const requestOptions = await this.getAgentSessionRequestOpts(requestParameters);
+        const response = await this.request(requestOptions, initOverrides);
+
+        return new runtime.JSONApiResponse(response, (jsonValue) => GetAgentSessionOutputDataFromJSON(jsonValue));
+    }
+
+    /**
+     * Get an agent session by ID.
+     */
+    async getAgentSession(requestParameters: GetAgentSessionRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<GetAgentSessionOutputData> {
+        const response = await this.getAgentSessionRaw(requestParameters, initOverrides);
+        return await response.value();
+    }
+
+    /**
      * Creates request options for getAgentStatus without sending the request
      */
     async getAgentStatusRequestOpts(requestParameters: GetAgentStatusRequest): Promise<runtime.RequestOpts> {
@@ -642,20 +739,6 @@ export class AgentApi extends runtime.BaseAPI {
      * Creates request options for listAgentSessions without sending the request
      */
     async listAgentSessionsRequestOpts(requestParameters: ListAgentSessionsRequest): Promise<runtime.RequestOpts> {
-        if (requestParameters['xOperatorId'] == null) {
-            throw new runtime.RequiredError(
-                'xOperatorId',
-                'Required parameter "xOperatorId" was null or undefined when calling listAgentSessions().'
-            );
-        }
-
-        if (requestParameters['authorization'] == null) {
-            throw new runtime.RequiredError(
-                'authorization',
-                'Required parameter "authorization" was null or undefined when calling listAgentSessions().'
-            );
-        }
-
         const queryParameters: any = {};
 
         if (requestParameters['limit'] != null) {
@@ -666,15 +749,11 @@ export class AgentApi extends runtime.BaseAPI {
             queryParameters['offset'] = requestParameters['offset'];
         }
 
+        if (requestParameters['metadataUserId'] != null) {
+            queryParameters['metadata_user_id'] = requestParameters['metadataUserId'];
+        }
+
         const headerParameters: runtime.HTTPHeaders = {};
-
-        if (requestParameters['xOperatorId'] != null) {
-            headerParameters['x-operator-id'] = String(requestParameters['xOperatorId']);
-        }
-
-        if (requestParameters['authorization'] != null) {
-            headerParameters['Authorization'] = String(requestParameters['authorization']);
-        }
 
 
         let urlPath = `/v1/llms/sessions`;
@@ -700,7 +779,7 @@ export class AgentApi extends runtime.BaseAPI {
     /**
      * List agent sessions for the current tenant.
      */
-    async listAgentSessions(requestParameters: ListAgentSessionsRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<ListAgentSessionsOutputData> {
+    async listAgentSessions(requestParameters: ListAgentSessionsRequest = {}, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<ListAgentSessionsOutputData> {
         const response = await this.listAgentSessionsRaw(requestParameters, initOverrides);
         return await response.value();
     }

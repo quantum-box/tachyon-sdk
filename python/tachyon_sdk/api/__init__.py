@@ -2,6 +2,7 @@
 
 # import apis into api package
 from tachyon_sdk.api.auth_api_keys_api import AuthAPIKeysApi
+from tachyon_sdk.api.auth_contract_authority_api import AuthContractAuthorityApi
 from tachyon_sdk.api.auth_o_auth2_clients_api import AuthOAuth2ClientsApi
 from tachyon_sdk.api.auth_o_auth2_consents_api import AuthOAuth2ConsentsApi
 from tachyon_sdk.api.auth_o_auth_tokens_api import AuthOAuthTokensApi

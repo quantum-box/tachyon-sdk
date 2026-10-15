@@ -5,10 +5,12 @@ All URIs are relative to *http://localhost*
 | Method | HTTP request | Description |
 |------------- | ------------- | -------------|
 | [**createAgentSession**](AgentApi.md#createagentsessionoperation) | **POST** /v1/llms/sessions | Create a new independent agent session. |
+| [**deleteAgentSession**](AgentApi.md#deleteagentsession) | **DELETE** /v1/llms/sessions/{session_id} |  |
 | [**executeAgent**](AgentApi.md#executeagent) | **POST** /v1/llms/chatrooms/{chatroom_id}/agent/execute | Execute agent |
 | [**executeAgentSession**](AgentApi.md#executeagentsession) | **POST** /v1/llms/sessions/{session_id}/agent/execute | Execute agent via session endpoint. |
 | [**getAgentMessages**](AgentApi.md#getagentmessages) | **GET** /v1/llms/chatrooms/{chatroom_id}/agent/messages | Get agent message log |
 | [**getAgentMessagesSession**](AgentApi.md#getagentmessagessession) | **GET** /v1/llms/sessions/{session_id}/agent/messages | Get agent message log (session alias) |
+| [**getAgentSession**](AgentApi.md#getagentsession) | **GET** /v1/llms/sessions/{session_id} | Get an agent session by ID. |
 | [**getAgentStatus**](AgentApi.md#getagentstatus) | **GET** /v1/llms/chatrooms/{chatroom_id}/agent/status | Get agent status |
 | [**getAgentStatusSession**](AgentApi.md#getagentstatussession) | **GET** /v1/llms/sessions/{session_id}/agent/status | Get agent status (session alias) |
 | [**listAgentSessions**](AgentApi.md#listagentsessions) | **GET** /v1/llms/sessions | List agent sessions for the current tenant. |
@@ -19,7 +21,7 @@ All URIs are relative to *http://localhost*
 
 ## createAgentSession
 
-> CreateAgentSessionOutputData createAgentSession(xOperatorId, authorization, createAgentSessionRequest)
+> CreateAgentSessionOutputData createAgentSession(createAgentSessionRequest)
 
 Create a new independent agent session.
 
@@ -39,10 +41,6 @@ async function example() {
   const api = new AgentApi();
 
   const body = {
-    // string | Operator ID
-    xOperatorId: tn_xxxxxx,
-    // string | Authorization
-    authorization: Bearer xxxxx,
     // CreateAgentSessionRequest
     createAgentSessionRequest: ...,
   } satisfies CreateAgentSessionOperationRequest;
@@ -64,8 +62,6 @@ example().catch(console.error);
 
 | Name | Type | Description  | Notes |
 |------------- | ------------- | ------------- | -------------|
-| **xOperatorId** | `string` | Operator ID | [Defaults to `undefined`] |
-| **authorization** | `string` | Authorization | [Defaults to `undefined`] |
 | **createAgentSessionRequest** | [CreateAgentSessionRequest](CreateAgentSessionRequest.md) |  | |
 
 ### Return type
@@ -86,6 +82,78 @@ No authorization required
 | Status code | Description | Response headers |
 |-------------|-------------|------------------|
 | **200** | Session created |  -  |
+
+[[Back to top]](#) [[Back to API list]](../README.md#api-endpoints) [[Back to Model list]](../README.md#models) [[Back to README]](../README.md)
+
+
+## deleteAgentSession
+
+> deleteAgentSession(sessionId, xOperatorId, authorization)
+
+
+
+### Example
+
+```ts
+import {
+  Configuration,
+  AgentApi,
+} from '@tachyon/sdk';
+import type { DeleteAgentSessionRequest } from '@tachyon/sdk';
+
+async function example() {
+  console.log("🚀 Testing @tachyon/sdk SDK...");
+  const api = new AgentApi();
+
+  const body = {
+    // string | Session ID
+    sessionId: sessionId_example,
+    // string | Operator ID
+    xOperatorId: tn_xxxxxx,
+    // string | Authorization
+    authorization: Bearer xxxxx,
+  } satisfies DeleteAgentSessionRequest;
+
+  try {
+    const data = await api.deleteAgentSession(body);
+    console.log(data);
+  } catch (error) {
+    console.error(error);
+  }
+}
+
+// Run the test
+example().catch(console.error);
+```
+
+### Parameters
+
+
+| Name | Type | Description  | Notes |
+|------------- | ------------- | ------------- | -------------|
+| **sessionId** | `string` | Session ID | [Defaults to `undefined`] |
+| **xOperatorId** | `string` | Operator ID | [Defaults to `undefined`] |
+| **authorization** | `string` | Authorization | [Defaults to `undefined`] |
+
+### Return type
+
+`void` (Empty response body)
+
+### Authorization
+
+No authorization required
+
+### HTTP request headers
+
+- **Content-Type**: Not defined
+- **Accept**: Not defined
+
+
+### HTTP response details
+| Status code | Description | Response headers |
+|-------------|-------------|------------------|
+| **204** | Session deleted |  -  |
+| **404** | Session not found |  -  |
 
 [[Back to top]](#) [[Back to API list]](../README.md#api-endpoints) [[Back to Model list]](../README.md#models) [[Back to README]](../README.md)
 
@@ -403,6 +471,72 @@ No authorization required
 [[Back to top]](#) [[Back to API list]](../README.md#api-endpoints) [[Back to Model list]](../README.md#models) [[Back to README]](../README.md)
 
 
+## getAgentSession
+
+> GetAgentSessionOutputData getAgentSession(sessionId)
+
+Get an agent session by ID.
+
+### Example
+
+```ts
+import {
+  Configuration,
+  AgentApi,
+} from '@tachyon/sdk';
+import type { GetAgentSessionRequest } from '@tachyon/sdk';
+
+async function example() {
+  console.log("🚀 Testing @tachyon/sdk SDK...");
+  const api = new AgentApi();
+
+  const body = {
+    // string | Session ID
+    sessionId: sessionId_example,
+  } satisfies GetAgentSessionRequest;
+
+  try {
+    const data = await api.getAgentSession(body);
+    console.log(data);
+  } catch (error) {
+    console.error(error);
+  }
+}
+
+// Run the test
+example().catch(console.error);
+```
+
+### Parameters
+
+
+| Name | Type | Description  | Notes |
+|------------- | ------------- | ------------- | -------------|
+| **sessionId** | `string` | Session ID | [Defaults to `undefined`] |
+
+### Return type
+
+[**GetAgentSessionOutputData**](GetAgentSessionOutputData.md)
+
+### Authorization
+
+No authorization required
+
+### HTTP request headers
+
+- **Content-Type**: Not defined
+- **Accept**: `application/json`
+
+
+### HTTP response details
+| Status code | Description | Response headers |
+|-------------|-------------|------------------|
+| **200** | Session detail |  -  |
+| **404** | Session not found |  -  |
+
+[[Back to top]](#) [[Back to API list]](../README.md#api-endpoints) [[Back to Model list]](../README.md#models) [[Back to README]](../README.md)
+
+
 ## getAgentStatus
 
 > AgentStatusResponse getAgentStatus(chatroomId, xOperatorId, authorization)
@@ -551,7 +685,7 @@ No authorization required
 
 ## listAgentSessions
 
-> ListAgentSessionsOutputData listAgentSessions(xOperatorId, authorization, limit, offset)
+> ListAgentSessionsOutputData listAgentSessions(limit, offset, metadataUserId)
 
 List agent sessions for the current tenant.
 
@@ -569,14 +703,12 @@ async function example() {
   const api = new AgentApi();
 
   const body = {
-    // string | Operator ID
-    xOperatorId: tn_xxxxxx,
-    // string | Authorization
-    authorization: Bearer xxxxx,
-    // number | Maximum number of sessions (optional)
+    // number | Maximum number of sessions to return. (optional)
     limit: 56,
-    // number | Offset (optional)
+    // number | Offset for pagination. (optional)
     offset: 56,
+    // string | Filter sessions by `user_id` stored in metadata JSON. (optional)
+    metadataUserId: metadataUserId_example,
   } satisfies ListAgentSessionsRequest;
 
   try {
@@ -596,10 +728,9 @@ example().catch(console.error);
 
 | Name | Type | Description  | Notes |
 |------------- | ------------- | ------------- | -------------|
-| **xOperatorId** | `string` | Operator ID | [Defaults to `undefined`] |
-| **authorization** | `string` | Authorization | [Defaults to `undefined`] |
-| **limit** | `number` | Maximum number of sessions | [Optional] [Defaults to `undefined`] |
-| **offset** | `number` | Offset | [Optional] [Defaults to `undefined`] |
+| **limit** | `number` | Maximum number of sessions to return. | [Optional] [Defaults to `undefined`] |
+| **offset** | `number` | Offset for pagination. | [Optional] [Defaults to `undefined`] |
+| **metadataUserId** | `string` | Filter sessions by &#x60;user_id&#x60; stored in metadata JSON. | [Optional] [Defaults to `undefined`] |
 
 ### Return type
 
@@ -775,3 +906,4 @@ No authorization required
 | **404** | No pending tool call found for the given tool_id |  -  |
 
 [[Back to top]](#) [[Back to API list]](../README.md#api-endpoints) [[Back to Model list]](../README.md#models) [[Back to README]](../README.md)
+

@@ -19,6 +19,7 @@ __version__ = "0.1.0"
 # Define package exports
 __all__ = [
     "AuthAPIKeysApi",
+    "AuthContractAuthorityApi",
     "AuthOAuth2ClientsApi",
     "AuthOAuth2ConsentsApi",
     "AuthOAuthTokensApi",
@@ -95,7 +96,13 @@ __all__ = [
     "AttachUserPolicyWithScopeRequest",
     "AttemptCompletionResult",
     "AuthUrlResponse",
+    "AuthorityActor",
+    "AuthorityIssuer",
+    "AuthorityPartyRef",
     "BillingAddressRequest",
+    "BindingReference",
+    "BindingSlot",
+    "BindingSlotRole",
     "ChatCompletionChunkResponse",
     "ChatCompletionRequest",
     "ChatCompletionResponse",
@@ -121,6 +128,9 @@ __all__ = [
     "ConsentListResponse",
     "ConsentResponse",
     "ContentPart",
+    "ContractAuthorityEvidence",
+    "ContractAuthorityResolveRequest",
+    "ContractAuthorityResolveResponse",
     "CreateAgentSessionOutputData",
     "CreateAgentSessionRequest",
     "CreateApiKeyRequest",
@@ -152,6 +162,7 @@ __all__ = [
     "Function",
     "FunctionCall",
     "FunctionCallResponse",
+    "GetAgentSessionOutputData",
     "GetChatroomsResponse",
     "IntegrationDetailResponse",
     "IntegrationResponse",
@@ -265,6 +276,7 @@ __all__ = [
 
 # import apis into sdk package
 from tachyon_sdk.api.auth_api_keys_api import AuthAPIKeysApi as AuthAPIKeysApi
+from tachyon_sdk.api.auth_contract_authority_api import AuthContractAuthorityApi as AuthContractAuthorityApi
 from tachyon_sdk.api.auth_o_auth2_clients_api import AuthOAuth2ClientsApi as AuthOAuth2ClientsApi
 from tachyon_sdk.api.auth_o_auth2_consents_api import AuthOAuth2ConsentsApi as AuthOAuth2ConsentsApi
 from tachyon_sdk.api.auth_o_auth_tokens_api import AuthOAuthTokensApi as AuthOAuthTokensApi
@@ -345,7 +357,13 @@ from tachyon_sdk.models.attach_user_policy_request import AttachUserPolicyReques
 from tachyon_sdk.models.attach_user_policy_with_scope_request import AttachUserPolicyWithScopeRequest as AttachUserPolicyWithScopeRequest
 from tachyon_sdk.models.attempt_completion_result import AttemptCompletionResult as AttemptCompletionResult
 from tachyon_sdk.models.auth_url_response import AuthUrlResponse as AuthUrlResponse
+from tachyon_sdk.models.authority_actor import AuthorityActor as AuthorityActor
+from tachyon_sdk.models.authority_issuer import AuthorityIssuer as AuthorityIssuer
+from tachyon_sdk.models.authority_party_ref import AuthorityPartyRef as AuthorityPartyRef
 from tachyon_sdk.models.billing_address_request import BillingAddressRequest as BillingAddressRequest
+from tachyon_sdk.models.binding_reference import BindingReference as BindingReference
+from tachyon_sdk.models.binding_slot import BindingSlot as BindingSlot
+from tachyon_sdk.models.binding_slot_role import BindingSlotRole as BindingSlotRole
 from tachyon_sdk.models.chat_completion_chunk_response import ChatCompletionChunkResponse as ChatCompletionChunkResponse
 from tachyon_sdk.models.chat_completion_request import ChatCompletionRequest as ChatCompletionRequest
 from tachyon_sdk.models.chat_completion_response import ChatCompletionResponse as ChatCompletionResponse
@@ -371,6 +389,9 @@ from tachyon_sdk.models.connection_response import ConnectionResponse as Connect
 from tachyon_sdk.models.consent_list_response import ConsentListResponse as ConsentListResponse
 from tachyon_sdk.models.consent_response import ConsentResponse as ConsentResponse
 from tachyon_sdk.models.content_part import ContentPart as ContentPart
+from tachyon_sdk.models.contract_authority_evidence import ContractAuthorityEvidence as ContractAuthorityEvidence
+from tachyon_sdk.models.contract_authority_resolve_request import ContractAuthorityResolveRequest as ContractAuthorityResolveRequest
+from tachyon_sdk.models.contract_authority_resolve_response import ContractAuthorityResolveResponse as ContractAuthorityResolveResponse
 from tachyon_sdk.models.create_agent_session_output_data import CreateAgentSessionOutputData as CreateAgentSessionOutputData
 from tachyon_sdk.models.create_agent_session_request import CreateAgentSessionRequest as CreateAgentSessionRequest
 from tachyon_sdk.models.create_api_key_request import CreateApiKeyRequest as CreateApiKeyRequest
@@ -402,6 +423,7 @@ from tachyon_sdk.models.evaluate_policies_batch_response import EvaluatePolicies
 from tachyon_sdk.models.function import Function as Function
 from tachyon_sdk.models.function_call import FunctionCall as FunctionCall
 from tachyon_sdk.models.function_call_response import FunctionCallResponse as FunctionCallResponse
+from tachyon_sdk.models.get_agent_session_output_data import GetAgentSessionOutputData as GetAgentSessionOutputData
 from tachyon_sdk.models.get_chatrooms_response import GetChatroomsResponse as GetChatroomsResponse
 from tachyon_sdk.models.integration_detail_response import IntegrationDetailResponse as IntegrationDetailResponse
 from tachyon_sdk.models.integration_response import IntegrationResponse as IntegrationResponse

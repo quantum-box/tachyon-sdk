@@ -6,19 +6,19 @@ Response for newly created OAuth2 client (includes plain-text secret)
 
 Name | Type | Description | Notes
 ------------ | ------------- | ------------- | -------------
-**allowed_scopes** | **List[str]** | Allowed scopes |
-**auth_mode** | **str** | Authentication mode | [optional]
-**client_id** | **str** |  |
-**client_secret** | **str** |  |
-**created_at** | **str** |  |
-**grant_types** | **List[str]** | Allowed grant types |
-**id** | **str** |  |
-**name** | **str** |  |
-**provider_user_pool_id** | **str** |  | [optional]
-**redirect_uris** | **List[str]** | Allowed redirect URIs |
-**status** | **str** |  |
-**use_tachyon_user_pool** | **bool** |  |
-**user_pool_id** | **str** |  | [optional]
+**allowed_scopes** | **List[str]** | Allowed scopes | 
+**auth_mode** | **str** | Authentication mode | [optional] 
+**client_id** | **str** |  | 
+**client_secret** | **str** |  | 
+**created_at** | **str** |  | 
+**grant_types** | **List[str]** | Allowed grant types | 
+**id** | **str** |  | 
+**name** | **str** |  | 
+**provider_user_pool_id** | **str** |  | [optional] 
+**redirect_uris** | **List[str]** | Allowed redirect URIs | 
+**status** | **str** |  | 
+**use_tachyon_user_pool** | **bool** |  | 
+**user_pool_id** | **str** |  | [optional] 
 
 ## Example
 

@@ -8,6 +8,7 @@ Identifies which agent produced a chunk.
 Name | Type
 ------------ | -------------
 `chatroomId` | string
+`sessionId` | string
 
 ## Example
 
@@ -17,6 +18,7 @@ import type { AgentSource } from '@tachyon/sdk'
 // TODO: Update the object below with actual values
 const example = {
   "chatroomId": null,
+  "sessionId": null,
 } satisfies AgentSource
 
 console.log(example)

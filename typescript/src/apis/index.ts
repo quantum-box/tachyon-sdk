@@ -2,6 +2,7 @@
 /* eslint-disable */
 export * from './AgentApi';
 export * from './AuthAPIKeysApi';
+export * from './AuthContractAuthorityApi';
 export * from './AuthOAuth2ClientsApi';
 export * from './AuthOAuth2ConsentsApi';
 export * from './AuthOAuthTokensApi';

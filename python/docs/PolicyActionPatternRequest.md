@@ -6,9 +6,9 @@ Policy action pattern entry
 
 Name | Type | Description | Notes
 ------------ | ------------- | ------------- | -------------
-**context_pattern** | **str** | Action context pattern |
-**effect** | **str** | Policy effect. Supported values are \&quot;allow\&quot; and \&quot;deny\&quot; |
-**name_pattern** | **str** | Action name pattern |
+**context_pattern** | **str** | Action context pattern | 
+**effect** | **str** | Policy effect. Supported values are \&quot;allow\&quot; and \&quot;deny\&quot; | 
+**name_pattern** | **str** | Action name pattern | 
 
 ## Example
 
