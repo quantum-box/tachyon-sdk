@@ -5697,6 +5697,45 @@
                     }
                 }
             }
+        },
+        "/v1/auth/contract-authority/resolve": {
+            "post": {
+                "tags": [
+                    "Auth - Contract Authority"
+                ],
+                "operationId": "resolve",
+                "requestBody": {
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/ContractAuthorityResolveRequest"
+                            }
+                        }
+                    },
+                    "required": true
+                },
+                "responses": {
+                    "200": {
+                        "description": "Current verified authority for the exact binding slot",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/ContractAuthorityResolveResponse"
+                                }
+                            }
+                        }
+                    },
+                    "400": {
+                        "description": "Invalid request scope or shape"
+                    },
+                    "403": {
+                        "description": "Caller denied or current proof unavailable"
+                    },
+                    "503": {
+                        "description": "Authority source unavailable"
+                    }
+                }
+            }
         }
     },
     "components": {
@@ -11774,6 +11813,226 @@
                         "format": "date-time"
                     }
                 }
+            },
+            "AuthorityActor": {
+                "type": "object",
+                "description": "Actor identity and its source-owned representation.",
+                "required": [
+                    "actorId",
+                    "representation"
+                ],
+                "properties": {
+                    "actorId": {
+                        "type": "string"
+                    },
+                    "representation": {
+                        "type": "string"
+                    }
+                },
+                "additionalProperties": false
+            },
+            "AuthorityIssuer": {
+                "type": "object",
+                "description": "Issuer and signing-key identity returned by the trusted source.",
+                "required": [
+                    "issuerId",
+                    "keyId"
+                ],
+                "properties": {
+                    "issuerId": {
+                        "type": "string"
+                    },
+                    "keyId": {
+                        "type": "string"
+                    }
+                },
+                "additionalProperties": false
+            },
+            "AuthorityPartyRef": {
+                "type": "object",
+                "description": "A legal-party reference from the stored Field contract.",
+                "required": [
+                    "recordOwnerTenantId",
+                    "partyId"
+                ],
+                "properties": {
+                    "partyId": {
+                        "type": "string"
+                    },
+                    "recordOwnerTenantId": {
+                        "type": "string"
+                    }
+                },
+                "additionalProperties": false
+            },
+            "BindingReference": {
+                "type": "object",
+                "description": "Exact Field contract identity and binding version/digest.",
+                "required": [
+                    "recordOwnerTenantId",
+                    "contractId",
+                    "bindingRevision",
+                    "bindingDigest"
+                ],
+                "properties": {
+                    "bindingDigest": {
+                        "type": "string"
+                    },
+                    "bindingRevision": {
+                        "type": "string"
+                    },
+                    "contractId": {
+                        "type": "string"
+                    },
+                    "recordOwnerTenantId": {
+                        "type": "string"
+                    }
+                },
+                "additionalProperties": false
+            },
+            "BindingSlot": {
+                "type": "object",
+                "description": "A server-derived slot.  `partyRef` is deliberately role-bound.",
+                "required": [
+                    "role",
+                    "tenantId"
+                ],
+                "properties": {
+                    "partyRef": {
+                        "oneOf": [
+                            {
+                                "type": "null"
+                            },
+                            {
+                                "$ref": "#/components/schemas/AuthorityPartyRef"
+                            }
+                        ]
+                    },
+                    "role": {
+                        "$ref": "#/components/schemas/BindingSlotRole"
+                    },
+                    "tenantId": {
+                        "type": "string"
+                    }
+                },
+                "additionalProperties": false
+            },
+            "BindingSlotRole": {
+                "type": "string",
+                "description": "The seven server-derived slot roles in Field's binding contract.",
+                "enum": [
+                    "recordOwner",
+                    "provider",
+                    "contractee",
+                    "usageTenant",
+                    "contractingParty",
+                    "billingParty",
+                    "rightsOwner"
+                ]
+            },
+            "ContractAuthorityEvidence": {
+                "type": "object",
+                "description": "Opaque proof metadata returned for a current exact resolution.\n\nThe issuer and key identify the server-trusted verification record.  They\ndo not expose private key material, party graphs or the signed token.",
+                "required": [
+                    "issuer",
+                    "evidenceId",
+                    "evidenceRevision",
+                    "evidenceDigest",
+                    "validFrom",
+                    "validUntil"
+                ],
+                "properties": {
+                    "evidenceDigest": {
+                        "type": "string"
+                    },
+                    "evidenceId": {
+                        "type": "string"
+                    },
+                    "evidenceRevision": {
+                        "type": "string"
+                    },
+                    "issuer": {
+                        "$ref": "#/components/schemas/AuthorityIssuer"
+                    },
+                    "revokedAt": {
+                        "type": [
+                            "string",
+                            "null"
+                        ],
+                        "format": "date-time"
+                    },
+                    "validFrom": {
+                        "type": "string",
+                        "format": "date-time"
+                    },
+                    "validUntil": {
+                        "type": "string",
+                        "format": "date-time"
+                    }
+                },
+                "additionalProperties": false
+            },
+            "ContractAuthorityResolveRequest": {
+                "type": "object",
+                "description": "The current authority request sent by Field.",
+                "required": [
+                    "schemaVersion",
+                    "slot",
+                    "binding",
+                    "actor",
+                    "action",
+                    "resource",
+                    "environment",
+                    "audience"
+                ],
+                "properties": {
+                    "action": {
+                        "type": "string"
+                    },
+                    "actor": {
+                        "$ref": "#/components/schemas/AuthorityActor"
+                    },
+                    "audience": {
+                        "type": "string"
+                    },
+                    "binding": {
+                        "$ref": "#/components/schemas/BindingReference"
+                    },
+                    "environment": {
+                        "type": "string"
+                    },
+                    "resource": {
+                        "type": "string"
+                    },
+                    "schemaVersion": {
+                        "type": "string"
+                    },
+                    "slot": {
+                        "$ref": "#/components/schemas/BindingSlot"
+                    }
+                },
+                "additionalProperties": false
+            },
+            "ContractAuthorityResolveResponse": {
+                "type": "object",
+                "description": "Current proof returned for the exact request.  The request is echoed so a\nconsumer can compare every scope field before converting to an internal\nField proof.",
+                "required": [
+                    "schemaVersion",
+                    "request",
+                    "evidence"
+                ],
+                "properties": {
+                    "evidence": {
+                        "$ref": "#/components/schemas/ContractAuthorityEvidence"
+                    },
+                    "request": {
+                        "$ref": "#/components/schemas/ContractAuthorityResolveRequest"
+                    },
+                    "schemaVersion": {
+                        "type": "string"
+                    }
+                },
+                "additionalProperties": false
             }
         }
     },
@@ -11897,6 +12156,10 @@
         {
             "name": "Notifications",
             "description": "Notification delivery APIs"
+        },
+        {
+            "name": "Auth - Contract Authority",
+            "description": "Trusted contract authority resolution"
         }
     ]
 }
