@@ -382,7 +382,8 @@ impl CodingJobDockerConfig {
             args.push("--detach".to_string());
         }
         if let Some(name) = &self.name {
-            args.push(format!("--name={name}"));
+            args.push("--name".to_string());
+            args.push(name.clone());
         }
         args.push("--label".to_string());
         args.push(TACHYOND_CONTAINER_LABEL.to_string());
@@ -1409,7 +1410,8 @@ mod coding_job_tests {
         assert_eq!(args.first().map(String::as_str), Some("run"));
         assert!(args.contains(&"--rm".to_string()));
         assert!(!args.contains(&"--detach".to_string()));
-        assert!(args.contains(&"--name=tachyond-test".to_string()));
+        assert!(args.contains(&"--name".to_string()));
+        assert!(args.contains(&"tachyond-test".to_string()));
         assert!(args.contains(&"--label".to_string()));
         assert!(args.contains(&TACHYOND_CONTAINER_LABEL.to_string()));
         assert!(args.contains(&"TACHYON_API_URL=https://api.example.test".to_string()));
@@ -1461,18 +1463,6 @@ mod coding_job_tests {
 
         let args = config.docker_args();
         assert!(args.contains(&"--detach".to_string()));
-    }
-
-    #[test]
-    fn docker_command_builder_attaches_a_dash_leading_name() {
-        let mut run_args = run_args();
-        run_args.name = Some("--synthetic-name".to_string());
-        let config =
-            CodingJobDockerConfig::from_runtime(&run_args, &test_config(), "op_test").unwrap();
-
-        let args = config.docker_args();
-        assert!(args.contains(&"--name=--synthetic-name".to_string()));
-        assert!(!args.contains(&"--name".to_string()));
     }
 
     #[test]

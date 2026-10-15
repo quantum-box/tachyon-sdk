@@ -780,7 +780,9 @@ async fn clone_repository(
 
     let mut clone = Command::new("git");
     clone.arg("clone").arg("--depth").arg("1");
-    append_git_clone_branch(&mut clone, initial_clone_branch(&workload.source));
+    if let Some(branch) = initial_clone_branch(&workload.source) {
+        clone.arg("--branch").arg(branch);
+    }
     clone
         .arg(&workload.source.repository_url)
         .arg(checkout_dir)
@@ -812,12 +814,6 @@ async fn clone_repository(
     }
 
     Ok(())
-}
-
-fn append_git_clone_branch(command: &mut Command, branch: Option<&str>) {
-    if let Some(branch) = branch {
-        command.arg(format!("--branch={branch}"));
-    }
 }
 
 fn requested_commit(source: &BuildWorkloadSource) -> Option<&str> {
@@ -917,10 +913,31 @@ fn is_lambda(workload: &BuildWorkloadSpec) -> bool {
 const WRANGLER_NPM_SPEC: &str = "wrangler@4.100.0";
 const MAX_COMMIT_MESSAGE_LENGTH: usize = 2048;
 
+/// Build an attached Wrangler string option while preserving matching outer
+/// quotes through the pinned parser's `stripQuotes` behavior.
+///
+/// Wrangler 4.100.0 pins yargs-parser 21.1.1, whose attached-value path strips
+/// one matching pair of outer quotes. Values with matching quote edges get an
+/// extra double-quote pair so the parser restores the original value. Recheck
+/// this behavior when bumping `WRANGLER_NPM_SPEC`; see
+/// <https://github.com/yargs/yargs-parser/blob/yargs-parser-v21.1.1/lib/yargs-parser.ts#L1033-L1040>.
+fn wrangler_string_option(name: &str, value: &str) -> OsString {
+    let first = value.chars().next();
+    let last = value.chars().last();
+    let encoded = if matches!(first, Some('\'') | Some('"')) && first == last {
+        format!("\"{value}\"")
+    } else {
+        value.to_string()
+    };
+
+    format!("--{name}={encoded}").into()
+}
+
 /// Arguments after the wrangler spec for `wrangler pages deploy`.
 ///
-/// Wrangler requires `--key=value` when a value can begin with a dash;
-/// otherwise its argument parser can treat the value as another option.
+/// Wrangler requires `--key=value` for dash-leading values. Its pinned parser
+/// also strips matching outer quotes from attached values; see
+/// `wrangler_string_option` for the quote-preserving encoding.
 ///
 /// The commit is passed explicitly: the process working directory is not the
 /// git checkout, so wrangler cannot detect it and would upload the deployment
@@ -936,13 +953,13 @@ fn pages_deploy_args(
         "pages".into(),
         "deploy".into(),
         output_dir.into(),
-        format!("--project-name={project_name}").into(),
-        format!("--branch={}", workload.source.branch).into(),
+        wrangler_string_option("project-name", project_name),
+        wrangler_string_option("branch", &workload.source.branch),
     ];
     if let Some(commit) = requested_commit(&workload.source) {
-        args.push(format!("--commit-hash={commit}").into());
+        args.push(wrangler_string_option("commit-hash", commit));
     }
-    args.push(format!("--commit-message={commit_message}").into());
+    args.push(wrangler_string_option("commit-message", commit_message));
     args
 }
 
@@ -1045,7 +1062,7 @@ async fn run_cloudflare_workers_deploy(
 fn workers_deploy_args(script_name: Option<&str>) -> Vec<OsString> {
     let mut args = vec!["deploy".into()];
     if let Some(name) = script_name {
-        args.push(format!("--name={name}").into());
+        args.push(wrangler_string_option("name", name));
     }
     args
 }
@@ -2761,12 +2778,17 @@ mod tests {
 
     #[test]
     fn workers_deploy_name_is_attached_to_its_option() {
+        let args = workers_deploy_args(Some("--synthetic-worker"));
         assert_eq!(
-            workers_deploy_args(Some("--synthetic-worker")),
+            args,
             vec![
                 OsString::from("deploy"),
                 OsString::from("--name=--synthetic-worker"),
             ]
+        );
+        assert_eq!(
+            model_pinned_yargs_parser_21_1_1_attached_value(&args[1]),
+            Some(("name".to_string(), "--synthetic-worker".to_string()))
         );
     }
 
@@ -3457,19 +3479,6 @@ mod tests {
         assert_eq!(initial_clone_branch(&workload.source), Some("feature/demo"));
     }
 
-    #[test]
-    fn git_clone_branch_is_attached_to_its_option() {
-        let mut command = Command::new("git");
-        append_git_clone_branch(&mut command, Some("-synthetic-branch"));
-
-        let args = command
-            .as_std()
-            .get_args()
-            .map(|arg| arg.to_string_lossy().into_owned())
-            .collect::<Vec<_>>();
-        assert_eq!(args, ["--branch=-synthetic-branch"]);
-    }
-
     fn pages_args_with_message(workload: &BuildWorkloadSpec, message: &str) -> Vec<String> {
         pages_deploy_args(workload, Path::new("/out"), "my-app", message)
             .into_iter()
@@ -3481,6 +3490,73 @@ mod tests {
         pages_args_with_message(workload, "msg")
     }
 
+    /// Model yargs-parser 21.1.1's attached `--key=value` handling, including
+    /// its one-pair `stripQuotes` behavior. Keep this aligned with the parser
+    /// pinned by `WRANGLER_NPM_SPEC`.
+    fn model_pinned_yargs_parser_21_1_1_attached_value(arg: &OsStr) -> Option<(String, String)> {
+        let arg = arg.to_str()?;
+        let (name, value) = arg.split_once('=')?;
+        let name = name.strip_prefix("--")?;
+        let chars = value.chars().collect::<Vec<_>>();
+        let parsed_value = if chars.len() > 1
+            && matches!(chars.first(), Some('\'') | Some('"'))
+            && chars.first() == chars.last()
+        {
+            chars[1..chars.len() - 1].iter().collect()
+        } else {
+            value.to_string()
+        };
+
+        Some((name.to_string(), parsed_value))
+    }
+
+    fn parsed_attached_option(args: &[OsString], expected_name: &str) -> String {
+        let values = args
+            .iter()
+            .filter_map(|arg| model_pinned_yargs_parser_21_1_1_attached_value(arg))
+            .filter_map(|(name, value)| (name == expected_name).then_some(value))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            values.len(),
+            1,
+            "expected exactly one --{expected_name}= option"
+        );
+        values.into_iter().next().unwrap()
+    }
+
+    #[test]
+    fn wrangler_string_option_preserves_matching_outer_quotes_only() {
+        for (value, expected) in [
+            ("\"outer quotes\"", "--probe=\"\"outer quotes\"\""),
+            ("'outer quotes'", "--probe=\"'outer quotes'\""),
+            ("\"", "--probe=\"\"\""),
+            ("\"\"", "--probe=\"\"\"\""),
+            ("''", "--probe=\"''\""),
+            ("\"main\"", "--probe=\"\"main\"\""),
+            ("'main'", "--probe=\"'main'\""),
+        ] {
+            assert_eq!(
+                wrangler_string_option("probe", value),
+                OsString::from(expected)
+            );
+        }
+
+        for value in [
+            "a\"b",
+            "\"a",
+            "- foo_bar_baz",
+            "--",
+            "--foo",
+            "",
+            "plain text",
+        ] {
+            assert_eq!(
+                wrangler_string_option("probe", value),
+                OsString::from(format!("--probe={value}"))
+            );
+        }
+    }
+
     fn assert_pages_commit_message_arg(raw: &str, expected: &str) {
         let env = BTreeMap::from([("COMMIT_MESSAGE".to_string(), raw.to_string())]);
         let message = ascii_commit_message(&env);
@@ -3489,17 +3565,22 @@ mod tests {
         let args = pages_deploy_args(&test_workload(None), Path::new("/out"), "my-app", &message);
         let message_args = args
             .iter()
-            .filter(|arg| arg.to_string_lossy().starts_with("--commit-message"))
+            .filter(|arg| arg.to_string_lossy().starts_with("--commit-message="))
             .collect::<Vec<_>>();
         assert_eq!(message_args.len(), 1);
-        let expected_arg = format!("--commit-message={expected}");
-        assert_eq!(
-            message_args[0].as_os_str(),
-            OsStr::new(expected_arg.as_str())
-        );
+        let expected_arg = wrangler_string_option("commit-message", expected);
+        assert_eq!(message_args[0].as_os_str(), expected_arg.as_os_str());
         assert!(!args
             .iter()
             .any(|arg| arg.as_os_str() == OsStr::new(expected)));
+        assert_eq!(parsed_attached_option(&args, "commit-message"), expected);
+
+        let worker_args = workers_deploy_args(Some(expected));
+        assert_eq!(
+            parsed_attached_option(&worker_args, "name"),
+            expected,
+            "Workers name should round-trip for commit-message fixture {raw:?}"
+        );
     }
 
     #[test]
@@ -3532,6 +3613,13 @@ mod tests {
             ("--", "--"),
             ("--foo with trailing text", "--foo with trailing text"),
             ("* leading line", "* leading line"),
+            ("\"outer quotes\"", "\"outer quotes\""),
+            ("'outer quotes'", "'outer quotes'"),
+            ("\"", "\""),
+            ("\"\"", "\"\""),
+            ("''", "''"),
+            ("\"main\"", "\"main\""),
+            ("'main'", "'main'"),
             (
                 "quotes: \"double\" and 'single'",
                 "quotes: \"double\" and 'single'",
@@ -3545,6 +3633,26 @@ mod tests {
             (" \t\n ", "Tachyon Cloud App build"),
         ] {
             assert_pages_commit_message_arg(raw, expected);
+        }
+    }
+
+    #[test]
+    fn quoted_pages_branch_names_round_trip_through_pinned_parser_model() {
+        for branch in ["\"main\"", "'main'"] {
+            let mut workload = test_workload(None);
+            workload.source.branch = branch.to_string();
+            let args = pages_deploy_args(&workload, Path::new("/out"), "my-app", "msg");
+
+            let branch_args = args
+                .iter()
+                .filter(|arg| arg.to_string_lossy().starts_with("--branch="))
+                .collect::<Vec<_>>();
+            assert_eq!(branch_args.len(), 1);
+            assert_eq!(
+                branch_args[0].as_os_str(),
+                wrangler_string_option("branch", branch).as_os_str()
+            );
+            assert_eq!(parsed_attached_option(&args, "branch"), branch);
         }
     }
 

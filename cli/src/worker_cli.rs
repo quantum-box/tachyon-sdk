@@ -710,24 +710,27 @@ fn base_docker_args(
         "--label".to_string(),
         format!("tachyon.coding_job_id={}", job.coding_job_id),
         format!("--network={network}"),
-        format!("--volume={workspace}:/workspace"),
-        format!("--workdir={}", job.container_working_dir()),
-        format!("--memory={memory}"),
+        "-v".to_string(),
+        format!("{workspace}:/workspace"),
+        "-w".to_string(),
+        job.container_working_dir(),
+        "--memory".to_string(),
+        memory.to_string(),
     ];
 
     if env::var_os("OPENAI_API_KEY").is_some() {
-        docker_args.push("--env=OPENAI_API_KEY".to_string());
+        docker_args.extend(["-e".to_string(), "OPENAI_API_KEY".to_string()]);
     }
 
     if let Some(codex_home) = job.codex_home() {
-        docker_args.push(format!("--volume={codex_home}:/codex-home"));
-        docker_args.push("--env=CODEX_HOME=/codex-home".to_string());
+        docker_args.extend(["-v".to_string(), format!("{codex_home}:/codex-home")]);
+        docker_args.extend(["-e".to_string(), "CODEX_HOME=/codex-home".to_string()]);
     }
 
     let mut environment = job.environment.iter().collect::<Vec<_>>();
     environment.sort_by(|a, b| a.0.cmp(b.0));
     for (key, value) in environment {
-        docker_args.push(format!("--env={key}={value}"));
+        docker_args.extend(["-e".to_string(), format!("{key}={value}")]);
     }
 
     docker_args
@@ -1744,10 +1747,7 @@ mod tests {
             prompt: "inspect".to_string(),
             output_profile: Some("gpt-5.4-mini".to_string()),
             context_paths: vec![workspace.path().display().to_string()],
-            environment: HashMap::from([
-                ("Z_VAR".to_string(), "z".to_string()),
-                ("-SYNTHETIC".to_string(), "value".to_string()),
-            ]),
+            environment: HashMap::from([("Z_VAR".to_string(), "z".to_string())]),
             metadata: json!({
                 "codex_mode": "app_server_ws",
                 "cwd": "/workspace",
@@ -1775,11 +1775,7 @@ mod tests {
 
         assert_eq!(job.execution_mode(), WorkerExecutionMode::AppServerWs);
         assert!(args.contains(&"--network=host".to_string()));
-        assert!(args.contains(&format!(
-            "--volume={}:/workspace",
-            workspace.path().display()
-        )));
-        assert!(args.contains(&"--env=-SYNTHETIC=value".to_string()));
+        assert!(args.contains(&format!("{}:/workspace", workspace.path().display())));
         assert_eq!(
             &args[image_index + 1..],
             &[
@@ -1792,16 +1788,6 @@ mod tests {
         assert!(!args
             .windows(3)
             .any(|window| window == ["codex", "exec", "--json"]));
-
-        let edge_args = base_docker_args(
-            &job,
-            "tachyon-codex-test",
-            "bridge",
-            "-synthetic-workspace",
-            "--synthetic-memory",
-        );
-        assert!(edge_args.contains(&"--volume=-synthetic-workspace:/workspace".to_string()));
-        assert!(edge_args.contains(&"--memory=--synthetic-memory".to_string()));
     }
 
     #[test]

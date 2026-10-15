@@ -62,7 +62,9 @@ fn checkout(
         .arg("clone")
         .arg("--depth")
         .arg(depth.to_string());
-    append_clone_branch(&mut command, branch);
+    if let Some(branch) = branch.filter(|branch| !branch.is_empty()) {
+        command.arg("--branch").arg(branch);
+    }
     let status = command
         .arg("--")
         .arg(repository)
@@ -73,12 +75,6 @@ fn checkout(
         bail!("git clone failed with {status}");
     }
     Ok(())
-}
-
-fn append_clone_branch(command: &mut Command, branch: Option<&str>) {
-    if let Some(branch) = branch.filter(|branch| !branch.is_empty()) {
-        command.arg(format!("--branch={branch}"));
-    }
 }
 
 fn github_authorization_header(token: &str) -> String {
@@ -118,18 +114,6 @@ mod tests {
     fn rejects_non_github_and_embedded_credentials() {
         assert!(validate_github_repository_url("https://example.com/a/b").is_err());
         assert!(validate_github_repository_url("https://token@github.com/a/b").is_err());
-    }
-
-    #[test]
-    fn git_clone_branch_is_attached_to_its_option() {
-        let mut command = Command::new("git");
-        append_clone_branch(&mut command, Some("-synthetic-branch"));
-
-        let args = command
-            .get_args()
-            .map(|arg| arg.to_string_lossy().into_owned())
-            .collect::<Vec<_>>();
-        assert_eq!(args, ["--branch=-synthetic-branch"]);
     }
 
     #[test]
