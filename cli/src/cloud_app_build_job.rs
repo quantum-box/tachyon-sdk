@@ -676,8 +676,7 @@ async fn run_iac_step(
         .arg(operation)
         .arg("--file")
         .arg(&manifest_path)
-        .arg("--app")
-        .arg(&iac.app_name)
+        .arg(iac_app_arg(&iac.app_name))
         .current_dir(checkout_dir)
         .env(TACHYON_API_URL_ENV, &api_url)
         // `TACHYON_API_KEY` takes precedence over profile auth, so the
@@ -717,6 +716,10 @@ fn validate_iac_operation(operation: &str) -> Result<&str> {
         "plan" | "apply" => Ok(operation),
         other => Err(anyhow!("unsupported Tachyon IaC operation: {other}")),
     }
+}
+
+fn iac_app_arg(app_name: &str) -> OsString {
+    format!("--app={app_name}").into()
 }
 
 /// Resolve the manifest path following the same candidate order as
@@ -777,9 +780,7 @@ async fn clone_repository(
 
     let mut clone = Command::new("git");
     clone.arg("clone").arg("--depth").arg("1");
-    if let Some(branch) = initial_clone_branch(&workload.source) {
-        clone.arg("--branch").arg(branch);
-    }
+    append_git_clone_branch(&mut clone, initial_clone_branch(&workload.source));
     clone
         .arg(&workload.source.repository_url)
         .arg(checkout_dir)
@@ -811,6 +812,12 @@ async fn clone_repository(
     }
 
     Ok(())
+}
+
+fn append_git_clone_branch(command: &mut Command, branch: Option<&str>) {
+    if let Some(branch) = branch {
+        command.arg(format!("--branch={branch}"));
+    }
 }
 
 fn requested_commit(source: &BuildWorkloadSource) -> Option<&str> {
@@ -908,8 +915,12 @@ fn is_lambda(workload: &BuildWorkloadSpec) -> bool {
 /// not depend on wrangler itself, so an upstream release can
 /// change CLI behavior mid-pipeline. Bump deliberately.
 const WRANGLER_NPM_SPEC: &str = "wrangler@4.100.0";
+const MAX_COMMIT_MESSAGE_LENGTH: usize = 2048;
 
 /// Arguments after the wrangler spec for `wrangler pages deploy`.
+///
+/// Wrangler requires `--key=value` when a value can begin with a dash;
+/// otherwise its argument parser can treat the value as another option.
 ///
 /// The commit is passed explicitly: the process working directory is not the
 /// git checkout, so wrangler cannot detect it and would upload the deployment
@@ -925,17 +936,13 @@ fn pages_deploy_args(
         "pages".into(),
         "deploy".into(),
         output_dir.into(),
-        "--project-name".into(),
-        project_name.into(),
-        "--branch".into(),
-        workload.source.branch.as_str().into(),
+        format!("--project-name={project_name}").into(),
+        format!("--branch={}", workload.source.branch).into(),
     ];
     if let Some(commit) = requested_commit(&workload.source) {
-        args.push("--commit-hash".into());
-        args.push(commit.into());
+        args.push(format!("--commit-hash={commit}").into());
     }
-    args.push("--commit-message".into());
-    args.push(commit_message.into());
+    args.push(format!("--commit-message={commit_message}").into());
     args
 }
 
@@ -1021,10 +1028,10 @@ async fn run_cloudflare_workers_deploy(
     );
 
     let mut command = Command::new("npx");
-    command.arg("--yes").arg(WRANGLER_NPM_SPEC).arg("deploy");
-    if let Some(name) = env_value(env, "WORKERS_SCRIPT_NAME") {
-        command.arg("--name").arg(name);
-    }
+    command
+        .arg("--yes")
+        .arg(WRANGLER_NPM_SPEC)
+        .args(workers_deploy_args(env_value(env, "WORKERS_SCRIPT_NAME")));
     let _secret_file = add_workers_runtime_bindings(&mut command, workload, env)?;
     command
         .current_dir(app_dir)
@@ -1033,6 +1040,14 @@ async fn run_cloudflare_workers_deploy(
         .stderr(Stdio::piped());
 
     run_command("wrangler deploy", command).await
+}
+
+fn workers_deploy_args(script_name: Option<&str>) -> Vec<OsString> {
+    let mut args = vec!["deploy".into()];
+    if let Some(name) = script_name {
+        args.push(format!("--name={name}").into());
+    }
+    args
 }
 
 /// Deploy redirect written by framework builds that generate their own
@@ -1980,7 +1995,7 @@ fn ascii_commit_message(env: &BTreeMap<String, String>) -> String {
     if normalized.is_empty() {
         "Tachyon Cloud App build".to_string()
     } else {
-        normalized
+        normalized.chars().take(MAX_COMMIT_MESSAGE_LENGTH).collect()
     }
 }
 
@@ -2744,6 +2759,17 @@ mod tests {
         assert!(has_workers_deploy_config(temp.path()));
     }
 
+    #[test]
+    fn workers_deploy_name_is_attached_to_its_option() {
+        assert_eq!(
+            workers_deploy_args(Some("--synthetic-worker")),
+            vec![
+                OsString::from("deploy"),
+                OsString::from("--name=--synthetic-worker"),
+            ]
+        );
+    }
+
     /// A generated wrangler configuration must land before the app's own
     /// install and build run, because the framework build reads it.
     #[test]
@@ -2901,6 +2927,14 @@ mod tests {
         assert_eq!(validate_iac_operation("apply").unwrap(), "apply");
         let error = validate_iac_operation("destroy").unwrap_err();
         assert!(error.to_string().contains("unsupported"), "got: {error}");
+    }
+
+    #[test]
+    fn iac_app_name_is_attached_to_its_option() {
+        assert_eq!(
+            iac_app_arg("--synthetic-app"),
+            OsString::from("--app=--synthetic-app")
+        );
     }
 
     #[test]
@@ -3423,11 +3457,49 @@ mod tests {
         assert_eq!(initial_clone_branch(&workload.source), Some("feature/demo"));
     }
 
-    fn pages_args(workload: &BuildWorkloadSpec) -> Vec<String> {
-        pages_deploy_args(workload, Path::new("/out"), "my-app", "msg")
+    #[test]
+    fn git_clone_branch_is_attached_to_its_option() {
+        let mut command = Command::new("git");
+        append_git_clone_branch(&mut command, Some("-synthetic-branch"));
+
+        let args = command
+            .as_std()
+            .get_args()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+        assert_eq!(args, ["--branch=-synthetic-branch"]);
+    }
+
+    fn pages_args_with_message(workload: &BuildWorkloadSpec, message: &str) -> Vec<String> {
+        pages_deploy_args(workload, Path::new("/out"), "my-app", message)
             .into_iter()
             .map(|arg| arg.to_string_lossy().into_owned())
             .collect()
+    }
+
+    fn pages_args(workload: &BuildWorkloadSpec) -> Vec<String> {
+        pages_args_with_message(workload, "msg")
+    }
+
+    fn assert_pages_commit_message_arg(raw: &str, expected: &str) {
+        let env = BTreeMap::from([("COMMIT_MESSAGE".to_string(), raw.to_string())]);
+        let message = ascii_commit_message(&env);
+        assert_eq!(message, expected);
+
+        let args = pages_deploy_args(&test_workload(None), Path::new("/out"), "my-app", &message);
+        let message_args = args
+            .iter()
+            .filter(|arg| arg.to_string_lossy().starts_with("--commit-message"))
+            .collect::<Vec<_>>();
+        assert_eq!(message_args.len(), 1);
+        let expected_arg = format!("--commit-message={expected}");
+        assert_eq!(
+            message_args[0].as_os_str(),
+            OsStr::new(expected_arg.as_str())
+        );
+        assert!(!args
+            .iter()
+            .any(|arg| arg.as_os_str() == OsStr::new(expected)));
     }
 
     #[test]
@@ -3440,16 +3512,47 @@ mod tests {
                 "pages",
                 "deploy",
                 "/out",
-                "--project-name",
-                "my-app",
-                "--branch",
-                "feature/demo",
-                "--commit-hash",
-                "abc",
-                "--commit-message",
-                "msg",
+                "--project-name=my-app",
+                "--branch=feature/demo",
+                "--commit-hash=abc",
+                "--commit-message=msg",
             ]
         );
+    }
+
+    #[test]
+    fn pages_commit_messages_are_passed_as_single_option_values() {
+        for (raw, expected) in [
+            ("候補の読みを更新", "Tachyon Cloud App build"),
+            (
+                "設定を更新する\n\n- 候補の読みが使う foo_bar_baz に処理を足す",
+                "- foo_bar_baz",
+            ),
+            ("--foo", "--foo"),
+            ("--", "--"),
+            ("--foo with trailing text", "--foo with trailing text"),
+            ("* leading line", "* leading line"),
+            (
+                "quotes: \"double\" and 'single'",
+                "quotes: \"double\" and 'single'",
+            ),
+            ("equals=inside=message", "equals=inside=message"),
+            (
+                "backticks `literal` and $(not-a-command)",
+                "backticks `literal` and $(not-a-command)",
+            ),
+            ("", "Tachyon Cloud App build"),
+            (" \t\n ", "Tachyon Cloud App build"),
+        ] {
+            assert_pages_commit_message_arg(raw, expected);
+        }
+    }
+
+    #[test]
+    fn pages_commit_message_is_capped_at_2048_characters() {
+        let raw = "x".repeat(2049);
+        let expected = "x".repeat(2048);
+        assert_pages_commit_message_arg(&raw, &expected);
     }
 
     #[test]
@@ -3459,7 +3562,9 @@ mod tests {
             workload.source.commit_sha = unresolved.to_string();
 
             assert!(
-                !pages_args(&workload).contains(&"--commit-hash".to_string()),
+                !pages_args(&workload)
+                    .iter()
+                    .any(|arg| arg.starts_with("--commit-hash=")),
                 "commit {unresolved:?} must not be sent as a commit hash"
             );
         }

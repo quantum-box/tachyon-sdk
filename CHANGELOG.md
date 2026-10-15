@@ -9,6 +9,8 @@
 
 ### Fixed
 
+- Pass Cloud App build commit messages to `wrangler pages deploy` as one
+  option value so messages beginning with a dash are preserved. (PLT-5893)
 - Pass `--commit-hash` to `wrangler pages deploy` in the Cloud App build job.
   The job runs wrangler outside the git checkout, so wrangler could not detect
   the commit and uploaded Pages deployments with an empty commit. The control

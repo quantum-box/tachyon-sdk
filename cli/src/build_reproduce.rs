@@ -147,15 +147,17 @@ impl DockerInvocation {
             "run".into(),
             "--rm".into(),
             "-i".into(),
-            "-v".into(),
-            format!("{}:{}", self.source_dir.display(), CONTAINER_SOURCE_DIR),
+            format!(
+                "--volume={}:{}",
+                self.source_dir.display(),
+                CONTAINER_SOURCE_DIR
+            ),
             "-w".into(),
             CONTAINER_SOURCE_DIR.into(),
         ];
         // BTreeMap iteration is sorted → stable output for tests.
         for (k, v) in &self.env {
-            argv.push("-e".into());
-            argv.push(format!("{k}={v}"));
+            argv.push(format!("--env={k}={v}"));
         }
         argv.push(self.image.clone());
         argv.push("/bin/bash".into());
@@ -298,6 +300,7 @@ phases:
                 variables: BTreeMap::from([
                     ("FOO".into(), "bar".into()),
                     ("AAA".into(), "1".into()),
+                    ("-SYNTHETIC".into(), "value".into()),
                 ]),
                 secret_names: vec![],
             },
@@ -306,18 +309,18 @@ phases:
         let spec =
             BuildSpec::parse("version: 0.2\nphases:\n  build:\n    commands: [\"echo hi\"]\n")
                 .unwrap();
-        let inv = build_invocation(&config, &spec, Path::new("/tmp/src"), None);
+        let inv = build_invocation(&config, &spec, Path::new("-synthetic-source"), None);
         let argv = inv.to_argv();
         // Image is the default
         assert!(argv.iter().any(|a| a == DEFAULT_IMAGE));
         // Env vars sorted alphabetically (BTreeMap), AAA before FOO
-        let aaa_pos = argv.iter().position(|a| a == "AAA=1").unwrap();
-        let foo_pos = argv.iter().position(|a| a == "FOO=bar").unwrap();
+        let aaa_pos = argv.iter().position(|a| a == "--env=AAA=1").unwrap();
+        let foo_pos = argv.iter().position(|a| a == "--env=FOO=bar").unwrap();
         assert!(aaa_pos < foo_pos);
-        // Mount point present
-        assert!(argv
-            .iter()
-            .any(|a| a.contains(CONTAINER_SOURCE_DIR) && a.contains("/tmp/src")));
+        assert!(argv.contains(&"--env=-SYNTHETIC=value".to_string()));
+        assert!(argv.contains(&format!(
+            "--volume=-synthetic-source:{CONTAINER_SOURCE_DIR}"
+        )));
     }
 
     #[test]
