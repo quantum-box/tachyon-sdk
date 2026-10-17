@@ -44,15 +44,12 @@ pub async fn callback(
         configuration.base_path,
         provider_name = crate::apis::urlencode(p_path_provider_name)
     );
-    let mut req_builder =
-        configuration.client.request(reqwest::Method::GET, &uri_str);
+    let mut req_builder = configuration.client.request(reqwest::Method::GET, &uri_str);
 
     req_builder = req_builder.query(&[("code", &p_query_code.to_string())]);
-    req_builder =
-        req_builder.query(&[("state", &p_query_state.to_string())]);
+    req_builder = req_builder.query(&[("state", &p_query_state.to_string())]);
     if let Some(ref user_agent) = configuration.user_agent {
-        req_builder = req_builder
-            .header(reqwest::header::USER_AGENT, user_agent.clone());
+        req_builder = req_builder.header(reqwest::header::USER_AGENT, user_agent.clone());
     }
 
     let req = req_builder.build()?;
@@ -75,8 +72,7 @@ pub async fn callback(
         }
     } else {
         let content = resp.text().await?;
-        let entity: Option<CallbackError> =
-            serde_json::from_str(&content).ok();
+        let entity: Option<CallbackError> = serde_json::from_str(&content).ok();
         Err(Error::ResponseError(ResponseContent {
             status,
             content,
@@ -97,12 +93,10 @@ pub async fn connect(
         configuration.base_path,
         provider_name = crate::apis::urlencode(p_path_provider_name)
     );
-    let mut req_builder =
-        configuration.client.request(reqwest::Method::GET, &uri_str);
+    let mut req_builder = configuration.client.request(reqwest::Method::GET, &uri_str);
 
     if let Some(ref user_agent) = configuration.user_agent {
-        req_builder = req_builder
-            .header(reqwest::header::USER_AGENT, user_agent.clone());
+        req_builder = req_builder.header(reqwest::header::USER_AGENT, user_agent.clone());
     }
 
     let req = req_builder.build()?;
@@ -125,8 +119,7 @@ pub async fn connect(
         }
     } else {
         let content = resp.text().await?;
-        let entity: Option<ConnectError> =
-            serde_json::from_str(&content).ok();
+        let entity: Option<ConnectError> = serde_json::from_str(&content).ok();
         Err(Error::ResponseError(ResponseContent {
             status,
             content,

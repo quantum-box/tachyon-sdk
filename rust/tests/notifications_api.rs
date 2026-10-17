@@ -14,8 +14,7 @@ fn spawn_http_server(
     status: &'static str,
     response_body: &'static str,
 ) -> (String, mpsc::Receiver<String>) {
-    let listener =
-        TcpListener::bind("127.0.0.1:0").expect("bind test server");
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind test server");
     let addr = listener.local_addr().expect("read local addr");
     let (tx, rx) = mpsc::channel();
 
@@ -25,24 +24,19 @@ fn spawn_http_server(
         let mut request = Vec::new();
 
         loop {
-            let bytes_read =
-                stream.read(&mut buffer).expect("read request");
+            let bytes_read = stream.read(&mut buffer).expect("read request");
             if bytes_read == 0 {
                 break;
             }
             request.extend_from_slice(&buffer[..bytes_read]);
 
-            if let Some(header_end) =
-                request.windows(4).position(|window| window == b"\r\n\r\n")
-            {
-                let headers =
-                    String::from_utf8_lossy(&request[..header_end]);
+            if let Some(header_end) = request.windows(4).position(|window| window == b"\r\n\r\n") {
+                let headers = String::from_utf8_lossy(&request[..header_end]);
                 let content_length = headers
                     .lines()
                     .find_map(|line| {
-                        line.strip_prefix("content-length: ").or_else(
-                            || line.strip_prefix("Content-Length: "),
-                        )
+                        line.strip_prefix("content-length: ")
+                            .or_else(|| line.strip_prefix("Content-Length: "))
                     })
                     .and_then(|value| value.parse::<usize>().ok())
                     .unwrap_or(0);
@@ -77,8 +71,7 @@ fn sms_request() -> SendSmsNotificationRequest {
 
 #[tokio::test]
 async fn send_sms_notification_posts_expected_payload() {
-    let (base_path, captured_request) =
-        spawn_http_server("202 Accepted", r#"{"accepted":true}"#);
+    let (base_path, captured_request) = spawn_http_server("202 Accepted", r#"{"accepted":true}"#);
     let configuration = Configuration {
         base_path,
         ..Configuration::default()
@@ -107,10 +100,8 @@ async fn send_sms_notification_posts_expected_payload() {
 
 #[tokio::test]
 async fn send_sms_notification_maps_error_response() {
-    let (base_path, _captured_request) = spawn_http_server(
-        "400 Bad Request",
-        r#"{"message":"invalid phone number"}"#,
-    );
+    let (base_path, _captured_request) =
+        spawn_http_server("400 Bad Request", r#"{"message":"invalid phone number"}"#);
     let configuration = Configuration {
         base_path,
         ..Configuration::default()
@@ -129,13 +120,8 @@ async fn send_sms_notification_maps_error_response() {
         Error::ResponseError(content) => {
             assert_eq!(content.status.as_u16(), 400);
             match content.entity {
-                Some(SendSmsNotificationError::Status400(
-                    error_response,
-                )) => {
-                    assert_eq!(
-                        error_response.message,
-                        "invalid phone number"
-                    );
+                Some(SendSmsNotificationError::Status400(error_response)) => {
+                    assert_eq!(error_response.message, "invalid phone number");
                 }
                 other => panic!("unexpected error entity: {other:?}"),
             }

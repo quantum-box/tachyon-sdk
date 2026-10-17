@@ -20,9 +20,7 @@ pub struct ConsentListResponse {
 
 impl ConsentListResponse {
     /// Response for listing user consents.
-    pub fn new(
-        consents: Vec<models::ConsentResponse>,
-    ) -> ConsentListResponse {
+    pub fn new(consents: Vec<models::ConsentResponse>) -> ConsentListResponse {
         ConsentListResponse { consents }
     }
 }

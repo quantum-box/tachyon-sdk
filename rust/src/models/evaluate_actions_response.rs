@@ -21,9 +21,7 @@ pub struct EvaluateActionsResponse {
 
 impl EvaluateActionsResponse {
     /// Response body
-    pub fn new(
-        results: Vec<models::ActionEvaluationResult>,
-    ) -> EvaluateActionsResponse {
+    pub fn new(results: Vec<models::ActionEvaluationResult>) -> EvaluateActionsResponse {
         EvaluateActionsResponse { results }
     }
 }

@@ -13,18 +13,7 @@ use serde::{Deserialize, Serialize};
 
 /// ToolChoice : Tool choice type for function calling
 /// Tool choice type for function calling
-#[derive(
-    Clone,
-    Copy,
-    Debug,
-    Eq,
-    PartialEq,
-    Ord,
-    PartialOrd,
-    Hash,
-    Serialize,
-    Deserialize,
-)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
 pub enum ToolChoice {
     #[serde(rename = "auto")]
     Auto,

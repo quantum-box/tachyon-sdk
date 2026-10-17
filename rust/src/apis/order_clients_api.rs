@@ -55,8 +55,7 @@ pub async fn create_client(
         .request(reqwest::Method::POST, &uri_str);
 
     if let Some(ref user_agent) = configuration.user_agent {
-        req_builder = req_builder
-            .header(reqwest::header::USER_AGENT, user_agent.clone());
+        req_builder = req_builder.header(reqwest::header::USER_AGENT, user_agent.clone());
     }
     req_builder = req_builder.json(&p_body_create_client_request);
 
@@ -80,8 +79,7 @@ pub async fn create_client(
         }
     } else {
         let content = resp.text().await?;
-        let entity: Option<CreateClientError> =
-            serde_json::from_str(&content).ok();
+        let entity: Option<CreateClientError> = serde_json::from_str(&content).ok();
         Err(Error::ResponseError(ResponseContent {
             status,
             content,
@@ -102,12 +100,10 @@ pub async fn get_client(
         configuration.base_path,
         id = crate::apis::urlencode(p_path_id)
     );
-    let mut req_builder =
-        configuration.client.request(reqwest::Method::GET, &uri_str);
+    let mut req_builder = configuration.client.request(reqwest::Method::GET, &uri_str);
 
     if let Some(ref user_agent) = configuration.user_agent {
-        req_builder = req_builder
-            .header(reqwest::header::USER_AGENT, user_agent.clone());
+        req_builder = req_builder.header(reqwest::header::USER_AGENT, user_agent.clone());
     }
 
     let req = req_builder.build()?;
@@ -130,8 +126,7 @@ pub async fn get_client(
         }
     } else {
         let content = resp.text().await?;
-        let entity: Option<GetClientError> =
-            serde_json::from_str(&content).ok();
+        let entity: Option<GetClientError> = serde_json::from_str(&content).ok();
         Err(Error::ResponseError(ResponseContent {
             status,
             content,
@@ -144,12 +139,10 @@ pub async fn list_clients(
     configuration: &configuration::Configuration,
 ) -> Result<models::ClientListResponse, Error<ListClientsError>> {
     let uri_str = format!("{}/v1/order/clients", configuration.base_path);
-    let mut req_builder =
-        configuration.client.request(reqwest::Method::GET, &uri_str);
+    let mut req_builder = configuration.client.request(reqwest::Method::GET, &uri_str);
 
     if let Some(ref user_agent) = configuration.user_agent {
-        req_builder = req_builder
-            .header(reqwest::header::USER_AGENT, user_agent.clone());
+        req_builder = req_builder.header(reqwest::header::USER_AGENT, user_agent.clone());
     }
 
     let req = req_builder.build()?;
@@ -172,8 +165,7 @@ pub async fn list_clients(
         }
     } else {
         let content = resp.text().await?;
-        let entity: Option<ListClientsError> =
-            serde_json::from_str(&content).ok();
+        let entity: Option<ListClientsError> = serde_json::from_str(&content).ok();
         Err(Error::ResponseError(ResponseContent {
             status,
             content,

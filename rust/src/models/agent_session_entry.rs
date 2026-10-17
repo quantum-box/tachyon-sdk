@@ -31,11 +31,7 @@ pub struct AgentSessionEntry {
 
 impl AgentSessionEntry {
     /// Single session entry in the list response.
-    pub fn new(
-        created_at: String,
-        id: String,
-        updated_at: String,
-    ) -> AgentSessionEntry {
+    pub fn new(created_at: String, id: String, updated_at: String) -> AgentSessionEntry {
         AgentSessionEntry {
             created_at,
             id,

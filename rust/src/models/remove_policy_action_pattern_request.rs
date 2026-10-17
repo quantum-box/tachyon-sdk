@@ -24,10 +24,7 @@ pub struct RemovePolicyActionPatternRequest {
 
 impl RemovePolicyActionPatternRequest {
     /// Policy action pattern removal entry
-    pub fn new(
-        context_pattern: String,
-        name_pattern: String,
-    ) -> RemovePolicyActionPatternRequest {
+    pub fn new(context_pattern: String, name_pattern: String) -> RemovePolicyActionPatternRequest {
         RemovePolicyActionPatternRequest {
             context_pattern,
             name_pattern,

@@ -37,12 +37,10 @@ pub async fn list_consents(
     configuration: &configuration::Configuration,
 ) -> Result<models::ConsentListResponse, Error<ListConsentsError>> {
     let uri_str = format!("{}/v1/auth/consents", configuration.base_path);
-    let mut req_builder =
-        configuration.client.request(reqwest::Method::GET, &uri_str);
+    let mut req_builder = configuration.client.request(reqwest::Method::GET, &uri_str);
 
     if let Some(ref user_agent) = configuration.user_agent {
-        req_builder = req_builder
-            .header(reqwest::header::USER_AGENT, user_agent.clone());
+        req_builder = req_builder.header(reqwest::header::USER_AGENT, user_agent.clone());
     }
 
     let req = req_builder.build()?;
@@ -65,8 +63,7 @@ pub async fn list_consents(
         }
     } else {
         let content = resp.text().await?;
-        let entity: Option<ListConsentsError> =
-            serde_json::from_str(&content).ok();
+        let entity: Option<ListConsentsError> = serde_json::from_str(&content).ok();
         Err(Error::ResponseError(ResponseContent {
             status,
             content,
@@ -93,8 +90,7 @@ pub async fn revoke_consent(
         .request(reqwest::Method::POST, &uri_str);
 
     if let Some(ref user_agent) = configuration.user_agent {
-        req_builder = req_builder
-            .header(reqwest::header::USER_AGENT, user_agent.clone());
+        req_builder = req_builder.header(reqwest::header::USER_AGENT, user_agent.clone());
     }
 
     let req = req_builder.build()?;
@@ -106,8 +102,7 @@ pub async fn revoke_consent(
         Ok(())
     } else {
         let content = resp.text().await?;
-        let entity: Option<RevokeConsentError> =
-            serde_json::from_str(&content).ok();
+        let entity: Option<RevokeConsentError> = serde_json::from_str(&content).ok();
         Err(Error::ResponseError(ResponseContent {
             status,
             content,

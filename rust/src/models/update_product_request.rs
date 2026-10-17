@@ -125,8 +125,7 @@ pub struct UpdateProductRequest {
         with = "::serde_with::rust::double_option",
         skip_serializing_if = "Option::is_none"
     )]
-    pub variations:
-        Option<Option<Vec<models::UpdateProductVariationRequest>>>,
+    pub variations: Option<Option<Vec<models::UpdateProductVariationRequest>>>,
 }
 
 impl UpdateProductRequest {

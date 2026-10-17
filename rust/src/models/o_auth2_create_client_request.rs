@@ -35,10 +35,7 @@ pub struct OAuth2CreateClientRequest {
     #[serde(rename = "redirectUris")]
     pub redirect_uris: Vec<String>,
     /// Whether to use Tachyon user pool
-    #[serde(
-        rename = "useTachyonUserPool",
-        skip_serializing_if = "Option::is_none"
-    )]
+    #[serde(rename = "useTachyonUserPool", skip_serializing_if = "Option::is_none")]
     pub use_tachyon_user_pool: Option<bool>,
     /// Associated User Pool ID when using a dedicated pool
     #[serde(

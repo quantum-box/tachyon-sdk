@@ -21,9 +21,7 @@ pub struct ProviderListResponse {
 
 impl ProviderListResponse {
     /// Provider list response
-    pub fn new(
-        items: Vec<models::ProviderMappingResponse>,
-    ) -> ProviderListResponse {
+    pub fn new(items: Vec<models::ProviderMappingResponse>) -> ProviderListResponse {
         ProviderListResponse { items }
     }
 }

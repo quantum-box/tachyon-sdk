@@ -15,10 +15,7 @@ use serde::{Deserialize, Serialize};
 #[derive(Clone, Default, Debug, PartialEq, Serialize, Deserialize)]
 pub struct AgentChunk {
     /// When `true`, this tool call targets a client-defined tool. The client should handle it locally and submit the result via the tool-result endpoint (unless `fire_and_forget`).
-    #[serde(
-        rename = "is_client_tool",
-        skip_serializing_if = "Option::is_none"
-    )]
+    #[serde(rename = "is_client_tool", skip_serializing_if = "Option::is_none")]
     pub is_client_tool: Option<bool>,
     #[serde(rename = "tool_id")]
     pub tool_id: String,
@@ -34,10 +31,7 @@ pub struct AgentChunk {
     #[serde(rename = "result")]
     pub result: String,
     /// When `true`, the server does not wait for the client to submit a tool result — the LLM continues immediately. The client may still execute the tool for its side effects.
-    #[serde(
-        rename = "fire_and_forget",
-        skip_serializing_if = "Option::is_none"
-    )]
+    #[serde(rename = "fire_and_forget", skip_serializing_if = "Option::is_none")]
     pub fire_and_forget: Option<bool>,
     #[serde(rename = "index")]
     pub index: i32,
@@ -67,10 +61,7 @@ pub struct AgentChunk {
     pub completion_tokens: i32,
     #[serde(rename = "prompt_tokens")]
     pub prompt_tokens: i32,
-    #[serde(
-        rename = "total_cost",
-        skip_serializing_if = "Option::is_none"
-    )]
+    #[serde(rename = "total_cost", skip_serializing_if = "Option::is_none")]
     pub total_cost: Option<f64>,
     #[serde(rename = "total_tokens")]
     pub total_tokens: i32,
@@ -137,18 +128,7 @@ impl AgentChunk {
     }
 }
 ///
-#[derive(
-    Clone,
-    Copy,
-    Debug,
-    Eq,
-    PartialEq,
-    Ord,
-    PartialOrd,
-    Hash,
-    Serialize,
-    Deserialize,
-)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
 pub enum Type {
     #[serde(rename = "coding_job_started")]
     CodingJobStarted,

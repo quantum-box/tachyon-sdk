@@ -44,12 +44,10 @@ pub async fn get_purchase_order(
         configuration.base_path,
         id = crate::apis::urlencode(p_path_id)
     );
-    let mut req_builder =
-        configuration.client.request(reqwest::Method::GET, &uri_str);
+    let mut req_builder = configuration.client.request(reqwest::Method::GET, &uri_str);
 
     if let Some(ref user_agent) = configuration.user_agent {
-        req_builder = req_builder
-            .header(reqwest::header::USER_AGENT, user_agent.clone());
+        req_builder = req_builder.header(reqwest::header::USER_AGENT, user_agent.clone());
     }
 
     let req = req_builder.build()?;
@@ -72,8 +70,7 @@ pub async fn get_purchase_order(
         }
     } else {
         let content = resp.text().await?;
-        let entity: Option<GetPurchaseOrderError> =
-            serde_json::from_str(&content).ok();
+        let entity: Option<GetPurchaseOrderError> = serde_json::from_str(&content).ok();
         Err(Error::ResponseError(ResponseContent {
             status,
             content,
@@ -84,16 +81,12 @@ pub async fn get_purchase_order(
 
 pub async fn list_purchase_orders(
     configuration: &configuration::Configuration,
-) -> Result<models::PurchaseOrderListResponse, Error<ListPurchaseOrdersError>>
-{
-    let uri_str =
-        format!("{}/v1/order/purchase-orders", configuration.base_path);
-    let mut req_builder =
-        configuration.client.request(reqwest::Method::GET, &uri_str);
+) -> Result<models::PurchaseOrderListResponse, Error<ListPurchaseOrdersError>> {
+    let uri_str = format!("{}/v1/order/purchase-orders", configuration.base_path);
+    let mut req_builder = configuration.client.request(reqwest::Method::GET, &uri_str);
 
     if let Some(ref user_agent) = configuration.user_agent {
-        req_builder = req_builder
-            .header(reqwest::header::USER_AGENT, user_agent.clone());
+        req_builder = req_builder.header(reqwest::header::USER_AGENT, user_agent.clone());
     }
 
     let req = req_builder.build()?;
@@ -116,8 +109,7 @@ pub async fn list_purchase_orders(
         }
     } else {
         let content = resp.text().await?;
-        let entity: Option<ListPurchaseOrdersError> =
-            serde_json::from_str(&content).ok();
+        let entity: Option<ListPurchaseOrdersError> = serde_json::from_str(&content).ok();
         Err(Error::ResponseError(ResponseContent {
             status,
             content,

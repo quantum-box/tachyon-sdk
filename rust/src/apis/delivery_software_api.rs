@@ -24,10 +24,7 @@ pub enum GetSoftwareDeliveryByOrderError {
 pub async fn get_software_delivery_by_order(
     configuration: &configuration::Configuration,
     order_id: &str,
-) -> Result<
-    models::SoftwareDeliveryResponse,
-    Error<GetSoftwareDeliveryByOrderError>,
-> {
+) -> Result<models::SoftwareDeliveryResponse, Error<GetSoftwareDeliveryByOrderError>> {
     // add a prefix to parameters to efficiently prevent name collisions
     let p_path_order_id = order_id;
 
@@ -36,12 +33,10 @@ pub async fn get_software_delivery_by_order(
         configuration.base_path,
         order_id = crate::apis::urlencode(p_path_order_id)
     );
-    let mut req_builder =
-        configuration.client.request(reqwest::Method::GET, &uri_str);
+    let mut req_builder = configuration.client.request(reqwest::Method::GET, &uri_str);
 
     if let Some(ref user_agent) = configuration.user_agent {
-        req_builder = req_builder
-            .header(reqwest::header::USER_AGENT, user_agent.clone());
+        req_builder = req_builder.header(reqwest::header::USER_AGENT, user_agent.clone());
     }
 
     let req = req_builder.build()?;
@@ -64,8 +59,7 @@ pub async fn get_software_delivery_by_order(
         }
     } else {
         let content = resp.text().await?;
-        let entity: Option<GetSoftwareDeliveryByOrderError> =
-            serde_json::from_str(&content).ok();
+        let entity: Option<GetSoftwareDeliveryByOrderError> = serde_json::from_str(&content).ok();
         Err(Error::ResponseError(ResponseContent {
             status,
             content,

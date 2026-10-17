@@ -35,10 +35,7 @@ pub async fn get_chatroom_messages(
     search: &str,
     x_operator_id: &str,
     authorization: &str,
-) -> Result<
-    models::ChatroomsChatroomIdMessagesGetResponse,
-    Error<GetChatroomMessagesError>,
-> {
+) -> Result<models::ChatroomsChatroomIdMessagesGetResponse, Error<GetChatroomMessagesError>> {
     // add a prefix to parameters to efficiently prevent name collisions
     let p_path_chatroom_id = chatroom_id;
     let p_query_limit = limit;
@@ -52,23 +49,16 @@ pub async fn get_chatroom_messages(
         configuration.base_path,
         chatroom_id = crate::apis::urlencode(p_path_chatroom_id)
     );
-    let mut req_builder =
-        configuration.client.request(reqwest::Method::GET, &uri_str);
+    let mut req_builder = configuration.client.request(reqwest::Method::GET, &uri_str);
 
-    req_builder =
-        req_builder.query(&[("limit", &p_query_limit.to_string())]);
-    req_builder =
-        req_builder.query(&[("offset", &p_query_offset.to_string())]);
-    req_builder =
-        req_builder.query(&[("search", &p_query_search.to_string())]);
+    req_builder = req_builder.query(&[("limit", &p_query_limit.to_string())]);
+    req_builder = req_builder.query(&[("offset", &p_query_offset.to_string())]);
+    req_builder = req_builder.query(&[("search", &p_query_search.to_string())]);
     if let Some(ref user_agent) = configuration.user_agent {
-        req_builder = req_builder
-            .header(reqwest::header::USER_AGENT, user_agent.clone());
+        req_builder = req_builder.header(reqwest::header::USER_AGENT, user_agent.clone());
     }
-    req_builder = req_builder
-        .header("x-operator-id", p_header_x_operator_id.to_string());
-    req_builder = req_builder
-        .header("Authorization", p_header_authorization.to_string());
+    req_builder = req_builder.header("x-operator-id", p_header_x_operator_id.to_string());
+    req_builder = req_builder.header("Authorization", p_header_authorization.to_string());
 
     let req = req_builder.build()?;
     let resp = configuration.client.execute(req).await?;
@@ -90,8 +80,7 @@ pub async fn get_chatroom_messages(
         }
     } else {
         let content = resp.text().await?;
-        let entity: Option<GetChatroomMessagesError> =
-            serde_json::from_str(&content).ok();
+        let entity: Option<GetChatroomMessagesError> = serde_json::from_str(&content).ok();
         Err(Error::ResponseError(ResponseContent {
             status,
             content,
@@ -118,33 +107,25 @@ pub async fn get_chatrooms(
     let p_query_metadata_user_id = metadata_user_id;
 
     let uri_str = format!("{}/v1/llms/chatrooms", configuration.base_path);
-    let mut req_builder =
-        configuration.client.request(reqwest::Method::GET, &uri_str);
+    let mut req_builder = configuration.client.request(reqwest::Method::GET, &uri_str);
 
     if let Some(ref param_value) = p_query_limit {
-        req_builder =
-            req_builder.query(&[("limit", &param_value.to_string())]);
+        req_builder = req_builder.query(&[("limit", &param_value.to_string())]);
     }
     if let Some(ref param_value) = p_query_offset {
-        req_builder =
-            req_builder.query(&[("offset", &param_value.to_string())]);
+        req_builder = req_builder.query(&[("offset", &param_value.to_string())]);
     }
     if let Some(ref param_value) = p_query_search {
-        req_builder =
-            req_builder.query(&[("search", &param_value.to_string())]);
+        req_builder = req_builder.query(&[("search", &param_value.to_string())]);
     }
     if let Some(ref param_value) = p_query_metadata_user_id {
-        req_builder = req_builder
-            .query(&[("metadata_user_id", &param_value.to_string())]);
+        req_builder = req_builder.query(&[("metadata_user_id", &param_value.to_string())]);
     }
     if let Some(ref user_agent) = configuration.user_agent {
-        req_builder = req_builder
-            .header(reqwest::header::USER_AGENT, user_agent.clone());
+        req_builder = req_builder.header(reqwest::header::USER_AGENT, user_agent.clone());
     }
-    req_builder = req_builder
-        .header("x-operator-id", p_header_x_operator_id.to_string());
-    req_builder = req_builder
-        .header("Authorization", p_header_authorization.to_string());
+    req_builder = req_builder.header("x-operator-id", p_header_x_operator_id.to_string());
+    req_builder = req_builder.header("Authorization", p_header_authorization.to_string());
 
     let req = req_builder.build()?;
     let resp = configuration.client.execute(req).await?;
@@ -166,8 +147,7 @@ pub async fn get_chatrooms(
         }
     } else {
         let content = resp.text().await?;
-        let entity: Option<GetChatroomsError> =
-            serde_json::from_str(&content).ok();
+        let entity: Option<GetChatroomsError> = serde_json::from_str(&content).ok();
         Err(Error::ResponseError(ResponseContent {
             status,
             content,

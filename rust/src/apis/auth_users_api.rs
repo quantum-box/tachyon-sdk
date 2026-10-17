@@ -92,8 +92,7 @@ pub async fn add_user_to_tenant(
         .request(reqwest::Method::POST, &uri_str);
 
     if let Some(ref user_agent) = configuration.user_agent {
-        req_builder = req_builder
-            .header(reqwest::header::USER_AGENT, user_agent.clone());
+        req_builder = req_builder.header(reqwest::header::USER_AGENT, user_agent.clone());
     }
     req_builder = req_builder.json(&p_body_add_user_to_tenant_request);
 
@@ -117,8 +116,7 @@ pub async fn add_user_to_tenant(
         }
     } else {
         let content = resp.text().await?;
-        let entity: Option<AddUserToTenantError> =
-            serde_json::from_str(&content).ok();
+        let entity: Option<AddUserToTenantError> = serde_json::from_str(&content).ok();
         Err(Error::ResponseError(ResponseContent {
             status,
             content,
@@ -140,8 +138,7 @@ pub async fn create_user(
         .request(reqwest::Method::POST, &uri_str);
 
     if let Some(ref user_agent) = configuration.user_agent {
-        req_builder = req_builder
-            .header(reqwest::header::USER_AGENT, user_agent.clone());
+        req_builder = req_builder.header(reqwest::header::USER_AGENT, user_agent.clone());
     }
     req_builder = req_builder.json(&p_body_create_user_request);
 
@@ -165,8 +162,7 @@ pub async fn create_user(
         }
     } else {
         let content = resp.text().await?;
-        let entity: Option<CreateUserError> =
-            serde_json::from_str(&content).ok();
+        let entity: Option<CreateUserError> = serde_json::from_str(&content).ok();
         Err(Error::ResponseError(ResponseContent {
             status,
             content,
@@ -186,14 +182,11 @@ pub async fn find_user_by_username(
         "{}/v1/auth/users/search/by-username",
         configuration.base_path
     );
-    let mut req_builder =
-        configuration.client.request(reqwest::Method::GET, &uri_str);
+    let mut req_builder = configuration.client.request(reqwest::Method::GET, &uri_str);
 
-    req_builder =
-        req_builder.query(&[("username", &p_query_username.to_string())]);
+    req_builder = req_builder.query(&[("username", &p_query_username.to_string())]);
     if let Some(ref user_agent) = configuration.user_agent {
-        req_builder = req_builder
-            .header(reqwest::header::USER_AGENT, user_agent.clone());
+        req_builder = req_builder.header(reqwest::header::USER_AGENT, user_agent.clone());
     }
 
     let req = req_builder.build()?;
@@ -216,8 +209,7 @@ pub async fn find_user_by_username(
         }
     } else {
         let content = resp.text().await?;
-        let entity: Option<FindUserByUsernameError> =
-            serde_json::from_str(&content).ok();
+        let entity: Option<FindUserByUsernameError> = serde_json::from_str(&content).ok();
         Err(Error::ResponseError(ResponseContent {
             status,
             content,
@@ -238,12 +230,10 @@ pub async fn get_user(
         configuration.base_path,
         id = crate::apis::urlencode(p_path_id)
     );
-    let mut req_builder =
-        configuration.client.request(reqwest::Method::GET, &uri_str);
+    let mut req_builder = configuration.client.request(reqwest::Method::GET, &uri_str);
 
     if let Some(ref user_agent) = configuration.user_agent {
-        req_builder = req_builder
-            .header(reqwest::header::USER_AGENT, user_agent.clone());
+        req_builder = req_builder.header(reqwest::header::USER_AGENT, user_agent.clone());
     }
 
     let req = req_builder.build()?;
@@ -266,8 +256,7 @@ pub async fn get_user(
         }
     } else {
         let content = resp.text().await?;
-        let entity: Option<GetUserError> =
-            serde_json::from_str(&content).ok();
+        let entity: Option<GetUserError> = serde_json::from_str(&content).ok();
         Err(Error::ResponseError(ResponseContent {
             status,
             content,
@@ -283,15 +272,13 @@ pub async fn invite_user(
     // add a prefix to parameters to efficiently prevent name collisions
     let p_body_invite_user_request = invite_user_request;
 
-    let uri_str =
-        format!("{}/v1/auth/users/invite", configuration.base_path);
+    let uri_str = format!("{}/v1/auth/users/invite", configuration.base_path);
     let mut req_builder = configuration
         .client
         .request(reqwest::Method::POST, &uri_str);
 
     if let Some(ref user_agent) = configuration.user_agent {
-        req_builder = req_builder
-            .header(reqwest::header::USER_AGENT, user_agent.clone());
+        req_builder = req_builder.header(reqwest::header::USER_AGENT, user_agent.clone());
     }
     req_builder = req_builder.json(&p_body_invite_user_request);
 
@@ -315,8 +302,7 @@ pub async fn invite_user(
         }
     } else {
         let content = resp.text().await?;
-        let entity: Option<InviteUserError> =
-            serde_json::from_str(&content).ok();
+        let entity: Option<InviteUserError> = serde_json::from_str(&content).ok();
         Err(Error::ResponseError(ResponseContent {
             status,
             content,
@@ -333,14 +319,11 @@ pub async fn list_users(
     let p_query_operator_id = operator_id;
 
     let uri_str = format!("{}/v1/auth/users", configuration.base_path);
-    let mut req_builder =
-        configuration.client.request(reqwest::Method::GET, &uri_str);
+    let mut req_builder = configuration.client.request(reqwest::Method::GET, &uri_str);
 
-    req_builder = req_builder
-        .query(&[("operator_id", &p_query_operator_id.to_string())]);
+    req_builder = req_builder.query(&[("operator_id", &p_query_operator_id.to_string())]);
     if let Some(ref user_agent) = configuration.user_agent {
-        req_builder = req_builder
-            .header(reqwest::header::USER_AGENT, user_agent.clone());
+        req_builder = req_builder.header(reqwest::header::USER_AGENT, user_agent.clone());
     }
 
     let req = req_builder.build()?;
@@ -363,8 +346,7 @@ pub async fn list_users(
         }
     } else {
         let content = resp.text().await?;
-        let entity: Option<ListUsersError> =
-            serde_json::from_str(&content).ok();
+        let entity: Option<ListUsersError> = serde_json::from_str(&content).ok();
         Err(Error::ResponseError(ResponseContent {
             status,
             content,
@@ -387,12 +369,10 @@ pub async fn update_user_role(
         configuration.base_path,
         user_id = crate::apis::urlencode(p_path_user_id)
     );
-    let mut req_builder =
-        configuration.client.request(reqwest::Method::PUT, &uri_str);
+    let mut req_builder = configuration.client.request(reqwest::Method::PUT, &uri_str);
 
     if let Some(ref user_agent) = configuration.user_agent {
-        req_builder = req_builder
-            .header(reqwest::header::USER_AGENT, user_agent.clone());
+        req_builder = req_builder.header(reqwest::header::USER_AGENT, user_agent.clone());
     }
     req_builder = req_builder.json(&p_body_update_user_role_request);
 
@@ -416,8 +396,7 @@ pub async fn update_user_role(
         }
     } else {
         let content = resp.text().await?;
-        let entity: Option<UpdateUserRoleError> =
-            serde_json::from_str(&content).ok();
+        let entity: Option<UpdateUserRoleError> = serde_json::from_str(&content).ok();
         Err(Error::ResponseError(ResponseContent {
             status,
             content,

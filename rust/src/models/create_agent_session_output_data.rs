@@ -29,10 +29,7 @@ pub struct CreateAgentSessionOutputData {
 
 impl CreateAgentSessionOutputData {
     /// Output after session creation.
-    pub fn new(
-        created_at: String,
-        session_id: String,
-    ) -> CreateAgentSessionOutputData {
+    pub fn new(created_at: String, session_id: String) -> CreateAgentSessionOutputData {
         CreateAgentSessionOutputData {
             created_at,
             name: None,

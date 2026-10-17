@@ -37,8 +37,7 @@ pub async fn process_checkout(
         .request(reqwest::Method::POST, &uri_str);
 
     if let Some(ref user_agent) = configuration.user_agent {
-        req_builder = req_builder
-            .header(reqwest::header::USER_AGENT, user_agent.clone());
+        req_builder = req_builder.header(reqwest::header::USER_AGENT, user_agent.clone());
     }
     req_builder = req_builder.json(&p_body_checkout_request);
 
@@ -62,8 +61,7 @@ pub async fn process_checkout(
         }
     } else {
         let content = resp.text().await?;
-        let entity: Option<ProcessCheckoutError> =
-            serde_json::from_str(&content).ok();
+        let entity: Option<ProcessCheckoutError> = serde_json::from_str(&content).ok();
         Err(Error::ResponseError(ResponseContent {
             status,
             content,
