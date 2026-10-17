@@ -20,9 +20,7 @@ pub struct ApiKeyListResponse {
 
 impl ApiKeyListResponse {
     /// Response for API key list
-    pub fn new(
-        api_keys: Vec<models::ApiKeyResponse>,
-    ) -> ApiKeyListResponse {
+    pub fn new(api_keys: Vec<models::ApiKeyResponse>) -> ApiKeyListResponse {
         ApiKeyListResponse { api_keys }
     }
 }

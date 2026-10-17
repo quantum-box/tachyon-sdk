@@ -16,10 +16,7 @@ pub struct PartOneOf3 {
     #[serde(rename = "args")]
     pub args: String,
     /// When `true`, this tool call targets a client-defined tool.
-    #[serde(
-        rename = "is_client_tool",
-        skip_serializing_if = "Option::is_none"
-    )]
+    #[serde(rename = "is_client_tool", skip_serializing_if = "Option::is_none")]
     pub is_client_tool: Option<bool>,
     #[serde(rename = "tool_call_id")]
     pub tool_call_id: String,
@@ -30,12 +27,7 @@ pub struct PartOneOf3 {
 }
 
 impl PartOneOf3 {
-    pub fn new(
-        args: String,
-        tool_call_id: String,
-        tool_name: String,
-        r#type: Type,
-    ) -> PartOneOf3 {
+    pub fn new(args: String, tool_call_id: String, tool_name: String, r#type: Type) -> PartOneOf3 {
         PartOneOf3 {
             args,
             is_client_tool: None,
@@ -46,18 +38,7 @@ impl PartOneOf3 {
     }
 }
 ///
-#[derive(
-    Clone,
-    Copy,
-    Debug,
-    Eq,
-    PartialEq,
-    Ord,
-    PartialOrd,
-    Hash,
-    Serialize,
-    Deserialize,
-)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
 pub enum Type {
     #[serde(rename = "tool-call")]
     ToolCall,

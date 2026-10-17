@@ -17,10 +17,7 @@ pub struct ToolCallPending {
     #[serde(rename = "args", deserialize_with = "Option::deserialize")]
     pub args: Option<serde_json::Value>,
     /// When `true`, the server does not wait for the client to submit a tool result — the LLM continues immediately. The client may still execute the tool for its side effects.
-    #[serde(
-        rename = "fire_and_forget",
-        skip_serializing_if = "Option::is_none"
-    )]
+    #[serde(rename = "fire_and_forget", skip_serializing_if = "Option::is_none")]
     pub fire_and_forget: Option<bool>,
     /// Unique identifier for this tool call. Use this value as `tool_id` when submitting the result.
     #[serde(rename = "tool_id")]

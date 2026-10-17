@@ -18,18 +18,12 @@ pub struct ClientToolDefinition {
     #[serde(rename = "description")]
     pub description: String,
     /// When `true`, the server dispatches the tool call to the client and immediately returns a success message to the LLM without waiting for a result submission. The client still receives the `tool_call_pending` SSE event but does not need to call the tool-result endpoint. Useful for notifications, webhooks, logging, and other side-effect-only operations.
-    #[serde(
-        rename = "fire_and_forget",
-        skip_serializing_if = "Option::is_none"
-    )]
+    #[serde(rename = "fire_and_forget", skip_serializing_if = "Option::is_none")]
     pub fire_and_forget: Option<bool>,
     /// Unique tool name. Must not collide with server built-in tools (e.g. `read_file`, `execute_command`, `search_files`). Use descriptive, snake_case names.
     #[serde(rename = "name")]
     pub name: String,
-    #[serde(
-        rename = "parameters",
-        deserialize_with = "Option::deserialize"
-    )]
+    #[serde(rename = "parameters", deserialize_with = "Option::deserialize")]
     pub parameters: Option<serde_json::Value>,
 }
 

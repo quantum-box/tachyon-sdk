@@ -21,9 +21,7 @@ pub struct PurchaseOrderListResponse {
 
 impl PurchaseOrderListResponse {
     /// Purchase order list response
-    pub fn new(
-        items: Vec<models::PurchaseOrderResponse>,
-    ) -> PurchaseOrderListResponse {
+    pub fn new(items: Vec<models::PurchaseOrderResponse>) -> PurchaseOrderListResponse {
         PurchaseOrderListResponse { items }
     }
 }

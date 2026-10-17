@@ -35,11 +35,7 @@ pub struct Function {
 
 impl Function {
     /// Function type for tool definitions
-    pub fn new(
-        description: String,
-        name: String,
-        parameters: models::ToolSchema,
-    ) -> Function {
+    pub fn new(description: String, name: String, parameters: models::ToolSchema) -> Function {
         Function {
             description,
             name,

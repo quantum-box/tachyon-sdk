@@ -24,11 +24,7 @@ pub struct AgentChunkEventOneOf7 {
 
 impl AgentChunkEventOneOf7 {
     /// Follow-up question
-    pub fn new(
-        options: Vec<String>,
-        text: String,
-        r#type: Type,
-    ) -> AgentChunkEventOneOf7 {
+    pub fn new(options: Vec<String>, text: String, r#type: Type) -> AgentChunkEventOneOf7 {
         AgentChunkEventOneOf7 {
             options,
             text,
@@ -37,18 +33,7 @@ impl AgentChunkEventOneOf7 {
     }
 }
 ///
-#[derive(
-    Clone,
-    Copy,
-    Debug,
-    Eq,
-    PartialEq,
-    Ord,
-    PartialOrd,
-    Hash,
-    Serialize,
-    Deserialize,
-)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
 pub enum Type {
     #[serde(rename = "ask")]
     Ask,

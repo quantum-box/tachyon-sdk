@@ -64,8 +64,7 @@ pub async fn delete_oauth_token(
         .request(reqwest::Method::DELETE, &uri_str);
 
     if let Some(ref user_agent) = configuration.user_agent {
-        req_builder = req_builder
-            .header(reqwest::header::USER_AGENT, user_agent.clone());
+        req_builder = req_builder.header(reqwest::header::USER_AGENT, user_agent.clone());
     }
 
     let req = req_builder.build()?;
@@ -77,8 +76,7 @@ pub async fn delete_oauth_token(
         Ok(())
     } else {
         let content = resp.text().await?;
-        let entity: Option<DeleteOauthTokenError> =
-            serde_json::from_str(&content).ok();
+        let entity: Option<DeleteOauthTokenError> = serde_json::from_str(&content).ok();
         Err(Error::ResponseError(ResponseContent {
             status,
             content,
@@ -90,10 +88,7 @@ pub async fn delete_oauth_token(
 pub async fn get_oauth_token_by_provider(
     configuration: &configuration::Configuration,
     provider: &str,
-) -> Result<
-    models::OAuthTokenDetailResponse,
-    Error<GetOauthTokenByProviderError>,
-> {
+) -> Result<models::OAuthTokenDetailResponse, Error<GetOauthTokenByProviderError>> {
     // add a prefix to parameters to efficiently prevent name collisions
     let p_path_provider = provider;
 
@@ -102,12 +97,10 @@ pub async fn get_oauth_token_by_provider(
         configuration.base_path,
         provider = crate::apis::urlencode(p_path_provider)
     );
-    let mut req_builder =
-        configuration.client.request(reqwest::Method::GET, &uri_str);
+    let mut req_builder = configuration.client.request(reqwest::Method::GET, &uri_str);
 
     if let Some(ref user_agent) = configuration.user_agent {
-        req_builder = req_builder
-            .header(reqwest::header::USER_AGENT, user_agent.clone());
+        req_builder = req_builder.header(reqwest::header::USER_AGENT, user_agent.clone());
     }
 
     let req = req_builder.build()?;
@@ -130,8 +123,7 @@ pub async fn get_oauth_token_by_provider(
         }
     } else {
         let content = resp.text().await?;
-        let entity: Option<GetOauthTokenByProviderError> =
-            serde_json::from_str(&content).ok();
+        let entity: Option<GetOauthTokenByProviderError> = serde_json::from_str(&content).ok();
         Err(Error::ResponseError(ResponseContent {
             status,
             content,
@@ -143,14 +135,11 @@ pub async fn get_oauth_token_by_provider(
 pub async fn list_oauth_tokens(
     configuration: &configuration::Configuration,
 ) -> Result<models::OAuthTokenListResponse, Error<ListOauthTokensError>> {
-    let uri_str =
-        format!("{}/v1/auth/oauth-tokens", configuration.base_path);
-    let mut req_builder =
-        configuration.client.request(reqwest::Method::GET, &uri_str);
+    let uri_str = format!("{}/v1/auth/oauth-tokens", configuration.base_path);
+    let mut req_builder = configuration.client.request(reqwest::Method::GET, &uri_str);
 
     if let Some(ref user_agent) = configuration.user_agent {
-        req_builder = req_builder
-            .header(reqwest::header::USER_AGENT, user_agent.clone());
+        req_builder = req_builder.header(reqwest::header::USER_AGENT, user_agent.clone());
     }
 
     let req = req_builder.build()?;
@@ -173,8 +162,7 @@ pub async fn list_oauth_tokens(
         }
     } else {
         let content = resp.text().await?;
-        let entity: Option<ListOauthTokensError> =
-            serde_json::from_str(&content).ok();
+        let entity: Option<ListOauthTokensError> = serde_json::from_str(&content).ok();
         Err(Error::ResponseError(ResponseContent {
             status,
             content,
@@ -190,15 +178,13 @@ pub async fn save_oauth_token(
     // add a prefix to parameters to efficiently prevent name collisions
     let p_body_save_o_auth_token_request = save_o_auth_token_request;
 
-    let uri_str =
-        format!("{}/v1/auth/oauth-tokens", configuration.base_path);
+    let uri_str = format!("{}/v1/auth/oauth-tokens", configuration.base_path);
     let mut req_builder = configuration
         .client
         .request(reqwest::Method::POST, &uri_str);
 
     if let Some(ref user_agent) = configuration.user_agent {
-        req_builder = req_builder
-            .header(reqwest::header::USER_AGENT, user_agent.clone());
+        req_builder = req_builder.header(reqwest::header::USER_AGENT, user_agent.clone());
     }
     req_builder = req_builder.json(&p_body_save_o_auth_token_request);
 
@@ -222,8 +208,7 @@ pub async fn save_oauth_token(
         }
     } else {
         let content = resp.text().await?;
-        let entity: Option<SaveOauthTokenError> =
-            serde_json::from_str(&content).ok();
+        let entity: Option<SaveOauthTokenError> = serde_json::from_str(&content).ok();
         Err(Error::ResponseError(ResponseContent {
             status,
             content,

@@ -41,10 +41,7 @@ pub struct SignInWithPlatformRequest {
 }
 
 impl SignInWithPlatformRequest {
-    pub fn new(
-        access_token: String,
-        platform_id: String,
-    ) -> SignInWithPlatformRequest {
+    pub fn new(access_token: String, platform_id: String) -> SignInWithPlatformRequest {
         SignInWithPlatformRequest {
             access_token,
             allow_sign_up: None,

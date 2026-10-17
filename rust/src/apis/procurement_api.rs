@@ -48,8 +48,7 @@ pub async fn delete_variant_link(
         .request(reqwest::Method::DELETE, &uri_str);
 
     if let Some(ref user_agent) = configuration.user_agent {
-        req_builder = req_builder
-            .header(reqwest::header::USER_AGENT, user_agent.clone());
+        req_builder = req_builder.header(reqwest::header::USER_AGENT, user_agent.clone());
     }
 
     let req = req_builder.build()?;
@@ -72,8 +71,7 @@ pub async fn delete_variant_link(
         }
     } else {
         let content = resp.text().await?;
-        let entity: Option<DeleteVariantLinkError> =
-            serde_json::from_str(&content).ok();
+        let entity: Option<DeleteVariantLinkError> = serde_json::from_str(&content).ok();
         Err(Error::ResponseError(ResponseContent {
             status,
             content,
@@ -89,15 +87,13 @@ pub async fn upsert_variant_link(
     // add a prefix to parameters to efficiently prevent name collisions
     let p_body_upsert_variant_link_request = upsert_variant_link_request;
 
-    let uri_str =
-        format!("{}/v1/procurement/variant-links", configuration.base_path);
+    let uri_str = format!("{}/v1/procurement/variant-links", configuration.base_path);
     let mut req_builder = configuration
         .client
         .request(reqwest::Method::POST, &uri_str);
 
     if let Some(ref user_agent) = configuration.user_agent {
-        req_builder = req_builder
-            .header(reqwest::header::USER_AGENT, user_agent.clone());
+        req_builder = req_builder.header(reqwest::header::USER_AGENT, user_agent.clone());
     }
     req_builder = req_builder.json(&p_body_upsert_variant_link_request);
 
@@ -121,8 +117,7 @@ pub async fn upsert_variant_link(
         }
     } else {
         let content = resp.text().await?;
-        let entity: Option<UpsertVariantLinkError> =
-            serde_json::from_str(&content).ok();
+        let entity: Option<UpsertVariantLinkError> = serde_json::from_str(&content).ok();
         Err(Error::ResponseError(ResponseContent {
             status,
             content,

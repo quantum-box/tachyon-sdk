@@ -34,22 +34,17 @@ pub enum ListProvidersError {
 pub async fn get_or_create_stripe_customer(
     configuration: &configuration::Configuration,
     stripe_customer_request: models::StripeCustomerRequest,
-) -> Result<
-    models::StripeCustomerResponse,
-    Error<GetOrCreateStripeCustomerError>,
-> {
+) -> Result<models::StripeCustomerResponse, Error<GetOrCreateStripeCustomerError>> {
     // add a prefix to parameters to efficiently prevent name collisions
     let p_body_stripe_customer_request = stripe_customer_request;
 
-    let uri_str =
-        format!("{}/v1/payment/stripe-customer", configuration.base_path);
+    let uri_str = format!("{}/v1/payment/stripe-customer", configuration.base_path);
     let mut req_builder = configuration
         .client
         .request(reqwest::Method::POST, &uri_str);
 
     if let Some(ref user_agent) = configuration.user_agent {
-        req_builder = req_builder
-            .header(reqwest::header::USER_AGENT, user_agent.clone());
+        req_builder = req_builder.header(reqwest::header::USER_AGENT, user_agent.clone());
     }
     req_builder = req_builder.json(&p_body_stripe_customer_request);
 
@@ -73,8 +68,7 @@ pub async fn get_or_create_stripe_customer(
         }
     } else {
         let content = resp.text().await?;
-        let entity: Option<GetOrCreateStripeCustomerError> =
-            serde_json::from_str(&content).ok();
+        let entity: Option<GetOrCreateStripeCustomerError> = serde_json::from_str(&content).ok();
         Err(Error::ResponseError(ResponseContent {
             status,
             content,
@@ -90,16 +84,12 @@ pub async fn list_providers(
     // add a prefix to parameters to efficiently prevent name collisions
     let p_query_entity_id = entity_id;
 
-    let uri_str =
-        format!("{}/v1/payment/providers", configuration.base_path);
-    let mut req_builder =
-        configuration.client.request(reqwest::Method::GET, &uri_str);
+    let uri_str = format!("{}/v1/payment/providers", configuration.base_path);
+    let mut req_builder = configuration.client.request(reqwest::Method::GET, &uri_str);
 
-    req_builder =
-        req_builder.query(&[("entity_id", &p_query_entity_id.to_string())]);
+    req_builder = req_builder.query(&[("entity_id", &p_query_entity_id.to_string())]);
     if let Some(ref user_agent) = configuration.user_agent {
-        req_builder = req_builder
-            .header(reqwest::header::USER_AGENT, user_agent.clone());
+        req_builder = req_builder.header(reqwest::header::USER_AGENT, user_agent.clone());
     }
 
     let req = req_builder.build()?;
@@ -122,8 +112,7 @@ pub async fn list_providers(
         }
     } else {
         let content = resp.text().await?;
-        let entity: Option<ListProvidersError> =
-            serde_json::from_str(&content).ok();
+        let entity: Option<ListProvidersError> = serde_json::from_str(&content).ok();
         Err(Error::ResponseError(ResponseContent {
             status,
             content,

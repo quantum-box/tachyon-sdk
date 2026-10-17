@@ -37,6 +37,9 @@ $GENERATOR generate \
   --additional-properties=packageName=tachyon-sdk,packageVersion=0.1.0,library=reqwest \
   --skip-validate-spec
 
+# openapi-generator does not run rustfmt; keep the generated crate formatted.
+cargo fmt --manifest-path "$ROOT_DIR/rust/Cargo.toml"
+
 echo ""
 
 # --- TypeScript SDK ---

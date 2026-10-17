@@ -74,8 +74,7 @@ pub async fn connect_integration(
         .request(reqwest::Method::POST, &uri_str);
 
     if let Some(ref user_agent) = configuration.user_agent {
-        req_builder = req_builder
-            .header(reqwest::header::USER_AGENT, user_agent.clone());
+        req_builder = req_builder.header(reqwest::header::USER_AGENT, user_agent.clone());
     }
 
     let req = req_builder.build()?;
@@ -98,8 +97,7 @@ pub async fn connect_integration(
         }
     } else {
         let content = resp.text().await?;
-        let entity: Option<ConnectIntegrationError> =
-            serde_json::from_str(&content).ok();
+        let entity: Option<ConnectIntegrationError> = serde_json::from_str(&content).ok();
         Err(Error::ResponseError(ResponseContent {
             status,
             content,
@@ -125,8 +123,7 @@ pub async fn disconnect_integration(
         .request(reqwest::Method::DELETE, &uri_str);
 
     if let Some(ref user_agent) = configuration.user_agent {
-        req_builder = req_builder
-            .header(reqwest::header::USER_AGENT, user_agent.clone());
+        req_builder = req_builder.header(reqwest::header::USER_AGENT, user_agent.clone());
     }
 
     let req = req_builder.build()?;
@@ -138,8 +135,7 @@ pub async fn disconnect_integration(
         Ok(())
     } else {
         let content = resp.text().await?;
-        let entity: Option<DisconnectIntegrationError> =
-            serde_json::from_str(&content).ok();
+        let entity: Option<DisconnectIntegrationError> = serde_json::from_str(&content).ok();
         Err(Error::ResponseError(ResponseContent {
             status,
             content,
@@ -160,12 +156,10 @@ pub async fn get_integration(
         configuration.base_path,
         id = crate::apis::urlencode(p_path_id)
     );
-    let mut req_builder =
-        configuration.client.request(reqwest::Method::GET, &uri_str);
+    let mut req_builder = configuration.client.request(reqwest::Method::GET, &uri_str);
 
     if let Some(ref user_agent) = configuration.user_agent {
-        req_builder = req_builder
-            .header(reqwest::header::USER_AGENT, user_agent.clone());
+        req_builder = req_builder.header(reqwest::header::USER_AGENT, user_agent.clone());
     }
 
     let req = req_builder.build()?;
@@ -188,8 +182,7 @@ pub async fn get_integration(
         }
     } else {
         let content = resp.text().await?;
-        let entity: Option<GetIntegrationError> =
-            serde_json::from_str(&content).ok();
+        let entity: Option<GetIntegrationError> = serde_json::from_str(&content).ok();
         Err(Error::ResponseError(ResponseContent {
             status,
             content,
@@ -201,14 +194,11 @@ pub async fn get_integration(
 pub async fn list_connections(
     configuration: &configuration::Configuration,
 ) -> Result<models::ListConnectionsResponse, Error<ListConnectionsError>> {
-    let uri_str =
-        format!("{}/v1/integrations/connections", configuration.base_path);
-    let mut req_builder =
-        configuration.client.request(reqwest::Method::GET, &uri_str);
+    let uri_str = format!("{}/v1/integrations/connections", configuration.base_path);
+    let mut req_builder = configuration.client.request(reqwest::Method::GET, &uri_str);
 
     if let Some(ref user_agent) = configuration.user_agent {
-        req_builder = req_builder
-            .header(reqwest::header::USER_AGENT, user_agent.clone());
+        req_builder = req_builder.header(reqwest::header::USER_AGENT, user_agent.clone());
     }
 
     let req = req_builder.build()?;
@@ -231,8 +221,7 @@ pub async fn list_connections(
         }
     } else {
         let content = resp.text().await?;
-        let entity: Option<ListConnectionsError> =
-            serde_json::from_str(&content).ok();
+        let entity: Option<ListConnectionsError> = serde_json::from_str(&content).ok();
         Err(Error::ResponseError(ResponseContent {
             status,
             content,
@@ -244,22 +233,18 @@ pub async fn list_connections(
 pub async fn list_integrations(
     configuration: &configuration::Configuration,
     category: Option<&str>,
-) -> Result<models::ListIntegrationsResponse, Error<ListIntegrationsError>>
-{
+) -> Result<models::ListIntegrationsResponse, Error<ListIntegrationsError>> {
     // add a prefix to parameters to efficiently prevent name collisions
     let p_query_category = category;
 
     let uri_str = format!("{}/v1/integrations", configuration.base_path);
-    let mut req_builder =
-        configuration.client.request(reqwest::Method::GET, &uri_str);
+    let mut req_builder = configuration.client.request(reqwest::Method::GET, &uri_str);
 
     if let Some(ref param_value) = p_query_category {
-        req_builder =
-            req_builder.query(&[("category", &param_value.to_string())]);
+        req_builder = req_builder.query(&[("category", &param_value.to_string())]);
     }
     if let Some(ref user_agent) = configuration.user_agent {
-        req_builder = req_builder
-            .header(reqwest::header::USER_AGENT, user_agent.clone());
+        req_builder = req_builder.header(reqwest::header::USER_AGENT, user_agent.clone());
     }
 
     let req = req_builder.build()?;
@@ -282,8 +267,7 @@ pub async fn list_integrations(
         }
     } else {
         let content = resp.text().await?;
-        let entity: Option<ListIntegrationsError> =
-            serde_json::from_str(&content).ok();
+        let entity: Option<ListIntegrationsError> = serde_json::from_str(&content).ok();
         Err(Error::ResponseError(ResponseContent {
             status,
             content,

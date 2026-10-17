@@ -22,10 +22,7 @@ pub struct RotateSecretResponse {
 
 impl RotateSecretResponse {
     /// Response for secret rotation
-    pub fn new(
-        client_id: String,
-        new_client_secret: String,
-    ) -> RotateSecretResponse {
+    pub fn new(client_id: String, new_client_secret: String) -> RotateSecretResponse {
         RotateSecretResponse {
             client_id,
             new_client_secret,

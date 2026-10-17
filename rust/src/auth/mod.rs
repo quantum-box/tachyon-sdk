@@ -22,38 +22,32 @@ pub use error::{AuthError, AuthResult};
 
 // ID types
 pub use types::{
-    Identifier, OperatorId, PlatformId, PolicyId, PublicApiKeyId,
-    PublicApiKeyValue, ServiceAccountId, TenantId, UserId,
+    Identifier, OperatorId, PlatformId, PolicyId, PublicApiKeyId, PublicApiKeyValue,
+    ServiceAccountId, TenantId, UserId,
 };
 
 // Domain types
 pub use domain::{
-    DefaultRole, EvaluatePoliciesBatchOutcome, NewOperatorOwnerMethod,
-    OAuth2ClientCreated, OAuthToken, OAuthTokenDetail, Operator, Policy,
-    PolicyActionRequest, PublicApiKey, ServiceAccount, TenantHierarchy,
-    User, UserPolicy, UserQuery,
+    DefaultRole, EvaluatePoliciesBatchOutcome, NewOperatorOwnerMethod, OAuth2ClientCreated,
+    OAuthToken, OAuthTokenDetail, Operator, Policy, PolicyActionRequest, PublicApiKey,
+    ServiceAccount, TenantHierarchy, User, UserPolicy, UserQuery,
 };
 
 // Executor / Multi-tenancy
-pub use executor::{
-    Executor, ExecutorAction, MultiTenancy, MultiTenancyAction,
-};
+pub use executor::{Executor, ExecutorAction, MultiTenancy, MultiTenancyAction};
 
 // Input types
 pub use inputs::{
     AddUserToTenantInput, AttachSaPolicyInput, AttachUserPolicyInput,
-    AttachUserPolicyWithScopeInput, CheckPolicyForResourceInput,
-    CheckPolicyInput, CreateOAuth2ClientInput, CreateOperatorInput,
-    CreatePublicApiKeyInput, CreateServiceAccountInput,
-    DeleteOAuthTokenInput, DeleteOperatorInput, DeleteServiceAccountInput,
-    DetachUserPolicyInput, DetachUserPolicyWithScopeInput,
-    EvaluatePoliciesBatchInput, FindAllPublicApiKeyInput,
-    FindOAuth2ClientByNameInput, FindPolicyByNameInput,
-    FindUsersByTenantInput, GetOAuthTokenByProviderInput,
+    AttachUserPolicyWithScopeInput, CheckPolicyForResourceInput, CheckPolicyInput,
+    CreateOAuth2ClientInput, CreateOperatorInput, CreatePublicApiKeyInput,
+    CreateServiceAccountInput, DeleteOAuthTokenInput, DeleteOperatorInput,
+    DeleteServiceAccountInput, DetachUserPolicyInput, DetachUserPolicyWithScopeInput,
+    EvaluatePoliciesBatchInput, FindAllPublicApiKeyInput, FindOAuth2ClientByNameInput,
+    FindPolicyByNameInput, FindUsersByTenantInput, GetOAuthTokenByProviderInput,
     GetOperatorByIdInput, GetOperatorByIdentifierInput, GetPolicyByIdInput,
-    GetServiceAccountByNameInput, GetUserByIdInput,
-    GetUserIdByUserProviderIdInput, OAuthTokenInput, RegisterPolicyInput,
-    SaveOAuthTokenInput, UpdateServiceAccountInput,
+    GetServiceAccountByNameInput, GetUserByIdInput, GetUserIdByUserProviderIdInput,
+    OAuthTokenInput, RegisterPolicyInput, SaveOAuthTokenInput, UpdateServiceAccountInput,
 };
 
 // Main trait

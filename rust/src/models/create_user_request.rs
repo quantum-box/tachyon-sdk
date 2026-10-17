@@ -43,11 +43,7 @@ pub struct CreateUserRequest {
 }
 
 impl CreateUserRequest {
-    pub fn new(
-        email: String,
-        operator_id: String,
-        username: String,
-    ) -> CreateUserRequest {
+    pub fn new(email: String, operator_id: String, username: String) -> CreateUserRequest {
         CreateUserRequest {
             email,
             image: None,

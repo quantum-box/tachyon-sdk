@@ -32,10 +32,7 @@ pub enum CreateShippingDestinationError {
 pub async fn check_shipping_availability(
     configuration: &configuration::Configuration,
     id: &str,
-) -> Result<
-    models::ShippingAvailabilityResponse,
-    Error<CheckShippingAvailabilityError>,
-> {
+) -> Result<models::ShippingAvailabilityResponse, Error<CheckShippingAvailabilityError>> {
     // add a prefix to parameters to efficiently prevent name collisions
     let p_path_id = id;
 
@@ -44,12 +41,10 @@ pub async fn check_shipping_availability(
         configuration.base_path,
         id = crate::apis::urlencode(p_path_id)
     );
-    let mut req_builder =
-        configuration.client.request(reqwest::Method::GET, &uri_str);
+    let mut req_builder = configuration.client.request(reqwest::Method::GET, &uri_str);
 
     if let Some(ref user_agent) = configuration.user_agent {
-        req_builder = req_builder
-            .header(reqwest::header::USER_AGENT, user_agent.clone());
+        req_builder = req_builder.header(reqwest::header::USER_AGENT, user_agent.clone());
     }
 
     let req = req_builder.build()?;
@@ -72,8 +67,7 @@ pub async fn check_shipping_availability(
         }
     } else {
         let content = resp.text().await?;
-        let entity: Option<CheckShippingAvailabilityError> =
-            serde_json::from_str(&content).ok();
+        let entity: Option<CheckShippingAvailabilityError> = serde_json::from_str(&content).ok();
         Err(Error::ResponseError(ResponseContent {
             status,
             content,
@@ -85,13 +79,9 @@ pub async fn check_shipping_availability(
 pub async fn create_shipping_destination(
     configuration: &configuration::Configuration,
     create_shipping_destination_request: models::CreateShippingDestinationRequest,
-) -> Result<
-    models::ShippingDestinationResponse,
-    Error<CreateShippingDestinationError>,
-> {
+) -> Result<models::ShippingDestinationResponse, Error<CreateShippingDestinationError>> {
     // add a prefix to parameters to efficiently prevent name collisions
-    let p_body_create_shipping_destination_request =
-        create_shipping_destination_request;
+    let p_body_create_shipping_destination_request = create_shipping_destination_request;
 
     let uri_str = format!(
         "{}/v1/delivery/shipping-destinations",
@@ -102,11 +92,9 @@ pub async fn create_shipping_destination(
         .request(reqwest::Method::POST, &uri_str);
 
     if let Some(ref user_agent) = configuration.user_agent {
-        req_builder = req_builder
-            .header(reqwest::header::USER_AGENT, user_agent.clone());
+        req_builder = req_builder.header(reqwest::header::USER_AGENT, user_agent.clone());
     }
-    req_builder =
-        req_builder.json(&p_body_create_shipping_destination_request);
+    req_builder = req_builder.json(&p_body_create_shipping_destination_request);
 
     let req = req_builder.build()?;
     let resp = configuration.client.execute(req).await?;
@@ -128,8 +116,7 @@ pub async fn create_shipping_destination(
         }
     } else {
         let content = resp.text().await?;
-        let entity: Option<CreateShippingDestinationError> =
-            serde_json::from_str(&content).ok();
+        let entity: Option<CreateShippingDestinationError> = serde_json::from_str(&content).ok();
         Err(Error::ResponseError(ResponseContent {
             status,
             content,

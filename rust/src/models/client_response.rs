@@ -107,11 +107,7 @@ pub struct ClientResponse {
 
 impl ClientResponse {
     /// Client response
-    pub fn new(
-        id: String,
-        name: String,
-        tenant_id: String,
-    ) -> ClientResponse {
+    pub fn new(id: String, name: String, tenant_id: String) -> ClientResponse {
         ClientResponse {
             capital: None,
             corporate_number: None,

@@ -20,9 +20,7 @@ pub struct ListAgentSessionsOutputData {
 
 impl ListAgentSessionsOutputData {
     /// Output containing the list of sessions.
-    pub fn new(
-        sessions: Vec<models::AgentSessionEntry>,
-    ) -> ListAgentSessionsOutputData {
+    pub fn new(sessions: Vec<models::AgentSessionEntry>) -> ListAgentSessionsOutputData {
         ListAgentSessionsOutputData { sessions }
     }
 }

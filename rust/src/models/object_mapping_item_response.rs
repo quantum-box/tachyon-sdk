@@ -27,9 +27,7 @@ pub struct ObjectMappingItemResponse {
 
 impl ObjectMappingItemResponse {
     /// Single item in object mapping list
-    pub fn new(
-        object_mapping: models::ObjectMappingResponse,
-    ) -> ObjectMappingItemResponse {
+    pub fn new(object_mapping: models::ObjectMappingResponse) -> ObjectMappingItemResponse {
         ObjectMappingItemResponse {
             object_mapping: Box::new(object_mapping),
             tenant_mapping: None,

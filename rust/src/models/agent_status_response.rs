@@ -27,11 +27,7 @@ pub struct AgentStatusResponse {
 
 impl AgentStatusResponse {
     /// Response for getting agent status
-    pub fn new(
-        is_running: bool,
-        progress: i32,
-        state: String,
-    ) -> AgentStatusResponse {
+    pub fn new(is_running: bool, progress: i32, state: String) -> AgentStatusResponse {
         AgentStatusResponse {
             is_running,
             progress,

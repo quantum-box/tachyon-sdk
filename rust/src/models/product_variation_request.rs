@@ -74,11 +74,7 @@ pub struct ProductVariationRequest {
 
 impl ProductVariationRequest {
     /// Product variation input
-    pub fn new(
-        currency: String,
-        name: String,
-        unit_amount: i64,
-    ) -> ProductVariationRequest {
+    pub fn new(currency: String, name: String, unit_amount: i64) -> ProductVariationRequest {
         ProductVariationRequest {
             code: None,
             currency,

@@ -20,9 +20,7 @@ pub struct EvaluatePoliciesBatchResponse {
 
 impl EvaluatePoliciesBatchResponse {
     /// Response for batch policy evaluation
-    pub fn new(
-        results: Vec<models::PolicyEvaluationOutcome>,
-    ) -> EvaluatePoliciesBatchResponse {
+    pub fn new(results: Vec<models::PolicyEvaluationOutcome>) -> EvaluatePoliciesBatchResponse {
         EvaluatePoliciesBatchResponse { results }
     }
 }
