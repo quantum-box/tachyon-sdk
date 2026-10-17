@@ -435,6 +435,7 @@ pub struct BuildSpec {
 #[serde(rename_all = "snake_case")]
 pub enum BuildRunnerBackend {
     Codebuild,
+    GithubActions,
     KubernetesKata,
 }
 
@@ -1282,6 +1283,9 @@ spec:
       preview:
         build:
           runnerBackend: codebuild
+      production:
+        build:
+          runnerBackend: github_actions
 "#;
         let document: CloudAppsDocument = serde_yaml::from_str(yaml).unwrap();
         let CloudAppsDocument::CloudApps(manifest) = document else {
@@ -1300,6 +1304,21 @@ spec:
                 .unwrap()
                 .runner_backend,
             Some(BuildRunnerBackend::KubernetesKata)
+        ));
+        assert!(matches!(
+            manifest.spec.apps[1]
+                .spec
+                .environments
+                .as_ref()
+                .unwrap()
+                .production
+                .as_ref()
+                .unwrap()
+                .build
+                .as_ref()
+                .unwrap()
+                .runner_backend,
+            Some(BuildRunnerBackend::GithubActions)
         ));
     }
 

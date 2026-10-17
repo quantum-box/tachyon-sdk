@@ -9,6 +9,11 @@
 
 ### Fixed
 
+- `tachyon apps apply` accepts `build.runnerBackend: github_actions`
+  (and `github-actions`) in Cloud App manifests and sends it to the control
+  plane, matching the server-side backend parser. A `cargo_lambda` app on
+  GitHub Actions can omit `build.command`; the CLI derives it from
+  `package`/`binary`/`release`/`arch`. (PLT-5946)
 - Pass Cloud App Pages deploy string options as attached values, preserving
   matching outer quotes through Wrangler's pinned parser. Workers `--name` and
   IaC `--app` values are attached too, so dash-leading values stay intact.
