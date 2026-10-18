@@ -9,6 +9,13 @@
 
 ### Fixed
 
+- The Cloud App build job (Kata runner) now finds a `cargo_lambda` bootstrap
+  from the manifest's `build.binary` first (`<target>/lambda/<binary>/bootstrap`)
+  and only falls back to parsing `--bin` / `--flatten` from the build command,
+  so commands wrapped in `bash -c` or scripts still package the right binary.
+  Without `CARGO_TARGET_DIR`, the job asks `cargo metadata` for the target
+  directory, so a monorepo app selected with `rootDirectory` packages from the
+  workspace root's `target/` instead of `<rootDirectory>/target`. (PLT-5955)
 - `tachyon apps apply` accepts `build.runnerBackend: github_actions`
   (and `github-actions`) in Cloud App manifests and sends it to the control
   plane, matching the server-side backend parser. A `cargo_lambda` app on
