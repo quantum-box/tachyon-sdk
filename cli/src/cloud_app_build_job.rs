@@ -1614,7 +1614,13 @@ async fn run_lambda_package_and_upload(
         .ok_or_else(|| anyhow!("{LAMBDA_UPLOAD_URL_ENV} is required for Lambda artifact upload"))?;
 
     let inherited_target_dir = std::env::var_os(CARGO_TARGET_DIR_ENV);
-    let target_dir = cargo_target_dir(app_dir, env, inherited_target_dir.as_deref());
+    let target_dir = cargo_target_dir(app_dir, env, inherited_target_dir.as_deref(), |dir| {
+        if is_rust_lambda(workload) {
+            cargo_metadata_target_dir(dir)
+        } else {
+            None
+        }
+    });
     let (archive, source) =
         package_lambda_archive_for_workload(workload, app_dir, &target_dir, build_started_at)?;
     let size = archive.len();
@@ -1647,10 +1653,15 @@ fn package_lambda_archive_for_workload(
     package_lambda_archive(app_dir)
 }
 
+/// Resolve where Cargo wrote the build output. An explicit
+/// `CARGO_TARGET_DIR` wins; otherwise ask Cargo (`metadata_target_dir`),
+/// because a monorepo app selected with `rootDirectory` builds into the
+/// workspace root's `target/`, not `<app_dir>/target`.
 fn cargo_target_dir(
     app_dir: &Path,
     env: &BTreeMap<String, String>,
     inherited_target_dir: Option<&OsStr>,
+    metadata_target_dir: impl FnOnce(&Path) -> Option<PathBuf>,
 ) -> PathBuf {
     let configured = env
         .get(CARGO_TARGET_DIR_ENV)
@@ -1658,7 +1669,7 @@ fn cargo_target_dir(
         .or(inherited_target_dir)
         .filter(|value| !value.is_empty());
     let Some(configured) = configured else {
-        return app_dir.join("target");
+        return metadata_target_dir(app_dir).unwrap_or_else(|| app_dir.join("target"));
     };
 
     let configured = PathBuf::from(configured);
@@ -1667,6 +1678,40 @@ fn cargo_target_dir(
     } else {
         app_dir.join(configured)
     }
+}
+
+/// `target_directory` from `cargo metadata`, which accounts for the
+/// enclosing workspace and `.cargo/config.toml` `build.target-dir`.
+/// `None` when Cargo is unavailable or `app_dir` is not a Cargo project.
+fn cargo_metadata_target_dir(app_dir: &Path) -> Option<PathBuf> {
+    let output = std::process::Command::new("cargo")
+        .arg("metadata")
+        .arg("--no-deps")
+        .arg("--format-version")
+        .arg("1")
+        .current_dir(app_dir)
+        .output()
+        .map_err(|error| {
+            tracing::warn!(%error, "failed to run cargo metadata for Cargo target dir detection");
+        })
+        .ok()?;
+    if !output.status.success() {
+        tracing::warn!(
+            stderr = %String::from_utf8_lossy(&output.stderr),
+            "cargo metadata failed; falling back to <app_dir>/target"
+        );
+        return None;
+    }
+    cargo_metadata_target_dir_from_json(&output.stdout)
+}
+
+fn cargo_metadata_target_dir_from_json(stdout: &[u8]) -> Option<PathBuf> {
+    let metadata: serde_json::Value = serde_json::from_slice(stdout).ok()?;
+    metadata
+        .get("target_directory")
+        .and_then(|value| value.as_str())
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
 }
 
 fn package_lambda_archive(app_dir: &Path) -> Result<(Vec<u8>, String)> {
@@ -1744,24 +1789,35 @@ fn rust_server_bootstrap_path(
     ))
 }
 
+/// Locate the cargo-lambda `bootstrap`. The manifest's `build.binary`
+/// (`commands.binary`) is authoritative: cargo-lambda always writes
+/// `lambda/<binary>/bootstrap`. Parsing the build command for `--bin` /
+/// `--flatten` is only a fallback, since commands wrapped in `bash -c`
+/// or scripts hide those flags.
 fn cargo_lambda_bootstrap_path(
     workload: &BuildWorkloadSpec,
     cargo_target_dir: &Path,
 ) -> Result<PathBuf> {
+    let lambda_dir = cargo_target_dir.join("lambda");
     let build_command = workload.commands.build.as_deref();
-    let explicit_name = workload
+    let explicit_binary = workload
         .commands
         .binary
         .as_deref()
         .map(str::trim)
-        .filter(|name| !name.is_empty())
-        .map(ToString::to_string)
-        .or_else(|| build_command.and_then(cargo_lambda_bootstrap_name));
+        .filter(|name| !name.is_empty());
+
     let mut candidates = Vec::new();
+    if let Some(binary) = explicit_binary {
+        candidates.push(lambda_dir.join(binary).join("bootstrap"));
+    }
     if build_command.is_some_and(cargo_lambda_bootstrap_is_flattened) {
-        candidates.push(cargo_target_dir.join("lambda").join("bootstrap"));
-    } else if let Some(name) = explicit_name {
-        candidates.push(cargo_target_dir.join("lambda").join(name).join("bootstrap"));
+        candidates.push(lambda_dir.join("bootstrap"));
+    } else if let Some(name) = build_command.and_then(cargo_lambda_bootstrap_name) {
+        let candidate = lambda_dir.join(name).join("bootstrap");
+        if !candidates.contains(&candidate) {
+            candidates.push(candidate);
+        }
     }
 
     for candidate in &candidates {
@@ -1771,7 +1827,6 @@ fn cargo_lambda_bootstrap_path(
     }
 
     let mut discovered = Vec::new();
-    let lambda_dir = cargo_target_dir.join("lambda");
     if candidates.is_empty() && lambda_dir.is_dir() {
         let flattened = lambda_dir.join("bootstrap");
         if flattened.is_file() {
@@ -1792,10 +1847,15 @@ fn cargo_lambda_bootstrap_path(
         return Ok(path);
     }
 
-    let expected = candidates
-        .first()
-        .map(|path| path.display().to_string())
-        .unwrap_or_else(|| format!("{}/lambda/<name>/bootstrap", cargo_target_dir.display()));
+    let expected = if candidates.is_empty() {
+        format!("{}/lambda/<name>/bootstrap", cargo_target_dir.display())
+    } else {
+        candidates
+            .iter()
+            .map(|path| path.display().to_string())
+            .collect::<Vec<_>>()
+            .join(" or ")
+    };
     Err(anyhow!(
         "cargo-lambda bootstrap not found; expected {expected}. Ensure the \
          build command ran cargo lambda build and produced the configured Cargo target artifact"
@@ -3909,6 +3969,173 @@ mod tests {
     }
 
     #[test]
+    fn cargo_lambda_bootstrap_path_prefers_binary_over_flatten_parse() {
+        let temp = tempfile::tempdir().unwrap();
+        let target_dir = temp.path().join("target");
+        let explicit = target_dir
+            .join("lambda")
+            .join("lambda-app")
+            .join("bootstrap");
+        let flattened = target_dir.join("lambda").join("bootstrap");
+        std::fs::create_dir_all(explicit.parent().unwrap()).unwrap();
+        std::fs::write(&explicit, b"manifest binary").unwrap();
+        std::fs::write(&flattened, b"stale flattened").unwrap();
+
+        let mut workload = test_workload(Some("lambda"));
+        workload.framework = Some("cargo_lambda".to_string());
+        workload.commands.binary = Some("lambda-app".to_string());
+        workload.commands.build =
+            Some("cargo lambda build --bin lambda-app --flatten other --release".to_string());
+
+        assert_eq!(
+            cargo_lambda_bootstrap_path(&workload, &target_dir).unwrap(),
+            explicit
+        );
+    }
+
+    #[test]
+    fn cargo_lambda_bootstrap_path_uses_binary_when_command_is_wrapped() {
+        let temp = tempfile::tempdir().unwrap();
+        let target_dir = temp.path().join("target");
+        let explicit = target_dir
+            .join("lambda")
+            .join("lambda-app")
+            .join("bootstrap");
+        let other = target_dir
+            .join("lambda")
+            .join("aaa-other")
+            .join("bootstrap");
+        std::fs::create_dir_all(explicit.parent().unwrap()).unwrap();
+        std::fs::create_dir_all(other.parent().unwrap()).unwrap();
+        std::fs::write(&explicit, b"manifest binary").unwrap();
+        std::fs::write(&other, b"other binary").unwrap();
+
+        let mut workload = test_workload(Some("lambda"));
+        workload.framework = Some("cargo_lambda".to_string());
+        workload.commands.binary = Some("lambda-app".to_string());
+        workload.commands.build = Some(
+            "bash -c 'cargo lambda build --package app --bin lambda-app --release --arm64'"
+                .to_string(),
+        );
+
+        assert_eq!(
+            cargo_lambda_bootstrap_path(&workload, &target_dir).unwrap(),
+            explicit
+        );
+    }
+
+    #[test]
+    fn cargo_lambda_bootstrap_path_falls_back_to_command_when_binary_missing_on_disk() {
+        let temp = tempfile::tempdir().unwrap();
+        let target_dir = temp.path().join("target");
+        let flattened = target_dir.join("lambda").join("bootstrap");
+        std::fs::create_dir_all(flattened.parent().unwrap()).unwrap();
+        std::fs::write(&flattened, b"flattened binary").unwrap();
+
+        let mut workload = test_workload(Some("lambda"));
+        workload.framework = Some("cargo_lambda".to_string());
+        workload.commands.binary = Some("lambda-app".to_string());
+        workload.commands.build =
+            Some("cargo lambda build --bin lambda-app --flatten lambda-app --release".to_string());
+
+        assert_eq!(
+            cargo_lambda_bootstrap_path(&workload, &target_dir).unwrap(),
+            flattened
+        );
+    }
+
+    #[test]
+    fn cargo_lambda_bootstrap_path_reports_every_candidate() {
+        let temp = tempfile::tempdir().unwrap();
+        let target_dir = temp.path().join("target");
+
+        let mut workload = test_workload(Some("lambda"));
+        workload.framework = Some("cargo_lambda".to_string());
+        workload.commands.binary = Some("lambda-app".to_string());
+        workload.commands.build =
+            Some("cargo lambda build --bin command-binary --release".to_string());
+
+        let error = cargo_lambda_bootstrap_path(&workload, &target_dir)
+            .unwrap_err()
+            .to_string();
+
+        assert!(error.contains("target/lambda/lambda-app/bootstrap"));
+        assert!(error.contains("target/lambda/command-binary/bootstrap"));
+    }
+
+    #[test]
+    fn cargo_target_dir_uses_cargo_metadata_when_unset() {
+        let temp = tempfile::tempdir().unwrap();
+        let workspace_target = temp.path().join("target");
+        let app_dir = temp.path().join("apps").join("api");
+
+        let target_dir = cargo_target_dir(&app_dir, &BTreeMap::new(), None, |dir| {
+            assert_eq!(dir, app_dir.as_path());
+            Some(workspace_target.clone())
+        });
+
+        assert_eq!(target_dir, workspace_target);
+    }
+
+    #[test]
+    fn cargo_target_dir_ignores_empty_env_and_uses_cargo_metadata() {
+        let temp = tempfile::tempdir().unwrap();
+        let workspace_target = temp.path().join("target");
+        let env = BTreeMap::from([(CARGO_TARGET_DIR_ENV.to_string(), String::new())]);
+
+        let target_dir =
+            cargo_target_dir(temp.path(), &env, None, |_| Some(workspace_target.clone()));
+
+        assert_eq!(target_dir, workspace_target);
+    }
+
+    #[test]
+    fn cargo_metadata_target_dir_from_json_reads_target_directory() {
+        let stdout = br#"{"packages":[],"target_directory":"/work/repo/target"}"#;
+        assert_eq!(
+            cargo_metadata_target_dir_from_json(stdout),
+            Some(PathBuf::from("/work/repo/target"))
+        );
+        assert_eq!(
+            cargo_metadata_target_dir_from_json(br#"{"packages":[]}"#),
+            None
+        );
+        assert_eq!(cargo_metadata_target_dir_from_json(b"not json"), None);
+    }
+
+    #[test]
+    fn cargo_metadata_target_dir_finds_workspace_root_target_for_member() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path();
+        std::fs::write(
+            root.join("Cargo.toml"),
+            "[workspace]\nmembers = [\"apps/api\"]\nresolver = \"2\"\n",
+        )
+        .unwrap();
+        let member = root.join("apps").join("api");
+        std::fs::create_dir_all(member.join("src")).unwrap();
+        std::fs::write(
+            member.join("Cargo.toml"),
+            "[package]\nname = \"api\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+        )
+        .unwrap();
+        std::fs::write(member.join("src").join("main.rs"), "fn main() {}\n").unwrap();
+
+        if std::env::var_os(CARGO_TARGET_DIR_ENV).is_some() {
+            // An inherited CARGO_TARGET_DIR overrides the workspace target.
+            return;
+        }
+        let target_dir = cargo_metadata_target_dir(&member).expect("cargo metadata target dir");
+
+        assert!(
+            target_dir == root.join("target")
+                || target_dir == root.canonicalize().unwrap().join("target"),
+            "unexpected target dir {}",
+            target_dir.display()
+        );
+    }
+
+    #[test]
     fn package_cargo_lambda_archive_uses_configured_target_dir() {
         let temp = tempfile::tempdir().unwrap();
         let app_dir = temp.path().join("app");
@@ -3918,6 +4145,7 @@ mod tests {
             &app_dir,
             &BTreeMap::new(),
             Some(configured_target_dir.as_os_str()),
+            |_| panic!("explicit CARGO_TARGET_DIR must not consult cargo metadata"),
         );
         let bootstrap = target_dir
             .join("lambda")
@@ -3949,7 +4177,7 @@ mod tests {
     #[test]
     fn package_cargo_lambda_archive_falls_back_to_app_target_dir() {
         let temp = tempfile::tempdir().unwrap();
-        let target_dir = cargo_target_dir(temp.path(), &BTreeMap::new(), None);
+        let target_dir = cargo_target_dir(temp.path(), &BTreeMap::new(), None, |_| None);
         assert_eq!(target_dir, temp.path().join("target"));
         let bootstrap = target_dir
             .join("lambda")
@@ -4037,7 +4265,7 @@ mod tests {
     #[test]
     fn package_rust_server_archive_falls_back_to_app_target_dir() {
         let temp = tempfile::tempdir().unwrap();
-        let target_dir = cargo_target_dir(temp.path(), &BTreeMap::new(), None);
+        let target_dir = cargo_target_dir(temp.path(), &BTreeMap::new(), None, |_| None);
         assert_eq!(target_dir, temp.path().join("target"));
         let binary = target_dir
             .join("aarch64-unknown-linux-gnu")
@@ -4075,6 +4303,7 @@ mod tests {
             &app_dir,
             &BTreeMap::new(),
             Some(configured_target_dir.as_os_str()),
+            |_| panic!("explicit CARGO_TARGET_DIR must not consult cargo metadata"),
         );
         let binary = target_dir
             .join("aarch64-unknown-linux-gnu")
@@ -4113,7 +4342,7 @@ mod tests {
     #[test]
     fn package_cargo_lambda_archive_rejects_stale_bootstrap() {
         let temp = tempfile::tempdir().unwrap();
-        let target_dir = cargo_target_dir(temp.path(), &BTreeMap::new(), None);
+        let target_dir = cargo_target_dir(temp.path(), &BTreeMap::new(), None, |_| None);
         let bootstrap = target_dir
             .join("lambda")
             .join("tachyon-field-api")
@@ -4139,7 +4368,7 @@ mod tests {
     #[test]
     fn package_rust_server_archive_rejects_stale_binary() {
         let temp = tempfile::tempdir().unwrap();
-        let target_dir = cargo_target_dir(temp.path(), &BTreeMap::new(), None);
+        let target_dir = cargo_target_dir(temp.path(), &BTreeMap::new(), None, |_| None);
         let binary = target_dir
             .join("aarch64-unknown-linux-gnu")
             .join("release")
