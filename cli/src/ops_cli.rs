@@ -61,6 +61,13 @@ pub enum OpsCommand {
         #[command(subcommand)]
         command: SentryCommand,
     },
+    /// Audited replay of delivered Field usage / accounting records
+    /// (request, approve, execute, revoke, get). Host tenant only, human
+    /// login session only.
+    ErpReplays {
+        #[command(subcommand)]
+        command: crate::erp_replay_cli::ErpReplaysCommand,
+    },
 }
 
 #[derive(Debug, Clone, Subcommand)]
@@ -2184,6 +2191,7 @@ pub async fn run(
     config: &Configuration,
     tenant_id: &str,
     config_flag: Option<&Path>,
+    uses_api_key: bool,
 ) -> Result<()> {
     let api = ApiClient::new(config, tenant_id)?;
 
@@ -2301,6 +2309,10 @@ pub async fn run(
             } => run_notify_react(&api, thread_key, emoji, ts.as_deref(), *json).await,
             NotifyCommand::Users { bot_token: _, json } => run_notify_users(&api, *json).await,
         },
+        // Sent to the Host tenant, never to `tenant_id`.
+        OpsCommand::ErpReplays { command } => {
+            crate::erp_replay_cli::run(command, config, uses_api_key).await
+        }
         OpsCommand::Sentry { command } => match command {
             SentryCommand::Issues { command } => match command {
                 SentryIssuesCommand::List {
