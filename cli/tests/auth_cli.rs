@@ -199,3 +199,177 @@ fn auth_issue_staging_updates_secret_ref_without_local_file() {
     assert!(yaml.contains("secret_ref: arn:aws:secretsmanager"));
     assert!(!String::from_utf8_lossy(&output.stdout).contains("dummy-secret"));
 }
+
+const ACCESS: &str = "stored-access-token-value";
+const REFRESH: &str = "stored-refresh-token-value";
+
+/// Write a profile file where `dirs::config_dir()` looks on this OS when HOME
+/// and XDG_CONFIG_HOME point into `home`.
+fn write_profile(home: &Path, name: &str, expires_at: i64) {
+    let creds = format!(
+        r#"{{"access_token":"{ACCESS}","refresh_token":"{REFRESH}","id_token":null,"expires_at":{expires_at},"token_type":"Bearer"}}"#
+    );
+    for base in [
+        home.join("Library/Application Support"),
+        home.join(".config"),
+    ] {
+        let dir = base.join("tachyon/profiles");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join(format!("{name}.json")), &creds).unwrap();
+    }
+}
+
+fn read_profile(home: &Path, name: &str) -> String {
+    let base = if cfg!(target_os = "macos") {
+        home.join("Library/Application Support")
+    } else {
+        home.join(".config")
+    };
+    fs::read_to_string(base.join(format!("tachyon/profiles/{name}.json"))).unwrap()
+}
+
+fn now() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs() as i64
+}
+
+/// One-shot OAuth token endpoint that answers with `status` and `body`.
+fn start_token_server(
+    status: &'static str,
+    body: &'static str,
+) -> (String, thread::JoinHandle<String>) {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    let handle = thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let mut buf = [0_u8; 8192];
+        let n = stream.read(&mut buf).unwrap();
+        let req = String::from_utf8_lossy(&buf[..n]).to_string();
+        let response = format!(
+            "HTTP/1.1 {status}\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+            body.len(),
+            body
+        );
+        stream.write_all(response.as_bytes()).unwrap();
+        req
+    });
+    (url, handle)
+}
+
+fn assert_no_secret(text: &str) {
+    for secret in [ACCESS, REFRESH, "refreshed-access-token-value"] {
+        assert!(!text.contains(secret), "secret leaked: {text}");
+    }
+}
+
+#[test]
+fn auth_token_prints_only_the_token_to_stdout() {
+    let tmp = TempDir::new().unwrap();
+    write_profile(tmp.path(), "work", now() + 3_600);
+
+    let output = isolated_command(tmp.path())
+        .env_remove("TACHYON_API_KEY")
+        .args(["auth", "token", "--profile", "work"])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success(), "{output:?}");
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        format!("{ACCESS}\n")
+    );
+    assert_no_secret(&String::from_utf8_lossy(&output.stderr));
+}
+
+#[test]
+fn auth_token_refreshes_a_token_that_is_about_to_expire() {
+    let tmp = TempDir::new().unwrap();
+    write_profile(tmp.path(), "work", now() + 60);
+    let (url, server) = start_token_server(
+        "200 OK",
+        r#"{"access_token":"refreshed-access-token-value","expires_in":3600,"token_type":"Bearer"}"#,
+    );
+
+    let output = isolated_command(tmp.path())
+        .env_remove("TACHYON_API_KEY")
+        .args([
+            "--cognito-domain",
+            &url,
+            "auth",
+            "token",
+            "--profile",
+            "work",
+        ])
+        .output()
+        .unwrap();
+
+    let request = server.join().unwrap();
+    assert!(request.starts_with("POST /oauth2/token"), "{request}");
+    assert!(request.contains("grant_type=refresh_token"), "{request}");
+    assert!(output.status.success(), "{output:?}");
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "refreshed-access-token-value\n"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("Token refreshed (profile: work)"),
+        "{stderr}"
+    );
+    assert_no_secret(&stderr);
+    // The refreshed token is saved, and the refresh token is kept.
+    let saved = read_profile(tmp.path(), "work");
+    assert!(saved.contains("refreshed-access-token-value"), "{saved}");
+    assert!(saved.contains(REFRESH), "{saved}");
+}
+
+#[test]
+fn auth_token_failed_refresh_prints_nothing_secret() {
+    let tmp = TempDir::new().unwrap();
+    write_profile(tmp.path(), "work", now() - 10);
+    let (url, server) = start_token_server("400 Bad Request", r#"{"error":"invalid_grant"}"#);
+
+    let output = isolated_command(tmp.path())
+        .env_remove("TACHYON_API_KEY")
+        .args([
+            "--cognito-domain",
+            &url,
+            "auth",
+            "token",
+            "--profile",
+            "work",
+        ])
+        .output()
+        .unwrap();
+
+    server.join().unwrap();
+    assert!(!output.status.success());
+    assert!(output.stdout.is_empty(), "{output:?}");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("tachyon auth login --profile work"),
+        "{stderr}"
+    );
+    assert_no_secret(&stderr);
+}
+
+#[test]
+fn auth_token_refuses_when_an_api_key_is_set() {
+    let tmp = TempDir::new().unwrap();
+    write_profile(tmp.path(), "work", now() + 3_600);
+
+    let output = isolated_command(tmp.path())
+        .env("TACHYON_API_KEY", "api-key-secret-value")
+        .args(["auth", "token", "--profile", "work"])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    assert!(output.stdout.is_empty(), "{output:?}");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("TACHYON_API_KEY"), "{stderr}");
+    assert!(!stderr.contains("api-key-secret-value"), "{stderr}");
+    assert_no_secret(&stderr);
+}
