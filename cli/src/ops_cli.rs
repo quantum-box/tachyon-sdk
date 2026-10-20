@@ -2309,7 +2309,8 @@ pub async fn run(
             } => run_notify_react(&api, thread_key, emoji, ts.as_deref(), *json).await,
             NotifyCommand::Users { bot_token: _, json } => run_notify_users(&api, *json).await,
         },
-        // Sent to the Host tenant, never to `tenant_id`.
+        // `main` dispatches this before tenant resolution; kept so the
+        // match stays exhaustive. Sent to the Host tenant either way.
         OpsCommand::ErpReplays { command } => {
             crate::erp_replay_cli::run(command, config, uses_api_key).await
         }

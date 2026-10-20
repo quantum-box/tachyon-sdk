@@ -1143,6 +1143,14 @@ async fn run() -> Result<()> {
                 manifest::run(args, None, None).await
             }
         }
+        // ERP replays go to the Host tenant: skip the project config and
+        // the ordinary tenant resolution, which they do not use.
+        Commands::Ops(ops_cli::OpsArgs {
+            command: ops_cli::OpsCommand::ErpReplays { command },
+        }) => {
+            let config = build_config(&cli, &active).await;
+            erp_replay_cli::run(command, &config, cli.api_key.is_some()).await
+        }
         Commands::Ops(args) => {
             let project_config = config::loader::load(cli.config.as_deref())?;
             let tenant_arg = tenant_arg(&cli, project_config.as_ref());
