@@ -705,6 +705,9 @@ enum AuthCommand {
     Init(commands::auth::init::InitAuthArgs),
     /// Issue credentials for a registered auth provider
     Issue(commands::auth::issue::IssueAuthArgs),
+    /// Print the logged-in user's API token to a pipe (refreshes it when it
+    /// is about to expire; refuses to print to a terminal)
+    Token(commands::auth::token::TokenAuthArgs),
     /// Remove a profile's stored credentials
     Logout(LogoutArgs),
     /// List registered profiles (active marked with *)
@@ -928,6 +931,15 @@ async fn run() -> Result<()> {
                     &cli.api_url,
                     token,
                     &tenant_arg,
+                )
+                .await
+            }
+            AuthCommand::Token(token_args) => {
+                commands::auth::token::run(
+                    token_args,
+                    &build_oauth_config(&cli),
+                    &active,
+                    cli.api_key.is_some(),
                 )
                 .await
             }

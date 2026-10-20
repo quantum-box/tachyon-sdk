@@ -108,6 +108,19 @@ Resolution order when picking a profile for a command:
 3. `~/.config/tachyon/active_profile` file (set by `auth login` / `auth use`)
 4. `default`
 
+To hand the logged-in user's token to a script without copying it by hand,
+pipe `tachyon auth token` into it:
+
+```sh
+tachyon auth token | node my-script.mjs --token-stdin
+tachyon auth token --profile work | ./tool --token-stdin
+```
+
+`auth token` refreshes the token first when it expires within 10 minutes
+(`--min-validity <seconds>` to change), writes only the token to stdout, and
+refuses to print it to a terminal. It also refuses while `--api-key` /
+`TACHYON_API_KEY` is set, because it only hands out the user's own login.
+
 Existing single-account installs are auto-migrated: an older
 `~/.config/tachyon/credentials.json` is copied to `profiles/default.json`
 on first use, with the legacy file kept for downgrade safety.

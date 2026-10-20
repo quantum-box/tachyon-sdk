@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### Added
+
+- `tachyon auth token` prints the logged-in user's API token to a pipe, so a
+  script can read it with `--token-stdin` without the user handling the token.
+  It refreshes the token first when it expires within `--min-validity` seconds
+  (default 600), refuses to print to a terminal, and refuses while an API key
+  is set. Errors never contain the token.
+
 ### Changed
 
 - When a service account name matches more than one service account, the error
