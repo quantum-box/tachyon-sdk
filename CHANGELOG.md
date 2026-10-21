@@ -17,6 +17,11 @@
 
 ### Fixed
 
+- The CLI now uses `rustls-webpki` 0.103.16 and `webpki-roots` /
+  `webpki-root-certs` 1.0.10. These reject certificate paths that go through
+  the eMudhra intermediate CAs whose private keys were disclosed, and no longer
+  trust emSign ECC Root CA - G3. The `aws-lc-rs` / `aws-lc-sys` versions that
+  `rustls-webpki` 0.103.16 requires are updated along with them.
 - The Cloud App build job (Kata runner) now finds a `cargo_lambda` bootstrap
   from the manifest's `build.binary` first (`<target>/lambda/<binary>/bootstrap`)
   and only falls back to parsing `--bin` / `--flatten` from the build command,
