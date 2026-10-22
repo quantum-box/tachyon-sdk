@@ -9,6 +9,15 @@
   It refreshes the token first when it expires within `--min-validity` seconds
   (default 600), refuses to print to a terminal, and refuses while an API key
   is set. Errors never contain the token.
+- `tachyon ops erp-replays request | approve | execute | revoke | get` drive
+  the audited ERP delivery replay API (`/v1/payment/erp-delivery-replays`).
+  `request` shows the dry-run's `targetDigest` and each item's `payloadSha256`
+  (`get --show-body` prints the exact bodies), and `execute` shows each
+  attempt's `outcome` with `allDuplicate`. The operator header is fixed to the
+  Host tenant (`--host-tenant-id`, defaulting to the production system tenant),
+  and API-key auth is refused before any request because the server only
+  accepts human login sessions. The server keeps enforcing that the approver
+  is neither the requester nor the executor. (PLT-5690)
 
 ### Changed
 
