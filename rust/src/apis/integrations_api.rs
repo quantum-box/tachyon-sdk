@@ -32,6 +32,16 @@ pub enum DisconnectIntegrationError {
     UnknownValue(serde_json::Value),
 }
 
+/// struct for typed errors of method [`get_github_billing_usage`]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum GetGithubBillingUsageError {
+    Status400(models::ErrorResponse),
+    Status403(models::ErrorResponse),
+    Status503(models::ErrorResponse),
+    UnknownValue(serde_json::Value),
+}
+
 /// struct for typed errors of method [`get_integration`]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(untagged)]
@@ -136,6 +146,60 @@ pub async fn disconnect_integration(
     } else {
         let content = resp.text().await?;
         let entity: Option<DisconnectIntegrationError> = serde_json::from_str(&content).ok();
+        Err(Error::ResponseError(ResponseContent {
+            status,
+            content,
+            entity,
+        }))
+    }
+}
+
+/// The body is GitHub's `GET /organizations/{org}/settings/billing/usage` response, unchanged. The installation token is never returned.
+pub async fn get_github_billing_usage(
+    configuration: &configuration::Configuration,
+    org: &str,
+    year: i32,
+    month: i32,
+) -> Result<serde_json::Value, Error<GetGithubBillingUsageError>> {
+    // add a prefix to parameters to efficiently prevent name collisions
+    let p_query_org = org;
+    let p_query_year = year;
+    let p_query_month = month;
+
+    let uri_str = format!(
+        "{}/v1/integrations/github/billing-usage",
+        configuration.base_path
+    );
+    let mut req_builder = configuration.client.request(reqwest::Method::GET, &uri_str);
+
+    req_builder = req_builder.query(&[("org", &p_query_org.to_string())]);
+    req_builder = req_builder.query(&[("year", &p_query_year.to_string())]);
+    req_builder = req_builder.query(&[("month", &p_query_month.to_string())]);
+    if let Some(ref user_agent) = configuration.user_agent {
+        req_builder = req_builder.header(reqwest::header::USER_AGENT, user_agent.clone());
+    }
+
+    let req = req_builder.build()?;
+    let resp = configuration.client.execute(req).await?;
+
+    let status = resp.status();
+    let content_type = resp
+        .headers()
+        .get("content-type")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("application/octet-stream");
+    let content_type = super::ContentType::from(content_type);
+
+    if !status.is_client_error() && !status.is_server_error() {
+        let content = resp.text().await?;
+        match content_type {
+            ContentType::Json => serde_json::from_str(&content).map_err(Error::from),
+            ContentType::Text => return Err(Error::from(serde_json::Error::custom("Received `text/plain` content type response that cannot be converted to `serde_json::Value`"))),
+            ContentType::Unsupported(unknown_type) => return Err(Error::from(serde_json::Error::custom(format!("Received `{unknown_type}` content type response that cannot be converted to `serde_json::Value`")))),
+        }
+    } else {
+        let content = resp.text().await?;
+        let entity: Option<GetGithubBillingUsageError> = serde_json::from_str(&content).ok();
         Err(Error::ResponseError(ResponseContent {
             status,
             content,
