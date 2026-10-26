@@ -8,6 +8,7 @@ mod commands;
 mod compute_cli;
 mod config;
 mod data_cli;
+mod erp_replay_cli;
 mod iac_cli;
 mod image_cli;
 mod install_cli;
@@ -176,6 +177,58 @@ mod tests {
             }
             _ => panic!("unexpected command"),
         }
+    }
+
+    #[test]
+    fn parses_ops_erp_replays_request_with_the_host_tenant_default() {
+        let cli = Cli::try_parse_from([
+            "tachyon",
+            "ops",
+            "erp-replays",
+            "request",
+            "--outbox",
+            "usage",
+            "--record-id",
+            "credit_consumption_attempts:cca_1:input-token",
+            "--reason",
+            "PLT-4603 canary duplicate drill",
+            "--change-reference",
+            "PLT-4603 A6b: link",
+            "--platform-id",
+            "tn_platform",
+        ])
+        .unwrap();
+
+        assert_eq!(cli.platform_id.as_deref(), Some("tn_platform"));
+        match cli.command {
+            Commands::Ops(ops_cli::OpsArgs {
+                command:
+                    ops_cli::OpsCommand::ErpReplays {
+                        command:
+                            erp_replay_cli::ErpReplaysCommand::Request {
+                                outbox,
+                                record_ids,
+                                target,
+                                ..
+                            },
+                    },
+            }) => {
+                assert_eq!(outbox, erp_replay_cli::ReplayOutbox::Usage);
+                assert_eq!(record_ids.len(), 1);
+                assert_eq!(
+                    target.host_tenant_id,
+                    erp_replay_cli::DEFAULT_HOST_TENANT_ID
+                );
+            }
+            _ => panic!("expected ops erp-replays request"),
+        }
+    }
+
+    #[test]
+    fn ops_erp_replays_execute_requires_the_digest() {
+        assert!(
+            Cli::try_parse_from(["tachyon", "ops", "erp-replays", "execute", "edr_01",]).is_err()
+        );
     }
 
     #[test]
@@ -1090,12 +1143,27 @@ async fn run() -> Result<()> {
                 manifest::run(args, None, None).await
             }
         }
+        // ERP replays go to the Host tenant: skip the project config and
+        // the ordinary tenant resolution, which they do not use.
+        Commands::Ops(ops_cli::OpsArgs {
+            command: ops_cli::OpsCommand::ErpReplays { command },
+        }) => {
+            let config = build_config(&cli, &active).await;
+            erp_replay_cli::run(command, &config, cli.api_key.is_some()).await
+        }
         Commands::Ops(args) => {
             let project_config = config::loader::load(cli.config.as_deref())?;
             let tenant_arg = tenant_arg(&cli, project_config.as_ref());
             let config = build_config(&cli, &active).await;
             let tenant_id = resolve::resolve_tenant_id(&config, tenant_arg, &active).await?;
-            ops_cli::run(args, &config, &tenant_id, cli.config.as_deref()).await
+            ops_cli::run(
+                args,
+                &config,
+                &tenant_id,
+                cli.config.as_deref(),
+                cli.api_key.is_some(),
+            )
+            .await
         }
         Commands::Image(args) => {
             let project_config = config::loader::load(cli.config.as_deref())?;
