@@ -2259,6 +2259,88 @@
                 }
             }
         },
+        "/v1/integrations/github/billing-usage": {
+            "get": {
+                "tags": [
+                    "Integrations"
+                ],
+                "summary": "Billing usage of a GitHub organization for one month.",
+                "description": "The body is GitHub's `GET /organizations/{org}/settings/billing/usage` response, unchanged. The installation token is never returned.",
+                "operationId": "get_github_billing_usage",
+                "parameters": [
+                    {
+                        "name": "org",
+                        "in": "query",
+                        "description": "GitHub organization login. It must be the account of a GitHub App installation connected to the requesting tenant.",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "name": "year",
+                        "in": "query",
+                        "required": true,
+                        "schema": {
+                            "type": "integer",
+                            "format": "int32",
+                            "minimum": 0
+                        }
+                    },
+                    {
+                        "name": "month",
+                        "in": "query",
+                        "description": "1-12.",
+                        "required": true,
+                        "schema": {
+                            "type": "integer",
+                            "format": "int32",
+                            "minimum": 0
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "GitHub billing usage report",
+                        "content": {
+                            "application/json": {
+                                "schema": {}
+                            }
+                        }
+                    },
+                    "400": {
+                        "description": "Invalid org or month",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/ErrorResponse"
+                                }
+                            }
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden, or the organization is not connected to the tenant",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/ErrorResponse"
+                                }
+                            }
+                        }
+                    },
+                    "503": {
+                        "description": "GitHub refused or failed the request",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/ErrorResponse"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
         "/v1/integrations/{id}": {
             "get": {
                 "tags": [

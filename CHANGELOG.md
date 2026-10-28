@@ -4,6 +4,11 @@
 
 ### Added
 
+- Rust SDK: `integrations_api::get_github_billing_usage` reads a GitHub
+  organization's billing usage (`GET /v1/integrations/github/billing-usage`)
+  through the tenant's Tachyon GitHub App installation. Tachyon checks that the
+  installation is granted to the calling tenant and never returns the
+  installation token. (PLT-6105)
 - `tachyon auth token` prints the logged-in user's API token to a pipe, so a
   script can read it with `--token-stdin` without the user handling the token.
   It refreshes the token first when it expires within `--min-validity` seconds

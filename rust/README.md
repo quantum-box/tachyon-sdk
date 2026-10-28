@@ -101,6 +101,7 @@ Class | Method | HTTP request | Description
 *FeatureFlagsApi* | [**evaluate_actions**](docs/FeatureFlagsApi.md#evaluate_actions) | **POST** /v1/feature-flags/actions/evaluate | TODO: add English documentation
 *IntegrationsApi* | [**connect_integration**](docs/IntegrationsApi.md#connect_integration) | **POST** /v1/integrations/{id}/connect | Initiate an OAuth connection to an integration.
 *IntegrationsApi* | [**disconnect_integration**](docs/IntegrationsApi.md#disconnect_integration) | **DELETE** /v1/integrations/connections/{id} | Disconnect an integration connection.
+*IntegrationsApi* | [**get_github_billing_usage**](docs/IntegrationsApi.md#get_github_billing_usage) | **GET** /v1/integrations/github/billing-usage | Billing usage of a GitHub organization for one month.
 *IntegrationsApi* | [**get_integration**](docs/IntegrationsApi.md#get_integration) | **GET** /v1/integrations/{id} | Get an integration by ID.
 *IntegrationsApi* | [**list_connections**](docs/IntegrationsApi.md#list_connections) | **GET** /v1/integrations/connections | List all connections for the current tenant.
 *IntegrationsApi* | [**list_integrations**](docs/IntegrationsApi.md#list_integrations) | **GET** /v1/integrations | List all integrations in the marketplace.
