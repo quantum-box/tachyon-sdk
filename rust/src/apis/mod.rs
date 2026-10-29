@@ -115,7 +115,6 @@ impl From<&str> for ContentType {
 
 pub mod agent_api;
 pub mod auth_api_keys_api;
-pub mod auth_contract_authority_api;
 pub mod auth_o_auth2_clients_api;
 pub mod auth_o_auth2_consents_api;
 pub mod auth_o_auth_tokens_api;
