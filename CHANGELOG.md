@@ -28,9 +28,16 @@
 
 - When a service account name matches more than one service account, the error
   now tells you to pass one of the listed IDs.
+- Rust SDK: removed `auth_contract_authority_api::resolve`
+  (`POST /v1/auth/contract-authority/resolve`) and its models, because core no
+  longer serves it. (PLT-6031)
 
 ### Fixed
 
+- `scripts/generate.sh` patches the Rust code openapi-generator emits for a
+  `oneOf` of string and array (`ArrayVecmodels::T(...)`) and for a nullable
+  inline `oneOf` (`OneOfLessThanGreaterThan`) before `cargo fmt`, so the
+  Generate SDKs workflow no longer fails parsing `message_content.rs`.
 - The Cloud App build job (Kata runner) now finds a `cargo_lambda` bootstrap
   from the manifest's `build.binary` first (`<target>/lambda/<binary>/bootstrap`)
   and only falls back to parsing `--bin` / `--flatten` from the build command,

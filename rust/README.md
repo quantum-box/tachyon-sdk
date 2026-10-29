@@ -39,7 +39,6 @@ Class | Method | HTTP request | Description
 *AuthApiKeysApi* | [**create_api_key**](docs/AuthApiKeysApi.md#create_api_key) | **POST** /v1/auth/service-accounts/{service_account_id}/api-keys | Create a new API key for a service account
 *AuthApiKeysApi* | [**list_api_keys**](docs/AuthApiKeysApi.md#list_api_keys) | **GET** /v1/auth/service-accounts/{service_account_id}/api-keys | List API keys for a service account
 *AuthApiKeysApi* | [**verify_api_key**](docs/AuthApiKeysApi.md#verify_api_key) | **POST** /v1/auth/api-keys/verify | Verify a public API key
-*AuthContractAuthorityApi* | [**resolve**](docs/AuthContractAuthorityApi.md#resolve) | **POST** /v1/auth/contract-authority/resolve | 
 *AuthOAuth2ClientsApi* | [**create_oauth2_client**](docs/AuthOAuth2ClientsApi.md#create_oauth2_client) | **POST** /v1/auth/oauth2-clients | Create a new OAuth2 client
 *AuthOAuth2ClientsApi* | [**get_oauth2_client**](docs/AuthOAuth2ClientsApi.md#get_oauth2_client) | **GET** /v1/auth/oauth2-clients/{id} | Get an OAuth2 client by ID
 *AuthOAuth2ClientsApi* | [**list_oauth2_clients**](docs/AuthOAuth2ClientsApi.md#list_oauth2_clients) | **GET** /v1/auth/oauth2-clients | List all OAuth2 clients for the current tenant
@@ -173,13 +172,7 @@ Class | Method | HTTP request | Description
  - [AttachUserPolicyWithScopeRequest](docs/AttachUserPolicyWithScopeRequest.md)
  - [AttemptCompletionResult](docs/AttemptCompletionResult.md)
  - [AuthUrlResponse](docs/AuthUrlResponse.md)
- - [AuthorityActor](docs/AuthorityActor.md)
- - [AuthorityIssuer](docs/AuthorityIssuer.md)
- - [AuthorityPartyRef](docs/AuthorityPartyRef.md)
  - [BillingAddressRequest](docs/BillingAddressRequest.md)
- - [BindingReference](docs/BindingReference.md)
- - [BindingSlot](docs/BindingSlot.md)
- - [BindingSlotRole](docs/BindingSlotRole.md)
  - [ChatCompletionChunkResponse](docs/ChatCompletionChunkResponse.md)
  - [ChatCompletionRequest](docs/ChatCompletionRequest.md)
  - [ChatCompletionResponse](docs/ChatCompletionResponse.md)
@@ -205,9 +198,6 @@ Class | Method | HTTP request | Description
  - [ConsentListResponse](docs/ConsentListResponse.md)
  - [ConsentResponse](docs/ConsentResponse.md)
  - [ContentPart](docs/ContentPart.md)
- - [ContractAuthorityEvidence](docs/ContractAuthorityEvidence.md)
- - [ContractAuthorityResolveRequest](docs/ContractAuthorityResolveRequest.md)
- - [ContractAuthorityResolveResponse](docs/ContractAuthorityResolveResponse.md)
  - [CreateAgentSessionOutputData](docs/CreateAgentSessionOutputData.md)
  - [CreateAgentSessionRequest](docs/CreateAgentSessionRequest.md)
  - [CreateApiKeyRequest](docs/CreateApiKeyRequest.md)
