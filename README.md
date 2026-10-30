@@ -618,3 +618,16 @@ STOREKIT_TYPESCRIPT_OUT=typescript-storekit \
 ## License
 
 MIT © 2026 Quantum Box株式会社
+
+## Feature flags
+
+The `feature-flag` command uses the current authentication profile and an explicit tenant scope.
+
+```sh
+tachyon feature-flag list --tenant-id <tenant-id> --search <key> --json
+tachyon feature-flag get <key> --tenant-id <tenant-id> --json
+tachyon feature-flag enable <key> --tenant-id <tenant-id> --json
+tachyon feature-flag disable <key> --tenant-id <tenant-id> --json
+```
+
+Enable and disable send a desired boolean state rather than toggling the current value, so retries do not invert it. The server resolves the key in the selected scope and enforces inherited-definition and publication-approval rules. These commands do not bypass host publication approvals or mutate the ancestor's row directly. GraphQL errors return a nonzero exit status.
