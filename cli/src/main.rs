@@ -9,6 +9,7 @@ mod compute_cli;
 mod config;
 mod data_cli;
 mod erp_replay_cli;
+mod feature_flag_cli;
 mod iac_cli;
 mod image_cli;
 mod install_cli;
@@ -696,6 +697,9 @@ enum Commands {
     Env(compute_cli::EnvArgs),
     /// Manage Tachyon Data datasets and queries
     Data(data_cli::DataArgs),
+    /// Inspect and set tenant feature flags
+    #[command(name = "feature-flag", visible_alias = "feature-flags")]
+    FeatureFlag(feature_flag_cli::FeatureFlagArgs),
     /// Generate a tachyon.yml project config
     Init(commands::init::InitArgs),
     /// Manage organizations, users, service accounts, and policies
@@ -1076,6 +1080,13 @@ async fn run() -> Result<()> {
             let config = build_config(&cli, &active).await;
             let tenant_id = resolve::resolve_tenant_id(&config, tenant_arg, &active).await?;
             data_cli::run(args, &config, &tenant_id).await
+        }
+        Commands::FeatureFlag(args) => {
+            let project_config = config::loader::load(cli.config.as_deref())?;
+            let tenant_arg = tenant_arg(&cli, project_config.as_ref());
+            let config = build_config(&cli, &active).await;
+            let tenant_id = resolve::resolve_tenant_id(&config, tenant_arg, &active).await?;
+            feature_flag_cli::run(args, &config, &tenant_id).await
         }
         Commands::Org(args) => {
             let project_config = config::loader::load(cli.config.as_deref())?;
