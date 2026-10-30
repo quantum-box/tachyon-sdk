@@ -6339,6 +6339,13 @@
                         ],
                         "description": "Model identifier. Accepts `provider/model` or just `model` (provider auto-detected).\n\nExamples:\n- `anthropic/claude-3-sonnet-20241022`\n- `openai/gpt-4`\n- `google_ai/gemini-pro`\n\nAuto-detection shortcuts:\n- `gpt-*` → OpenAI\n- `claude-*` → Anthropic\n- `gemini*` → Google AI"
                     },
+                    "reasoning_effort": {
+                        "type": [
+                            "string",
+                            "null"
+                        ],
+                        "description": "Optional reasoning effort for reasoning-capable models\n(e.g. `low`, `medium`, `high`).\n\nSent to OpenAI models that use the Responses API\n(`gpt-5*`, `gpt-6*`) as `reasoning.effort`. Other\nproviders and models ignore it."
+                    },
                     "task": {
                         "type": "string",
                         "description": "The task or prompt for the agent to execute."

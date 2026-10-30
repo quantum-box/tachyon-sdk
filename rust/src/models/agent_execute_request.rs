@@ -80,6 +80,14 @@ pub struct AgentExecuteRequest {
         skip_serializing_if = "Option::is_none"
     )]
     pub model: Option<Option<String>>,
+    /// Optional reasoning effort for reasoning-capable models (e.g. `low`, `medium`, `high`).  Sent to OpenAI models that use the Responses API (`gpt-5*`, `gpt-6*`) as `reasoning.effort`. Other providers and models ignore it.
+    #[serde(
+        rename = "reasoning_effort",
+        default,
+        with = "::serde_with::rust::double_option",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub reasoning_effort: Option<Option<String>>,
     /// The task or prompt for the agent to execute.
     #[serde(rename = "task")]
     pub task: String,
@@ -118,6 +126,7 @@ impl AgentExecuteRequest {
             max_requests: None,
             mcp_hub_config_json: None,
             model: None,
+            reasoning_effort: None,
             task,
             tool_access: None,
             use_json_tool_calls: None,
