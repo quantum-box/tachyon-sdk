@@ -4,6 +4,10 @@
 
 ### Added
 
+- Rust SDK: `AgentExecuteRequest.reasoning_effort` (e.g. `"low"`) asks the
+  agent's model for a reasoning effort. OpenAI models that use the Responses
+  API (`gpt-5*`, `gpt-6*`) receive it as `reasoning.effort`; other providers
+  and models ignore it.
 - Rust SDK: `integrations_api::get_github_billing_usage` reads a GitHub
   organization's billing usage (`GET /v1/integrations/github/billing-usage`)
   through the tenant's Tachyon GitHub App installation. Tachyon checks that the
