@@ -29,7 +29,9 @@ fn cli_enable_disable_use_explicit_boolean_and_tenant() {
                 if let Some(value) = line.to_lowercase().strip_prefix("content-length:") {
                     length = value.trim().parse::<usize>().unwrap();
                 }
-                tenant |= line.trim().eq_ignore_ascii_case("x-operator-id: tn_test1234567890");
+                tenant |= line
+                    .trim()
+                    .eq_ignore_ascii_case("x-operator-id: tn_test1234567890");
             }
             assert!(tenant);
             let mut body = vec![0; length];
