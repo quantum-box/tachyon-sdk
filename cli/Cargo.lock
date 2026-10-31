@@ -2352,7 +2352,7 @@ dependencies = [
 
 [[package]]
 name = "tachyon"
-version = "0.6.86"
+version = "0.6.87"
 dependencies = [
  "anyhow",
  "async-trait",
