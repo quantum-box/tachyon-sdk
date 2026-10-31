@@ -6,13 +6,13 @@ Request to create an OAuth2 client
 
 Name | Type | Description | Notes
 ------------ | ------------- | ------------- | -------------
-**allowed_scopes** | **List[str]** | Allowed scopes |
-**auth_mode** | **str** | Authentication mode: \&quot;direct\&quot; or \&quot;proxied\&quot; | [optional]
-**grant_types** | **List[str]** | Allowed grant types |
-**name** | **str** | Display name |
-**redirect_uris** | **List[str]** | Allowed redirect URIs |
+**allowed_scopes** | **List[str]** | Allowed scopes | 
+**auth_mode** | **str** | Authentication mode: \&quot;direct\&quot; or \&quot;proxied\&quot; | [optional] 
+**grant_types** | **List[str]** | Allowed grant types | 
+**name** | **str** | Display name | 
+**redirect_uris** | **List[str]** | Allowed redirect URIs | 
 **use_tachyon_user_pool** | **bool** | Whether to use Tachyon user pool | [optional] [default to True]
-**user_pool_id** | **str** | Associated User Pool ID when using a dedicated pool | [optional]
+**user_pool_id** | **str** | Associated User Pool ID when using a dedicated pool | [optional] 
 
 ## Example
 

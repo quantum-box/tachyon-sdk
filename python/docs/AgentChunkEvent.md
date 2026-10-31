@@ -27,7 +27,7 @@ Name | Type | Description | Notes
 **prompt_tokens** | **int** |  | 
 **total_cost** | **float** |  | [optional] 
 **total_tokens** | **int** |  | 
-**coding_job_id** | **str** |  |
+**coding_job_id** | **str** |  | 
 **provider** | **str** |  | 
 
 ## Example
@@ -48,4 +48,5 @@ agent_chunk_event_dict = agent_chunk_event_instance.to_dict()
 agent_chunk_event_from_dict = AgentChunkEvent.from_dict(agent_chunk_event_dict)
 ```
 [[Back to Model list]](../README.md#documentation-for-models) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to README]](../README.md)
+
 

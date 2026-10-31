@@ -107,6 +107,7 @@ from tachyon_sdk.models.evaluate_policies_batch_response import EvaluatePolicies
 from tachyon_sdk.models.function import Function
 from tachyon_sdk.models.function_call import FunctionCall
 from tachyon_sdk.models.function_call_response import FunctionCallResponse
+from tachyon_sdk.models.get_agent_session_output_data import GetAgentSessionOutputData
 from tachyon_sdk.models.get_chatrooms_response import GetChatroomsResponse
 from tachyon_sdk.models.integration_detail_response import IntegrationDetailResponse
 from tachyon_sdk.models.integration_response import IntegrationResponse

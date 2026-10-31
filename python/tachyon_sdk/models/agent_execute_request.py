@@ -41,11 +41,12 @@ class AgentExecuteRequest(BaseModel):
     max_requests: Optional[Annotated[int, Field(strict=True, ge=0)]] = Field(default=None, description="Maximum number of LLM round-trips (tool calls) the agent is allowed to make before stopping.")
     mcp_hub_config_json: Optional[StrictStr] = Field(default=None, description="Optional MCP Hub configuration in JSON string form.")
     model: Optional[StrictStr] = Field(default=None, description="Model identifier. Accepts `provider/model` or just `model` (provider auto-detected).  Examples: - `anthropic/claude-3-sonnet-20241022` - `openai/gpt-4` - `google_ai/gemini-pro`  Auto-detection shortcuts: - `gpt-*` → OpenAI - `claude-*` → Anthropic - `gemini*` → Google AI")
+    reasoning_effort: Optional[StrictStr] = Field(default=None, description="Optional reasoning effort for reasoning-capable models (e.g. `low`, `medium`, `high`).  Sent to OpenAI models that use the Responses API (`gpt-5*`, `gpt-6*`) as `reasoning.effort`. Other providers and models ignore it.")
     task: StrictStr = Field(description="The task or prompt for the agent to execute.")
     tool_access: Optional[List[AgentBuiltinToolRequest]] = Field(default=None, description="Builtin tools available to the agent.")
     use_json_tool_calls: Optional[StrictBool] = Field(default=None, description="When true, use JSON Schema tool definitions (function calling) instead of XML-based tool parsing. This is automatically enabled when `client_tools` is provided.")
     user_custom_instructions: Optional[StrictStr] = Field(default=None, description="Custom system-level instructions appended to the agent's prompt.")
-    __properties: ClassVar[List[str]] = ["additional_tool_description", "agent_protocol_id", "agent_protocol_mode", "assistant_name", "auto_approve", "chatroom_name_generation", "client_tools", "max_requests", "mcp_hub_config_json", "model", "task", "tool_access", "use_json_tool_calls", "user_custom_instructions"]
+    __properties: ClassVar[List[str]] = ["additional_tool_description", "agent_protocol_id", "agent_protocol_mode", "assistant_name", "auto_approve", "chatroom_name_generation", "client_tools", "max_requests", "mcp_hub_config_json", "model", "reasoning_effort", "task", "tool_access", "use_json_tool_calls", "user_custom_instructions"]
 
     model_config = ConfigDict(
         populate_by_name=True,
@@ -130,6 +131,11 @@ class AgentExecuteRequest(BaseModel):
         if self.model is None and "model" in self.model_fields_set:
             _dict['model'] = None
 
+        # set to None if reasoning_effort (nullable) is None
+        # and model_fields_set contains the field
+        if self.reasoning_effort is None and "reasoning_effort" in self.model_fields_set:
+            _dict['reasoning_effort'] = None
+
         # set to None if use_json_tool_calls (nullable) is None
         # and model_fields_set contains the field
         if self.use_json_tool_calls is None and "use_json_tool_calls" in self.model_fields_set:
@@ -162,6 +168,7 @@ class AgentExecuteRequest(BaseModel):
             "max_requests": obj.get("max_requests"),
             "mcp_hub_config_json": obj.get("mcp_hub_config_json"),
             "model": obj.get("model"),
+            "reasoning_effort": obj.get("reasoning_effort"),
             "task": obj.get("task"),
             "tool_access": [AgentBuiltinToolRequest.from_dict(_item) for _item in obj["tool_access"]] if obj.get("tool_access") is not None else None,
             "use_json_tool_calls": obj.get("use_json_tool_calls"),

@@ -17,6 +17,7 @@ Name | Type
 `maxRequests` | number
 `mcpHubConfigJson` | string
 `model` | string
+`reasoningEffort` | string
 `task` | string
 `toolAccess` | [Array&lt;AgentBuiltinToolRequest&gt;](AgentBuiltinToolRequest.md)
 `useJsonToolCalls` | boolean
@@ -39,6 +40,7 @@ const example = {
   "maxRequests": null,
   "mcpHubConfigJson": null,
   "model": null,
+  "reasoningEffort": null,
   "task": null,
   "toolAccess": null,
   "useJsonToolCalls": null,

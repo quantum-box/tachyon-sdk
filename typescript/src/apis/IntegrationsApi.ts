@@ -42,6 +42,12 @@ export interface DisconnectIntegrationRequest {
     id: string;
 }
 
+export interface GetGithubBillingUsageRequest {
+    org: string;
+    year: number;
+    month: number;
+}
+
 export interface GetIntegrationRequest {
     id: string;
 }
@@ -142,6 +148,82 @@ export class IntegrationsApi extends runtime.BaseAPI {
      */
     async disconnectIntegration(requestParameters: DisconnectIntegrationRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<void> {
         await this.disconnectIntegrationRaw(requestParameters, initOverrides);
+    }
+
+    /**
+     * Creates request options for getGithubBillingUsage without sending the request
+     */
+    async getGithubBillingUsageRequestOpts(requestParameters: GetGithubBillingUsageRequest): Promise<runtime.RequestOpts> {
+        if (requestParameters['org'] == null) {
+            throw new runtime.RequiredError(
+                'org',
+                'Required parameter "org" was null or undefined when calling getGithubBillingUsage().'
+            );
+        }
+
+        if (requestParameters['year'] == null) {
+            throw new runtime.RequiredError(
+                'year',
+                'Required parameter "year" was null or undefined when calling getGithubBillingUsage().'
+            );
+        }
+
+        if (requestParameters['month'] == null) {
+            throw new runtime.RequiredError(
+                'month',
+                'Required parameter "month" was null or undefined when calling getGithubBillingUsage().'
+            );
+        }
+
+        const queryParameters: any = {};
+
+        if (requestParameters['org'] != null) {
+            queryParameters['org'] = requestParameters['org'];
+        }
+
+        if (requestParameters['year'] != null) {
+            queryParameters['year'] = requestParameters['year'];
+        }
+
+        if (requestParameters['month'] != null) {
+            queryParameters['month'] = requestParameters['month'];
+        }
+
+        const headerParameters: runtime.HTTPHeaders = {};
+
+
+        let urlPath = `/v1/integrations/github/billing-usage`;
+
+        return {
+            path: urlPath,
+            method: 'GET',
+            headers: headerParameters,
+            query: queryParameters,
+        };
+    }
+
+    /**
+     * The body is GitHub\'s `GET /organizations/{org}/settings/billing/usage` response, unchanged. The installation token is never returned.
+     * Billing usage of a GitHub organization for one month.
+     */
+    async getGithubBillingUsageRaw(requestParameters: GetGithubBillingUsageRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<any>> {
+        const requestOptions = await this.getGithubBillingUsageRequestOpts(requestParameters);
+        const response = await this.request(requestOptions, initOverrides);
+
+        if (this.isJsonMime(response.headers.get('content-type'))) {
+            return new runtime.JSONApiResponse<any>(response);
+        } else {
+            return new runtime.TextApiResponse(response) as any;
+        }
+    }
+
+    /**
+     * The body is GitHub\'s `GET /organizations/{org}/settings/billing/usage` response, unchanged. The installation token is never returned.
+     * Billing usage of a GitHub organization for one month.
+     */
+    async getGithubBillingUsage(requestParameters: GetGithubBillingUsageRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<any> {
+        const response = await this.getGithubBillingUsageRaw(requestParameters, initOverrides);
+        return await response.value();
     }
 
     /**

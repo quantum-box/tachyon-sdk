@@ -101,6 +101,9 @@ pub async fn check_policies_for_tenants(
     configuration: &configuration::Configuration,
     check_tenants_policy_request: models::CheckTenantsPolicyRequest,
 ) -> Result<models::CheckTenantsPolicyResponse, Error<CheckPoliciesForTenantsError>> {
+    // add a prefix to parameters to efficiently prevent name collisions
+    let p_body_check_tenants_policy_request = check_tenants_policy_request;
+
     let uri_str = format!("{}/v1/auth/policies/check-tenants", configuration.base_path);
     let mut req_builder = configuration
         .client
@@ -109,34 +112,25 @@ pub async fn check_policies_for_tenants(
     if let Some(ref user_agent) = configuration.user_agent {
         req_builder = req_builder.header(reqwest::header::USER_AGENT, user_agent.clone());
     }
-    req_builder = req_builder.json(&check_tenants_policy_request);
+    req_builder = req_builder.json(&p_body_check_tenants_policy_request);
 
     let req = req_builder.build()?;
     let resp = configuration.client.execute(req).await?;
+
     let status = resp.status();
     let content_type = resp
         .headers()
         .get("content-type")
-        .and_then(|value| value.to_str().ok())
+        .and_then(|v| v.to_str().ok())
         .unwrap_or("application/octet-stream");
-    let content_type = ContentType::from(content_type);
+    let content_type = super::ContentType::from(content_type);
 
     if !status.is_client_error() && !status.is_server_error() {
         let content = resp.text().await?;
         match content_type {
-            ContentType::Json => {
-                serde_json::from_str(&content).map_err(Error::from)
-            }
-            ContentType::Text => Err(Error::from(
-                serde_json::Error::custom(
-                    "Received `text/plain` content type response that cannot be converted to `models::CheckTenantsPolicyResponse`",
-                ),
-            )),
-            ContentType::Unsupported(unknown_type) => Err(Error::from(
-                serde_json::Error::custom(format!(
-                    "Received `{unknown_type}` content type response that cannot be converted to `models::CheckTenantsPolicyResponse`"
-                )),
-            )),
+            ContentType::Json => serde_json::from_str(&content).map_err(Error::from),
+            ContentType::Text => return Err(Error::from(serde_json::Error::custom("Received `text/plain` content type response that cannot be converted to `models::CheckTenantsPolicyResponse`"))),
+            ContentType::Unsupported(unknown_type) => return Err(Error::from(serde_json::Error::custom(format!("Received `{unknown_type}` content type response that cannot be converted to `models::CheckTenantsPolicyResponse`")))),
         }
     } else {
         let content = resp.text().await?;

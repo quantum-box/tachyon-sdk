@@ -158,6 +158,17 @@ export interface AgentExecuteRequest {
      */
     model?: string | null;
     /**
+     * Optional reasoning effort for reasoning-capable models
+     * (e.g. `low`, `medium`, `high`).
+     * 
+     * Sent to OpenAI models that use the Responses API
+     * (`gpt-5*`, `gpt-6*`) as `reasoning.effort`. Other
+     * providers and models ignore it.
+     * @type {string}
+     * @memberof AgentExecuteRequest
+     */
+    reasoningEffort?: string | null;
+    /**
      * The task or prompt for the agent to execute.
      * @type {string}
      * @memberof AgentExecuteRequest
@@ -216,6 +227,7 @@ export function AgentExecuteRequestFromJSONTyped(json: any, ignoreDiscriminator:
         'maxRequests': json['max_requests'] == null ? undefined : json['max_requests'],
         'mcpHubConfigJson': json['mcp_hub_config_json'] == null ? undefined : json['mcp_hub_config_json'],
         'model': json['model'] == null ? undefined : json['model'],
+        'reasoningEffort': json['reasoning_effort'] == null ? undefined : json['reasoning_effort'],
         'task': json['task'],
         'toolAccess': json['tool_access'] == null ? undefined : ((json['tool_access'] as Array<any>).map(AgentBuiltinToolRequestFromJSON)),
         'useJsonToolCalls': json['use_json_tool_calls'] == null ? undefined : json['use_json_tool_calls'],
@@ -244,6 +256,7 @@ export function AgentExecuteRequestToJSONTyped(value?: AgentExecuteRequest | nul
         'max_requests': value['maxRequests'],
         'mcp_hub_config_json': value['mcpHubConfigJson'],
         'model': value['model'],
+        'reasoning_effort': value['reasoningEffort'],
         'task': value['task'],
         'tool_access': value['toolAccess'] == null ? undefined : ((value['toolAccess'] as Array<any>).map(AgentBuiltinToolRequestToJSON)),
         'use_json_tool_calls': value['useJsonToolCalls'],

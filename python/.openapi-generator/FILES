@@ -115,6 +115,7 @@ docs/FeatureFlagsApi.md
 docs/Function.md
 docs/FunctionCall.md
 docs/FunctionCallResponse.md
+docs/GetAgentSessionOutputData.md
 docs/GetChatroomsResponse.md
 docs/IntegrationDetailResponse.md
 docs/IntegrationResponse.md
@@ -374,6 +375,7 @@ tachyon_sdk/models/evaluate_policies_batch_response.py
 tachyon_sdk/models/function.py
 tachyon_sdk/models/function_call.py
 tachyon_sdk/models/function_call_response.py
+tachyon_sdk/models/get_agent_session_output_data.py
 tachyon_sdk/models/get_chatrooms_response.py
 tachyon_sdk/models/integration_detail_response.py
 tachyon_sdk/models/integration_response.py
@@ -487,4 +489,5 @@ tachyon_sdk/py.typed
 tachyon_sdk/rest.py
 test-requirements.txt
 test/__init__.py
+test/test_get_agent_session_output_data.py
 tox.ini

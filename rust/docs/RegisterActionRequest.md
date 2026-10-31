@@ -4,9 +4,9 @@
 
 Name | Type | Description | Notes
 ------------ | ------------- | ------------- | -------------
-**context** | **String** | Action context |
+**context** | **String** | Action context | 
 **description** | Option<**String**> | Description | [optional]
-**name** | **String** | Action name |
+**name** | **String** | Action name | 
 **resource_pattern** | Option<**String**> | Resource pattern | [optional]
 **sandbox_restriction** | Option<**String**> | Sandbox restriction: \"allow\", \"deny\", or \"audit\" | [optional]
 

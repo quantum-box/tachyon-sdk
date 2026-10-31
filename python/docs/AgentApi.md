@@ -5,10 +5,12 @@ All URIs are relative to *http://localhost*
 Method | HTTP request | Description
 ------------- | ------------- | -------------
 [**create_agent_session**](AgentApi.md#create_agent_session) | **POST** /v1/llms/sessions | Create a new independent agent session.
+[**delete_agent_session**](AgentApi.md#delete_agent_session) | **DELETE** /v1/llms/sessions/{session_id} | 
 [**execute_agent**](AgentApi.md#execute_agent) | **POST** /v1/llms/chatrooms/{chatroom_id}/agent/execute | Execute agent
 [**execute_agent_session**](AgentApi.md#execute_agent_session) | **POST** /v1/llms/sessions/{session_id}/agent/execute | Execute agent via session endpoint.
 [**get_agent_messages**](AgentApi.md#get_agent_messages) | **GET** /v1/llms/chatrooms/{chatroom_id}/agent/messages | Get agent message log
 [**get_agent_messages_session**](AgentApi.md#get_agent_messages_session) | **GET** /v1/llms/sessions/{session_id}/agent/messages | Get agent message log (session alias)
+[**get_agent_session**](AgentApi.md#get_agent_session) | **GET** /v1/llms/sessions/{session_id} | Get an agent session by ID.
 [**get_agent_status**](AgentApi.md#get_agent_status) | **GET** /v1/llms/chatrooms/{chatroom_id}/agent/status | Get agent status
 [**get_agent_status_session**](AgentApi.md#get_agent_status_session) | **GET** /v1/llms/sessions/{session_id}/agent/status | Get agent status (session alias)
 [**list_agent_sessions**](AgentApi.md#list_agent_sessions) | **GET** /v1/llms/sessions | List agent sessions for the current tenant.
@@ -17,7 +19,7 @@ Method | HTTP request | Description
 
 
 # **create_agent_session**
-> CreateAgentSessionOutputData create_agent_session(x_operator_id, authorization, create_agent_session_request)
+> CreateAgentSessionOutputData create_agent_session(create_agent_session_request)
 
 Create a new independent agent session.
 
@@ -45,13 +47,11 @@ configuration = tachyon_sdk.Configuration(
 with tachyon_sdk.ApiClient(configuration) as api_client:
     # Create an instance of the API class
     api_instance = tachyon_sdk.AgentApi(api_client)
-    x_operator_id = 'tn_xxxxxx' # str | Operator ID
-    authorization = 'Bearer xxxxx' # str | Authorization
     create_agent_session_request = tachyon_sdk.CreateAgentSessionRequest() # CreateAgentSessionRequest | 
 
     try:
         # Create a new independent agent session.
-        api_response = api_instance.create_agent_session(x_operator_id, authorization, create_agent_session_request)
+        api_response = api_instance.create_agent_session(create_agent_session_request)
         print("The response of AgentApi->create_agent_session:\n")
         pprint(api_response)
     except Exception as e:
@@ -65,8 +65,6 @@ with tachyon_sdk.ApiClient(configuration) as api_client:
 
 Name | Type | Description  | Notes
 ------------- | ------------- | ------------- | -------------
- **x_operator_id** | **str**| Operator ID | 
- **authorization** | **str**| Authorization | 
  **create_agent_session_request** | [**CreateAgentSessionRequest**](CreateAgentSessionRequest.md)|  | 
 
 ### Return type
@@ -87,6 +85,71 @@ No authorization required
 | Status code | Description | Response headers |
 |-------------|-------------|------------------|
 **200** | Session created |  -  |
+
+[[Back to top]](#) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to Model list]](../README.md#documentation-for-models) [[Back to README]](../README.md)
+
+# **delete_agent_session**
+> delete_agent_session(session_id, x_operator_id, authorization)
+
+### Example
+
+
+```python
+import tachyon_sdk
+from tachyon_sdk.rest import ApiException
+from pprint import pprint
+
+# Defining the host is optional and defaults to http://localhost
+# See configuration.py for a list of all supported configuration parameters.
+configuration = tachyon_sdk.Configuration(
+    host = "http://localhost"
+)
+
+
+# Enter a context with an instance of the API client
+with tachyon_sdk.ApiClient(configuration) as api_client:
+    # Create an instance of the API class
+    api_instance = tachyon_sdk.AgentApi(api_client)
+    session_id = 'session_id_example' # str | Session ID
+    x_operator_id = 'tn_xxxxxx' # str | Operator ID
+    authorization = 'Bearer xxxxx' # str | Authorization
+
+    try:
+        api_instance.delete_agent_session(session_id, x_operator_id, authorization)
+    except Exception as e:
+        print("Exception when calling AgentApi->delete_agent_session: %s\n" % e)
+```
+
+
+
+### Parameters
+
+
+Name | Type | Description  | Notes
+------------- | ------------- | ------------- | -------------
+ **session_id** | **str**| Session ID | 
+ **x_operator_id** | **str**| Operator ID | 
+ **authorization** | **str**| Authorization | 
+
+### Return type
+
+void (empty response body)
+
+### Authorization
+
+No authorization required
+
+### HTTP request headers
+
+ - **Content-Type**: Not defined
+ - **Accept**: Not defined
+
+### HTTP response details
+
+| Status code | Description | Response headers |
+|-------------|-------------|------------------|
+**204** | Session deleted |  -  |
+**404** | Session not found |  -  |
 
 [[Back to top]](#) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to Model list]](../README.md#documentation-for-models) [[Back to README]](../README.md)
 
@@ -444,6 +507,73 @@ No authorization required
 
 [[Back to top]](#) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to Model list]](../README.md#documentation-for-models) [[Back to README]](../README.md)
 
+# **get_agent_session**
+> GetAgentSessionOutputData get_agent_session(session_id)
+
+Get an agent session by ID.
+
+### Example
+
+
+```python
+import tachyon_sdk
+from tachyon_sdk.models.get_agent_session_output_data import GetAgentSessionOutputData
+from tachyon_sdk.rest import ApiException
+from pprint import pprint
+
+# Defining the host is optional and defaults to http://localhost
+# See configuration.py for a list of all supported configuration parameters.
+configuration = tachyon_sdk.Configuration(
+    host = "http://localhost"
+)
+
+
+# Enter a context with an instance of the API client
+with tachyon_sdk.ApiClient(configuration) as api_client:
+    # Create an instance of the API class
+    api_instance = tachyon_sdk.AgentApi(api_client)
+    session_id = 'session_id_example' # str | Session ID
+
+    try:
+        # Get an agent session by ID.
+        api_response = api_instance.get_agent_session(session_id)
+        print("The response of AgentApi->get_agent_session:\n")
+        pprint(api_response)
+    except Exception as e:
+        print("Exception when calling AgentApi->get_agent_session: %s\n" % e)
+```
+
+
+
+### Parameters
+
+
+Name | Type | Description  | Notes
+------------- | ------------- | ------------- | -------------
+ **session_id** | **str**| Session ID | 
+
+### Return type
+
+[**GetAgentSessionOutputData**](GetAgentSessionOutputData.md)
+
+### Authorization
+
+No authorization required
+
+### HTTP request headers
+
+ - **Content-Type**: Not defined
+ - **Accept**: application/json
+
+### HTTP response details
+
+| Status code | Description | Response headers |
+|-------------|-------------|------------------|
+**200** | Session detail |  -  |
+**404** | Session not found |  -  |
+
+[[Back to top]](#) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to Model list]](../README.md#documentation-for-models) [[Back to README]](../README.md)
+
 # **get_agent_status**
 > AgentStatusResponse get_agent_status(chatroom_id, x_operator_id, authorization)
 
@@ -589,7 +719,7 @@ No authorization required
 [[Back to top]](#) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to Model list]](../README.md#documentation-for-models) [[Back to README]](../README.md)
 
 # **list_agent_sessions**
-> ListAgentSessionsOutputData list_agent_sessions(x_operator_id, authorization, limit=limit, offset=offset)
+> ListAgentSessionsOutputData list_agent_sessions(limit=limit, offset=offset, metadata_user_id=metadata_user_id)
 
 List agent sessions for the current tenant.
 
@@ -613,14 +743,13 @@ configuration = tachyon_sdk.Configuration(
 with tachyon_sdk.ApiClient(configuration) as api_client:
     # Create an instance of the API class
     api_instance = tachyon_sdk.AgentApi(api_client)
-    x_operator_id = 'tn_xxxxxx' # str | Operator ID
-    authorization = 'Bearer xxxxx' # str | Authorization
-    limit = 56 # int | Maximum number of sessions (optional)
-    offset = 56 # int | Offset (optional)
+    limit = 56 # int | Maximum number of sessions to return. (optional)
+    offset = 56 # int | Offset for pagination. (optional)
+    metadata_user_id = 'metadata_user_id_example' # str | Filter sessions by `user_id` stored in metadata JSON. (optional)
 
     try:
         # List agent sessions for the current tenant.
-        api_response = api_instance.list_agent_sessions(x_operator_id, authorization, limit=limit, offset=offset)
+        api_response = api_instance.list_agent_sessions(limit=limit, offset=offset, metadata_user_id=metadata_user_id)
         print("The response of AgentApi->list_agent_sessions:\n")
         pprint(api_response)
     except Exception as e:
@@ -634,10 +763,9 @@ with tachyon_sdk.ApiClient(configuration) as api_client:
 
 Name | Type | Description  | Notes
 ------------- | ------------- | ------------- | -------------
- **x_operator_id** | **str**| Operator ID | 
- **authorization** | **str**| Authorization | 
- **limit** | **int**| Maximum number of sessions | [optional] 
- **offset** | **int**| Offset | [optional] 
+ **limit** | **int**| Maximum number of sessions to return. | [optional] 
+ **offset** | **int**| Offset for pagination. | [optional] 
+ **metadata_user_id** | **str**| Filter sessions by &#x60;user_id&#x60; stored in metadata JSON. | [optional] 
 
 ### Return type
 
@@ -829,3 +957,4 @@ No authorization required
 **404** | No pending tool call found for the given tool_id |  -  |
 
 [[Back to top]](#) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to Model list]](../README.md#documentation-for-models) [[Back to README]](../README.md)
+

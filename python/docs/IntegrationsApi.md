@@ -6,6 +6,7 @@ Method | HTTP request | Description
 ------------- | ------------- | -------------
 [**connect_integration**](IntegrationsApi.md#connect_integration) | **POST** /v1/integrations/{id}/connect | Initiate an OAuth connection to an integration.
 [**disconnect_integration**](IntegrationsApi.md#disconnect_integration) | **DELETE** /v1/integrations/connections/{id} | Disconnect an integration connection.
+[**get_github_billing_usage**](IntegrationsApi.md#get_github_billing_usage) | **GET** /v1/integrations/github/billing-usage | Billing usage of a GitHub organization for one month.
 [**get_integration**](IntegrationsApi.md#get_integration) | **GET** /v1/integrations/{id} | Get an integration by ID.
 [**list_connections**](IntegrationsApi.md#list_connections) | **GET** /v1/integrations/connections | List all connections for the current tenant.
 [**list_integrations**](IntegrationsApi.md#list_integrations) | **GET** /v1/integrations | List all integrations in the marketplace.
@@ -142,6 +143,80 @@ No authorization required
 **204** | Disconnected |  -  |
 **403** | Forbidden |  -  |
 **404** | Connection not found |  -  |
+
+[[Back to top]](#) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to Model list]](../README.md#documentation-for-models) [[Back to README]](../README.md)
+
+# **get_github_billing_usage**
+> object get_github_billing_usage(org, year, month)
+
+Billing usage of a GitHub organization for one month.
+
+The body is GitHub's `GET /organizations/{org}/settings/billing/usage` response, unchanged. The installation token is never returned.
+
+### Example
+
+
+```python
+import tachyon_sdk
+from tachyon_sdk.rest import ApiException
+from pprint import pprint
+
+# Defining the host is optional and defaults to http://localhost
+# See configuration.py for a list of all supported configuration parameters.
+configuration = tachyon_sdk.Configuration(
+    host = "http://localhost"
+)
+
+
+# Enter a context with an instance of the API client
+with tachyon_sdk.ApiClient(configuration) as api_client:
+    # Create an instance of the API class
+    api_instance = tachyon_sdk.IntegrationsApi(api_client)
+    org = 'org_example' # str | GitHub organization login. It must be the account of a GitHub App installation connected to the requesting tenant.
+    year = 56 # int | 
+    month = 56 # int | 1-12.
+
+    try:
+        # Billing usage of a GitHub organization for one month.
+        api_response = api_instance.get_github_billing_usage(org, year, month)
+        print("The response of IntegrationsApi->get_github_billing_usage:\n")
+        pprint(api_response)
+    except Exception as e:
+        print("Exception when calling IntegrationsApi->get_github_billing_usage: %s\n" % e)
+```
+
+
+
+### Parameters
+
+
+Name | Type | Description  | Notes
+------------- | ------------- | ------------- | -------------
+ **org** | **str**| GitHub organization login. It must be the account of a GitHub App installation connected to the requesting tenant. | 
+ **year** | **int**|  | 
+ **month** | **int**| 1-12. | 
+
+### Return type
+
+**object**
+
+### Authorization
+
+No authorization required
+
+### HTTP request headers
+
+ - **Content-Type**: Not defined
+ - **Accept**: application/json
+
+### HTTP response details
+
+| Status code | Description | Response headers |
+|-------------|-------------|------------------|
+**200** | GitHub billing usage report |  -  |
+**400** | Invalid org or month |  -  |
+**403** | Forbidden, or the organization is not connected to the tenant |  -  |
+**503** | GitHub refused or failed the request |  -  |
 
 [[Back to top]](#) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to Model list]](../README.md#documentation-for-models) [[Back to README]](../README.md)
 

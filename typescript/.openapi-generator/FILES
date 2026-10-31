@@ -113,6 +113,7 @@ docs/FeatureFlagsApi.md
 docs/Function.md
 docs/FunctionCall.md
 docs/FunctionCallResponse.md
+docs/GetAgentSessionOutputData.md
 docs/GetChatroomsResponse.md
 docs/IntegrationDetailResponse.md
 docs/IntegrationResponse.md
@@ -363,6 +364,7 @@ src/models/EvaluatePoliciesBatchResponse.ts
 src/models/Function.ts
 src/models/FunctionCall.ts
 src/models/FunctionCallResponse.ts
+src/models/GetAgentSessionOutputData.ts
 src/models/GetChatroomsResponse.ts
 src/models/IntegrationDetailResponse.ts
 src/models/IntegrationResponse.ts

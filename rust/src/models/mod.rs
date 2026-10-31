@@ -186,6 +186,8 @@ pub mod function_call;
 pub use self::function_call::FunctionCall;
 pub mod function_call_response;
 pub use self::function_call_response::FunctionCallResponse;
+pub mod get_agent_session_output_data;
+pub use self::get_agent_session_output_data::GetAgentSessionOutputData;
 pub mod get_chatrooms_response;
 pub use self::get_chatrooms_response::GetChatroomsResponse;
 pub mod integration_detail_response;

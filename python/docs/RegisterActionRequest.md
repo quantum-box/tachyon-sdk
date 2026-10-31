@@ -6,11 +6,11 @@ Request to register a custom action
 
 Name | Type | Description | Notes
 ------------ | ------------- | ------------- | -------------
-**context** | **str** | Action context |
-**description** | **str** | Description | [optional]
-**name** | **str** | Action name |
-**resource_pattern** | **str** | Resource pattern | [optional]
-**sandbox_restriction** | **str** | Sandbox restriction: \&quot;allow\&quot;, \&quot;deny\&quot;, or \&quot;audit\&quot; | [optional]
+**context** | **str** | Action context | 
+**description** | **str** | Description | [optional] 
+**name** | **str** | Action name | 
+**resource_pattern** | **str** | Resource pattern | [optional] 
+**sandbox_restriction** | **str** | Sandbox restriction: \&quot;allow\&quot;, \&quot;deny\&quot;, or \&quot;audit\&quot; | [optional] 
 
 ## Example
 

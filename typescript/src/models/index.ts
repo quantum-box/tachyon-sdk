@@ -94,6 +94,7 @@ export * from './EvaluatePoliciesBatchResponse';
 export * from './Function';
 export * from './FunctionCall';
 export * from './FunctionCallResponse';
+export * from './GetAgentSessionOutputData';
 export * from './GetChatroomsResponse';
 export * from './IntegrationDetailResponse';
 export * from './IntegrationResponse';

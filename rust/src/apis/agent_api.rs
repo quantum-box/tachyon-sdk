@@ -20,6 +20,14 @@ pub enum CreateAgentSessionError {
     UnknownValue(serde_json::Value),
 }
 
+/// struct for typed errors of method [`delete_agent_session`]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum DeleteAgentSessionError {
+    Status404(),
+    UnknownValue(serde_json::Value),
+}
+
 /// struct for typed errors of method [`execute_agent`]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(untagged)]
@@ -48,6 +56,14 @@ pub enum GetAgentMessagesError {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum GetAgentMessagesSessionError {
+    UnknownValue(serde_json::Value),
+}
+
+/// struct for typed errors of method [`get_agent_session`]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum GetAgentSessionError {
+    Status404(),
     UnknownValue(serde_json::Value),
 }
 
@@ -91,13 +107,9 @@ pub enum SubmitToolResultSessionError {
 /// Returns a session with an `as_`-prefixed ID that can be used with the session agent endpoints.
 pub async fn create_agent_session(
     configuration: &configuration::Configuration,
-    x_operator_id: &str,
-    authorization: &str,
     create_agent_session_request: models::CreateAgentSessionRequest,
 ) -> Result<models::CreateAgentSessionOutputData, Error<CreateAgentSessionError>> {
     // add a prefix to parameters to efficiently prevent name collisions
-    let p_header_x_operator_id = x_operator_id;
-    let p_header_authorization = authorization;
     let p_body_create_agent_session_request = create_agent_session_request;
 
     let uri_str = format!("{}/v1/llms/sessions", configuration.base_path);
@@ -108,8 +120,6 @@ pub async fn create_agent_session(
     if let Some(ref user_agent) = configuration.user_agent {
         req_builder = req_builder.header(reqwest::header::USER_AGENT, user_agent.clone());
     }
-    req_builder = req_builder.header("x-operator-id", p_header_x_operator_id.to_string());
-    req_builder = req_builder.header("Authorization", p_header_authorization.to_string());
     req_builder = req_builder.json(&p_body_create_agent_session_request);
 
     let req = req_builder.build()?;
@@ -133,6 +143,50 @@ pub async fn create_agent_session(
     } else {
         let content = resp.text().await?;
         let entity: Option<CreateAgentSessionError> = serde_json::from_str(&content).ok();
+        Err(Error::ResponseError(ResponseContent {
+            status,
+            content,
+            entity,
+        }))
+    }
+}
+
+pub async fn delete_agent_session(
+    configuration: &configuration::Configuration,
+    session_id: &str,
+    x_operator_id: &str,
+    authorization: &str,
+) -> Result<(), Error<DeleteAgentSessionError>> {
+    // add a prefix to parameters to efficiently prevent name collisions
+    let p_path_session_id = session_id;
+    let p_header_x_operator_id = x_operator_id;
+    let p_header_authorization = authorization;
+
+    let uri_str = format!(
+        "{}/v1/llms/sessions/{session_id}",
+        configuration.base_path,
+        session_id = crate::apis::urlencode(p_path_session_id)
+    );
+    let mut req_builder = configuration
+        .client
+        .request(reqwest::Method::DELETE, &uri_str);
+
+    if let Some(ref user_agent) = configuration.user_agent {
+        req_builder = req_builder.header(reqwest::header::USER_AGENT, user_agent.clone());
+    }
+    req_builder = req_builder.header("x-operator-id", p_header_x_operator_id.to_string());
+    req_builder = req_builder.header("Authorization", p_header_authorization.to_string());
+
+    let req = req_builder.build()?;
+    let resp = configuration.client.execute(req).await?;
+
+    let status = resp.status();
+
+    if !status.is_client_error() && !status.is_server_error() {
+        Ok(())
+    } else {
+        let content = resp.text().await?;
+        let entity: Option<DeleteAgentSessionError> = serde_json::from_str(&content).ok();
         Err(Error::ResponseError(ResponseContent {
             status,
             content,
@@ -387,6 +441,53 @@ pub async fn get_agent_messages_session(
     }
 }
 
+pub async fn get_agent_session(
+    configuration: &configuration::Configuration,
+    session_id: &str,
+) -> Result<models::GetAgentSessionOutputData, Error<GetAgentSessionError>> {
+    // add a prefix to parameters to efficiently prevent name collisions
+    let p_path_session_id = session_id;
+
+    let uri_str = format!(
+        "{}/v1/llms/sessions/{session_id}",
+        configuration.base_path,
+        session_id = crate::apis::urlencode(p_path_session_id)
+    );
+    let mut req_builder = configuration.client.request(reqwest::Method::GET, &uri_str);
+
+    if let Some(ref user_agent) = configuration.user_agent {
+        req_builder = req_builder.header(reqwest::header::USER_AGENT, user_agent.clone());
+    }
+
+    let req = req_builder.build()?;
+    let resp = configuration.client.execute(req).await?;
+
+    let status = resp.status();
+    let content_type = resp
+        .headers()
+        .get("content-type")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("application/octet-stream");
+    let content_type = super::ContentType::from(content_type);
+
+    if !status.is_client_error() && !status.is_server_error() {
+        let content = resp.text().await?;
+        match content_type {
+            ContentType::Json => serde_json::from_str(&content).map_err(Error::from),
+            ContentType::Text => return Err(Error::from(serde_json::Error::custom("Received `text/plain` content type response that cannot be converted to `models::GetAgentSessionOutputData`"))),
+            ContentType::Unsupported(unknown_type) => return Err(Error::from(serde_json::Error::custom(format!("Received `{unknown_type}` content type response that cannot be converted to `models::GetAgentSessionOutputData`")))),
+        }
+    } else {
+        let content = resp.text().await?;
+        let entity: Option<GetAgentSessionError> = serde_json::from_str(&content).ok();
+        Err(Error::ResponseError(ResponseContent {
+            status,
+            content,
+            entity,
+        }))
+    }
+}
+
 /// Get execution status of agent for specified chatroom.
 pub async fn get_agent_status(
     configuration: &configuration::Configuration,
@@ -497,16 +598,14 @@ pub async fn get_agent_status_session(
 
 pub async fn list_agent_sessions(
     configuration: &configuration::Configuration,
-    x_operator_id: &str,
-    authorization: &str,
     limit: Option<i32>,
     offset: Option<i32>,
+    metadata_user_id: Option<&str>,
 ) -> Result<models::ListAgentSessionsOutputData, Error<ListAgentSessionsError>> {
     // add a prefix to parameters to efficiently prevent name collisions
-    let p_header_x_operator_id = x_operator_id;
-    let p_header_authorization = authorization;
     let p_query_limit = limit;
     let p_query_offset = offset;
+    let p_query_metadata_user_id = metadata_user_id;
 
     let uri_str = format!("{}/v1/llms/sessions", configuration.base_path);
     let mut req_builder = configuration.client.request(reqwest::Method::GET, &uri_str);
@@ -517,11 +616,12 @@ pub async fn list_agent_sessions(
     if let Some(ref param_value) = p_query_offset {
         req_builder = req_builder.query(&[("offset", &param_value.to_string())]);
     }
+    if let Some(ref param_value) = p_query_metadata_user_id {
+        req_builder = req_builder.query(&[("metadata_user_id", &param_value.to_string())]);
+    }
     if let Some(ref user_agent) = configuration.user_agent {
         req_builder = req_builder.header(reqwest::header::USER_AGENT, user_agent.clone());
     }
-    req_builder = req_builder.header("x-operator-id", p_header_x_operator_id.to_string());
-    req_builder = req_builder.header("Authorization", p_header_authorization.to_string());
 
     let req = req_builder.build()?;
     let resp = configuration.client.execute(req).await?;

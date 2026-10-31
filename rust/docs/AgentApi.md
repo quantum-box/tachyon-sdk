@@ -5,10 +5,12 @@ All URIs are relative to *http://localhost*
 Method | HTTP request | Description
 ------------- | ------------- | -------------
 [**create_agent_session**](AgentApi.md#create_agent_session) | **POST** /v1/llms/sessions | Create a new independent agent session.
+[**delete_agent_session**](AgentApi.md#delete_agent_session) | **DELETE** /v1/llms/sessions/{session_id} | 
 [**execute_agent**](AgentApi.md#execute_agent) | **POST** /v1/llms/chatrooms/{chatroom_id}/agent/execute | Execute agent
 [**execute_agent_session**](AgentApi.md#execute_agent_session) | **POST** /v1/llms/sessions/{session_id}/agent/execute | Execute agent via session endpoint.
 [**get_agent_messages**](AgentApi.md#get_agent_messages) | **GET** /v1/llms/chatrooms/{chatroom_id}/agent/messages | Get agent message log
 [**get_agent_messages_session**](AgentApi.md#get_agent_messages_session) | **GET** /v1/llms/sessions/{session_id}/agent/messages | Get agent message log (session alias)
+[**get_agent_session**](AgentApi.md#get_agent_session) | **GET** /v1/llms/sessions/{session_id} | Get an agent session by ID.
 [**get_agent_status**](AgentApi.md#get_agent_status) | **GET** /v1/llms/chatrooms/{chatroom_id}/agent/status | Get agent status
 [**get_agent_status_session**](AgentApi.md#get_agent_status_session) | **GET** /v1/llms/sessions/{session_id}/agent/status | Get agent status (session alias)
 [**list_agent_sessions**](AgentApi.md#list_agent_sessions) | **GET** /v1/llms/sessions | List agent sessions for the current tenant.
@@ -19,7 +21,7 @@ Method | HTTP request | Description
 
 ## create_agent_session
 
-> models::CreateAgentSessionOutputData create_agent_session(x_operator_id, authorization, create_agent_session_request)
+> models::CreateAgentSessionOutputData create_agent_session(create_agent_session_request)
 Create a new independent agent session.
 
 Returns a session with an `as_`-prefixed ID that can be used with the session agent endpoints.
@@ -29,8 +31,6 @@ Returns a session with an `as_`-prefixed ID that can be used with the session ag
 
 Name | Type | Description  | Required | Notes
 ------------- | ------------- | ------------- | ------------- | -------------
-**x_operator_id** | **String** | Operator ID | [required] |
-**authorization** | **String** | Authorization | [required] |
 **create_agent_session_request** | [**CreateAgentSessionRequest**](CreateAgentSessionRequest.md) |  | [required] |
 
 ### Return type
@@ -45,6 +45,36 @@ No authorization required
 
 - **Content-Type**: application/json
 - **Accept**: application/json
+
+[[Back to top]](#) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to Model list]](../README.md#documentation-for-models) [[Back to README]](../README.md)
+
+
+## delete_agent_session
+
+> delete_agent_session(session_id, x_operator_id, authorization)
+
+
+### Parameters
+
+
+Name | Type | Description  | Required | Notes
+------------- | ------------- | ------------- | ------------- | -------------
+**session_id** | **String** | Session ID | [required] |
+**x_operator_id** | **String** | Operator ID | [required] |
+**authorization** | **String** | Authorization | [required] |
+
+### Return type
+
+ (empty response body)
+
+### Authorization
+
+No authorization required
+
+### HTTP request headers
+
+- **Content-Type**: Not defined
+- **Accept**: Not defined
 
 [[Back to top]](#) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to Model list]](../README.md#documentation-for-models) [[Back to README]](../README.md)
 
@@ -183,6 +213,34 @@ No authorization required
 [[Back to top]](#) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to Model list]](../README.md#documentation-for-models) [[Back to README]](../README.md)
 
 
+## get_agent_session
+
+> models::GetAgentSessionOutputData get_agent_session(session_id)
+Get an agent session by ID.
+
+### Parameters
+
+
+Name | Type | Description  | Required | Notes
+------------- | ------------- | ------------- | ------------- | -------------
+**session_id** | **String** | Session ID | [required] |
+
+### Return type
+
+[**models::GetAgentSessionOutputData**](GetAgentSessionOutputData.md)
+
+### Authorization
+
+No authorization required
+
+### HTTP request headers
+
+- **Content-Type**: Not defined
+- **Accept**: application/json
+
+[[Back to top]](#) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to Model list]](../README.md#documentation-for-models) [[Back to README]](../README.md)
+
+
 ## get_agent_status
 
 > models::AgentStatusResponse get_agent_status(chatroom_id, x_operator_id, authorization)
@@ -249,7 +307,7 @@ No authorization required
 
 ## list_agent_sessions
 
-> models::ListAgentSessionsOutputData list_agent_sessions(x_operator_id, authorization, limit, offset)
+> models::ListAgentSessionsOutputData list_agent_sessions(limit, offset, metadata_user_id)
 List agent sessions for the current tenant.
 
 ### Parameters
@@ -257,10 +315,9 @@ List agent sessions for the current tenant.
 
 Name | Type | Description  | Required | Notes
 ------------- | ------------- | ------------- | ------------- | -------------
-**x_operator_id** | **String** | Operator ID | [required] |
-**authorization** | **String** | Authorization | [required] |
-**limit** | Option<**i32**> | Maximum number of sessions |  |
-**offset** | Option<**i32**> | Offset |  |
+**limit** | Option<**i32**> | Maximum number of sessions to return. |  |
+**offset** | Option<**i32**> | Offset for pagination. |  |
+**metadata_user_id** | Option<**String**> | Filter sessions by `user_id` stored in metadata JSON. |  |
 
 ### Return type
 

@@ -41,7 +41,7 @@ configuration = tachyon_sdk.Configuration(
 with tachyon_sdk.ApiClient(configuration) as api_client:
     # Create an instance of the API class
     api_instance = tachyon_sdk.AuthPoliciesApi(api_client)
-    check_tenants_policy_request = tachyon_sdk.CheckTenantsPolicyRequest() # CheckTenantsPolicyRequest |
+    check_tenants_policy_request = tachyon_sdk.CheckTenantsPolicyRequest() # CheckTenantsPolicyRequest | 
 
     try:
         # Evaluate one policy action across the authenticated user's tenant scopes.
@@ -59,7 +59,7 @@ with tachyon_sdk.ApiClient(configuration) as api_client:
 
 Name | Type | Description  | Notes
 ------------- | ------------- | ------------- | -------------
- **check_tenants_policy_request** | [**CheckTenantsPolicyRequest**](CheckTenantsPolicyRequest.md)|  |
+ **check_tenants_policy_request** | [**CheckTenantsPolicyRequest**](CheckTenantsPolicyRequest.md)|  | 
 
 ### Return type
 
@@ -113,7 +113,7 @@ configuration = tachyon_sdk.Configuration(
 with tachyon_sdk.ApiClient(configuration) as api_client:
     # Create an instance of the API class
     api_instance = tachyon_sdk.AuthPoliciesApi(api_client)
-    check_policy_for_resource_request = tachyon_sdk.CheckPolicyForResourceRequest() # CheckPolicyForResourceRequest |
+    check_policy_for_resource_request = tachyon_sdk.CheckPolicyForResourceRequest() # CheckPolicyForResourceRequest | 
 
     try:
         # Check permission for a specific resource
@@ -131,7 +131,7 @@ with tachyon_sdk.ApiClient(configuration) as api_client:
 
 Name | Type | Description  | Notes
 ------------- | ------------- | ------------- | -------------
- **check_policy_for_resource_request** | [**CheckPolicyForResourceRequest**](CheckPolicyForResourceRequest.md)|  |
+ **check_policy_for_resource_request** | [**CheckPolicyForResourceRequest**](CheckPolicyForResourceRequest.md)|  | 
 
 ### Return type
 
@@ -196,7 +196,7 @@ with tachyon_sdk.ApiClient(configuration) as api_client:
 
 Name | Type | Description  | Notes
 ------------- | ------------- | ------------- | -------------
- **id** | **str**| Policy ID |
+ **id** | **str**| Policy ID | 
 
 ### Return type
 
@@ -249,7 +249,7 @@ configuration = tachyon_sdk.Configuration(
 with tachyon_sdk.ApiClient(configuration) as api_client:
     # Create an instance of the API class
     api_instance = tachyon_sdk.AuthPoliciesApi(api_client)
-    evaluate_policies_batch_request = tachyon_sdk.EvaluatePoliciesBatchRequest() # EvaluatePoliciesBatchRequest |
+    evaluate_policies_batch_request = tachyon_sdk.EvaluatePoliciesBatchRequest() # EvaluatePoliciesBatchRequest | 
 
     try:
         # Evaluate multiple policy actions in batch
@@ -267,7 +267,7 @@ with tachyon_sdk.ApiClient(configuration) as api_client:
 
 Name | Type | Description  | Notes
 ------------- | ------------- | ------------- | -------------
- **evaluate_policies_batch_request** | [**EvaluatePoliciesBatchRequest**](EvaluatePoliciesBatchRequest.md)|  |
+ **evaluate_policies_batch_request** | [**EvaluatePoliciesBatchRequest**](EvaluatePoliciesBatchRequest.md)|  | 
 
 ### Return type
 
@@ -334,7 +334,7 @@ with tachyon_sdk.ApiClient(configuration) as api_client:
 
 Name | Type | Description  | Notes
 ------------- | ------------- | ------------- | -------------
- **id** | **str**| Policy ID |
+ **id** | **str**| Policy ID | 
 
 ### Return type
 
@@ -401,7 +401,7 @@ with tachyon_sdk.ApiClient(configuration) as api_client:
 
 Name | Type | Description  | Notes
 ------------- | ------------- | ------------- | -------------
- **context** | **str**| Filter by context | [optional]
+ **context** | **str**| Filter by context | [optional] 
 
 ### Return type
 
@@ -451,7 +451,7 @@ configuration = tachyon_sdk.Configuration(
 with tachyon_sdk.ApiClient(configuration) as api_client:
     # Create an instance of the API class
     api_instance = tachyon_sdk.AuthPoliciesApi(api_client)
-    register_action_request = tachyon_sdk.RegisterActionRequest() # RegisterActionRequest |
+    register_action_request = tachyon_sdk.RegisterActionRequest() # RegisterActionRequest | 
 
     try:
         # Register a custom action
@@ -469,7 +469,7 @@ with tachyon_sdk.ApiClient(configuration) as api_client:
 
 Name | Type | Description  | Notes
 ------------- | ------------- | ------------- | -------------
- **register_action_request** | [**RegisterActionRequest**](RegisterActionRequest.md)|  |
+ **register_action_request** | [**RegisterActionRequest**](RegisterActionRequest.md)|  | 
 
 ### Return type
 
@@ -520,7 +520,7 @@ configuration = tachyon_sdk.Configuration(
 with tachyon_sdk.ApiClient(configuration) as api_client:
     # Create an instance of the API class
     api_instance = tachyon_sdk.AuthPoliciesApi(api_client)
-    register_policy_request = tachyon_sdk.RegisterPolicyRequest() # RegisterPolicyRequest |
+    register_policy_request = tachyon_sdk.RegisterPolicyRequest() # RegisterPolicyRequest | 
 
     try:
         # Register a custom policy
@@ -538,7 +538,7 @@ with tachyon_sdk.ApiClient(configuration) as api_client:
 
 Name | Type | Description  | Notes
 ------------- | ------------- | ------------- | -------------
- **register_policy_request** | [**RegisterPolicyRequest**](RegisterPolicyRequest.md)|  |
+ **register_policy_request** | [**RegisterPolicyRequest**](RegisterPolicyRequest.md)|  | 
 
 ### Return type
 
@@ -590,7 +590,7 @@ with tachyon_sdk.ApiClient(configuration) as api_client:
     # Create an instance of the API class
     api_instance = tachyon_sdk.AuthPoliciesApi(api_client)
     id = 'id_example' # str | Policy ID
-    update_policy_request = tachyon_sdk.UpdatePolicyRequest() # UpdatePolicyRequest |
+    update_policy_request = tachyon_sdk.UpdatePolicyRequest() # UpdatePolicyRequest | 
 
     try:
         # Update a custom policy
@@ -608,8 +608,8 @@ with tachyon_sdk.ApiClient(configuration) as api_client:
 
 Name | Type | Description  | Notes
 ------------- | ------------- | ------------- | -------------
- **id** | **str**| Policy ID |
- **update_policy_request** | [**UpdatePolicyRequest**](UpdatePolicyRequest.md)|  |
+ **id** | **str**| Policy ID | 
+ **update_policy_request** | [**UpdatePolicyRequest**](UpdatePolicyRequest.md)|  | 
 
 ### Return type
 
@@ -634,3 +634,4 @@ No authorization required
 **404** | Policy not found |  -  |
 
 [[Back to top]](#) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to Model list]](../README.md#documentation-for-models) [[Back to README]](../README.md)
+

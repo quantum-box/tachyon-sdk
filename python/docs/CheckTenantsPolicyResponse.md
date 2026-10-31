@@ -6,7 +6,7 @@ Response for tenant-bulk policy evaluation.
 
 Name | Type | Description | Notes
 ------------ | ------------- | ------------- | -------------
-**allowed_tenants** | [**List[AllowedTenantResponse]**](AllowedTenantResponse.md) |  |
+**allowed_tenants** | [**List[AllowedTenantResponse]**](AllowedTenantResponse.md) |  | 
 
 ## Example
 
@@ -26,3 +26,5 @@ check_tenants_policy_response_dict = check_tenants_policy_response_instance.to_d
 check_tenants_policy_response_from_dict = CheckTenantsPolicyResponse.from_dict(check_tenants_policy_response_dict)
 ```
 [[Back to Model list]](../README.md#documentation-for-models) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to README]](../README.md)
+
+

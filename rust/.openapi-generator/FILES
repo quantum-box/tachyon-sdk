@@ -114,6 +114,7 @@ docs/FeatureFlagsApi.md
 docs/Function.md
 docs/FunctionCall.md
 docs/FunctionCallResponse.md
+docs/GetAgentSessionOutputData.md
 docs/GetChatroomsResponse.md
 docs/IntegrationDetailResponse.md
 docs/IntegrationResponse.md
@@ -365,6 +366,7 @@ src/models/evaluate_policies_batch_response.rs
 src/models/function.rs
 src/models/function_call.rs
 src/models/function_call_response.rs
+src/models/get_agent_session_output_data.rs
 src/models/get_chatrooms_response.rs
 src/models/integration_detail_response.rs
 src/models/integration_response.rs

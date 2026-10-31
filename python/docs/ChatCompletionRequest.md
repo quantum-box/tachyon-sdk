@@ -18,10 +18,10 @@ Name | Type | Description | Notes
 **response_format** | [**ResponseFormat**](ResponseFormat.md) | Format to return the response in | [optional] 
 **stream** | **bool** | Whether to stream back partial progress | [optional] [default to False]
 **technical_level** | **str** | Technical level preference | [optional] 
-**temperature** | **float** | What sampling temperature to use, between 0 and 2 | [optional] [default to 1.0]
+**temperature** | **float** | What sampling temperature to use, between 0 and 2 | [optional] [default to 1]
 **tool_choice** | [**ToolChoice**](ToolChoice.md) | Controls which (if any) function is called by the model | [optional] 
 **tools** | [**List[Tool]**](Tool.md) | A list of tools the model may call | [optional] 
-**top_p** | **float** | An alternative to sampling with temperature | [optional] [default to 1.0]
+**top_p** | **float** | An alternative to sampling with temperature | [optional] [default to 1]
 **user** | **str** | A unique identifier representing your end-user | [optional] 
 
 ## Example

@@ -152,6 +152,7 @@ __all__ = [
     "Function",
     "FunctionCall",
     "FunctionCallResponse",
+    "GetAgentSessionOutputData",
     "GetChatroomsResponse",
     "IntegrationDetailResponse",
     "IntegrationResponse",
@@ -402,6 +403,7 @@ from tachyon_sdk.models.evaluate_policies_batch_response import EvaluatePolicies
 from tachyon_sdk.models.function import Function as Function
 from tachyon_sdk.models.function_call import FunctionCall as FunctionCall
 from tachyon_sdk.models.function_call_response import FunctionCallResponse as FunctionCallResponse
+from tachyon_sdk.models.get_agent_session_output_data import GetAgentSessionOutputData as GetAgentSessionOutputData
 from tachyon_sdk.models.get_chatrooms_response import GetChatroomsResponse as GetChatroomsResponse
 from tachyon_sdk.models.integration_detail_response import IntegrationDetailResponse as IntegrationDetailResponse
 from tachyon_sdk.models.integration_response import IntegrationResponse as IntegrationResponse

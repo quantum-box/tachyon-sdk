@@ -6,6 +6,7 @@ All URIs are relative to *http://localhost*
 |------------- | ------------- | -------------|
 | [**connectIntegration**](IntegrationsApi.md#connectintegration) | **POST** /v1/integrations/{id}/connect | Initiate an OAuth connection to an integration. |
 | [**disconnectIntegration**](IntegrationsApi.md#disconnectintegration) | **DELETE** /v1/integrations/connections/{id} | Disconnect an integration connection. |
+| [**getGithubBillingUsage**](IntegrationsApi.md#getgithubbillingusage) | **GET** /v1/integrations/github/billing-usage | Billing usage of a GitHub organization for one month. |
 | [**getIntegration**](IntegrationsApi.md#getintegration) | **GET** /v1/integrations/{id} | Get an integration by ID. |
 | [**listConnections**](IntegrationsApi.md#listconnections) | **GET** /v1/integrations/connections | List all connections for the current tenant. |
 | [**listIntegrations**](IntegrationsApi.md#listintegrations) | **GET** /v1/integrations | List all integrations in the marketplace. |
@@ -143,6 +144,82 @@ No authorization required
 | **204** | Disconnected |  -  |
 | **403** | Forbidden |  -  |
 | **404** | Connection not found |  -  |
+
+[[Back to top]](#) [[Back to API list]](../README.md#api-endpoints) [[Back to Model list]](../README.md#models) [[Back to README]](../README.md)
+
+
+## getGithubBillingUsage
+
+> any getGithubBillingUsage(org, year, month)
+
+Billing usage of a GitHub organization for one month.
+
+The body is GitHub\&#39;s &#x60;GET /organizations/{org}/settings/billing/usage&#x60; response, unchanged. The installation token is never returned.
+
+### Example
+
+```ts
+import {
+  Configuration,
+  IntegrationsApi,
+} from '@tachyon/sdk';
+import type { GetGithubBillingUsageRequest } from '@tachyon/sdk';
+
+async function example() {
+  console.log("🚀 Testing @tachyon/sdk SDK...");
+  const api = new IntegrationsApi();
+
+  const body = {
+    // string | GitHub organization login. It must be the account of a GitHub App installation connected to the requesting tenant.
+    org: org_example,
+    // number
+    year: 56,
+    // number | 1-12.
+    month: 56,
+  } satisfies GetGithubBillingUsageRequest;
+
+  try {
+    const data = await api.getGithubBillingUsage(body);
+    console.log(data);
+  } catch (error) {
+    console.error(error);
+  }
+}
+
+// Run the test
+example().catch(console.error);
+```
+
+### Parameters
+
+
+| Name | Type | Description  | Notes |
+|------------- | ------------- | ------------- | -------------|
+| **org** | `string` | GitHub organization login. It must be the account of a GitHub App installation connected to the requesting tenant. | [Defaults to `undefined`] |
+| **year** | `number` |  | [Defaults to `undefined`] |
+| **month** | `number` | 1-12. | [Defaults to `undefined`] |
+
+### Return type
+
+**any**
+
+### Authorization
+
+No authorization required
+
+### HTTP request headers
+
+- **Content-Type**: Not defined
+- **Accept**: `application/json`
+
+
+### HTTP response details
+| Status code | Description | Response headers |
+|-------------|-------------|------------------|
+| **200** | GitHub billing usage report |  -  |
+| **400** | Invalid org or month |  -  |
+| **403** | Forbidden, or the organization is not connected to the tenant |  -  |
+| **503** | GitHub refused or failed the request |  -  |
 
 [[Back to top]](#) [[Back to API list]](../README.md#api-endpoints) [[Back to Model list]](../README.md#models) [[Back to README]](../README.md)
 

@@ -16,6 +16,7 @@ Name | Type | Description | Notes
 **max_requests** | **int** | Maximum number of LLM round-trips (tool calls) the agent is allowed to make before stopping. | [optional] 
 **mcp_hub_config_json** | **str** | Optional MCP Hub configuration in JSON string form. | [optional] 
 **model** | **str** | Model identifier. Accepts &#x60;provider/model&#x60; or just &#x60;model&#x60; (provider auto-detected).  Examples: - &#x60;anthropic/claude-3-sonnet-20241022&#x60; - &#x60;openai/gpt-4&#x60; - &#x60;google_ai/gemini-pro&#x60;  Auto-detection shortcuts: - &#x60;gpt-*&#x60; → OpenAI - &#x60;claude-*&#x60; → Anthropic - &#x60;gemini*&#x60; → Google AI | [optional] 
+**reasoning_effort** | **str** | Optional reasoning effort for reasoning-capable models (e.g. &#x60;low&#x60;, &#x60;medium&#x60;, &#x60;high&#x60;).  Sent to OpenAI models that use the Responses API (&#x60;gpt-5*&#x60;, &#x60;gpt-6*&#x60;) as &#x60;reasoning.effort&#x60;. Other providers and models ignore it. | [optional] 
 **task** | **str** | The task or prompt for the agent to execute. | 
 **tool_access** | [**List[AgentBuiltinToolRequest]**](AgentBuiltinToolRequest.md) | Builtin tools available to the agent. | [optional] 
 **use_json_tool_calls** | **bool** | When true, use JSON Schema tool definitions (function calling) instead of XML-based tool parsing. This is automatically enabled when &#x60;client_tools&#x60; is provided. | [optional] 

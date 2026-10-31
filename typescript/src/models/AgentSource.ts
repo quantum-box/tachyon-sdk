@@ -20,11 +20,17 @@ import { mapValues } from '../runtime';
  */
 export interface AgentSource {
     /**
-     * 
+     * Compatibility key for clients that predate Session objects.
      * @type {string}
      * @memberof AgentSource
      */
     chatroomId: string;
+    /**
+     * Canonical conversation ID for new Session-based agents.
+     * @type {string}
+     * @memberof AgentSource
+     */
+    sessionId?: string | null;
 }
 
 /**
@@ -46,6 +52,7 @@ export function AgentSourceFromJSONTyped(json: any, ignoreDiscriminator: boolean
     return {
         
         'chatroomId': json['chatroom_id'],
+        'sessionId': json['session_id'] == null ? undefined : json['session_id'],
     };
 }
 
@@ -61,6 +68,7 @@ export function AgentSourceToJSONTyped(value?: AgentSource | null, ignoreDiscrim
     return {
         
         'chatroom_id': value['chatroomId'],
+        'session_id': value['sessionId'],
     };
 }
 

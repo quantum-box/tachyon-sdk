@@ -25,10 +25,6 @@ async function example() {
   const api = new AgentApi();
 
   const body = {
-    // string | Operator ID
-    xOperatorId: tn_xxxxxx,
-    // string | Authorization
-    authorization: Bearer xxxxx,
     // CreateAgentSessionRequest
     createAgentSessionRequest: ...,
   } satisfies CreateAgentSessionOperationRequest;
@@ -55,10 +51,12 @@ All URIs are relative to *http://localhost*
 | Class | Method | HTTP request | Description
 | ----- | ------ | ------------ | -------------
 *AgentApi* | [**createAgentSession**](docs/AgentApi.md#createagentsessionoperation) | **POST** /v1/llms/sessions | Create a new independent agent session.
+*AgentApi* | [**deleteAgentSession**](docs/AgentApi.md#deleteagentsession) | **DELETE** /v1/llms/sessions/{session_id} | 
 *AgentApi* | [**executeAgent**](docs/AgentApi.md#executeagent) | **POST** /v1/llms/chatrooms/{chatroom_id}/agent/execute | Execute agent
 *AgentApi* | [**executeAgentSession**](docs/AgentApi.md#executeagentsession) | **POST** /v1/llms/sessions/{session_id}/agent/execute | Execute agent via session endpoint.
 *AgentApi* | [**getAgentMessages**](docs/AgentApi.md#getagentmessages) | **GET** /v1/llms/chatrooms/{chatroom_id}/agent/messages | Get agent message log
 *AgentApi* | [**getAgentMessagesSession**](docs/AgentApi.md#getagentmessagessession) | **GET** /v1/llms/sessions/{session_id}/agent/messages | Get agent message log (session alias)
+*AgentApi* | [**getAgentSession**](docs/AgentApi.md#getagentsession) | **GET** /v1/llms/sessions/{session_id} | Get an agent session by ID.
 *AgentApi* | [**getAgentStatus**](docs/AgentApi.md#getagentstatus) | **GET** /v1/llms/chatrooms/{chatroom_id}/agent/status | Get agent status
 *AgentApi* | [**getAgentStatusSession**](docs/AgentApi.md#getagentstatussession) | **GET** /v1/llms/sessions/{session_id}/agent/status | Get agent status (session alias)
 *AgentApi* | [**listAgentSessions**](docs/AgentApi.md#listagentsessions) | **GET** /v1/llms/sessions | List agent sessions for the current tenant.
@@ -105,14 +103,14 @@ All URIs are relative to *http://localhost*
 *AuthUserPoliciesApi* | [**findUserPolicyMappings**](docs/AuthUserPoliciesApi.md#finduserpolicymappings) | **GET** /v1/auth/user-policy-mappings | Find user policy mappings by resource scope
 *AuthUserPoliciesApi* | [**listUserPolicies**](docs/AuthUserPoliciesApi.md#listuserpolicies) | **GET** /v1/auth/users/{user_id}/policies | List policies attached to a user
 *AuthUsersApi* | [**addUserToTenant**](docs/AuthUsersApi.md#addusertotenantoperation) | **POST** /v1/auth/users/{user_id}/tenants | Add a user to a tenant (grant tenant access)
-*AuthUsersApi* | [**createUser**](docs/AuthUsersApi.md#createuseroperation) | **POST** /auth/v1beta/users |
+*AuthUsersApi* | [**createUser**](docs/AuthUsersApi.md#createuseroperation) | **POST** /auth/v1beta/users | 
 *AuthUsersApi* | [**findUserByUsername**](docs/AuthUsersApi.md#finduserbyusername) | **GET** /v1/auth/users/search/by-username | Find a user by username
 *AuthUsersApi* | [**getUser**](docs/AuthUsersApi.md#getuser) | **GET** /v1/auth/users/{id} | Get a user by ID
 *AuthUsersApi* | [**inviteUser**](docs/AuthUsersApi.md#inviteuseroperation) | **POST** /v1/auth/users/invite | Invite a user to a tenant
 *AuthUsersApi* | [**listUsers**](docs/AuthUsersApi.md#listusers) | **GET** /v1/auth/users | List all users in an operator
 *AuthUsersApi* | [**updateUserRole**](docs/AuthUsersApi.md#updateuserroleoperation) | **PUT** /v1/auth/users/{user_id}/role | Update a user\&#39;s role in a specific tenant
-*AuthVerifyApi* | [**signInWithPlatform**](docs/AuthVerifyApi.md#signinwithplatformoperation) | **POST** /auth/v1beta/sign-in-with-platform |
-*AuthVerifyApi* | [**verify**](docs/AuthVerifyApi.md#verifyoperation) | **POST** /auth/v1beta/verify |
+*AuthVerifyApi* | [**signInWithPlatform**](docs/AuthVerifyApi.md#signinwithplatformoperation) | **POST** /auth/v1beta/sign-in-with-platform | 
+*AuthVerifyApi* | [**verify**](docs/AuthVerifyApi.md#verifyoperation) | **POST** /auth/v1beta/verify | 
 *CRMObjectMappingsApi* | [**createObjectMapping**](docs/CRMObjectMappingsApi.md#createobjectmappingoperation) | **POST** /v1/crm/object-mappings | Create an object mapping
 *CRMObjectMappingsApi* | [**getObjectMappings**](docs/CRMObjectMappingsApi.md#getobjectmappings) | **GET** /v1/crm/object-mappings | Get object mappings by entity ID and object name
 *ChatApi* | [**chatCompletion**](docs/ChatApi.md#chatcompletionoperation) | **POST** /v1/llms/chat/completions | Create a chat completion
@@ -128,6 +126,7 @@ All URIs are relative to *http://localhost*
 *FeatureFlagsApi* | [**evaluateActions**](docs/FeatureFlagsApi.md#evaluateactionsoperation) | **POST** /v1/feature-flags/actions/evaluate | TODO: add English documentation
 *IntegrationsApi* | [**connectIntegration**](docs/IntegrationsApi.md#connectintegration) | **POST** /v1/integrations/{id}/connect | Initiate an OAuth connection to an integration.
 *IntegrationsApi* | [**disconnectIntegration**](docs/IntegrationsApi.md#disconnectintegration) | **DELETE** /v1/integrations/connections/{id} | Disconnect an integration connection.
+*IntegrationsApi* | [**getGithubBillingUsage**](docs/IntegrationsApi.md#getgithubbillingusage) | **GET** /v1/integrations/github/billing-usage | Billing usage of a GitHub organization for one month.
 *IntegrationsApi* | [**getIntegration**](docs/IntegrationsApi.md#getintegration) | **GET** /v1/integrations/{id} | Get an integration by ID.
 *IntegrationsApi* | [**listConnections**](docs/IntegrationsApi.md#listconnections) | **GET** /v1/integrations/connections | List all connections for the current tenant.
 *IntegrationsApi* | [**listIntegrations**](docs/IntegrationsApi.md#listintegrations) | **GET** /v1/integrations | List all integrations in the marketplace.
@@ -256,6 +255,7 @@ All URIs are relative to *http://localhost*
 - [Function](docs/Function.md)
 - [FunctionCall](docs/FunctionCall.md)
 - [FunctionCallResponse](docs/FunctionCallResponse.md)
+- [GetAgentSessionOutputData](docs/GetAgentSessionOutputData.md)
 - [GetChatroomsResponse](docs/GetChatroomsResponse.md)
 - [IntegrationDetailResponse](docs/IntegrationDetailResponse.md)
 - [IntegrationResponse](docs/IntegrationResponse.md)

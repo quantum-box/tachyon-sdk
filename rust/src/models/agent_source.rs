@@ -14,13 +14,25 @@ use serde::{Deserialize, Serialize};
 /// AgentSource : Identifies which agent produced a chunk.
 #[derive(Clone, Default, Debug, PartialEq, Serialize, Deserialize)]
 pub struct AgentSource {
+    /// Compatibility key for clients that predate Session objects.
     #[serde(rename = "chatroom_id")]
     pub chatroom_id: String,
+    /// Canonical conversation ID for new Session-based agents.
+    #[serde(
+        rename = "session_id",
+        default,
+        with = "::serde_with::rust::double_option",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub session_id: Option<Option<String>>,
 }
 
 impl AgentSource {
     /// Identifies which agent produced a chunk.
     pub fn new(chatroom_id: String) -> AgentSource {
-        AgentSource { chatroom_id }
+        AgentSource {
+            chatroom_id,
+            session_id: None,
+        }
     }
 }

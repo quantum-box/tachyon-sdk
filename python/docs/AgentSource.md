@@ -6,7 +6,8 @@ Identifies which agent produced a chunk.
 
 Name | Type | Description | Notes
 ------------ | ------------- | ------------- | -------------
-**chatroom_id** | **str** |  | 
+**chatroom_id** | **str** | Compatibility key for clients that predate Session objects. | 
+**session_id** | **str** | Canonical conversation ID for new Session-based agents. | [optional] 
 
 ## Example
 
