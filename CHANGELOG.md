@@ -38,6 +38,13 @@
 
 ### Fixed
 
+- `tachyon env set <app> --secret KEY` only writes `valueFrom.secret` into the
+  local `tachyon.yml` when that manifest declares `<app>`. Setting another
+  app's secret leaves the file untouched and prints the reference to add
+  instead; before, it wrote into the first app of an unrelated `CloudApps`
+  manifest. A newly appended `envVars` entry now keeps its block indentation
+  instead of emitting `type:` / `target:` / `valueFrom:` at column zero.
+
 - `scripts/generate.sh` patches the Rust code openapi-generator emits for a
   `oneOf` of string and array (`ArrayVecmodels::T(...)`) and for a nullable
   inline `oneOf` (`OneOfLessThanGreaterThan`) before `cargo fmt`, so the

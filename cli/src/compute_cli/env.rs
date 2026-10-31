@@ -239,9 +239,23 @@ pub(super) async fn run_env_set_secret(
         .await?;
 
     let secret_path = manifest_secret_path(&resp.secret_ref, &resp.key)?;
-    update_manifest_secret_ref(config_flag, &resp.key, &resp.target, secret_path)?;
     println!("Set secret {} for target {}.", resp.key, resp.target);
-    println!("Updated tachyon.yml with valueFrom.secret: {secret_path}");
+    let app_name = secret_path
+        .split_once('/')
+        .map(|(app_name, _)| app_name)
+        .unwrap_or_default();
+    let manifest_path =
+        update_manifest_secret_ref(config_flag, app_name, &resp.key, &resp.target, secret_path)?;
+    match manifest_path {
+        Some(path) => println!(
+            "Updated {} with valueFrom.secret: {secret_path}",
+            path.display()
+        ),
+        None => println!(
+            "Left the local manifest unchanged: it does not declare app {app_name}. \
+             Reference the secret from that app's manifest with valueFrom.secret: {secret_path}"
+        ),
+    }
     Ok(())
 }
 
@@ -336,23 +350,30 @@ fn manifest_secret_path<'a>(secret_ref: &'a str, key: &str) -> Result<&'a str> {
     Ok(path)
 }
 
+/// Returns the manifest path when it declares `app_name` and was updated.
 fn update_manifest_secret_ref(
     config_flag: Option<&Path>,
+    app_name: &str,
     key: &str,
     target: &str,
     secret_path: &str,
-) -> Result<()> {
+) -> Result<Option<PathBuf>> {
     let loaded = crate::config::loader::load_with_path(config_flag)?
         .ok_or_else(|| anyhow!("tachyon.yml not found. Run `tachyon init` first."))?;
-    upsert_manifest_secret_ref(&loaded.path, key, target, secret_path)
+    let updated = upsert_manifest_secret_ref(&loaded.path, app_name, key, target, secret_path)?;
+    Ok(updated.then_some(loaded.path))
 }
 
+/// Writes the secret reference into the entry for `app_name`. A manifest
+/// that does not declare that app is left untouched and returns `false`, so
+/// setting another app's secret never edits an unrelated `tachyon.yml`.
 fn upsert_manifest_secret_ref(
     path: &Path,
+    app_name: &str,
     key: &str,
     target: &str,
     secret_path: &str,
-) -> Result<()> {
+) -> Result<bool> {
     let raw = std::fs::read_to_string(path)?;
     let file = YamlFile::from_str(&raw)?;
     let doc = file
@@ -365,34 +386,31 @@ fn upsert_manifest_secret_ref(
 
     match kind.as_str() {
         "CloudApp" => {
+            let declared_name = root
+                .get_mapping("metadata")
+                .and_then(|metadata| yaml_mapping_string(&metadata, "name"));
+            if declared_name.as_deref() != Some(app_name) {
+                return Ok(false);
+            }
             let spec = ensure_mapping_child(&root, "spec")?;
             upsert_env_var_ref(&spec, key, target, secret_path)?;
         }
         "CloudApps" => {
-            let app_name = root
-                .get_mapping("metadata")
-                .and_then(|metadata| yaml_mapping_string(&metadata, "name"));
             let apps = root
                 .get_mapping("spec")
                 .and_then(|spec| spec.get_sequence("apps"))
                 .ok_or_else(|| anyhow!("CloudApps manifest is missing spec.apps"))?;
-            let entry_index = app_name
-                .as_deref()
-                .and_then(|name| {
-                    (0..apps.len()).find(|index| {
-                        apps.get(*index)
-                            .and_then(|app| {
-                                app.as_mapping()
-                                    .and_then(|app| yaml_mapping_string(app, "name"))
-                            })
-                            .as_deref()
-                            == Some(name)
-                    })
+            let Some(entry) = (0..apps.len())
+                .filter_map(|index| apps.get(index))
+                .find(|app| {
+                    app.as_mapping()
+                        .and_then(|app| yaml_mapping_string(app, "name"))
+                        .as_deref()
+                        == Some(app_name)
                 })
-                .unwrap_or(0);
-            let entry = apps
-                .get(entry_index)
-                .ok_or_else(|| anyhow!("CloudApps manifest has no apps"))?;
+            else {
+                return Ok(false);
+            };
             let mapping = entry
                 .as_mapping()
                 .ok_or_else(|| anyhow!("CloudApps spec.apps entry must be an object"))?;
@@ -402,7 +420,7 @@ fn upsert_manifest_secret_ref(
     }
 
     std::fs::write(path, file.to_string())?;
-    Ok(())
+    Ok(true)
 }
 
 fn yaml_mapping_string(mapping: &Mapping, key: &str) -> Option<String> {
@@ -445,9 +463,17 @@ fn upsert_env_var_ref(spec: &Mapping, key: &str, target: &str, secret_path: &str
         }
     }
 
+    // yaml-edit drops the indentation of every key after the first in a
+    // pushed multi-key mapping. Push the entry with `name` only, then fill
+    // it in place like an existing entry, which keeps the block indentation.
     let mapping = Mapping::new_pending_block();
-    set_secret_env_mapping(&mapping, key, target, secret_path);
+    mapping.set("name", key);
     env_vars.push(mapping);
+    let pushed = env_vars
+        .get(env_vars.len() - 1)
+        .and_then(|entry| entry.as_mapping().cloned())
+        .ok_or_else(|| anyhow!("failed to append envVars entry for {key}"))?;
+    set_secret_env_mapping(&pushed, key, target, secret_path);
     Ok(())
 }
 
@@ -477,6 +503,140 @@ pub(super) async fn run_env_delete(api: &ApiClient, app_id: &str, env_id: &str) 
 mod tests {
     use super::*;
     use serde_json::json;
+
+    const CLOUD_APPS_MANIFEST: &str = "\
+apiVersion: apps.tachy.one/v1alpha
+kind: CloudApps
+metadata:
+  name: tachyon-apps
+spec:
+  apps:
+  - name: tachyon-console
+    envVars:
+    - name: OPEN_NEXT_DEPLOY
+      value: 'true'
+    watchPaths:
+    - apps/tachyon/**
+  - name: field
+    framework: worker
+";
+
+    fn write_manifest(content: &str) -> (tempfile::TempDir, PathBuf) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("tachyon.yml");
+        std::fs::write(&path, content).unwrap();
+        (dir, path)
+    }
+
+    fn app_env_vars(path: &Path, app_name: &str) -> serde_json::Value {
+        let manifest: serde_json::Value =
+            serde_yaml::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+        manifest["spec"]["apps"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|app| app["name"] == app_name)
+            .unwrap()["envVars"]
+            .clone()
+    }
+
+    #[test]
+    fn secret_ref_for_undeclared_app_leaves_manifest_untouched() {
+        let (_dir, path) = write_manifest(CLOUD_APPS_MANIFEST);
+
+        let updated = upsert_manifest_secret_ref(
+            &path,
+            "tachyonfield",
+            "NEXTAUTH_URL",
+            "preview",
+            "tachyonfield/NEXTAUTH_URL",
+        )
+        .unwrap();
+
+        assert!(!updated);
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), CLOUD_APPS_MANIFEST);
+    }
+
+    #[test]
+    fn secret_ref_for_undeclared_single_app_leaves_manifest_untouched() {
+        let manifest = "kind: CloudApp\nmetadata:\n  name: web\nspec:\n  envVars:\n  - name: A\n    value: b\n";
+        let (_dir, path) = write_manifest(manifest);
+
+        let updated =
+            upsert_manifest_secret_ref(&path, "api", "TOKEN", "all", "api/TOKEN").unwrap();
+
+        assert!(!updated);
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), manifest);
+    }
+
+    #[test]
+    fn secret_ref_is_appended_to_the_named_app_with_block_indentation() {
+        let (_dir, path) = write_manifest(CLOUD_APPS_MANIFEST);
+
+        for app_name in ["tachyon-console", "field"] {
+            let updated = upsert_manifest_secret_ref(
+                &path,
+                app_name,
+                "AUTH_SECRET",
+                "preview",
+                &format!("{app_name}/AUTH_SECRET"),
+            )
+            .unwrap();
+            assert!(updated);
+        }
+
+        assert_eq!(
+            app_env_vars(&path, "tachyon-console"),
+            json!([
+                {"name": "OPEN_NEXT_DEPLOY", "value": "true"},
+                {
+                    "name": "AUTH_SECRET",
+                    "type": "credential",
+                    "target": "preview",
+                    "valueFrom": {"secret": "tachyon-console/AUTH_SECRET"}
+                }
+            ])
+        );
+        assert_eq!(
+            app_env_vars(&path, "field"),
+            json!([{
+                "name": "AUTH_SECRET",
+                "type": "credential",
+                "target": "preview",
+                "valueFrom": {"secret": "field/AUTH_SECRET"}
+            }])
+        );
+        let raw = std::fs::read_to_string(&path).unwrap();
+        assert!(raw.contains("      type: credential\n"), "{raw}");
+        assert!(
+            raw.contains("        secret: tachyon-console/AUTH_SECRET\n"),
+            "{raw}"
+        );
+    }
+
+    #[test]
+    fn secret_ref_replaces_an_existing_entry_in_place() {
+        let (_dir, path) = write_manifest(CLOUD_APPS_MANIFEST);
+
+        let updated = upsert_manifest_secret_ref(
+            &path,
+            "tachyon-console",
+            "OPEN_NEXT_DEPLOY",
+            "all",
+            "tachyon-console/OPEN_NEXT_DEPLOY",
+        )
+        .unwrap();
+
+        assert!(updated);
+        assert_eq!(
+            app_env_vars(&path, "tachyon-console"),
+            json!([{
+                "name": "OPEN_NEXT_DEPLOY",
+                "type": "credential",
+                "valueFrom": {"secret": "tachyon-console/OPEN_NEXT_DEPLOY"}
+            }])
+        );
+    }
 
     #[test]
     fn env_response_preserves_secret_source_metadata_in_json() {
