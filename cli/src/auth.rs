@@ -590,6 +590,31 @@ pub async fn refresh_access_token(
     Ok(new_creds)
 }
 
+/// Try to open `url` in the default browser. Returns `false` when disabled via
+/// `TACHYON_NO_BROWSER` or when no opener could be launched.
+fn open_browser(url: &str) -> bool {
+    if std::env::var_os("TACHYON_NO_BROWSER").is_some_and(|v| !v.is_empty() && v != "0") {
+        return false;
+    }
+
+    let mut cmd = if cfg!(target_os = "macos") {
+        std::process::Command::new("open")
+    } else if cfg!(target_os = "windows") {
+        let mut c = std::process::Command::new("rundll32");
+        c.arg("url.dll,FileProtocolHandler");
+        c
+    } else {
+        std::process::Command::new("xdg-open")
+    };
+
+    cmd.arg(url)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .is_ok()
+}
+
 /// Run the full OAuth login flow and persist tokens to the named profile.
 ///
 /// Also writes `active_profile` to `profile` if no active profile is set, so
@@ -604,7 +629,11 @@ pub async fn login(oauth_config: &OAuthConfig, api_url: &str, profile: &str) -> 
 
     println!();
     println!("Logging in profile '{profile}'.");
-    println!("Open the following URL in your browser to log in:");
+    if open_browser(&auth_url) {
+        println!("Opened your browser to log in. If it did not open, visit:");
+    } else {
+        println!("Open the following URL in your browser to log in:");
+    }
     println!();
     println!("  {auth_url}");
     println!();
