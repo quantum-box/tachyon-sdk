@@ -4,6 +4,13 @@
 
 ### Added
 
+- Rust SDK: `agent_session` (feature `agent-session`) calls the agent session
+  API as one caller: `create_session`, `execute` returning the open event
+  stream, and `submit_tool_result`, which resends a result a few times while
+  Tachyon briefly reports the pending call as missing. Request bodies pass
+  through unchanged (the generated `agent_api` reads `execute` as one JSON
+  body and its request model drops `attachments`). `parse_sse_record` and
+  `tool_result_text` read events and bound tool results.
 - `@tachyon-sdk/agent` 0.4.0: `TachyonAgentSessionClient` for the agent
   session API (create a session, stream `execute` events, submit client-side
   tool results), with a pluggable transport and paths so apps can go through
