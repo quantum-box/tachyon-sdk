@@ -42,6 +42,58 @@ for await (const event of streamAgent('Hello!', {
 }
 ```
 
+## Agent sessions (client-side tools)
+
+`TachyonAgentSessionClient` talks to the session API
+(`/v1/llms/sessions/...`). Tachyon runs the agent loop and keeps history; the
+app streams events and answers `tool_call_pending` with tools it runs itself.
+
+```typescript
+import {
+  TachyonAgentSessionClient,
+  fetchAgentTransport,
+  toolResultText,
+} from '@tachyon-sdk/agent'
+
+const agent = new TachyonAgentSessionClient({
+  transport: fetchAgentTransport({
+    apiBaseUrl: 'https://api.n1.tachy.one',
+    accessToken: () => getAccessToken(),
+    tenantId: 'tn_...',
+  }),
+})
+
+const session = await agent.createSession({ name: 'My Agent' })
+for await (const event of agent.execute(session, { task: 'Hello!' })) {
+  if (event.type === 'say') console.log(event.text)
+  if (event.type === 'tool_call_pending' && event.tool_id) {
+    const result = await runTool(event.tool_name, event.args)
+    await agent.submitToolResult(session, {
+      tool_id: event.tool_id,
+      result: toolResultText(result, 16_000),
+      is_error: false,
+    })
+  }
+}
+```
+
+An app that proxies the agent through its own server passes its own
+`transport` (reusing its API client's auth and timeouts) and `paths`:
+
+```typescript
+new TachyonAgentSessionClient({
+  transport: myTransport,
+  paths: {
+    sessions: '/v1/my-app/agent/sessions',
+    execute: id => `/v1/my-app/agent/sessions/${id}/execute`,
+    toolResult: id => `/v1/my-app/agent/sessions/${id}/tool-result`,
+  },
+})
+```
+
+`readAgentEvents(body)` reads a session event stream on its own. It throws
+when the stream ends before `done`.
+
 ## React (SSE streaming)
 
 ```tsx
