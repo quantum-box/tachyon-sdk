@@ -4,6 +4,11 @@
 
 ### Added
 
+- `@tachyon-sdk/agent` 0.4.0: `TachyonAgentSessionClient` for the agent
+  session API (create a session, stream `execute` events, submit client-side
+  tool results), with a pluggable transport and paths so apps can go through
+  their own server. `readAgentEvents` reads a session event stream and fails
+  when it ends before `done`; `toolResultText` bounds a tool result's size.
 - Rust SDK: `AgentExecuteRequest.reasoning_effort` (e.g. `"low"`) asks the
   agent's model for a reasoning effort. OpenAI models that use the Responses
   API (`gpt-5*`, `gpt-6*`) receive it as `reasoning.effort`; other providers
