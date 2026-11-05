@@ -1,6 +1,6 @@
 {
   "name": "@tachyon-sdk/agent",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "description": "Lightweight TypeScript SDK for Tachyon Agent API, plus agent skill definitions",
   "type": "module",
   "main": "./dist/index.cjs",
