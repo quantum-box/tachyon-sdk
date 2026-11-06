@@ -1,6 +1,6 @@
 [package]
 name = "tachyon"
-version = "0.6.88"
+version = "0.6.89"
 edition = "2021"
 description = "CLI for the Tachyon Platform"
 license = "MIT"

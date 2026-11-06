@@ -50,6 +50,11 @@
 
 ### Fixed
 
+- CLI 0.6.89: `kind: OAuth2Resource` manifests carry `spec.exchange`
+  (ADR-0166 token exchange). `manifest plan` diffs it and `manifest apply`
+  sends it; 0.6.88 and earlier dropped it and reported a live resource
+  without an exchange as Unchanged.
+
 - `tachyon env set <app> --secret KEY` only writes `valueFrom.secret` into the
   local `tachyon.yml` when that manifest declares `<app>`. Setting another
   app's secret leaves the file untouched and prints the reference to add
