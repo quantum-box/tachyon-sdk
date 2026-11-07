@@ -42,6 +42,16 @@
 
 ### Changed
 
+- CLI 0.6.90: `tachyon auth login` no longer hands the authorization code to
+  the Tachyon API to relay. It listens on `127.0.0.1` (port 42813, then 42814,
+  then 42815) and the browser returns to `http://localhost:{port}/callback`
+  (RFC 8252). A callback whose `state` does not match is rejected. On a machine
+  without a local browser, `tachyon auth login --no-browser` still relays
+  through the API, but prints a code (`XXXX-XXXX`) that you enter in the
+  browser after signing in; the API releases the code only after that. Before
+  this, anyone who got a user to open a login URL they had built could collect
+  that user's authorization code from the poll endpoint. CLI 0.6.89 and
+  earlier can no longer log in once the API requires the confirmation code.
 - When a service account name matches more than one service account, the error
   now tells you to pass one of the listed IDs.
 - Rust SDK: removed `auth_contract_authority_api::resolve`

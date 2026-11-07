@@ -101,6 +101,24 @@ TACHYON_PROFILE=work tachyon compute apps list
 tachyon auth logout --profile personal
 ```
 
+`tachyon auth login` opens your browser and waits on `127.0.0.1` (port 42813,
+42814 or 42815, whichever is free) for the browser to return to
+`http://localhost:{port}/callback`. Set `TACHYON_NO_BROWSER=1` to only print
+the login URL instead of opening it; the browser still has to run on the same
+machine.
+
+When the browser runs on another machine (SSH, containers), use
+`--no-browser`. The CLI prints the login URL and a code such as `ABCD-EFGH`.
+Open the URL, sign in, and enter the code on the confirmation page; the CLI
+then finishes the login:
+
+```sh
+tachyon auth login --no-browser
+```
+
+Only enter the code on a page you opened from the URL your own terminal
+printed.
+
 Resolution order when picking a profile for a command:
 
 1. `--profile <name>` global flag
