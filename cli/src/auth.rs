@@ -4,14 +4,28 @@ use rand::Rng;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use std::net::Ipv4Addr;
 use std::path::PathBuf;
 use std::sync::{OnceLock, RwLock};
 use std::time::Duration;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::{TcpListener, TcpStream};
 
 /// Polling interval when waiting for the callback relay.
 const POLL_INTERVAL: Duration = Duration::from_secs(2);
 /// Maximum time to wait for the user to complete login.
-const POLL_TIMEOUT: Duration = Duration::from_secs(300);
+const LOGIN_TIMEOUT: Duration = Duration::from_secs(300);
+/// Maximum time a single loopback connection may take to send its request line.
+const LOOPBACK_READ_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Loopback ports tried in order for `tachyon auth login`. Each one is
+/// registered on the CLI Cognito app client as `http://localhost:{port}/callback`,
+/// so changing this list requires changing the Cognito client too.
+pub const LOOPBACK_PORTS: [u16; 3] = [42813, 42814, 42815];
+
+/// Prefix hashed with the OAuth `state` to derive the terminal confirmation
+/// code for `--no-browser` logins. The Tachyon API derives the same code.
+const USER_CODE_HASH_PREFIX: &str = "tachyon-cli-login:";
 
 /// Default profile name when none is configured.
 pub const DEFAULT_PROFILE: &str = "default";
@@ -28,7 +42,6 @@ pub struct OAuthConfig {
     pub cognito_domain: String,
     pub client_id: String,
     pub client_secret: String,
-    pub redirect_uri: String,
     pub scopes: Vec<String>,
 }
 
@@ -58,13 +71,13 @@ pub fn runtime_auth_context() -> Option<RuntimeAuthContext> {
 }
 
 impl OAuthConfig {
-    pub fn authorize_url(&self, state: &str, code_challenge: &str) -> String {
+    pub fn authorize_url(&self, redirect_uri: &str, state: &str, code_challenge: &str) -> String {
         let scopes = self.scopes.join("+");
         format!(
             "{}/oauth2/authorize?response_type=code&client_id={}&redirect_uri={}&scope={}&state={}&code_challenge={}&code_challenge_method=S256",
             self.cognito_domain,
             urlencoding::encode(&self.client_id),
-            urlencoding::encode(&self.redirect_uri),
+            urlencoding::encode(redirect_uri),
             scopes,
             urlencoding::encode(state),
             urlencoding::encode(code_challenge),
@@ -90,7 +103,6 @@ impl Default for OAuthConfig {
             cognito_domain: String::new(),
             client_id: String::new(),
             client_secret: String::new(),
-            redirect_uri: String::new(),
             scopes: DEFAULT_OAUTH_SCOPES
                 .iter()
                 .map(|scope| (*scope).to_string())
@@ -470,6 +482,7 @@ pub fn resolve_active_profile(explicit: Option<&str>) -> Result<String> {
 /// Exchange authorization code for tokens at the Cognito token endpoint.
 async fn exchange_code(
     oauth_config: &OAuthConfig,
+    redirect_uri: &str,
     code: &str,
     code_verifier: &str,
 ) -> Result<TokenResponse> {
@@ -477,7 +490,7 @@ async fn exchange_code(
     form.extend([
         ("grant_type", "authorization_code"),
         ("code", code),
-        ("redirect_uri", oauth_config.redirect_uri.as_str()),
+        ("redirect_uri", redirect_uri),
         ("code_verifier", code_verifier),
     ]);
     let client = Client::new();
@@ -509,7 +522,7 @@ async fn poll_for_code(api_url: &str, state: &str) -> Result<String> {
         api_url.trim_end_matches('/'),
         state
     );
-    let deadline = tokio::time::Instant::now() + POLL_TIMEOUT;
+    let deadline = tokio::time::Instant::now() + LOGIN_TIMEOUT;
 
     loop {
         if tokio::time::Instant::now() > deadline {
@@ -528,7 +541,185 @@ async fn poll_for_code(api_url: &str, state: &str) -> Result<String> {
                 resp.json().await.context("failed to parse poll response")?;
             return Ok(poll_resp.code);
         }
-        // 204 No Content or other = not ready yet, keep polling
+        // 204 No Content (the code has not been confirmed in the browser yet)
+        // or any other status: keep polling until the deadline.
+    }
+}
+
+/// Terminal confirmation code for a `--no-browser` login.
+///
+/// The first 5 bytes of `SHA-256("tachyon-cli-login:" + state)`, encoded as
+/// RFC 4648 base32 (upper case, no padding) into 8 characters and split as
+/// `XXXX-XXXX`. The Tachyon API derives the same code from the same state and
+/// only releases the authorization code to `poll` after the user types it in
+/// the browser, so the code ties the browser session to this terminal.
+pub fn cli_login_user_code(state: &str) -> String {
+    const ALPHABET: &[u8; 32] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
+    let digest = Sha256::digest(format!("{USER_CODE_HASH_PREFIX}{state}").as_bytes());
+    let bits = digest[..5]
+        .iter()
+        .fold(0_u64, |acc, byte| (acc << 8) | u64::from(*byte));
+    let chars: String = (0..8)
+        .map(|i| {
+            let index = (bits >> (35 - i * 5)) & 0x1f;
+            char::from(ALPHABET[index as usize])
+        })
+        .collect();
+    format!("{}-{}", &chars[..4], &chars[4..])
+}
+
+/// `redirect_uri` for a loopback login on `port`. The host is `localhost`
+/// because that is the exact value registered on the Cognito app client.
+fn loopback_redirect_uri(port: u16) -> String {
+    format!("http://localhost:{port}/callback")
+}
+
+/// Listen on the first free `127.0.0.1` port from `ports`.
+async fn bind_loopback(ports: &[u16]) -> Result<(TcpListener, u16)> {
+    for &port in ports {
+        if let Ok(listener) = TcpListener::bind((Ipv4Addr::LOCALHOST, port)).await {
+            return Ok((listener, port));
+        }
+    }
+    let ports = ports
+        .iter()
+        .map(u16::to_string)
+        .collect::<Vec<_>>()
+        .join(", ");
+    Err(anyhow!(
+        "could not listen on 127.0.0.1 port {ports} for the login callback. \
+         Stop the program using them, or run `tachyon auth login --no-browser`."
+    ))
+}
+
+/// Decode an `application/x-www-form-urlencoded` query string.
+fn parse_query(query: &str) -> Vec<(String, String)> {
+    query
+        .split('&')
+        .filter(|pair| !pair.is_empty())
+        .map(|pair| {
+            let (key, value) = pair.split_once('=').unwrap_or((pair, ""));
+            let decode = |raw: &str| {
+                let raw = raw.replace('+', " ");
+                urlencoding::decode(&raw)
+                    .map(|value| value.into_owned())
+                    .unwrap_or(raw)
+            };
+            (decode(key), decode(value))
+        })
+        .collect()
+}
+
+/// Decide what a `GET /callback?...` query means for the login.
+fn loopback_callback_code(query: &str, expected_state: &str) -> Result<String> {
+    let params = parse_query(query);
+    let param = |name: &str| {
+        params
+            .iter()
+            .find(|(key, _)| key == name)
+            .map(|(_, value)| value.as_str())
+    };
+    if let Some(error) = param("error") {
+        let description = param("error_description").unwrap_or_default();
+        return Err(anyhow!("login was not authorized: {error} {description}"));
+    }
+    if param("state") != Some(expected_state) {
+        return Err(anyhow!(
+            "login callback rejected: its state does not match this login. \
+             Run `tachyon auth login` again."
+        ));
+    }
+    match param("code") {
+        Some(code) if !code.is_empty() => Ok(code.to_string()),
+        _ => Err(anyhow!(
+            "login callback did not include an authorization code"
+        )),
+    }
+}
+
+/// Read the request line of one HTTP request and return its method and target.
+async fn read_request_line(stream: &mut TcpStream) -> Result<(String, String)> {
+    let mut buf = Vec::with_capacity(1024);
+    let mut chunk = [0_u8; 1024];
+    let read = async {
+        loop {
+            let n = stream.read(&mut chunk).await?;
+            if n == 0 {
+                break;
+            }
+            buf.extend_from_slice(&chunk[..n]);
+            if buf.windows(4).any(|w| w == b"\r\n\r\n") || buf.len() > 16 * 1024 {
+                break;
+            }
+        }
+        Ok::<_, std::io::Error>(())
+    };
+    tokio::time::timeout(LOOPBACK_READ_TIMEOUT, read)
+        .await
+        .context("timed out reading the login callback request")??;
+    let head = String::from_utf8_lossy(&buf);
+    let mut parts = head.lines().next().unwrap_or_default().split_whitespace();
+    match (parts.next(), parts.next()) {
+        (Some(method), Some(target)) => Ok((method.to_string(), target.to_string())),
+        _ => Err(anyhow!("malformed login callback request")),
+    }
+}
+
+async fn write_html(stream: &mut TcpStream, status: &str, title: &str, message: &str) {
+    let body = format!(
+        "<!doctype html><html><head><meta charset=\"utf-8\"><title>{title}</title></head>\
+         <body style=\"font-family:sans-serif;max-width:32rem;margin:4rem auto\">\
+         <h1>{title}</h1><p>{message}</p></body></html>"
+    );
+    let response = format!(
+        "HTTP/1.1 {status}\r\ncontent-type: text/html; charset=utf-8\r\n\
+         content-length: {}\r\ncache-control: no-store\r\nconnection: close\r\n\r\n{body}",
+        body.len()
+    );
+    let _ = stream.write_all(response.as_bytes()).await;
+    let _ = stream.shutdown().await;
+}
+
+/// Wait on `listener` for the browser redirect to `/callback` and return the
+/// authorization code. Requests to other paths get a 404 and are ignored. The
+/// first `/callback` request decides the outcome: a `state` mismatch, an
+/// `error=` query, or a missing code ends the login with an error.
+async fn receive_loopback_code(listener: &TcpListener, expected_state: &str) -> Result<String> {
+    loop {
+        let (mut stream, _) = listener
+            .accept()
+            .await
+            .context("failed to accept the login callback connection")?;
+        let Ok((method, target)) = read_request_line(&mut stream).await else {
+            continue;
+        };
+        let (path, query) = target.split_once('?').unwrap_or((target.as_str(), ""));
+        if method != "GET" || path != "/callback" {
+            write_html(&mut stream, "404 Not Found", "Not found", "").await;
+            continue;
+        }
+        return match loopback_callback_code(query, expected_state) {
+            Ok(code) => {
+                write_html(
+                    &mut stream,
+                    "200 OK",
+                    "Tachyon CLI login complete",
+                    "You can close this tab and return to the terminal.",
+                )
+                .await;
+                Ok(code)
+            }
+            Err(error) => {
+                write_html(
+                    &mut stream,
+                    "400 Bad Request",
+                    "Tachyon CLI login failed",
+                    "Return to the terminal for details and run the login again.",
+                )
+                .await;
+                Err(error)
+            }
+        };
     }
 }
 
@@ -615,21 +806,20 @@ fn open_browser(url: &str) -> bool {
         .is_ok()
 }
 
-/// Run the full OAuth login flow and persist tokens to the named profile.
-///
-/// Also writes `active_profile` to `profile` if no active profile is set, so
-/// a fresh user logging in for the first time has a working setup.
-pub async fn login(oauth_config: &OAuthConfig, api_url: &str, profile: &str) -> Result<()> {
-    validate_profile_name(profile)?;
+/// How `tachyon auth login` receives the authorization code.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LoginMethod {
+    /// Listen on `127.0.0.1` and let the browser redirect to
+    /// `http://localhost:{port}/callback` (RFC 8252). The default.
+    Loopback,
+    /// Redirect to the Tachyon API and poll it for the code, which it releases
+    /// only after the user confirms the terminal code in the same browser.
+    /// For `--no-browser`, when the browser runs on another machine.
+    Relay,
+}
 
-    let state = random_string(16);
-    let (code_verifier, code_challenge) = pkce_pair();
-
-    let auth_url = oauth_config.authorize_url(&state, &code_challenge);
-
-    println!();
-    println!("Logging in profile '{profile}'.");
-    if open_browser(&auth_url) {
+fn print_authorize_url(auth_url: &str, try_browser: bool) {
+    if try_browser && open_browser(auth_url) {
         println!("Opened your browser to log in. If it did not open, visit:");
     } else {
         println!("Open the following URL in your browser to log in:");
@@ -637,13 +827,58 @@ pub async fn login(oauth_config: &OAuthConfig, api_url: &str, profile: &str) -> 
     println!();
     println!("  {auth_url}");
     println!();
-    println!("Waiting for login to complete...");
+}
 
-    let code = poll_for_code(api_url, &state).await?;
+/// Run the full OAuth login flow and persist tokens to the named profile.
+///
+/// Also writes `active_profile` to `profile` if no active profile is set, so
+/// a fresh user logging in for the first time has a working setup.
+pub async fn login(
+    oauth_config: &OAuthConfig,
+    api_url: &str,
+    profile: &str,
+    method: LoginMethod,
+) -> Result<()> {
+    validate_profile_name(profile)?;
+
+    let state = random_string(16);
+    let (code_verifier, code_challenge) = pkce_pair();
+
+    println!();
+    println!("Logging in profile '{profile}'.");
+
+    let (code, redirect_uri) = match method {
+        LoginMethod::Loopback => {
+            let (listener, port) = bind_loopback(&LOOPBACK_PORTS).await?;
+            let redirect_uri = loopback_redirect_uri(port);
+            let auth_url = oauth_config.authorize_url(&redirect_uri, &state, &code_challenge);
+            print_authorize_url(&auth_url, true);
+            println!("Waiting for the browser to return to {redirect_uri} ...");
+            let code =
+                tokio::time::timeout(LOGIN_TIMEOUT, receive_loopback_code(&listener, &state))
+                    .await
+                    .map_err(|_| anyhow!("login timed out — no response within 5 minutes"))??;
+            (code, redirect_uri)
+        }
+        LoginMethod::Relay => {
+            let redirect_uri = format!("{}/v1/auth/cli/callback", api_url.trim_end_matches('/'));
+            let auth_url = oauth_config.authorize_url(&redirect_uri, &state, &code_challenge);
+            print_authorize_url(&auth_url, false);
+            println!(
+                "After you sign in, enter this code in your browser: {}",
+                cli_login_user_code(&state)
+            );
+            println!("Only enter it on a page you opened from the URL above.");
+            println!();
+            println!("Waiting for login to complete...");
+            let code = poll_for_code(api_url, &state).await?;
+            (code, redirect_uri)
+        }
+    };
 
     println!("Exchanging authorization code for tokens...");
 
-    let token_resp = exchange_code(oauth_config, &code, &code_verifier).await?;
+    let token_resp = exchange_code(oauth_config, &redirect_uri, &code, &code_verifier).await?;
 
     let now = chrono::Utc::now().timestamp();
     let expires_at = token_resp.expires_in.map(|e| now + e);
@@ -839,12 +1074,12 @@ mod tests {
             cognito_domain: "https://auth.example.com".to_string(),
             client_id: "test-client".to_string(),
             client_secret: "test-secret".to_string(),
-            redirect_uri: "https://api.example.com/v1/auth/cli/callback".to_string(),
             scopes: vec!["openid".into(), "profile".into()],
         };
-        let url = config.authorize_url("STATE", "CHALLENGE");
+        let url = config.authorize_url("http://localhost:42813/callback", "STATE", "CHALLENGE");
         assert!(url.starts_with("https://auth.example.com/oauth2/authorize?"));
         assert!(url.contains("client_id=test-client"));
+        assert!(url.contains("redirect_uri=http%3A%2F%2Flocalhost%3A42813%2Fcallback"));
         assert!(url.contains("state=STATE"));
         assert!(url.contains("code_challenge=CHALLENGE"));
         assert!(url.contains("code_challenge_method=S256"));
@@ -934,5 +1169,121 @@ mod tests {
         // least confirm validation runs.
         assert!(profile_path("..").is_err());
         assert!(profile_path("a/b").is_err());
+    }
+
+    /// The Tachyon API derives the same code from the same state, so these
+    /// values are fixed on purpose: changing them breaks `--no-browser` login.
+    #[test]
+    fn cli_login_user_code_matches_the_server_derivation() {
+        assert_eq!(cli_login_user_code("abc"), "NLH5-C6F2");
+        assert_eq!(cli_login_user_code("test-state"), "434E-2PBV");
+        assert_eq!(cli_login_user_code("q3Vb0Xc8mJYv5bU0N2e1sA"), "DIV5-AEHW");
+    }
+
+    #[test]
+    fn cli_login_user_code_is_two_groups_of_base32() {
+        let code = cli_login_user_code(&random_string(16));
+        assert_eq!(code.len(), 9);
+        assert_eq!(&code[4..5], "-");
+        assert!(code
+            .chars()
+            .filter(|c| *c != '-')
+            .all(|c| matches!(c, 'A'..='Z' | '2'..='7')));
+    }
+
+    #[test]
+    fn loopback_redirect_uri_uses_the_registered_localhost_form() {
+        assert_eq!(
+            loopback_redirect_uri(42813),
+            "http://localhost:42813/callback"
+        );
+        assert_eq!(LOOPBACK_PORTS, [42813, 42814, 42815]);
+    }
+
+    #[tokio::test]
+    async fn bind_loopback_skips_a_port_in_use() {
+        let busy = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let busy_port = busy.local_addr().unwrap().port();
+        let free_port = {
+            let probe = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            probe.local_addr().unwrap().port()
+        };
+
+        let (_listener, port) = bind_loopback(&[busy_port, free_port]).await.unwrap();
+
+        assert_eq!(port, free_port);
+        assert!(bind_loopback(&[busy_port]).await.is_err());
+    }
+
+    async fn send_callback(port: u16, target: &str) -> String {
+        let mut stream = TcpStream::connect((Ipv4Addr::LOCALHOST, port))
+            .await
+            .unwrap();
+        stream
+            .write_all(
+                format!("GET {target} HTTP/1.1\r\nHost: localhost:{port}\r\n\r\n").as_bytes(),
+            )
+            .await
+            .unwrap();
+        let mut response = String::new();
+        stream.read_to_string(&mut response).await.unwrap();
+        response
+    }
+
+    async fn loopback_listener() -> (TcpListener, u16) {
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        (listener, port)
+    }
+
+    #[tokio::test]
+    async fn loopback_returns_the_code_when_state_matches() {
+        let (listener, port) = loopback_listener().await;
+        let receiver =
+            tokio::spawn(async move { receive_loopback_code(&listener, "state-1").await });
+
+        let not_found = send_callback(port, "/favicon.ico").await;
+        let response = send_callback(port, "/callback?code=auth%2Dcode&state=state-1").await;
+
+        assert!(not_found.starts_with("HTTP/1.1 404"));
+        assert!(response.starts_with("HTTP/1.1 200 OK"), "{response}");
+        assert!(response.contains("login complete"));
+        assert_eq!(receiver.await.unwrap().unwrap(), "auth-code");
+    }
+
+    #[tokio::test]
+    async fn loopback_rejects_a_callback_with_another_state() {
+        let (listener, port) = loopback_listener().await;
+        let receiver =
+            tokio::spawn(async move { receive_loopback_code(&listener, "state-1").await });
+
+        let response = send_callback(port, "/callback?code=attacker-code&state=state-2").await;
+
+        assert!(response.starts_with("HTTP/1.1 400"), "{response}");
+        let error = receiver.await.unwrap().unwrap_err().to_string();
+        assert!(error.contains("state does not match"), "{error}");
+    }
+
+    #[tokio::test]
+    async fn loopback_rejects_a_callback_without_state() {
+        let (listener, port) = loopback_listener().await;
+        let receiver =
+            tokio::spawn(async move { receive_loopback_code(&listener, "state-1").await });
+
+        send_callback(port, "/callback?code=attacker-code").await;
+
+        assert!(receiver.await.unwrap().is_err());
+    }
+
+    #[tokio::test]
+    async fn loopback_ends_the_login_on_an_error_query() {
+        let (listener, port) = loopback_listener().await;
+        let receiver =
+            tokio::spawn(async move { receive_loopback_code(&listener, "state-1").await });
+
+        send_callback(port, "/callback?error=access_denied&state=state-1").await;
+
+        let error = receiver.await.unwrap().unwrap_err().to_string();
+        assert!(error.contains("access_denied"), "{error}");
     }
 }
