@@ -157,6 +157,29 @@ impl AgentSessionClient {
         }
     }
 
+    /// Read a session using AIP's owner and tenant authorization gate.
+    pub async fn get_session(&self, session_id: &str) -> Result<Value, AgentSessionError> {
+        let path = session_path(session_id)?;
+        let mut request = self
+            .client
+            .get(format!("{}{path}", self.base_path))
+            .bearer_auth(&self.token)
+            .header("x-operator-id", &self.operator_id)
+            .header("accept", "application/json")
+            .timeout(Duration::from_secs(20));
+        if let Some(platform) = &self.platform_id {
+            request = request.header("x-platform-id", platform);
+        }
+        let response = request
+            .send()
+            .await
+            .map_err(AgentSessionError::Unavailable)?;
+        Self::check(response)?
+            .json()
+            .await
+            .map_err(AgentSessionError::Unavailable)
+    }
+
     /// Run one turn. Returns the open server-sent event stream; read it with
     /// `bytes_stream()` and `parse_sse_record`.
     pub async fn execute(
@@ -288,6 +311,26 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(created["session_id"], "as_1");
+    }
+
+    #[tokio::test]
+    async fn reads_session_with_the_callers_headers() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/v1/llms/sessions/as_1"))
+            .and(header("authorization", "Bearer token"))
+            .and(header("x-operator-id", "tn_op"))
+            .and(header("x-platform-id", "tn_platform"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(json!({"id":"as_1", "metadata":{"application":"tachyonfield"}})),
+            )
+            .mount(&server)
+            .await;
+        assert_eq!(
+            client(&server).get_session("as_1").await.unwrap()["id"],
+            "as_1"
+        );
     }
 
     #[tokio::test]

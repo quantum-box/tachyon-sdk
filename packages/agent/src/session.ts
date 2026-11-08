@@ -17,6 +17,32 @@ export type AgentSessionTransport = {
   ): Promise<ReadableStream<Uint8Array>>
 }
 
+/** Reviewed Field application context, sent consistently for every session call. */
+export type FieldAgentContext = {
+  appId: 'tachyonfield' | 'courseboard'
+  capabilities?: ('reservation_status' | 'reservation_status_view')[]
+}
+
+export function fieldAgentHeaders(context: FieldAgentContext): Record<string, string> {
+  return {
+    'x-field-agent-app': context.appId,
+    'x-field-agent-capabilities': (context.capabilities ?? []).join(','),
+  }
+}
+
+export const FIELD_AGENT_SESSION_PATHS: AgentSessionPaths = {
+  sessions: '/v1/field/agent/sessions',
+  execute: id => `/v1/field/agent/sessions/${encodeURIComponent(id)}/execute`,
+  toolResult: id => `/v1/field/agent/sessions/${encodeURIComponent(id)}/tool-result`,
+}
+
+/** Structured host data stays intact outside the model's text transcript. */
+export type AgentStructuredResult<T = unknown> = {
+  type: string
+  version: number
+  data: T
+}
+
 /** Where each call goes. Defaults are Tachyon's own agent session API. */
 export type AgentSessionPaths = {
   sessions: string
@@ -154,6 +180,9 @@ export type FetchAgentTransportConfig = {
   tenantId?: string
   /** Platform ID (x-platform-id header) */
   platformId?: string
+  /** Stream host may differ from the JSON API host. */
+  streamBaseUrl?: string
+  application?: FieldAgentContext
   headers?: Record<string, string>
   fetch?: typeof fetch
 }
@@ -177,11 +206,12 @@ export function fetchAgentTransport(
       Accept: accept,
       Authorization: `Bearer ${token}`,
       ...config.headers,
+      ...(config.application ? fieldAgentHeaders(config.application) : {}),
     }
     if (config.tenantId) headers['x-operator-id'] = config.tenantId
     if (config.platformId) headers['x-platform-id'] = config.platformId
     const response = await (config.fetch ?? fetch)(
-      `${config.apiBaseUrl.replace(/\/+$/, '')}${path}`,
+      `${(accept === 'text/event-stream' ? config.streamBaseUrl ?? config.apiBaseUrl : config.apiBaseUrl).replace(/\/+$/, '')}${path}`,
       {
         method: 'POST',
         headers,

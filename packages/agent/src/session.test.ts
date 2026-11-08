@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest'
 import { readAgentEvents } from './events'
 import {
   type AgentSessionTransport,
+  FIELD_AGENT_SESSION_PATHS,
+  fieldAgentHeaders,
   TachyonAgentSessionClient,
   fetchAgentTransport,
   toolResultText,
@@ -190,5 +192,38 @@ describe('fetchAgentTransport', () => {
     await expect(transport.postJson('/fail', undefined)).rejects.toMatchObject({
       status: 403,
     })
+  })
+})
+
+
+describe('Field application transport', () => {
+  it('uses one application context for JSON and stream without changing the result', async () => {
+    const calls: { url: string; headers: Headers }[] = []
+    const transport = fetchAgentTransport({
+      apiBaseUrl: 'https://field.example', streamBaseUrl: 'https://stream.example',
+      accessToken: 'caller', tenantId: 'tn_1',
+      application: { appId: 'courseboard', capabilities: ['reservation_status', 'reservation_status_view'] },
+      fetch: async (url, init) => {
+        calls.push({ url: String(url), headers: new Headers(init?.headers) })
+        return String(url).endsWith('/execute')
+          ? new Response('data: {"type":"done"}\n\n')
+          : Response.json({ session_id: 'as_one' })
+      },
+    })
+    const client = new TachyonAgentSessionClient({ transport, paths: FIELD_AGENT_SESSION_PATHS })
+    await client.createSession()
+    await collect(client.execute('as_one', { task: 'reservations' }))
+    await client.submitToolResult('as_one', { tool_id: 't1', result: '{"course":"滝のOUT","players":13}', is_error: false })
+    expect(calls.map(c => c.url)).toEqual([
+      'https://field.example/v1/field/agent/sessions',
+      'https://stream.example/v1/field/agent/sessions/as_one/execute',
+      'https://field.example/v1/field/agent/sessions/as_one/tool-result',
+    ])
+    for (const call of calls) {
+      expect(call.headers.get('x-field-agent-app')).toBe('courseboard')
+      expect(call.headers.get('x-field-agent-capabilities')).toBe('reservation_status,reservation_status_view')
+      expect(call.headers.get('authorization')).toBe('Bearer caller')
+    }
+    expect(fieldAgentHeaders({ appId: 'tachyonfield' })['x-field-agent-app']).toBe('tachyonfield')
   })
 })
