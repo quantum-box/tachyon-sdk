@@ -795,3 +795,74 @@ fn compute_preview_create_posts_manual_branch_build() {
         "stdout:\n{stdout}"
     );
 }
+
+#[test]
+fn compute_preview_create_wait_prints_the_matching_preview_url() {
+    let tmp = TempDir::new().unwrap();
+    let app_id = "app_01kp4vm07tr3d4375597d15gkp";
+    let (api_url, rx, handle) = start_server(vec![
+        r#"{"id":"bld_test","app_id":"app_test","status":"queued"}"#,
+        r#"{"id":"bld_test","app_id":"app_test","status":"succeeded"}"#,
+        r#"{"deployments":[{"id":"dep_old","build_id":"bld_old","status":"active","public_url":"https://old.example.test"},{"id":"dep_test","build_id":"bld_test","status":"active","public_url":"https://preview.example.test"}]}"#,
+    ]);
+
+    let output = isolated_command(tmp.path())
+        .env("TACHYON_API_URL", api_url)
+        .args([
+            "compute",
+            "preview",
+            "create",
+            "--app",
+            app_id,
+            "--branch",
+            "feature/preview",
+            "--wait",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    handle.join().unwrap();
+    let requests: Vec<_> = rx.into_iter().collect();
+    assert!(requests[1].starts_with("GET /v1/compute/builds/bld_test "));
+    assert!(requests[2].starts_with(&format!(
+        "GET /v1/compute/apps/{app_id}/deployments?environment=preview "
+    )));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("Preview URL: https://preview.example.test"),
+        "{stdout}"
+    );
+}
+
+#[test]
+fn compute_preview_create_wait_reports_the_build_failure() {
+    let tmp = TempDir::new().unwrap();
+    let (api_url, _requests, handle) = start_server(vec![
+        r#"{"id":"bld_test","app_id":"app_test","status":"queued"}"#,
+        r#"{"id":"bld_test","app_id":"app_test","status":"failed","error_message":"deploy hook failed"}"#,
+    ]);
+    let output = isolated_command(tmp.path())
+        .env("TACHYON_API_URL", api_url)
+        .args([
+            "compute",
+            "preview",
+            "create",
+            "--app",
+            "app_01kp4vm07tr3d4375597d15gkp",
+            "--branch",
+            "feature/preview",
+            "--wait",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr)
+        .contains("bld_test finished with status failed: deploy hook failed"));
+    handle.join().unwrap();
+}
