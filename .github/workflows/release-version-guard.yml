@@ -1,0 +1,26 @@
+name: Release Version Guard
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    name: Require version bumps for release changes
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - name: Test release version bump lint
+        run: node scripts/test-release-version-bump.mjs
+
+      - name: Check release package versions
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: node scripts/lint-release-version-bump.mjs --base "$BASE_SHA" --head "$HEAD_SHA"

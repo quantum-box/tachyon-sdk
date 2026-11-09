@@ -32,6 +32,32 @@ pub struct ProjectSpec {
     pub repository: Option<RepositoryConfig>,
     #[serde(default)]
     pub apps: Vec<CloudAppEntry>,
+    #[serde(default)]
+    pub chat: Option<ChatNotificationConfig>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize, PartialEq, Eq)]
+pub struct ChatNotificationConfig {
+    #[serde(default)]
+    pub slack: Option<SlackNotificationConfig>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize, PartialEq, Eq)]
+pub struct SlackNotificationConfig {
+    #[serde(default, alias = "mentionAliases")]
+    pub mention_aliases: Vec<SlackMentionAliasConfig>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize, PartialEq, Eq)]
+pub struct SlackMentionAliasConfig {
+    #[serde(default)]
+    pub alias: String,
+    #[serde(default)]
+    pub kind: Option<String>,
+    #[serde(default, alias = "groupId")]
+    pub group_id: Option<String>,
+    #[serde(default, alias = "userId")]
+    pub user_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize, PartialEq, Eq)]
@@ -240,6 +266,40 @@ metadata:
         assert_eq!(loaded.metadata.name.as_deref(), Some("fieldadmin"));
         assert_eq!(loaded.metadata.tenant_id.as_deref(), Some("tn_field"));
         assert_eq!(loaded.spec.apps[0].name.as_deref(), Some("fieldadmin"));
+    }
+
+    #[test]
+    fn parses_slack_mention_aliases_for_notify_resolution_precedence() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        let _guard = EnvGuard::remove(CONFIG_ENV);
+        let tmp = TempDir::new().unwrap();
+        std::fs::write(
+            tmp.path().join(CONFIG_FILE),
+            r#"apiVersion: apps.tachy.one/v1alpha
+kind: ProjectConfig
+metadata:
+  name: default
+  tenantId: tn_field
+spec:
+  chat:
+    slack:
+      workspaceId: T123
+      mentionAliases:
+        - alias: on-call
+          kind: user_group
+          groupId: S123
+"#,
+        )
+        .unwrap();
+
+        let loaded = load_from(tmp.path(), None).unwrap().unwrap();
+        let aliases = &loaded.spec.chat.unwrap().slack.unwrap().mention_aliases;
+
+        assert_eq!(aliases.len(), 1);
+        assert_eq!(aliases[0].alias, "on-call");
+        assert_eq!(aliases[0].kind.as_deref(), Some("user_group"));
+        assert_eq!(aliases[0].group_id.as_deref(), Some("S123"));
+        assert_eq!(aliases[0].user_id, None);
     }
 
     #[test]

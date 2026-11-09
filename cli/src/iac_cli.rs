@@ -1,16 +1,20 @@
 use anyhow::{anyhow, Context, Result};
 use chrono::{DateTime, Utc};
 use clap::{Args, Subcommand};
+use dialoguer::{theme::ColorfulTheme, Password};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::collections::HashSet;
 use std::fs;
+use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 use tachyon_sdk::apis::configuration::Configuration;
 
 use crate::client::{print_json, ApiClient};
 use crate::resolve;
+
+const HOST_TENANT_ID: &str = "tn_01jcjtqxah6mhyw4e5mahg02nd";
 
 #[derive(Debug, Clone, Args)]
 pub struct IacArgs {
@@ -20,6 +24,11 @@ pub struct IacArgs {
 
 #[derive(Debug, Clone, Subcommand)]
 pub enum IacCommand {
+    /// Show the bundled Host IaC configuration digest
+    HostConfig {
+        #[arg(long)]
+        json: bool,
+    },
     /// Show manifest revision history
     History {
         #[arg(long)]
@@ -68,6 +77,23 @@ pub enum IacCommand {
         /// Override state file path
         #[arg(long)]
         state: Option<String>,
+        /// Prompt interactively for newly added or changed `$secret_ref` values.
+        /// Values are sent only in memory; the server stores them and the
+        /// local IaC state keeps the reference instead of the value.
+        #[arg(long)]
+        prompt_secrets: bool,
+        /// Change-control approval token for protected production mutations.
+        ///
+        /// Prefer TACHYON_CHANGE_CONTROL_APPROVAL_TOKEN so the token does not
+        /// appear in shell history or process arguments. Optional during the
+        /// compatibility rollout; when present, verified before API access
+        /// and forwarded only as a dedicated request header.
+        #[arg(
+            long = "change-control-token",
+            env = "TACHYON_CHANGE_CONTROL_APPROVAL_TOKEN",
+            hide_env_values = true
+        )]
+        change_control_token: Option<String>,
     },
     /// Roll back manifest to a specific revision
     Rollback {
@@ -77,18 +103,18 @@ pub enum IacCommand {
         name: String,
         #[arg(long)]
         revision: i32,
-    },
-    /// Import IAC manifests from 003-iac-manifests.yaml through the API
-    ImportSeed {
-        #[arg(long)]
-        file: String,
-        #[arg(long, default_value_t = false)]
-        dry_run: bool,
-    },
-    /// Verify drift between seed manifests and current IAC API state
-    VerifySeed {
-        #[arg(long)]
-        file: String,
+        /// Change-control approval token for protected production mutations.
+        ///
+        /// Prefer TACHYON_CHANGE_CONTROL_APPROVAL_TOKEN so the token does not
+        /// appear in shell history or process arguments. Optional during the
+        /// compatibility rollout; when present, verified before API access
+        /// and forwarded only as a dedicated request header.
+        #[arg(
+            long = "change-control-token",
+            env = "TACHYON_CHANGE_CONTROL_APPROVAL_TOKEN",
+            hide_env_values = true
+        )]
+        change_control_token: Option<String>,
     },
     /// Show the current local IaC state file contents
     State {
@@ -113,6 +139,11 @@ pub enum IacCommand {
     Connections {
         #[command(subcommand)]
         command: ConnectionsCommand,
+    },
+    /// Manage tenant grants on integration installations
+    Grants {
+        #[command(subcommand)]
+        command: GrantsCommand,
     },
 }
 
@@ -149,52 +180,163 @@ pub enum ConnectionsCommand {
     Disconnect { id: String },
 }
 
+#[derive(Debug, Clone, Subcommand)]
+pub enum GrantsCommand {
+    /// List tenant grants on integration installations
+    List {
+        #[arg(long)]
+        json: bool,
+    },
+    /// Create a tenant grant for an installation verified by the caller
+    Create {
+        #[arg(long)]
+        provider: String,
+        #[arg(long)]
+        installation_id: String,
+        /// Value of github_verification returned after GitHub OAuth
+        #[arg(long)]
+        verification: String,
+        /// Grant every resource reachable by the installation
+        #[arg(long, conflicts_with = "repos", required_unless_present = "repos")]
+        all: bool,
+        /// owner/repo, repeatable; an empty list is not a valid CLI scope
+        #[arg(long = "repo", conflicts_with = "all", required_unless_present = "all")]
+        repos: Vec<String>,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Change the resource scope of a tenant grant
+    SetScope {
+        id: String,
+        #[arg(long, conflicts_with = "repos", required_unless_present = "repos")]
+        all: bool,
+        /// owner/repo, repeatable; an empty list is not a valid CLI scope
+        #[arg(long = "repo", conflicts_with = "all", required_unless_present = "all")]
+        repos: Vec<String>,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Revoke a tenant grant
+    Revoke {
+        id: String,
+        #[arg(long)]
+        json: bool,
+    },
+}
+
 // ---- Response types ----
 
 #[derive(Debug, Deserialize, Serialize)]
 struct OAuthProvidersResponse {
-    #[serde(default)]
-    github: Option<OAuthProviderConfig>,
-    #[serde(default)]
-    linear: Option<OAuthProviderConfig>,
+    providers: Vec<OAuthProviderConfig>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
 struct OAuthProviderConfig {
-    #[serde(default)]
-    client_id: Option<String>,
-    #[serde(default)]
-    enabled: Option<bool>,
-    #[serde(default)]
-    scopes: Option<Vec<String>>,
+    provider: String,
+    client_id: String,
+    redirect_uri: String,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
 struct IntegrationResponse {
     id: String,
-    #[serde(default)]
-    name: Option<String>,
-    #[serde(default)]
-    provider: Option<String>,
-    #[serde(default)]
-    status: Option<String>,
-    #[serde(default)]
-    created_at: Option<String>,
+    name: String,
+    description: String,
+    category: String,
+    provider: String,
+    icon_url: Option<String>,
+    is_enabled: bool,
+    is_featured: bool,
+    requires_oauth: bool,
+    requires_setup: bool,
+}
+
+#[derive(Debug, Deserialize)]
+struct IntegrationListResponse {
+    integrations: Vec<IntegrationResponse>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct IntegrationDetailResponse {
+    id: String,
+    name: String,
+    description: String,
+    category: String,
+    provider: String,
+    icon_url: Option<String>,
+    sync_capability: String,
+    supported_objects: Vec<String>,
+    is_enabled: bool,
+    is_featured: bool,
+    requires_oauth: bool,
+    oauth_scopes: Vec<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
 struct ConnectionResponse {
     id: String,
-    #[serde(default)]
-    integration_id: Option<String>,
-    #[serde(default)]
-    provider: Option<String>,
-    #[serde(default)]
-    status: Option<String>,
-    #[serde(default)]
-    account_name: Option<String>,
-    #[serde(default)]
-    created_at: Option<String>,
+    integration_id: String,
+    provider: String,
+    status: String,
+    external_account_id: Option<String>,
+    external_account_name: Option<String>,
+    connected_at: String,
+    last_synced_at: Option<String>,
+    error_message: Option<String>,
+    metadata: std::collections::HashMap<String, serde_json::Value>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ConnectionListResponse {
+    connections: Vec<ConnectionResponse>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+enum ResourceScope {
+    All,
+    List { resources: Vec<String> },
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct TenantGrantResponse {
+    id: String,
+    status: String,
+    resource_scope: ResourceScope,
+    managed_by_connection: bool,
+    installation: InstallationResponse,
+    created_at: DateTime<Utc>,
+    updated_at: DateTime<Utc>,
+    revoked_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct InstallationResponse {
+    id: String,
+    provider: String,
+    kind: String,
+    status: String,
+    external_installation_id: Option<String>,
+    external_account_name: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct TenantGrantListResponse {
+    grants: Vec<TenantGrantResponse>,
+}
+
+#[derive(Debug, Serialize)]
+struct CreateTenantGrantRequest<'a> {
+    provider: &'a str,
+    installation_id: &'a str,
+    verification: &'a str,
+    resource_scope: ResourceScope,
+}
+
+#[derive(Debug, Serialize)]
+struct UpdateTenantGrantScopeRequest {
+    resource_scope: ResourceScope,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -207,26 +349,43 @@ struct ManifestHistoryItem {
     manifest: String,
 }
 
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct HostIacConfigResponse {
+    environment: String,
+    host_config_digest: String,
+}
+
 #[derive(Debug, Clone)]
 struct ManifestIdentity {
     kind: String,
     name: String,
 }
 
-#[derive(Debug, Deserialize)]
-struct SeedFile {
-    tables: Vec<SeedTable>,
-}
-
-#[derive(Debug, Deserialize)]
-struct SeedTable {
-    name: String,
-    rows: Vec<SeedRow>,
-}
-
-#[derive(Debug, Deserialize)]
-struct SeedRow {
+struct PlannedManifestWrite {
     manifest: Value,
+    identity: ManifestIdentity,
+    expected_revision: i32,
+    prompted_secrets: Vec<PromptedSecret>,
+}
+
+struct PlannedManifestApply {
+    write: PlannedManifestWrite,
+    action: ChangeAction,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SecretPromptCandidate {
+    provider_index: usize,
+    field: String,
+    secret_ref: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PromptedSecret {
+    provider_index: usize,
+    field: String,
+    secret_ref: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -296,6 +455,17 @@ enum ChangeAction {
 
 // ---- Handlers ----
 
+async fn run_host_config(api: &ApiClient, json: bool) -> Result<()> {
+    let response: HostIacConfigResponse = api.get("/v1/iac/host-config").await?;
+    if json {
+        return print_json(&response);
+    }
+
+    println!("Environment: {}", response.environment);
+    println!("Host config digest: {}", response.host_config_digest);
+    Ok(())
+}
+
 async fn run_oauth_providers(
     api: &ApiClient,
     tenant_id: Option<&str>,
@@ -310,43 +480,18 @@ async fn run_oauth_providers(
         return print_json(&resp);
     }
     println!("OAuth Provider Configurations:");
-    println!();
-    if let Some(gh) = &resp.github {
-        println!("  GitHub:");
-        println!(
-            "    Enabled:   {}",
-            gh.enabled
-                .map(|v| if v { "yes" } else { "no" })
-                .unwrap_or("-")
-        );
-        println!("    Client ID: {}", gh.client_id.as_deref().unwrap_or("-"));
-        if let Some(scopes) = &gh.scopes {
-            println!("    Scopes:    {}", scopes.join(", "));
-        }
-    } else {
-        println!("  GitHub: not configured");
-    }
-    println!();
-    if let Some(lr) = &resp.linear {
-        println!("  Linear:");
-        println!(
-            "    Enabled:   {}",
-            lr.enabled
-                .map(|v| if v { "yes" } else { "no" })
-                .unwrap_or("-")
-        );
-        println!("    Client ID: {}", lr.client_id.as_deref().unwrap_or("-"));
-        if let Some(scopes) = &lr.scopes {
-            println!("    Scopes:    {}", scopes.join(", "));
-        }
-    } else {
-        println!("  Linear: not configured");
+    for provider in &resp.providers {
+        println!();
+        println!("  {}:", provider.provider);
+        println!("    Client ID:    {}", provider.client_id);
+        println!("    Redirect URI: {}", provider.redirect_uri);
     }
     Ok(())
 }
 
 async fn run_integrations_list(api: &ApiClient, json: bool) -> Result<()> {
-    let integrations: Vec<IntegrationResponse> = api.get("/v1/integrations").await?;
+    let response: IntegrationListResponse = api.get("/v1/integrations").await?;
+    let integrations = response.integrations;
     if json {
         return print_json(&integrations);
     }
@@ -355,41 +500,44 @@ async fn run_integrations_list(api: &ApiClient, json: bool) -> Result<()> {
         return Ok(());
     }
     println!(
-        "{:<28}  {:<20}  {:<16}  {:<12}  CREATED AT",
-        "ID", "NAME", "PROVIDER", "STATUS"
+        "{:<28}  {:<20}  {:<16}  {:<8}  REQUIRES SETUP",
+        "ID", "NAME", "PROVIDER", "ENABLED"
     );
     println!(
-        "{:-<28}  {:-<20}  {:-<16}  {:-<12}  {:-<19}",
+        "{:-<28}  {:-<20}  {:-<16}  {:-<8}  {:-<14}",
         "", "", "", "", ""
     );
     for i in &integrations {
         println!(
-            "{:<28}  {:<20}  {:<16}  {:<12}  {}",
-            i.id,
-            i.name.as_deref().unwrap_or("-"),
-            i.provider.as_deref().unwrap_or("-"),
-            i.status.as_deref().unwrap_or("-"),
-            i.created_at.as_deref().unwrap_or("-"),
+            "{:<28}  {:<20}  {:<16}  {:<8}  {}",
+            i.id, i.name, i.provider, i.is_enabled, i.requires_setup,
         );
     }
     Ok(())
 }
 
 async fn run_integrations_get(api: &ApiClient, id: &str, json: bool) -> Result<()> {
-    let i: IntegrationResponse = api.get(&format!("/v1/integrations/{id}")).await?;
+    let i: IntegrationDetailResponse = api.get(&format!("/v1/integrations/{id}")).await?;
     if json {
         return print_json(&i);
     }
-    println!("ID:       {}", i.id);
-    println!("Name:     {}", i.name.as_deref().unwrap_or("-"));
-    println!("Provider: {}", i.provider.as_deref().unwrap_or("-"));
-    println!("Status:   {}", i.status.as_deref().unwrap_or("-"));
-    println!("Created:  {}", i.created_at.as_deref().unwrap_or("-"));
+    println!("ID:               {}", i.id);
+    println!("Name:             {}", i.name);
+    println!("Description:      {}", i.description);
+    println!("Category:         {}", i.category);
+    println!("Provider:         {}", i.provider);
+    println!("Sync capability:  {}", i.sync_capability);
+    println!("Supported objects: {}", i.supported_objects.join(", "));
+    println!("Enabled:          {}", i.is_enabled);
+    println!("Featured:         {}", i.is_featured);
+    println!("Requires OAuth:   {}", i.requires_oauth);
+    println!("OAuth scopes:     {}", i.oauth_scopes.join(", "));
     Ok(())
 }
 
 async fn run_connections_list(api: &ApiClient, json: bool) -> Result<()> {
-    let conns: Vec<ConnectionResponse> = api.get("/v1/integrations/connections").await?;
+    let response: ConnectionListResponse = api.get("/v1/integrations/connections").await?;
+    let conns = response.connections;
     if json {
         return print_json(&conns);
     }
@@ -398,7 +546,7 @@ async fn run_connections_list(api: &ApiClient, json: bool) -> Result<()> {
         return Ok(());
     }
     println!(
-        "{:<28}  {:<16}  {:<12}  {:<20}  CREATED AT",
+        "{:<28}  {:<16}  {:<12}  {:<20}  CONNECTED AT",
         "ID", "PROVIDER", "STATUS", "ACCOUNT"
     );
     println!(
@@ -409,10 +557,10 @@ async fn run_connections_list(api: &ApiClient, json: bool) -> Result<()> {
         println!(
             "{:<28}  {:<16}  {:<12}  {:<20}  {}",
             c.id,
-            c.provider.as_deref().unwrap_or("-"),
-            c.status.as_deref().unwrap_or("-"),
-            c.account_name.as_deref().unwrap_or("-"),
-            c.created_at.as_deref().unwrap_or("-"),
+            c.provider,
+            c.status,
+            c.external_account_name.as_deref().unwrap_or("-"),
+            c.connected_at,
         );
     }
     Ok(())
@@ -426,10 +574,145 @@ async fn run_connections_get(api: &ApiClient, id: &str, json: bool) -> Result<()
         return print_json(&c);
     }
     println!("ID:       {}", c.id);
-    println!("Provider: {}", c.provider.as_deref().unwrap_or("-"));
-    println!("Status:   {}", c.status.as_deref().unwrap_or("-"));
-    println!("Account:  {}", c.account_name.as_deref().unwrap_or("-"));
-    println!("Created:  {}", c.created_at.as_deref().unwrap_or("-"));
+    println!("Provider:  {}", c.provider);
+    println!("Status:    {}", c.status);
+    println!(
+        "Account:   {}",
+        c.external_account_name.as_deref().unwrap_or("-")
+    );
+    println!("Connected: {}", c.connected_at);
+    Ok(())
+}
+
+fn resource_scope(all: bool, repos: &[String]) -> Result<ResourceScope> {
+    if all {
+        return Ok(ResourceScope::All);
+    }
+    if repos.is_empty() {
+        return Err(anyhow!("at least one --repo is required for a list scope"));
+    }
+    Ok(ResourceScope::List {
+        resources: repos.to_vec(),
+    })
+}
+
+fn render_resource_scope(scope: &ResourceScope) -> String {
+    match scope {
+        ResourceScope::All => "all".to_string(),
+        ResourceScope::List { resources } => format!("list({})", resources.join(",")),
+    }
+}
+
+fn print_grant(grant: &TenantGrantResponse) {
+    println!("ID:        {}", grant.id);
+    println!("Provider:  {}", grant.installation.provider);
+    println!(
+        "Account:   {}",
+        grant
+            .installation
+            .external_account_name
+            .as_deref()
+            .unwrap_or("-")
+    );
+    println!("Status:    {}", grant.status);
+    println!(
+        "Scope:     {}",
+        render_resource_scope(&grant.resource_scope)
+    );
+    println!("Managed:   {}", grant.managed_by_connection);
+}
+
+async fn run_grants_list(api: &ApiClient, json: bool) -> Result<()> {
+    let response: TenantGrantListResponse = api.get("/v1/integrations/grants").await?;
+    if json {
+        return print_json(&response.grants);
+    }
+    if response.grants.is_empty() {
+        println!("No tenant grants found.");
+        return Ok(());
+    }
+    println!(
+        "{:<28}  {:<16}  {:<12}  {:<24}  SCOPE",
+        "ID", "PROVIDER", "STATUS", "ACCOUNT"
+    );
+    println!(
+        "{:-<28}  {:-<16}  {:-<12}  {:-<24}  {:-<20}",
+        "", "", "", "", ""
+    );
+    for grant in &response.grants {
+        println!(
+            "{:<28}  {:<16}  {:<12}  {:<24}  {}",
+            grant.id,
+            grant.installation.provider,
+            grant.status,
+            grant
+                .installation
+                .external_account_name
+                .as_deref()
+                .unwrap_or("-"),
+            render_resource_scope(&grant.resource_scope),
+        );
+    }
+    Ok(())
+}
+
+async fn run_grants_create(
+    api: &ApiClient,
+    provider: &str,
+    installation_id: &str,
+    verification: &str,
+    all: bool,
+    repos: &[String],
+    json: bool,
+) -> Result<()> {
+    let response: TenantGrantResponse = api
+        .post(
+            "/v1/integrations/grants",
+            &CreateTenantGrantRequest {
+                provider,
+                installation_id,
+                verification,
+                resource_scope: resource_scope(all, repos)?,
+            },
+        )
+        .await?;
+    if json {
+        return print_json(&response);
+    }
+    print_grant(&response);
+    Ok(())
+}
+
+async fn run_grants_set_scope(
+    api: &ApiClient,
+    id: &str,
+    all: bool,
+    repos: &[String],
+    json: bool,
+) -> Result<()> {
+    let response: TenantGrantResponse = api
+        .patch(
+            &format!("/v1/integrations/grants/{id}/scope"),
+            &UpdateTenantGrantScopeRequest {
+                resource_scope: resource_scope(all, repos)?,
+            },
+        )
+        .await?;
+    if json {
+        return print_json(&response);
+    }
+    print_grant(&response);
+    Ok(())
+}
+
+async fn run_grants_revoke(api: &ApiClient, id: &str, json: bool) -> Result<()> {
+    let response: TenantGrantResponse = api
+        .delete_json(&format!("/v1/integrations/grants/{id}"))
+        .await?;
+    if json {
+        return print_json(&response);
+    }
+    println!("Tenant grant {id} revoked.");
     Ok(())
 }
 
@@ -476,6 +759,10 @@ fn compute_change(state: &IacState, identity: &ManifestIdentity, manifest: &Valu
         Some(existing) if existing.manifest == *manifest => ChangeAction::NoChange,
         Some(_) => ChangeAction::Update,
     }
+}
+
+fn should_save_manifest(action: &ChangeAction, prompted_secrets: &[PromptedSecret]) -> bool {
+    *action != ChangeAction::NoChange || !prompted_secrets.is_empty()
 }
 
 fn load_manifest_files(path: &str, app: Option<&str>) -> Result<Vec<Value>> {
@@ -653,9 +940,176 @@ fn inject_tenant_id(manifest: &Value, tenant_id: &str) -> Value {
     manifest
 }
 
+fn find_provider<'a>(manifest: Option<&'a Value>, provider_name: &str) -> Option<&'a Value> {
+    manifest
+        .and_then(|manifest| manifest.pointer("/spec/providers"))
+        .and_then(Value::as_array)
+        .and_then(|providers| {
+            providers.iter().find(|provider| {
+                provider.get("name").and_then(Value::as_str) == Some(provider_name)
+            })
+        })
+}
+
+fn collect_secret_prompt_candidates(
+    manifest: &Value,
+    current_manifest: Option<&Value>,
+) -> Vec<SecretPromptCandidate> {
+    let Some(providers) = manifest
+        .pointer("/spec/providers")
+        .and_then(Value::as_array)
+    else {
+        return Vec::new();
+    };
+
+    let mut candidates = Vec::new();
+    for (provider_index, provider) in providers.iter().enumerate() {
+        let Some(provider_name) = provider.get("name").and_then(Value::as_str) else {
+            continue;
+        };
+        let Some(config) = provider.get("config").and_then(Value::as_object) else {
+            continue;
+        };
+        let current_provider = find_provider(current_manifest, provider_name);
+
+        for (field, value) in config {
+            let Some(secret_ref) = value.get("$secret_ref").and_then(Value::as_str) else {
+                continue;
+            };
+
+            let current_ref = current_provider
+                .and_then(|provider| provider.get("config"))
+                .and_then(Value::as_object)
+                .and_then(|config| config.get(field))
+                .and_then(|value| value.get("$secret_ref"))
+                .and_then(Value::as_str);
+
+            // Existing references are intentionally left untouched. This
+            // makes re-applying a full manifest non-interactive for secrets
+            // that are already part of the current desired state.
+            if current_ref == Some(secret_ref) {
+                continue;
+            }
+
+            candidates.push(SecretPromptCandidate {
+                provider_index,
+                field: field.clone(),
+                secret_ref: secret_ref.to_string(),
+            });
+        }
+    }
+
+    candidates
+}
+
+fn nonempty_secret_input(value: String) -> Option<String> {
+    (!value.is_empty()).then_some(value)
+}
+
+fn prompt_for_manifest_secrets(
+    manifest: &mut Value,
+    current_manifest: Option<&Value>,
+) -> Result<Vec<PromptedSecret>> {
+    let candidates = collect_secret_prompt_candidates(manifest, current_manifest);
+    if candidates.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    if !std::io::stdin().is_terminal() {
+        return Err(anyhow!(
+            "--prompt-secrets requires an interactive terminal; omit the flag for non-interactive apply"
+        ));
+    }
+
+    let theme = ColorfulTheme::default();
+    let mut prompted = Vec::new();
+    for candidate in candidates {
+        let value = Password::with_theme(&theme)
+            .with_prompt(format!(
+                "Secret for {} (hidden; Enter keeps the $secret_ref)",
+                candidate.secret_ref
+            ))
+            .allow_empty_password(true)
+            .interact()
+            .with_context(|| format!("read secret for {}", candidate.secret_ref))?;
+        let Some(value) = nonempty_secret_input(value) else {
+            println!(
+                "Skipped {}; the reference will be kept.",
+                candidate.secret_ref
+            );
+            continue;
+        };
+
+        let Some(provider) = manifest
+            .pointer_mut("/spec/providers")
+            .and_then(Value::as_array_mut)
+            .and_then(|providers| providers.get_mut(candidate.provider_index))
+        else {
+            return Err(anyhow!(
+                "provider index {} disappeared while prompting for {}",
+                candidate.provider_index,
+                candidate.secret_ref
+            ));
+        };
+        let Some(config) = provider.get_mut("config").and_then(Value::as_object_mut) else {
+            return Err(anyhow!(
+                "provider config disappeared while prompting for {}",
+                candidate.secret_ref
+            ));
+        };
+        config.insert(candidate.field.clone(), Value::String(value));
+        prompted.push(PromptedSecret {
+            provider_index: candidate.provider_index,
+            field: candidate.field,
+            secret_ref: candidate.secret_ref,
+        });
+    }
+
+    Ok(prompted)
+}
+
+fn restore_prompted_secret_refs(manifest: &mut Value, prompted: &[PromptedSecret]) {
+    for secret in prompted {
+        let Some(provider) = manifest
+            .pointer_mut("/spec/providers")
+            .and_then(Value::as_array_mut)
+            .and_then(|providers| providers.get_mut(secret.provider_index))
+        else {
+            continue;
+        };
+        let Some(config) = provider.get_mut("config").and_then(Value::as_object_mut) else {
+            continue;
+        };
+        config.insert(
+            secret.field.clone(),
+            json!({ "$secret_ref": secret.secret_ref }),
+        );
+    }
+}
+
 async fn graphql_request(api: &ApiClient, body: Value) -> Result<Value> {
+    graphql_request_with_change_control(api, body, None).await
+}
+
+/// Header carrying the approval token to the authoritative server-side gate.
+/// Keeping it out of GraphQL variables prevents request-body logs from
+/// retaining the credential.
+const CHANGE_CONTROL_TOKEN_HEADER: &str = "x-tachyon-change-control-token";
+
+async fn graphql_request_with_change_control(
+    api: &ApiClient,
+    body: Value,
+    change_control_token: Option<&str>,
+) -> Result<Value> {
     let url = format!("{}/v1/graphql", api.base_url);
-    let response = api.client.post(url).json(&body).send().await?;
+    let mut request = api.client.post(url).json(&body);
+    if let Some(token) = change_control_token
+        .map(str::trim)
+        .filter(|token| !token.is_empty())
+    {
+        request = request.header(CHANGE_CONTROL_TOKEN_HEADER, token);
+    }
+    let response = request.send().await?;
     let status = response.status();
     let payload: Value = response.json().await?;
     if !status.is_success() {
@@ -670,6 +1124,28 @@ async fn graphql_request(api: &ApiClient, body: Value) -> Result<Value> {
         .get("data")
         .cloned()
         .ok_or_else(|| anyhow!("missing data in graphql response"))
+}
+
+/// Validate an optional token before the first API request. This is only a
+/// fail-fast client check; the server remains the authorization boundary.
+fn verify_iac_change_control_token(change_control_token: Option<&str>) -> Result<()> {
+    let Some(token) = change_control_token
+        .map(str::trim)
+        .filter(|token| !token.is_empty())
+    else {
+        return Ok(());
+    };
+
+    let verification_key = std::env::var(crate::compute_cli::change_control::VERIFICATION_KEY_ENV)
+        .ok()
+        .filter(|key| !key.is_empty());
+    crate::compute_cli::change_control::verify_change_control_token(
+        token,
+        "production",
+        verification_key.as_deref().map(str::as_bytes),
+        Utc::now().timestamp(),
+    )?;
+    Ok(())
 }
 
 async fn fetch_history(
@@ -705,7 +1181,39 @@ async fn fetch_history(
     Ok(serde_json::from_value(value.clone())?)
 }
 
-async fn save_manifest(api: &ApiClient, tenant_id: &str, manifest: &Value) -> Result<()> {
+async fn fetch_expected_revision(
+    api: &ApiClient,
+    tenant_id: &str,
+    identity: &ManifestIdentity,
+) -> Result<i32> {
+    Ok(fetch_latest_manifest(api, tenant_id, identity).await?.0)
+}
+
+async fn fetch_latest_manifest(
+    api: &ApiClient,
+    tenant_id: &str,
+    identity: &ManifestIdentity,
+) -> Result<(i32, Option<Value>)> {
+    let history = fetch_history(api, tenant_id, &identity.kind, &identity.name, 1).await?;
+    let Some(item) = history.first() else {
+        return Ok((0, None));
+    };
+    let manifest = serde_json::from_str(&item.manifest).with_context(|| {
+        format!(
+            "parse latest manifest {} / {}",
+            identity.kind, identity.name
+        )
+    })?;
+    Ok((item.revision, Some(manifest)))
+}
+
+async fn save_manifest(
+    api: &ApiClient,
+    tenant_id: &str,
+    manifest: &Value,
+    expected_revision: i32,
+    change_control_token: Option<&str>,
+) -> Result<()> {
     let body = json!({
         "query": r#"
           mutation SaveManifest($input: SaveManifestInput!) {
@@ -716,41 +1224,168 @@ async fn save_manifest(api: &ApiClient, tenant_id: &str, manifest: &Value) -> Re
             "input": {
                 "tenantId": tenant_id,
                 "manifest": serde_json::to_string(manifest)?,
+                "expectedRevision": expected_revision,
             }
         }
     });
-    graphql_request(api, body).await?;
+    graphql_request_with_change_control(api, body, change_control_token).await?;
     Ok(())
 }
 
-async fn apply_manifest_resource(api: &ApiClient, kind: &str, name: &str) -> Result<Value> {
-    let body = json!({
-        "query": r#"
-          mutation ApplyManifest($input: ApplyManifestInput!) {
-            applyManifest(input: $input) {
+const APPLY_MANIFEST_BASE_SELECTION: &str = "
               success
               serviceAccountsCreated
               serviceAccountsModified
               providersApplied
-              seedDataTables { tableName created updated skipped }
+              seedDataTables { tableName created updated skipped }";
+
+/// Per-entry FeatureFlags result (tachyon-api PLT-3399, slice S3399-1).
+const APPLY_MANIFEST_FEATURE_FLAG_SELECTION: &str = "
+              featureFlagEntries {
+                manifestName tenantId flagKey outcome enabled
+                inactiveReason reason fields
+              }";
+
+fn apply_manifest_query(with_feature_flag_entries: bool) -> String {
+    let feature_flags = if with_feature_flag_entries {
+        APPLY_MANIFEST_FEATURE_FLAG_SELECTION
+    } else {
+        ""
+    };
+    format!(
+        "mutation ApplyManifest($input: ApplyManifestInput!) {{\n  \
+         applyManifest(input: $input) {{{APPLY_MANIFEST_BASE_SELECTION}{feature_flags}\n  }}\n}}\n"
+    )
+}
+
+/// True when the server rejected the query because it predates
+/// `featureFlagEntries`. GraphQL validates a document before executing it,
+/// so nothing was applied and the request can be sent again without it.
+fn is_unknown_feature_flag_entries_field(error: &anyhow::Error) -> bool {
+    let message = error.to_string();
+    message.contains("Unknown field") && message.contains("featureFlagEntries")
+}
+
+async fn apply_manifest_resource(
+    api: &ApiClient,
+    kind: &str,
+    name: &str,
+    change_control_token: Option<&str>,
+) -> Result<Value> {
+    let request = |with_feature_flag_entries: bool| {
+        json!({
+            "query": apply_manifest_query(with_feature_flag_entries),
+            "variables": {
+                "input": {
+                    "kind": kind,
+                    "name": name,
+                    "dryRun": false,
+                }
             }
-          }
-        "#,
-        "variables": {
-            "input": {
-                "kind": kind,
-                "name": name,
-                "dryRun": false,
-            }
+        })
+    };
+    let with_feature_flag_entries = kind == "FeatureFlags";
+    let data = match graphql_request_with_change_control(
+        api,
+        request(with_feature_flag_entries),
+        change_control_token,
+    )
+    .await
+    {
+        Err(error)
+            if with_feature_flag_entries && is_unknown_feature_flag_entries_field(&error) =>
+        {
+            eprintln!(
+                "Note: this tachyon-api does not report FeatureFlags entries yet; \
+                 applying without the per-entry result."
+            );
+            graphql_request_with_change_control(api, request(false), change_control_token).await?
         }
-    });
-    let data = graphql_request(api, body).await?;
+        result => result?,
+    };
     data.get("applyManifest")
         .cloned()
         .ok_or_else(|| anyhow!("applyManifest not found in response"))
 }
 
-async fn rollback_manifest(api: &ApiClient, kind: &str, name: &str, revision: i32) -> Result<()> {
+/// Human-readable summary of `featureFlagEntries`: one line per entry, then
+/// a warning for refused entries and a note for flags left OFF. A manifest
+/// never publishes a flag, so `Applied` alone does not mean a flag is on.
+fn feature_flag_entry_report(result: &Value) -> Vec<String> {
+    let Some(entries) = result.get("featureFlagEntries").and_then(Value::as_array) else {
+        return Vec::new();
+    };
+    let text = |entry: &Value, field: &str| {
+        entry
+            .get(field)
+            .and_then(Value::as_str)
+            .unwrap_or("-")
+            .to_string()
+    };
+
+    let mut lines = vec![format!("FeatureFlags entries ({}):", entries.len())];
+    let mut refused = 0;
+    let mut left_off = 0;
+    for entry in entries {
+        let outcome = text(entry, "outcome");
+        let enabled = entry
+            .get("enabled")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+        let mut line = format!(
+            "  {outcome:<19} {} {}",
+            text(entry, "flagKey"),
+            if enabled { "ON" } else { "OFF" }
+        );
+        if let Some(reason) = entry.get("inactiveReason").and_then(Value::as_str) {
+            line.push_str(&format!(" ({reason})"));
+        }
+        if outcome == "REFUSED_PUBLICATION" {
+            refused += 1;
+            let fields = entry
+                .get("fields")
+                .and_then(Value::as_array)
+                .map(|fields| {
+                    fields
+                        .iter()
+                        .filter_map(Value::as_str)
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                })
+                .unwrap_or_default();
+            line.push_str(&format!(" refused: {} [{fields}]", text(entry, "reason")));
+        }
+        if !enabled && outcome != "PRUNED" {
+            left_off += 1;
+        }
+        lines.push(line);
+    }
+    if refused > 0 {
+        lines.push(format!(
+            "Warning: {refused} FeatureFlags entr{} refused and not written: a manifest \
+             never changes enabled/defaultValue of an existing flag. Use a Delivery \
+             command or a stop, or declare the current value.",
+            if refused == 1 { "y was" } else { "ies were" }
+        ));
+    }
+    if left_off > 0 {
+        lines.push(format!(
+            "Note: {left_off} declared flag{} OFF after this apply. A manifest never \
+             publishes a flag; open it with a Delivery command.",
+            if left_off == 1 { " is" } else { "s are" }
+        ));
+    }
+    lines
+}
+
+async fn rollback_manifest(
+    api: &ApiClient,
+    kind: &str,
+    name: &str,
+    revision: i32,
+    expected_revision: i32,
+    change_control_token: Option<&str>,
+) -> Result<()> {
     let body = json!({
         "query": r#"
           mutation RollbackManifest($input: RollbackManifestInput!) {
@@ -762,27 +1397,12 @@ async fn rollback_manifest(api: &ApiClient, kind: &str, name: &str, revision: i3
                 "kind": kind,
                 "name": name,
                 "revision": revision,
+                "expectedRevision": expected_revision,
             }
         }
     });
-    graphql_request(api, body).await?;
+    graphql_request_with_change_control(api, body, change_control_token).await?;
     Ok(())
-}
-
-fn extract_iac_manifests(seed_file: SeedFile) -> Vec<Value> {
-    seed_file
-        .tables
-        .into_iter()
-        .filter(|table| table.name == "tachyon_apps_iac.manifests")
-        .flat_map(|table| table.rows.into_iter().map(|row| row.manifest))
-        .collect()
-}
-
-fn load_seed_manifests(file: &str) -> Result<Vec<Value>> {
-    let content = fs::read_to_string(file).with_context(|| format!("read {file}"))?;
-    let seed_file: SeedFile =
-        serde_yaml::from_str(&content).with_context(|| format!("parse yaml {file}"))?;
-    Ok(extract_iac_manifests(seed_file))
 }
 
 async fn run_history(
@@ -860,25 +1480,85 @@ async fn run_plan(
     Ok(())
 }
 
+struct ApplyOptions<'a> {
+    tenant_id: &'a str,
+    file: &'a str,
+    app: Option<&'a str>,
+    state: Option<&'a str>,
+    prompt_secrets: bool,
+    change_control_token: Option<&'a str>,
+}
+
 async fn run_apply(
-    api: &ApiClient,
-    tenant_id: &str,
-    file: &str,
-    app: Option<&str>,
-    state: Option<&str>,
+    read_api: &ApiClient,
+    write_api: &ApiClient,
+    options: ApplyOptions<'_>,
 ) -> Result<()> {
+    let ApplyOptions {
+        tenant_id,
+        file,
+        app,
+        state,
+        prompt_secrets,
+        change_control_token,
+    } = options;
+    verify_iac_change_control_token(change_control_token)?;
     let state_path = state_path(state);
     let mut iac_state = load_state(&state_path)?;
     let mut manifests = load_manifest_files(file, app)?;
     sort_manifests_for_apply(&mut manifests);
+
+    // Capture every serving revision before the first write so a concurrent
+    // update after this planning window is rejected by the server-side CAS.
+    let mut planned = Vec::with_capacity(manifests.len());
     for manifest in manifests {
-        let manifest = inject_tenant_id(&manifest, tenant_id);
+        let mut manifest = inject_tenant_id(&manifest, tenant_id);
         let identity = infer_identity(&manifest, None, None)?;
+        let (expected_revision, current_manifest) =
+            fetch_latest_manifest(read_api, tenant_id, &identity).await?;
+        let prompted_secrets = if prompt_secrets {
+            prompt_for_manifest_secrets(&mut manifest, current_manifest.as_ref())?
+        } else {
+            Vec::new()
+        };
         let action = compute_change(&iac_state, &identity, &manifest);
-        if action != ChangeAction::NoChange {
-            save_manifest(api, tenant_id, &manifest).await?;
+        planned.push(PlannedManifestApply {
+            write: PlannedManifestWrite {
+                manifest,
+                identity,
+                expected_revision,
+                prompted_secrets,
+            },
+            action,
+        });
+    }
+
+    for plan in planned {
+        let PlannedManifestWrite {
+            mut manifest,
+            identity,
+            expected_revision,
+            prompted_secrets,
+        } = plan.write;
+        let action = plan.action;
+        if should_save_manifest(&action, &prompted_secrets) {
+            save_manifest(
+                write_api,
+                tenant_id,
+                &manifest,
+                expected_revision,
+                change_control_token,
+            )
+            .await?;
         }
-        let result = apply_manifest_resource(api, &identity.kind, &identity.name).await?;
+        let result = apply_manifest_resource(
+            write_api,
+            &identity.kind,
+            &identity.name,
+            change_control_token,
+        )
+        .await?;
+        restore_prompted_secret_refs(&mut manifest, &prompted_secrets);
         iac_state.upsert_resource(&identity, manifest);
         if action == ChangeAction::NoChange {
             println!(
@@ -892,68 +1572,12 @@ async fn run_apply(
             );
         }
         println!("{}", serde_json::to_string_pretty(&result)?);
+        for line in feature_flag_entry_report(&result) {
+            println!("{line}");
+        }
     }
     save_state(&state_path, &iac_state)?;
     Ok(())
-}
-
-async fn run_import_seed(
-    api: &ApiClient,
-    tenant_id: &str,
-    file: &str,
-    dry_run: bool,
-) -> Result<()> {
-    let manifests = load_seed_manifests(file)?;
-    if dry_run {
-        println!(
-            "Import dry-run completed: {} manifests found.",
-            manifests.len()
-        );
-        return Ok(());
-    }
-    for manifest in &manifests {
-        let manifest = inject_tenant_id(manifest, tenant_id);
-        let identity = infer_identity(&manifest, None, None)?;
-        save_manifest(api, tenant_id, &manifest).await?;
-        println!("Imported: {} / {}", identity.kind, identity.name);
-    }
-    println!("Import completed: {} manifests saved.", manifests.len());
-    Ok(())
-}
-
-async fn run_verify_seed(api: &ApiClient, tenant_id: &str, file: &str) -> Result<()> {
-    let manifests = load_seed_manifests(file)?;
-    let mut drift_messages = Vec::new();
-    for expected in manifests {
-        let expected = inject_tenant_id(&expected, tenant_id);
-        let identity = infer_identity(&expected, None, None)?;
-        let history = fetch_history(api, tenant_id, &identity.kind, &identity.name, 1).await?;
-        let Some(latest) = history.first() else {
-            drift_messages.push(format!(
-                "missing manifest: kind={} name={}",
-                identity.kind, identity.name
-            ));
-            continue;
-        };
-        let actual: Value = serde_json::from_str(&latest.manifest)?;
-        if actual != expected {
-            drift_messages.push(format!(
-                "content drift: kind={} name={}",
-                identity.kind, identity.name
-            ));
-        }
-    }
-    if drift_messages.is_empty() {
-        println!("Drift check passed.");
-        return Ok(());
-    }
-    for message in &drift_messages {
-        eprintln!("drift: {message}");
-    }
-    Err(anyhow!(
-        "detected {} IAC manifest drift(s)",
-        drift_messages.len()
-    ))
 }
 
 fn run_state(state: Option<&str>) -> Result<()> {
@@ -978,9 +1602,28 @@ fn run_state(state: Option<&str>) -> Result<()> {
 // ---- Entry point ----
 
 pub async fn run(args: &IacArgs, config: &Configuration, tenant_id: &str) -> Result<()> {
-    let api = ApiClient::new(config, tenant_id)?;
+    let api_tenant_id = if matches!(&args.command, IacCommand::HostConfig { .. }) {
+        HOST_TENANT_ID
+    } else {
+        tenant_id
+    };
+    let api = ApiClient::new(config, api_tenant_id)?;
+    let apply_api = if matches!(&args.command, IacCommand::Apply { .. }) {
+        std::env::var("TACHYON_IAC_APPLY_API_KEY")
+            .ok()
+            .filter(|token| !token.trim().is_empty())
+            .map(|token| {
+                let mut apply_config = config.clone();
+                apply_config.bearer_access_token = Some(token);
+                ApiClient::new(&apply_config, api_tenant_id)
+            })
+            .transpose()?
+    } else {
+        None
+    };
 
     match &args.command {
+        IacCommand::HostConfig { json } => run_host_config(&api, *json).await,
         IacCommand::History {
             kind,
             name,
@@ -1020,22 +1663,51 @@ pub async fn run(args: &IacArgs, config: &Configuration, tenant_id: &str) -> Res
             )
             .await
         }
-        IacCommand::Apply { file, app, state } => {
-            run_apply(&api, tenant_id, file, app.as_deref(), state.as_deref()).await
+        IacCommand::Apply {
+            file,
+            app,
+            state,
+            prompt_secrets,
+            change_control_token,
+        } => {
+            run_apply(
+                &api,
+                apply_api.as_ref().unwrap_or(&api),
+                ApplyOptions {
+                    tenant_id,
+                    file,
+                    app: app.as_deref(),
+                    state: state.as_deref(),
+                    prompt_secrets: *prompt_secrets,
+                    change_control_token: change_control_token.as_deref(),
+                },
+            )
+            .await
         }
         IacCommand::Rollback {
             kind,
             name,
             revision,
+            change_control_token,
         } => {
-            rollback_manifest(&api, kind, name, *revision).await?;
+            verify_iac_change_control_token(change_control_token.as_deref())?;
+            let identity = ManifestIdentity {
+                kind: kind.clone(),
+                name: name.clone(),
+            };
+            let expected_revision = fetch_expected_revision(&api, tenant_id, &identity).await?;
+            rollback_manifest(
+                &api,
+                kind,
+                name,
+                *revision,
+                expected_revision,
+                change_control_token.as_deref(),
+            )
+            .await?;
             println!("Rollback completed: {kind} / {name} => revision {revision}");
             Ok(())
         }
-        IacCommand::ImportSeed { file, dry_run } => {
-            run_import_seed(&api, tenant_id, file, *dry_run).await
-        }
-        IacCommand::VerifySeed { file } => run_verify_seed(&api, tenant_id, file).await,
         IacCommand::State { state } => run_state(state.as_deref()),
         IacCommand::OauthProviders {
             tenant_id: tid,
@@ -1053,6 +1725,35 @@ pub async fn run(args: &IacArgs, config: &Configuration, tenant_id: &str) -> Res
             ConnectionsCommand::Get { id, json } => run_connections_get(&api, id, *json).await,
             ConnectionsCommand::Disconnect { id } => run_connections_disconnect(&api, id).await,
         },
+        IacCommand::Grants { command } => match command {
+            GrantsCommand::List { json } => run_grants_list(&api, *json).await,
+            GrantsCommand::Create {
+                provider,
+                installation_id,
+                verification,
+                all,
+                repos,
+                json,
+            } => {
+                run_grants_create(
+                    &api,
+                    provider,
+                    installation_id,
+                    verification,
+                    *all,
+                    repos,
+                    *json,
+                )
+                .await
+            }
+            GrantsCommand::SetScope {
+                id,
+                all,
+                repos,
+                json,
+            } => run_grants_set_scope(&api, id, *all, repos, *json).await,
+            GrantsCommand::Revoke { id, json } => run_grants_revoke(&api, id, *json).await,
+        },
     }
 }
 
@@ -1060,6 +1761,71 @@ pub async fn run(args: &IacArgs, config: &Configuration, tenant_id: &str) -> Res
 mod tests {
     use super::*;
     use tempfile::TempDir;
+
+    #[test]
+    fn apply_query_selects_feature_flag_entries_only_when_asked() {
+        assert!(apply_manifest_query(true).contains("featureFlagEntries"));
+        assert!(!apply_manifest_query(false).contains("featureFlagEntries"));
+        for query in [apply_manifest_query(true), apply_manifest_query(false)] {
+            assert!(query.contains("applyManifest(input: $input)"));
+            assert!(query.contains("seedDataTables { tableName created updated skipped }"));
+        }
+    }
+
+    #[test]
+    fn unknown_field_error_is_detected_for_older_servers() {
+        let older = anyhow!(
+            r#"graphql error: [{{"message":"Unknown field \"featureFlagEntries\" on type \"ApplyManifestResult\"."}}]"#
+        );
+        assert!(is_unknown_feature_flag_entries_field(&older));
+        let other = anyhow!("graphql error: FeatureFlags manifest rejected 1 entry");
+        assert!(!is_unknown_feature_flag_entries_field(&other));
+    }
+
+    #[test]
+    fn feature_flag_entry_report_flags_refused_and_off_entries() {
+        let result = json!({
+            "success": true,
+            "featureFlagEntries": [
+                {"flagKey": "feature.a", "outcome": "CREATED", "enabled": false,
+                 "inactiveReason": "INSERTED_OFF", "reason": null, "fields": []},
+                {"flagKey": "feature.b", "outcome": "REFUSED_PUBLICATION", "enabled": true,
+                 "inactiveReason": null, "reason": "MANIFEST_PUBLICATION_REFUSED",
+                 "fields": ["enabled", "defaultValue"]},
+                {"flagKey": "feature.c", "outcome": "UNCHANGED", "enabled": true,
+                 "inactiveReason": null, "reason": null, "fields": []},
+                {"flagKey": "feature.d", "outcome": "PRUNED", "enabled": false,
+                 "inactiveReason": "PRUNED", "reason": null, "fields": []}
+            ]
+        });
+
+        let report = feature_flag_entry_report(&result);
+
+        assert_eq!(
+            report,
+            vec![
+                "FeatureFlags entries (4):".to_string(),
+                "  CREATED             feature.a OFF (INSERTED_OFF)".to_string(),
+                "  REFUSED_PUBLICATION feature.b ON refused: MANIFEST_PUBLICATION_REFUSED \
+                 [enabled, defaultValue]"
+                    .to_string(),
+                "  UNCHANGED           feature.c ON".to_string(),
+                "  PRUNED              feature.d OFF (PRUNED)".to_string(),
+                "Warning: 1 FeatureFlags entry was refused and not written: a manifest never \
+                 changes enabled/defaultValue of an existing flag. Use a Delivery command or a \
+                 stop, or declare the current value."
+                    .to_string(),
+                "Note: 1 declared flag is OFF after this apply. A manifest never publishes a \
+                 flag; open it with a Delivery command."
+                    .to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn feature_flag_entry_report_is_empty_without_entries() {
+        assert!(feature_flag_entry_report(&json!({"success": true})).is_empty());
+    }
 
     #[test]
     fn load_manifest_files_selects_app_across_multi_document_cloudapps() {
@@ -1230,5 +1996,89 @@ spec:
             .map(|manifest| manifest.get("kind").and_then(Value::as_str).unwrap())
             .collect::<Vec<_>>();
         assert_eq!(kinds, vec!["OAuth2Client", "CloudApp"]);
+    }
+
+    #[test]
+    fn secret_prompt_candidates_only_include_new_or_changed_references() {
+        let current = json!({
+            "spec": {
+                "providers": [{
+                    "name": "openai",
+                    "config": {
+                        "api_key": { "$secret_ref": "openai/api_key" }
+                    }
+                }]
+            }
+        });
+        let desired = json!({
+            "spec": {
+                "providers": [{
+                    "name": "openai",
+                    "config": {
+                        "api_key": { "$secret_ref": "openai/api_key" }
+                    }
+                }, {
+                    "name": "typesafeai",
+                    "config": {
+                        "api_key": { "$secret_ref": "typesafeai/api_key" }
+                    }
+                }]
+            }
+        });
+
+        assert_eq!(
+            collect_secret_prompt_candidates(&desired, Some(&current)),
+            vec![SecretPromptCandidate {
+                provider_index: 1,
+                field: "api_key".to_string(),
+                secret_ref: "typesafeai/api_key".to_string(),
+            }]
+        );
+    }
+
+    #[test]
+    fn prompted_secret_is_restored_to_a_reference_before_local_state_save() {
+        let mut manifest = json!({
+            "spec": {
+                "providers": [{
+                    "name": "typesafeai",
+                    "config": { "api_key": "in-memory-only" }
+                }]
+            }
+        });
+        let prompted = vec![PromptedSecret {
+            provider_index: 0,
+            field: "api_key".to_string(),
+            secret_ref: "typesafeai/api_key".to_string(),
+        }];
+
+        restore_prompted_secret_refs(&mut manifest, &prompted);
+
+        assert_eq!(
+            manifest["spec"]["providers"][0]["config"]["api_key"],
+            json!({ "$secret_ref": "typesafeai/api_key" })
+        );
+        assert!(!manifest.to_string().contains("in-memory-only"));
+    }
+
+    #[test]
+    fn nonempty_secret_input_preserves_whitespace() {
+        let value = "  secret with whitespace  ".to_string();
+
+        assert_eq!(nonempty_secret_input(value.clone()), Some(value));
+        assert_eq!(nonempty_secret_input(String::new()), None);
+    }
+
+    #[test]
+    fn prompted_secret_forces_save_when_manifest_matches_local_state() {
+        let prompted = vec![PromptedSecret {
+            provider_index: 0,
+            field: "api_key".to_string(),
+            secret_ref: "typesafeai/api_key".to_string(),
+        }];
+
+        assert!(should_save_manifest(&ChangeAction::NoChange, &prompted));
+        assert!(!should_save_manifest(&ChangeAction::NoChange, &[]));
+        assert!(should_save_manifest(&ChangeAction::Create, &[]));
     }
 }

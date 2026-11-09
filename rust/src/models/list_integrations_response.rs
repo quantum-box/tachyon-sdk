@@ -18,9 +18,7 @@ pub struct ListIntegrationsResponse {
 }
 
 impl ListIntegrationsResponse {
-    pub fn new(
-        integrations: Vec<models::IntegrationResponse>,
-    ) -> ListIntegrationsResponse {
+    pub fn new(integrations: Vec<models::IntegrationResponse>) -> ListIntegrationsResponse {
         ListIntegrationsResponse { integrations }
     }
 }

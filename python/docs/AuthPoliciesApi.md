@@ -6,6 +6,7 @@ Method | HTTP request | Description
 ------------- | ------------- | -------------
 [**check_policies_for_tenants**](AuthPoliciesApi.md#check_policies_for_tenants) | **POST** /v1/auth/policies/check-tenants | Evaluate one policy action across the authenticated user&#39;s tenant scopes.
 [**check_policy_for_resource**](AuthPoliciesApi.md#check_policy_for_resource) | **POST** /v1/auth/policies/check-for-resource | Check permission for a specific resource
+[**delete_policy**](AuthPoliciesApi.md#delete_policy) | **DELETE** /v1/auth/policies/{id} | Delete an unreferenced custom policy.
 [**evaluate_policies_batch**](AuthPoliciesApi.md#evaluate_policies_batch) | **POST** /v1/auth/policies/check | Evaluate multiple policy actions in batch
 [**get_policy**](AuthPoliciesApi.md#get_policy) | **GET** /v1/auth/policies/{id} | Get a policy by ID
 [**list_actions**](AuthPoliciesApi.md#list_actions) | **GET** /v1/auth/actions | List all registered actions
@@ -152,6 +153,73 @@ No authorization required
 **200** | Permission check result |  -  |
 **400** | Bad request |  -  |
 **403** | Forbidden |  -  |
+
+[[Back to top]](#) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to Model list]](../README.md#documentation-for-models) [[Back to README]](../README.md)
+
+# **delete_policy**
+> delete_policy(id)
+
+Delete an unreferenced custom policy.
+
+### Example
+
+
+```python
+import tachyon_sdk
+from tachyon_sdk.rest import ApiException
+from pprint import pprint
+
+# Defining the host is optional and defaults to http://localhost
+# See configuration.py for a list of all supported configuration parameters.
+configuration = tachyon_sdk.Configuration(
+    host = "http://localhost"
+)
+
+
+# Enter a context with an instance of the API client
+with tachyon_sdk.ApiClient(configuration) as api_client:
+    # Create an instance of the API class
+    api_instance = tachyon_sdk.AuthPoliciesApi(api_client)
+    id = 'id_example' # str | Policy ID
+
+    try:
+        # Delete an unreferenced custom policy.
+        api_instance.delete_policy(id)
+    except Exception as e:
+        print("Exception when calling AuthPoliciesApi->delete_policy: %s\n" % e)
+```
+
+
+
+### Parameters
+
+
+Name | Type | Description  | Notes
+------------- | ------------- | ------------- | -------------
+ **id** | **str**| Policy ID |
+
+### Return type
+
+void (empty response body)
+
+### Authorization
+
+No authorization required
+
+### HTTP request headers
+
+ - **Content-Type**: Not defined
+ - **Accept**: application/json
+
+### HTTP response details
+
+| Status code | Description | Response headers |
+|-------------|-------------|------------------|
+**204** | Policy deleted |  -  |
+**400** | Invalid policy ID |  -  |
+**403** | Protected policy or forbidden tenant |  -  |
+**404** | Policy not found |  -  |
+**409** | Policy is still referenced |  -  |
 
 [[Back to top]](#) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to Model list]](../README.md#documentation-for-models) [[Back to README]](../README.md)
 
@@ -566,4 +634,3 @@ No authorization required
 **404** | Policy not found |  -  |
 
 [[Back to top]](#) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to Model list]](../README.md#documentation-for-models) [[Back to README]](../README.md)
-

@@ -106,6 +106,21 @@ build:
   nodeVersion: "20"
 ```
 
+### Cloudflare Workers / Astro
+
+Apps using the `@astrojs/cloudflare` adapter (Astro 6+) deploy to Workers;
+the adapter no longer supports Pages. The build generates the Worker config,
+so `build.outputDirectory` is not needed. Static-only Astro sites can keep
+using `cloudflare_pages` with `outputDirectory: dist`.
+
+```yaml
+framework: astro
+deploymentTarget: cloudflare_workers
+build:
+  command: npm run build
+  nodeVersion: "22"
+```
+
 ### Lambda / cargo-lambda
 
 ```yaml
@@ -256,7 +271,7 @@ After apply, check build/deploy separately with `tachyon compute status` and `ta
 ## Deployment Target Notes
 
 - `cloudflare_pages`: static/frontend output, usually `build.outputDirectory`.
-- `cloudflare_workers`: Worker/Vinext-style target; confirm framework and build command in the app manifest.
+- `cloudflare_workers`: Worker/Vinext-style target, and Astro with `@astrojs/cloudflare`. Valid frameworks are `worker`, `rust_worker`, and `astro`; confirm framework and build command in the app manifest.
 - `lambda`: cargo-lambda or server target. Include `build.package`, `build.binary`, `build.release`, and `build.arch` when needed.
 - `cloud_run`: container/server target. Keep `rootDirectory` and `dockerContext` distinct when Docker context differs from app root.
 

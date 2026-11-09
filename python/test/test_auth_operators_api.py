@@ -33,6 +33,13 @@ class TestAuthOperatorsApi(unittest.TestCase):
         """
         pass
 
+    def test_delete_operator(self) -> None:
+        """Test case for delete_operator
+
+        Delete an operator
+        """
+        pass
+
     def test_find_operators_by_user(self) -> None:
         """Test case for find_operators_by_user
 

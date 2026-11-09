@@ -80,11 +80,13 @@ All URIs are relative to *http://localhost*
 *AuthOAuthTokensApi* | [**listOauthTokens**](docs/AuthOAuthTokensApi.md#listoauthtokens) | **GET** /v1/auth/oauth-tokens | List all OAuth tokens
 *AuthOAuthTokensApi* | [**saveOauthToken**](docs/AuthOAuthTokensApi.md#saveoauthtoken) | **POST** /v1/auth/oauth-tokens | Save an OAuth token
 *AuthOperatorsApi* | [**createOperator**](docs/AuthOperatorsApi.md#createoperatoroperation) | **POST** /v1/auth/operators | Create an operator under a platform
+*AuthOperatorsApi* | [**deleteOperator**](docs/AuthOperatorsApi.md#deleteoperator) | **DELETE** /v1/auth/operators/{id} | Delete an operator
 *AuthOperatorsApi* | [**findOperatorsByUser**](docs/AuthOperatorsApi.md#findoperatorsbyuser) | **GET** /v1/auth/operators/by-user | Find operators accessible to a user under a platform
 *AuthOperatorsApi* | [**getOperatorByAlias**](docs/AuthOperatorsApi.md#getoperatorbyalias) | **GET** /v1/auth/operators/by-alias | Get an operator by alias within a platform
 *AuthOperatorsApi* | [**getOperatorById**](docs/AuthOperatorsApi.md#getoperatorbyid) | **GET** /v1/auth/operators/{id} | Get an operator by ID
 *AuthPoliciesApi* | [**checkPoliciesForTenants**](docs/AuthPoliciesApi.md#checkpoliciesfortenants) | **POST** /v1/auth/policies/check-tenants | Evaluate one policy action across the authenticated user\&#39;s tenant scopes.
 *AuthPoliciesApi* | [**checkPolicyForResource**](docs/AuthPoliciesApi.md#checkpolicyforresourceoperation) | **POST** /v1/auth/policies/check-for-resource | Check permission for a specific resource
+*AuthPoliciesApi* | [**deletePolicy**](docs/AuthPoliciesApi.md#deletepolicy) | **DELETE** /v1/auth/policies/{id} | Delete an unreferenced custom policy.
 *AuthPoliciesApi* | [**evaluatePoliciesBatch**](docs/AuthPoliciesApi.md#evaluatepoliciesbatchoperation) | **POST** /v1/auth/policies/check | Evaluate multiple policy actions in batch
 *AuthPoliciesApi* | [**getPolicy**](docs/AuthPoliciesApi.md#getpolicy) | **GET** /v1/auth/policies/{id} | Get a policy by ID
 *AuthPoliciesApi* | [**listActions**](docs/AuthPoliciesApi.md#listactions) | **GET** /v1/auth/actions | List all registered actions
@@ -239,6 +241,7 @@ All URIs are relative to *http://localhost*
 - [CreateShippingDestinationRequest](docs/CreateShippingDestinationRequest.md)
 - [CreateUserRequest](docs/CreateUserRequest.md)
 - [CreateUserResponse](docs/CreateUserResponse.md)
+- [DeleteOperatorResponse](docs/DeleteOperatorResponse.md)
 - [DeleteProductResponse](docs/DeleteProductResponse.md)
 - [DeleteResponse](docs/DeleteResponse.md)
 - [DeleteServiceAccountResponse](docs/DeleteServiceAccountResponse.md)

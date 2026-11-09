@@ -26,12 +26,7 @@ pub struct AgentChunkEventOneOf4 {
 
 impl AgentChunkEventOneOf4 {
     /// Thinking/reasoning content
-    pub fn new(
-        index: i32,
-        is_finished: bool,
-        text: String,
-        r#type: Type,
-    ) -> AgentChunkEventOneOf4 {
+    pub fn new(index: i32, is_finished: bool, text: String, r#type: Type) -> AgentChunkEventOneOf4 {
         AgentChunkEventOneOf4 {
             index,
             is_finished,
@@ -41,18 +36,7 @@ impl AgentChunkEventOneOf4 {
     }
 }
 ///
-#[derive(
-    Clone,
-    Copy,
-    Debug,
-    Eq,
-    PartialEq,
-    Ord,
-    PartialOrd,
-    Hash,
-    Serialize,
-    Deserialize,
-)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
 pub enum Type {
     #[serde(rename = "thinking")]
     Thinking,

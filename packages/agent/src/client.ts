@@ -1,3 +1,4 @@
+import { TachyonAgentError } from './errors'
 import type { AgentChunk, AgentExecuteRequest, ChatRoom } from './types'
 
 export type TachyonAgentClientConfig = {
@@ -11,16 +12,7 @@ export type TachyonAgentClientConfig = {
   userId?: string
 }
 
-export class TachyonAgentError extends Error {
-  constructor(
-    message: string,
-    public readonly status?: number,
-    public readonly body?: string,
-  ) {
-    super(message)
-    this.name = 'TachyonAgentError'
-  }
-}
+export { TachyonAgentError }
 
 export class TachyonAgentClient {
   private config: TachyonAgentClientConfig

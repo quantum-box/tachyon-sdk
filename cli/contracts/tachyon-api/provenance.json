@@ -1,0 +1,15 @@
+{
+  "schemaVersion": 1,
+  "repository": "quantum-box/tachyon-apps",
+  "commit": "a45c6a5cf6c64b4b7fbe0d8d3975a3f586eaf997",
+  "openapiPath": "apps/tachyon/src/gen/openapi/tachyon-api.openapi.json",
+  "openapiSha256": "2f859493ad19cdf426eb5a129a54aab368cbfea6df727d0ed5bd5bcbe0ed9c0c",
+  "bundleSha256": "fc4598f3e92526a2aedcbf01ef8d2388b5425ccc77aed849602073e5a77c1d1b",
+  "files": [
+    {
+      "path": "openapi.json",
+      "sha256": "2f859493ad19cdf426eb5a129a54aab368cbfea6df727d0ed5bd5bcbe0ed9c0c"
+    }
+  ],
+  "externalContracts": []
+}

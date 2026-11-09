@@ -21,6 +21,15 @@ pub enum CreateOperatorError {
     UnknownValue(serde_json::Value),
 }
 
+/// struct for typed errors of method [`delete_operator`]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum DeleteOperatorError {
+    Status403(),
+    Status404(),
+    UnknownValue(serde_json::Value),
+}
+
 /// struct for typed errors of method [`find_operators_by_user`]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(untagged)]
@@ -57,8 +66,7 @@ pub async fn create_operator(
         .request(reqwest::Method::POST, &uri_str);
 
     if let Some(ref user_agent) = configuration.user_agent {
-        req_builder = req_builder
-            .header(reqwest::header::USER_AGENT, user_agent.clone());
+        req_builder = req_builder.header(reqwest::header::USER_AGENT, user_agent.clone());
     }
     req_builder = req_builder.json(&p_body_create_operator_request);
 
@@ -82,8 +90,57 @@ pub async fn create_operator(
         }
     } else {
         let content = resp.text().await?;
-        let entity: Option<CreateOperatorError> =
-            serde_json::from_str(&content).ok();
+        let entity: Option<CreateOperatorError> = serde_json::from_str(&content).ok();
+        Err(Error::ResponseError(ResponseContent {
+            status,
+            content,
+            entity,
+        }))
+    }
+}
+
+/// The acting tenant scope (`x-operator-id`, falling back to `x-platform-id`) must be the target operator itself or its parent platform. The parent platform is resolved from the target record, so callers do not need to supply `x-platform-id`.
+pub async fn delete_operator(
+    configuration: &configuration::Configuration,
+    id: &str,
+) -> Result<models::DeleteOperatorResponse, Error<DeleteOperatorError>> {
+    // add a prefix to parameters to efficiently prevent name collisions
+    let p_path_id = id;
+
+    let uri_str = format!(
+        "{}/v1/auth/operators/{id}",
+        configuration.base_path,
+        id = crate::apis::urlencode(p_path_id)
+    );
+    let mut req_builder = configuration
+        .client
+        .request(reqwest::Method::DELETE, &uri_str);
+
+    if let Some(ref user_agent) = configuration.user_agent {
+        req_builder = req_builder.header(reqwest::header::USER_AGENT, user_agent.clone());
+    }
+
+    let req = req_builder.build()?;
+    let resp = configuration.client.execute(req).await?;
+
+    let status = resp.status();
+    let content_type = resp
+        .headers()
+        .get("content-type")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("application/octet-stream");
+    let content_type = super::ContentType::from(content_type);
+
+    if !status.is_client_error() && !status.is_server_error() {
+        let content = resp.text().await?;
+        match content_type {
+            ContentType::Json => serde_json::from_str(&content).map_err(Error::from),
+            ContentType::Text => return Err(Error::from(serde_json::Error::custom("Received `text/plain` content type response that cannot be converted to `models::DeleteOperatorResponse`"))),
+            ContentType::Unsupported(unknown_type) => return Err(Error::from(serde_json::Error::custom(format!("Received `{unknown_type}` content type response that cannot be converted to `models::DeleteOperatorResponse`")))),
+        }
+    } else {
+        let content = resp.text().await?;
+        let entity: Option<DeleteOperatorError> = serde_json::from_str(&content).ok();
         Err(Error::ResponseError(ResponseContent {
             status,
             content,
@@ -101,18 +158,13 @@ pub async fn find_operators_by_user(
     let p_query_platform_id = platform_id;
     let p_query_user_id = user_id;
 
-    let uri_str =
-        format!("{}/v1/auth/operators/by-user", configuration.base_path);
-    let mut req_builder =
-        configuration.client.request(reqwest::Method::GET, &uri_str);
+    let uri_str = format!("{}/v1/auth/operators/by-user", configuration.base_path);
+    let mut req_builder = configuration.client.request(reqwest::Method::GET, &uri_str);
 
-    req_builder = req_builder
-        .query(&[("platform_id", &p_query_platform_id.to_string())]);
-    req_builder =
-        req_builder.query(&[("user_id", &p_query_user_id.to_string())]);
+    req_builder = req_builder.query(&[("platform_id", &p_query_platform_id.to_string())]);
+    req_builder = req_builder.query(&[("user_id", &p_query_user_id.to_string())]);
     if let Some(ref user_agent) = configuration.user_agent {
-        req_builder = req_builder
-            .header(reqwest::header::USER_AGENT, user_agent.clone());
+        req_builder = req_builder.header(reqwest::header::USER_AGENT, user_agent.clone());
     }
 
     let req = req_builder.build()?;
@@ -135,8 +187,7 @@ pub async fn find_operators_by_user(
         }
     } else {
         let content = resp.text().await?;
-        let entity: Option<FindOperatorsByUserError> =
-            serde_json::from_str(&content).ok();
+        let entity: Option<FindOperatorsByUserError> = serde_json::from_str(&content).ok();
         Err(Error::ResponseError(ResponseContent {
             status,
             content,
@@ -154,18 +205,13 @@ pub async fn get_operator_by_alias(
     let p_query_platform_id = platform_id;
     let p_query_alias = alias;
 
-    let uri_str =
-        format!("{}/v1/auth/operators/by-alias", configuration.base_path);
-    let mut req_builder =
-        configuration.client.request(reqwest::Method::GET, &uri_str);
+    let uri_str = format!("{}/v1/auth/operators/by-alias", configuration.base_path);
+    let mut req_builder = configuration.client.request(reqwest::Method::GET, &uri_str);
 
-    req_builder = req_builder
-        .query(&[("platform_id", &p_query_platform_id.to_string())]);
-    req_builder =
-        req_builder.query(&[("alias", &p_query_alias.to_string())]);
+    req_builder = req_builder.query(&[("platform_id", &p_query_platform_id.to_string())]);
+    req_builder = req_builder.query(&[("alias", &p_query_alias.to_string())]);
     if let Some(ref user_agent) = configuration.user_agent {
-        req_builder = req_builder
-            .header(reqwest::header::USER_AGENT, user_agent.clone());
+        req_builder = req_builder.header(reqwest::header::USER_AGENT, user_agent.clone());
     }
 
     let req = req_builder.build()?;
@@ -188,8 +234,7 @@ pub async fn get_operator_by_alias(
         }
     } else {
         let content = resp.text().await?;
-        let entity: Option<GetOperatorByAliasError> =
-            serde_json::from_str(&content).ok();
+        let entity: Option<GetOperatorByAliasError> = serde_json::from_str(&content).ok();
         Err(Error::ResponseError(ResponseContent {
             status,
             content,
@@ -210,12 +255,10 @@ pub async fn get_operator_by_id(
         configuration.base_path,
         id = crate::apis::urlencode(p_path_id)
     );
-    let mut req_builder =
-        configuration.client.request(reqwest::Method::GET, &uri_str);
+    let mut req_builder = configuration.client.request(reqwest::Method::GET, &uri_str);
 
     if let Some(ref user_agent) = configuration.user_agent {
-        req_builder = req_builder
-            .header(reqwest::header::USER_AGENT, user_agent.clone());
+        req_builder = req_builder.header(reqwest::header::USER_AGENT, user_agent.clone());
     }
 
     let req = req_builder.build()?;
@@ -238,8 +281,7 @@ pub async fn get_operator_by_id(
         }
     } else {
         let content = resp.text().await?;
-        let entity: Option<GetOperatorByIdError> =
-            serde_json::from_str(&content).ok();
+        let entity: Option<GetOperatorByIdError> = serde_json::from_str(&content).ok();
         Err(Error::ResponseError(ResponseContent {
             status,
             content,

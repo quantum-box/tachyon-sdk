@@ -33,27 +33,22 @@ pub async fn chat_completion(
     x_operator_id: &str,
     authorization: &str,
     chat_completion_request: models::ChatCompletionRequest,
-) -> Result<models::ChatCompletionChunkResponse, Error<ChatCompletionError>>
-{
+) -> Result<models::ChatCompletionChunkResponse, Error<ChatCompletionError>> {
     // add a prefix to parameters to efficiently prevent name collisions
     let p_header_x_operator_id = x_operator_id;
     let p_header_authorization = authorization;
     let p_body_chat_completion_request = chat_completion_request;
 
-    let uri_str =
-        format!("{}/v1/llms/chat/completions", configuration.base_path);
+    let uri_str = format!("{}/v1/llms/chat/completions", configuration.base_path);
     let mut req_builder = configuration
         .client
         .request(reqwest::Method::POST, &uri_str);
 
     if let Some(ref user_agent) = configuration.user_agent {
-        req_builder = req_builder
-            .header(reqwest::header::USER_AGENT, user_agent.clone());
+        req_builder = req_builder.header(reqwest::header::USER_AGENT, user_agent.clone());
     }
-    req_builder = req_builder
-        .header("x-operator-id", p_header_x_operator_id.to_string());
-    req_builder = req_builder
-        .header("Authorization", p_header_authorization.to_string());
+    req_builder = req_builder.header("x-operator-id", p_header_x_operator_id.to_string());
+    req_builder = req_builder.header("Authorization", p_header_authorization.to_string());
     req_builder = req_builder.json(&p_body_chat_completion_request);
 
     let req = req_builder.build()?;
@@ -76,8 +71,7 @@ pub async fn chat_completion(
         }
     } else {
         let content = resp.text().await?;
-        let entity: Option<ChatCompletionError> =
-            serde_json::from_str(&content).ok();
+        let entity: Option<ChatCompletionError> = serde_json::from_str(&content).ok();
         Err(Error::ResponseError(ResponseContent {
             status,
             content,
@@ -93,10 +87,8 @@ pub async fn chat_completion_on_chatroom(
     x_operator_id: &str,
     authorization: &str,
     chat_completion_request: models::ChatCompletionRequest,
-) -> Result<
-    models::ChatCompletionWithChatroomStreamResponse,
-    Error<ChatCompletionOnChatroomError>,
-> {
+) -> Result<models::ChatCompletionWithChatroomStreamResponse, Error<ChatCompletionOnChatroomError>>
+{
     // add a prefix to parameters to efficiently prevent name collisions
     let p_path_chatroom_id = chatroom_id;
     let p_header_x_operator_id = x_operator_id;
@@ -113,13 +105,10 @@ pub async fn chat_completion_on_chatroom(
         .request(reqwest::Method::POST, &uri_str);
 
     if let Some(ref user_agent) = configuration.user_agent {
-        req_builder = req_builder
-            .header(reqwest::header::USER_AGENT, user_agent.clone());
+        req_builder = req_builder.header(reqwest::header::USER_AGENT, user_agent.clone());
     }
-    req_builder = req_builder
-        .header("x-operator-id", p_header_x_operator_id.to_string());
-    req_builder = req_builder
-        .header("Authorization", p_header_authorization.to_string());
+    req_builder = req_builder.header("x-operator-id", p_header_x_operator_id.to_string());
+    req_builder = req_builder.header("Authorization", p_header_authorization.to_string());
     req_builder = req_builder.json(&p_body_chat_completion_request);
 
     let req = req_builder.build()?;
@@ -142,8 +131,7 @@ pub async fn chat_completion_on_chatroom(
         }
     } else {
         let content = resp.text().await?;
-        let entity: Option<ChatCompletionOnChatroomError> =
-            serde_json::from_str(&content).ok();
+        let entity: Option<ChatCompletionOnChatroomError> = serde_json::from_str(&content).ok();
         Err(Error::ResponseError(ResponseContent {
             status,
             content,

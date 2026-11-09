@@ -45,10 +45,7 @@ pub struct AgentExecuteRequest {
     )]
     pub assistant_name: Option<Option<String>>,
     /// When true, the agent auto-approves tool executions without asking for confirmation.
-    #[serde(
-        rename = "auto_approve",
-        skip_serializing_if = "Option::is_none"
-    )]
+    #[serde(rename = "auto_approve", skip_serializing_if = "Option::is_none")]
     pub auto_approve: Option<bool>,
     /// Controls chatroom name auto-generation behavior. - `first_only` (default): Generate on first message only (regardless of current name) - `always`: Always attempt to generate/update name after each message - `never`: Never auto-generate chatroom name
     #[serde(
@@ -65,10 +62,7 @@ pub struct AgentExecuteRequest {
     )]
     pub client_tools: Option<Option<Vec<models::ClientToolDefinition>>>,
     /// Maximum number of LLM round-trips (tool calls) the agent is allowed to make before stopping.
-    #[serde(
-        rename = "max_requests",
-        skip_serializing_if = "Option::is_none"
-    )]
+    #[serde(rename = "max_requests", skip_serializing_if = "Option::is_none")]
     pub max_requests: Option<i32>,
     /// Optional MCP Hub configuration in JSON string form.
     #[serde(
@@ -86,14 +80,19 @@ pub struct AgentExecuteRequest {
         skip_serializing_if = "Option::is_none"
     )]
     pub model: Option<Option<String>>,
+    /// Optional reasoning effort for reasoning-capable models (e.g. `low`, `medium`, `high`).  Sent to OpenAI models that use the Responses API (`gpt-5*`, `gpt-6*`) as `reasoning.effort`. Other providers and models ignore it.
+    #[serde(
+        rename = "reasoning_effort",
+        default,
+        with = "::serde_with::rust::double_option",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub reasoning_effort: Option<Option<String>>,
     /// The task or prompt for the agent to execute.
     #[serde(rename = "task")]
     pub task: String,
     /// Builtin tools available to the agent.
-    #[serde(
-        rename = "tool_access",
-        skip_serializing_if = "Option::is_none"
-    )]
+    #[serde(rename = "tool_access", skip_serializing_if = "Option::is_none")]
     pub tool_access: Option<Vec<models::AgentBuiltinToolRequest>>,
     /// When true, use JSON Schema tool definitions (function calling) instead of XML-based tool parsing. This is automatically enabled when `client_tools` is provided.
     #[serde(
@@ -127,6 +126,7 @@ impl AgentExecuteRequest {
             max_requests: None,
             mcp_hub_config_json: None,
             model: None,
+            reasoning_effort: None,
             task,
             tool_access: None,
             use_json_tool_calls: None,

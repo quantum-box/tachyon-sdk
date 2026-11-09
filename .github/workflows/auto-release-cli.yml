@@ -5,6 +5,13 @@ on:
     branches: [main]
     paths:
       - 'cli/**'
+      # Also re-run when the release pipeline itself changes. A
+      # failed release leaves the version bumped but the tag
+      # missing, and without this a fix to this workflow would not
+      # re-attempt it. The check job skips when the tag already
+      # exists, so this stays idempotent.
+      - '.github/workflows/auto-release-cli.yml'
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -41,6 +48,16 @@ jobs:
             echo "Tag tachyon-cli-v${{ steps.version.outputs.version }} does not exist, will create release"
           fi
 
+      - name: Summarize skipped release
+        if: steps.check_tag.outputs.needed == 'false'
+        run: |
+          echo "::notice title=Release skipped::Tag tachyon-cli-v${{ steps.version.outputs.version }} already exists; no GitHub release was created."
+          {
+            echo "## Release skipped"
+            echo
+            echo "Tag \`tachyon-cli-v${{ steps.version.outputs.version }}\` already exists, so no GitHub release was created."
+          } >> "$GITHUB_STEP_SUMMARY"
+
   build:
     name: Build ${{ matrix.artifact }}
     needs: check
@@ -56,6 +73,19 @@ jobs:
           - os: ubuntu-24.04-arm
             target: aarch64-unknown-linux-gnu
             artifact: tachyon-linux-arm64
+          # Statically linked musl builds. The gnu artifacts above
+          # are built on Ubuntu 24.04 and therefore require
+          # GLIBC_2.39, which makes them unusable on older images
+          # such as Amazon Linux 2023 (glibc 2.34) used by the
+          # CodeBuild Cloud App runners. Keep both: the gnu
+          # artifacts stay the default for developer installs,
+          # while build runners consume the musl ones.
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-musl
+            artifact: tachyon-linux-musl-x86_64
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-musl
+            artifact: tachyon-linux-musl-arm64
           # macos-13 Intel queues indefinitely; use GitHub's
           # current standard Intel label instead.
           - os: macos-15-intel
@@ -69,13 +99,53 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@nightly
         with:
+          toolchain: nightly-2026-06-04
           targets: ${{ matrix.target }}
+
+      # The step above installs the target for `stable`, but
+      # cli/rust-toolchain.toml pins a specific channel, so that is
+      # the toolchain cargo actually uses. Install the target there
+      # too. Running inside cli/ makes rustup pick the pinned
+      # toolchain. Host targets already ship their std, which is why
+      # only the cross-libc musl targets failed with
+      # `can't find crate for core`.
+      - name: Install target for the pinned toolchain
+        working-directory: cli
+        run: rustup target add ${{ matrix.target }}
+
+      # aws-lc-sys and ring compile C sources, so the musl targets
+      # need a musl-aware C toolchain in addition to the Rust std.
+      - name: Install musl build tools
+        if: contains(matrix.target, '-musl')
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y musl-tools
 
       - name: Build
         working-directory: cli
         run: cargo build --release --target ${{ matrix.target }}
+
+      # Assert what actually matters — the artifact must carry no
+      # libc version requirement — rather than matching one exact
+      # phrase from `file`. x86_64 musl links as "static-pie linked"
+      # while aarch64 musl reports "statically linked", so an
+      # equality check on either wording rejects a good binary.
+      - name: Verify musl artifact has no dynamic libc dependency
+        if: contains(matrix.target, '-musl')
+        run: |
+          BIN=cli/target/${{ matrix.target }}/release/tachyon
+          file "$BIN"
+          if file "$BIN" | grep -q 'dynamically linked'; then
+            echo "ERROR: $BIN is dynamically linked" >&2
+            exit 1
+          fi
+          if strings -a "$BIN" | grep -q 'GLIBC_'; then
+            echo "ERROR: $BIN references glibc versioned symbols" >&2
+            strings -a "$BIN" | grep -o 'GLIBC_[0-9.]*' | sort -u >&2
+            exit 1
+          fi
 
       - name: Package
         shell: bash
@@ -89,6 +159,7 @@ jobs:
         with:
           name: ${{ matrix.artifact }}
           path: dist/${{ matrix.artifact }}.tar.gz
+          retention-days: 1
 
   release:
     name: Create GitHub Release

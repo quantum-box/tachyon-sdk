@@ -52,11 +52,13 @@ Class | Method | HTTP request | Description
 *AuthOAuthTokensApi* | [**list_oauth_tokens**](docs/AuthOAuthTokensApi.md#list_oauth_tokens) | **GET** /v1/auth/oauth-tokens | List all OAuth tokens
 *AuthOAuthTokensApi* | [**save_oauth_token**](docs/AuthOAuthTokensApi.md#save_oauth_token) | **POST** /v1/auth/oauth-tokens | Save an OAuth token
 *AuthOperatorsApi* | [**create_operator**](docs/AuthOperatorsApi.md#create_operator) | **POST** /v1/auth/operators | Create an operator under a platform
+*AuthOperatorsApi* | [**delete_operator**](docs/AuthOperatorsApi.md#delete_operator) | **DELETE** /v1/auth/operators/{id} | Delete an operator
 *AuthOperatorsApi* | [**find_operators_by_user**](docs/AuthOperatorsApi.md#find_operators_by_user) | **GET** /v1/auth/operators/by-user | Find operators accessible to a user under a platform
 *AuthOperatorsApi* | [**get_operator_by_alias**](docs/AuthOperatorsApi.md#get_operator_by_alias) | **GET** /v1/auth/operators/by-alias | Get an operator by alias within a platform
 *AuthOperatorsApi* | [**get_operator_by_id**](docs/AuthOperatorsApi.md#get_operator_by_id) | **GET** /v1/auth/operators/{id} | Get an operator by ID
 *AuthPoliciesApi* | [**check_policies_for_tenants**](docs/AuthPoliciesApi.md#check_policies_for_tenants) | **POST** /v1/auth/policies/check-tenants | Evaluate one policy action across the authenticated user's tenant scopes.
 *AuthPoliciesApi* | [**check_policy_for_resource**](docs/AuthPoliciesApi.md#check_policy_for_resource) | **POST** /v1/auth/policies/check-for-resource | Check permission for a specific resource
+*AuthPoliciesApi* | [**delete_policy**](docs/AuthPoliciesApi.md#delete_policy) | **DELETE** /v1/auth/policies/{id} | Delete an unreferenced custom policy.
 *AuthPoliciesApi* | [**evaluate_policies_batch**](docs/AuthPoliciesApi.md#evaluate_policies_batch) | **POST** /v1/auth/policies/check | Evaluate multiple policy actions in batch
 *AuthPoliciesApi* | [**get_policy**](docs/AuthPoliciesApi.md#get_policy) | **GET** /v1/auth/policies/{id} | Get a policy by ID
 *AuthPoliciesApi* | [**list_actions**](docs/AuthPoliciesApi.md#list_actions) | **GET** /v1/auth/actions | List all registered actions
@@ -98,6 +100,7 @@ Class | Method | HTTP request | Description
 *FeatureFlagsApi* | [**evaluate_actions**](docs/FeatureFlagsApi.md#evaluate_actions) | **POST** /v1/feature-flags/actions/evaluate | TODO: add English documentation
 *IntegrationsApi* | [**connect_integration**](docs/IntegrationsApi.md#connect_integration) | **POST** /v1/integrations/{id}/connect | Initiate an OAuth connection to an integration.
 *IntegrationsApi* | [**disconnect_integration**](docs/IntegrationsApi.md#disconnect_integration) | **DELETE** /v1/integrations/connections/{id} | Disconnect an integration connection.
+*IntegrationsApi* | [**get_github_billing_usage**](docs/IntegrationsApi.md#get_github_billing_usage) | **GET** /v1/integrations/github/billing-usage | Billing usage of a GitHub organization for one month.
 *IntegrationsApi* | [**get_integration**](docs/IntegrationsApi.md#get_integration) | **GET** /v1/integrations/{id} | Get an integration by ID.
 *IntegrationsApi* | [**list_connections**](docs/IntegrationsApi.md#list_connections) | **GET** /v1/integrations/connections | List all connections for the current tenant.
 *IntegrationsApi* | [**list_integrations**](docs/IntegrationsApi.md#list_integrations) | **GET** /v1/integrations | List all integrations in the marketplace.
@@ -211,6 +214,7 @@ Class | Method | HTTP request | Description
  - [CreateShippingDestinationRequest](docs/CreateShippingDestinationRequest.md)
  - [CreateUserRequest](docs/CreateUserRequest.md)
  - [CreateUserResponse](docs/CreateUserResponse.md)
+ - [DeleteOperatorResponse](docs/DeleteOperatorResponse.md)
  - [DeleteProductResponse](docs/DeleteProductResponse.md)
  - [DeleteResponse](docs/DeleteResponse.md)
  - [DeleteServiceAccountResponse](docs/DeleteServiceAccountResponse.md)

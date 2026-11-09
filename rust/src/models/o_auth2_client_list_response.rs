@@ -20,9 +20,7 @@ pub struct OAuth2ClientListResponse {
 
 impl OAuth2ClientListResponse {
     /// OAuth2 client list response
-    pub fn new(
-        clients: Vec<models::OAuth2ClientResponse>,
-    ) -> OAuth2ClientListResponse {
+    pub fn new(clients: Vec<models::OAuth2ClientResponse>) -> OAuth2ClientListResponse {
         OAuth2ClientListResponse { clients }
     }
 }

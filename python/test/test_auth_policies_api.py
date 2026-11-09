@@ -33,6 +33,13 @@ class TestAuthPoliciesApi(unittest.TestCase):
         """
         pass
 
+    def test_delete_policy(self) -> None:
+        """Test case for delete_policy
+
+        Delete an unreferenced custom policy.
+        """
+        pass
+
     def test_evaluate_policies_batch(self) -> None:
         """Test case for evaluate_policies_batch
 

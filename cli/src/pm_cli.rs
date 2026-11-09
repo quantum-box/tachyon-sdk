@@ -1,11 +1,19 @@
 //! `tachyon pm` subcommands for provider-agnostic PM operations.
 
-use anyhow::Result;
+use std::time::Duration;
+
+use anyhow::{anyhow, Result};
 use clap::{Args, Subcommand};
 use serde::{Deserialize, Serialize};
 use tachyon_sdk::apis::configuration::Configuration;
 
-use crate::client::{print_json, ApiClient};
+use crate::client::{print_json, ApiClient, HttpError};
+use crate::pm_project_update_cli::{self, ProjectUpdateCommand};
+use crate::pm_resource_cli::{self, ResourceCommand};
+use crate::settings::ResolvedPmSettings;
+
+const LINEAR_OAUTH_RESOLUTION_OPERATION: &str = "linear_oauth_client_resolve";
+const LINEAR_RECONCILE_WAIT_TIMEOUT_SECONDS: u64 = 30 * 60;
 
 #[derive(Debug, Clone, Args, PartialEq, Eq)]
 pub struct PmArgs {
@@ -18,7 +26,47 @@ pub enum PmCommand {
     /// Manage issues in a configured project-management provider
     Issue {
         #[command(subcommand)]
-        command: IssueCommand,
+        command: Box<IssueCommand>,
+    },
+    /// Manage projects
+    Project {
+        #[command(subcommand)]
+        command: ResourceCommand,
+    },
+    /// Manage initiatives
+    Initiative {
+        #[command(subcommand)]
+        command: ResourceCommand,
+    },
+    /// Manage cycles
+    Cycle {
+        #[command(subcommand)]
+        command: ResourceCommand,
+    },
+    /// Manage teams
+    Team {
+        #[command(subcommand)]
+        command: ResourceCommand,
+    },
+    /// Manage issue labels
+    Label {
+        #[command(subcommand)]
+        command: ResourceCommand,
+    },
+    /// Manage documents
+    Document {
+        #[command(subcommand)]
+        command: ResourceCommand,
+    },
+    /// Manage project milestones
+    Milestone {
+        #[command(subcommand)]
+        command: ResourceCommand,
+    },
+    /// Manage project status updates (the project's "Updates" tab)
+    ProjectUpdate {
+        #[command(subcommand)]
+        command: ProjectUpdateCommand,
     },
 }
 
@@ -50,9 +98,14 @@ pub enum IssueCommand {
         /// Provider-specific assignee id
         #[arg(long, visible_alias = "assignee")]
         assignee_id: Option<String>,
-        /// Provider-specific delegate agent user id
+        /// Provider-specific delegate agent user id. For Linear issue creation, pass an empty
+        /// string (`--delegate-id ""`) to disable automatic delegation and create the issue
+        /// unassigned.
         #[arg(long)]
         delegate_id: Option<String>,
+        /// Do not auto-delegate the issue to the Linear agent
+        #[arg(long, conflicts_with = "delegate_id")]
+        no_delegate: bool,
         /// Provider-specific label id. Can be specified multiple times.
         #[arg(long = "label-id")]
         label_ids: Vec<String>,
@@ -68,6 +121,15 @@ pub enum IssueCommand {
         /// Due date in YYYY-MM-DD format
         #[arg(long)]
         due_date: Option<String>,
+        /// Cycle id
+        #[arg(long)]
+        cycle_id: Option<String>,
+        /// Project milestone id
+        #[arg(long)]
+        project_milestone_id: Option<String>,
+        /// Parent issue id or key. Creates this issue as a sub-issue.
+        #[arg(long, visible_alias = "parent")]
+        parent_issue_id: Option<String>,
         /// Related issue id. Can be specified multiple times.
         #[arg(long = "related-issue-id")]
         related_issue_ids: Vec<String>,
@@ -95,10 +157,30 @@ pub enum IssueCommand {
         /// Legacy project id option
         #[arg(long)]
         project_id: Option<String>,
+        /// Filter issues by project milestone id (requires --project)
+        #[arg(long, visible_alias = "milestone")]
+        project_milestone_id: Option<String>,
         /// Include completed/canceled issues
         #[arg(long)]
         include_completed: bool,
+        /// Max issues per request (1-100, default 100)
+        #[arg(long)]
+        limit: Option<u32>,
+        /// Opaque cursor from a previous response's next_cursor
+        #[arg(long)]
+        cursor: Option<String>,
+        /// Follow pagination until every matching issue is fetched
+        #[arg(long)]
+        all: bool,
         /// Print the API response as JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// Get an issue by id or key
+    Get {
+        issue_id: String,
+        #[arg(long)]
+        provider: Option<String>,
         #[arg(long)]
         json: bool,
     },
@@ -130,18 +212,138 @@ pub enum IssueCommand {
         /// New issue title
         #[arg(long)]
         title: Option<String>,
+        /// New Markdown description
+        #[arg(long)]
+        description: Option<String>,
         /// Provider-specific assignee id
         #[arg(long, visible_alias = "assignee")]
         assignee_id: Option<String>,
         /// Provider-specific delegate agent user id
         #[arg(long)]
         delegate_id: Option<String>,
+        /// Do not auto-delegate the issue to the Linear agent
+        #[arg(long, conflicts_with = "delegate_id")]
+        no_delegate: bool,
         /// Priority: urgent, high, medium, low, none, or provider alias
         #[arg(long)]
         priority: Option<String>,
+        /// Replace all label ids. Can be specified multiple times.
+        #[arg(long = "label-id")]
+        label_ids: Vec<String>,
+        /// Add a label id. Can be specified multiple times.
+        #[arg(long = "add-label-id")]
+        added_label_ids: Vec<String>,
+        /// Remove a label id. Can be specified multiple times.
+        #[arg(long = "remove-label-id")]
+        removed_label_ids: Vec<String>,
+        #[arg(long)]
+        project_id: Option<String>,
+        #[arg(long)]
+        cycle_id: Option<String>,
+        #[arg(long)]
+        project_milestone_id: Option<String>,
+        #[arg(long)]
+        due_date: Option<String>,
+        /// Set the parent issue id or key
+        #[arg(long, visible_alias = "parent")]
+        parent_issue_id: Option<String>,
+        /// Remove the current parent and promote the issue to top level
+        #[arg(long, conflicts_with = "parent_issue_id")]
+        remove_parent: bool,
         /// Print the API response as JSON
         #[arg(long)]
         json: bool,
+    },
+    /// Delete an issue
+    Delete {
+        issue_id: String,
+        #[arg(long)]
+        provider: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
+    /// List direct sub-issues
+    Children {
+        issue_id: String,
+        #[arg(long)]
+        provider: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Manage issue comments
+    Comment {
+        #[command(subcommand)]
+        command: CommentCommand,
+    },
+    /// Manage issue relations
+    Relation {
+        #[command(subcommand)]
+        command: RelationCommand,
+    },
+}
+
+#[derive(Debug, Clone, Subcommand, PartialEq, Eq)]
+pub enum CommentCommand {
+    List {
+        issue_id: String,
+        #[arg(long)]
+        provider: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
+    Create {
+        issue_id: String,
+        #[arg(long)]
+        body: String,
+        #[arg(long)]
+        parent_id: Option<String>,
+        #[arg(long)]
+        provider: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
+    Update {
+        issue_id: String,
+        comment_id: String,
+        #[arg(long)]
+        body: String,
+        #[arg(long)]
+        provider: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
+    Delete {
+        issue_id: String,
+        comment_id: String,
+        #[arg(long)]
+        provider: Option<String>,
+    },
+}
+
+#[derive(Debug, Clone, Subcommand, PartialEq, Eq)]
+pub enum RelationCommand {
+    List {
+        issue_id: String,
+        #[arg(long)]
+        provider: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
+    Create {
+        issue_id: String,
+        related_issue_id: String,
+        #[arg(long, default_value = "related")]
+        relation_type: String,
+        #[arg(long)]
+        provider: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
+    Delete {
+        issue_id: String,
+        relation_id: String,
+        #[arg(long)]
+        provider: Option<String>,
     },
 }
 
@@ -173,6 +375,12 @@ struct CreatePmIssueRequest {
     project_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     due_date: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    cycle_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    project_milestone_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    parent_issue_id: Option<String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     related_issue_ids: Vec<String>,
     #[serde(skip_serializing_if = "is_false")]
@@ -199,6 +407,8 @@ struct UpdatePmIssueRequest {
     #[serde(skip_serializing_if = "Option::is_none")]
     title: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    description: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     assignee_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     delegate_id: Option<String>,
@@ -206,6 +416,32 @@ struct UpdatePmIssueRequest {
     auto_delegate_to_linear_agent: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     priority: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    label_ids: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    added_label_ids: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    removed_label_ids: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    project_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    cycle_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    project_milestone_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    due_date: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    parent_issue_id: Option<String>,
+    #[serde(skip_serializing_if = "is_false")]
+    remove_parent: bool,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+struct PmIssueAssignee {
+    id: String,
+    name: String,
+    avatar_url: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -218,12 +454,27 @@ struct PmIssue {
     url: String,
     status: String,
     priority: String,
+    assignee: Option<PmIssueAssignee>,
+    project_milestone_id: Option<String>,
+    project_milestone_name: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+struct PmIssueMutation {
+    provider: String,
+    id: String,
+    key: String,
+    title: String,
+    url: String,
+    status: String,
+    priority: String,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 struct CreatePmIssueResponse {
-    issue: PmIssue,
+    issue: PmIssueMutation,
     created: bool,
 }
 
@@ -232,12 +483,51 @@ struct CreatePmIssueResponse {
 struct ListPmIssuesResponse {
     items: Vec<PmIssue>,
     count: usize,
+    // Defaulted so a new CLI keeps working against an API that predates
+    // pagination; it just never reports a truncation.
+    #[serde(default)]
+    has_next_page: bool,
+    #[serde(default)]
+    next_cursor: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 struct UpdatePmIssueResponse {
-    issue: PmIssue,
+    issue: PmIssueMutation,
+}
+
+#[derive(Debug, Deserialize)]
+struct LinearOAuthResolutionErrorResponse {
+    provider: String,
+    operation: String,
+    recovery: LinearOAuthRecoveryAction,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum LinearOAuthRecoveryAction {
+    ReconcilePending {
+        retry_after_seconds: u64,
+        reconcile_interval_seconds: u64,
+    },
+    ReconnectRequired,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ReconcilePending {
+    retry_after_seconds: u64,
+    reconcile_interval_seconds: u64,
+}
+
+#[derive(Debug, Serialize)]
+struct LinearReconcileTimeoutResponse {
+    error: &'static str,
+    provider: &'static str,
+    operation: &'static str,
+    waited_seconds: u64,
+    wait_timeout_seconds: u64,
+    message: String,
 }
 
 fn is_false(value: &bool) -> bool {
@@ -252,6 +542,16 @@ fn issue_path(tenant_id: &str, issue_id: &str) -> String {
     format!("/v1beta/{tenant_id}/pm/issues/{issue_id}")
 }
 
+fn issue_subresource_path(tenant_id: &str, issue_id: &str, subresource: &str) -> String {
+    format!("{}/{subresource}", issue_path(tenant_id, issue_id))
+}
+
+fn provider_query(provider: Option<&str>) -> Vec<(&str, &str)> {
+    provider
+        .map(|value| vec![("provider", value)])
+        .unwrap_or_default()
+}
+
 fn provider_with_alias(provider: &Option<String>, provider_alias: Option<&str>) -> Option<String> {
     provider
         .clone()
@@ -264,13 +564,115 @@ fn is_linear_provider(provider: &Option<String>) -> bool {
         .is_some_and(|provider| provider.eq_ignore_ascii_case("linear"))
 }
 
+fn should_auto_delegate(
+    no_delegate: bool,
+    delegate_id: &Option<String>,
+    provider: &Option<String>,
+) -> bool {
+    !no_delegate && delegate_id.is_none() && is_linear_provider(provider)
+}
+
+fn effective_no_delegate(no_delegate: bool, settings: &ResolvedPmSettings) -> bool {
+    no_delegate || settings.no_delegate.unwrap_or(false)
+}
+
+fn effective_team(
+    team: &Option<String>,
+    team_id: &Option<String>,
+    settings: &ResolvedPmSettings,
+) -> Option<String> {
+    team.clone().or_else(|| {
+        team_id
+            .is_none()
+            .then(|| settings.default_team.clone())
+            .flatten()
+    })
+}
+
+fn linear_reconcile_pending(error: &anyhow::Error) -> Option<ReconcilePending> {
+    let http_error = error.downcast_ref::<HttpError>()?;
+    if http_error.status != reqwest::StatusCode::FAILED_DEPENDENCY {
+        return None;
+    }
+
+    let response =
+        serde_json::from_str::<LinearOAuthResolutionErrorResponse>(&http_error.body).ok()?;
+    if response.provider != "linear" || response.operation != LINEAR_OAUTH_RESOLUTION_OPERATION {
+        return None;
+    }
+
+    match response.recovery {
+        LinearOAuthRecoveryAction::ReconcilePending {
+            retry_after_seconds,
+            reconcile_interval_seconds,
+        } if reconcile_interval_seconds > 0 => Some(ReconcilePending {
+            retry_after_seconds,
+            reconcile_interval_seconds,
+        }),
+        LinearOAuthRecoveryAction::ReconcilePending { .. }
+        | LinearOAuthRecoveryAction::ReconnectRequired => None,
+    }
+}
+
+fn reconcile_delay_seconds(pending: ReconcilePending, first_wait: bool) -> u64 {
+    if first_wait {
+        pending.retry_after_seconds
+    } else {
+        pending.reconcile_interval_seconds
+    }
+}
+
 async fn run_create(
     api: &ApiClient,
     tenant_id: &str,
     request: CreatePmIssueRequest,
     json: bool,
 ) -> Result<()> {
-    let response: CreatePmIssueResponse = api.post(&issues_path(tenant_id), &request).await?;
+    let path = issues_path(tenant_id);
+    let mut first_wait = true;
+    let max_wait = Duration::from_secs(LINEAR_RECONCILE_WAIT_TIMEOUT_SECONDS);
+    let mut reconcile_wait: Option<(tokio::time::Instant, tokio::time::Instant)> = None;
+
+    let response: CreatePmIssueResponse = loop {
+        match api.post_once(&path, &request).await {
+            Ok(response) => break response,
+            Err(error) => {
+                let Some(pending) = linear_reconcile_pending(&error) else {
+                    return Err(error);
+                };
+                let delay_seconds = reconcile_delay_seconds(pending, first_wait);
+                let delay = Duration::from_secs(delay_seconds);
+                let (started_at, deadline) = *reconcile_wait.get_or_insert_with(|| {
+                    let started_at = tokio::time::Instant::now();
+                    let deadline = started_at
+                        .checked_add(max_wait)
+                        .expect("Linear reconcile wait deadline is representable");
+                    (started_at, deadline)
+                });
+                let now = tokio::time::Instant::now();
+                let waited = now.duration_since(started_at);
+                if now >= deadline {
+                    return linear_reconcile_timeout(json, waited);
+                }
+                let Some(retry_at) = now.checked_add(delay) else {
+                    return linear_reconcile_timeout(json, waited);
+                };
+                if retry_at > deadline {
+                    return linear_reconcile_timeout(json, waited);
+                }
+
+                eprintln!(
+                    "Linear OAuth reconcile is pending; retrying issue creation in \
+                     {delay_seconds} seconds (waited {} of \
+                     {LINEAR_RECONCILE_WAIT_TIMEOUT_SECONDS} seconds).",
+                    waited.as_secs()
+                );
+                tokio::time::sleep(delay).await;
+                first_wait = false;
+            }
+        }
+    };
+
     if json {
         return print_json(&response);
     }
@@ -283,28 +685,143 @@ async fn run_create(
     Ok(())
 }
 
+fn linear_reconcile_timeout(json: bool, waited: Duration) -> Result<()> {
+    let message = format!(
+        "Linear OAuth reconcile is incomplete and cannot be retried within the \
+         {LINEAR_RECONCILE_WAIT_TIMEOUT_SECONDS}-second wait deadline. Check reconcile worker \
+         operation and the Linear connection state before trying again."
+    );
+    if json {
+        print_json(&LinearReconcileTimeoutResponse {
+            error: "linear_oauth_reconcile_timeout",
+            provider: "linear",
+            operation: LINEAR_OAUTH_RESOLUTION_OPERATION,
+            waited_seconds: waited.as_secs(),
+            wait_timeout_seconds: LINEAR_RECONCILE_WAIT_TIMEOUT_SECONDS,
+            message: message.clone(),
+        })?;
+    }
+    Err(anyhow!(message))
+}
+
+/// Safety valve for `--all` so a runaway cursor cannot hammer the API.
+const MAX_ISSUE_PAGES: usize = 100;
+
+/// How far a single `issue list` invocation should page.
+#[derive(Debug, Default)]
+struct ListPagination {
+    limit: Option<u32>,
+    cursor: Option<String>,
+    all: bool,
+}
+
 async fn run_list(
     api: &ApiClient,
     tenant_id: &str,
-    query: Vec<(&str, String)>,
+    base_query: Vec<(&str, String)>,
+    pagination: ListPagination,
     json: bool,
 ) -> Result<()> {
-    let query_refs = query
-        .iter()
-        .map(|(key, value)| (*key, value.as_str()))
-        .collect::<Vec<_>>();
-    let response: ListPmIssuesResponse =
-        api.get_query(&issues_path(tenant_id), &query_refs).await?;
+    let mut items: Vec<PmIssue> = Vec::new();
+    let mut cursor = pagination.cursor.clone();
+    let mut has_next_page;
+    let mut pages = 0usize;
+
+    loop {
+        let mut query = base_query.clone();
+        if let Some(limit) = pagination.limit {
+            query.push(("limit", limit.to_string()));
+        }
+        if let Some(cursor) = &cursor {
+            query.push(("cursor", cursor.clone()));
+        }
+        let query_refs = query
+            .iter()
+            .map(|(key, value)| (*key, value.as_str()))
+            .collect::<Vec<_>>();
+
+        let response: ListPmIssuesResponse =
+            api.get_query(&issues_path(tenant_id), &query_refs).await?;
+
+        items.extend(response.items);
+        has_next_page = response.has_next_page;
+        cursor = response.next_cursor;
+        pages += 1;
+
+        if !pagination.all || !has_next_page {
+            break;
+        }
+        // A provider that claims another page but hands back no cursor
+        // would loop forever on the same page. Stop and let the warning
+        // report the truncation.
+        if cursor.is_none() || pages >= MAX_ISSUE_PAGES {
+            break;
+        }
+    }
+
+    let response = ListPmIssuesResponse {
+        count: items.len(),
+        items,
+        has_next_page,
+        next_cursor: cursor,
+    };
+
     if json {
-        return print_json(&response);
+        print_json(&response)?;
+    } else {
+        for issue in &response.items {
+            println!(
+                "{}\t{}\t{}\t{}\t{}",
+                issue.key,
+                issue.status,
+                issue.priority,
+                issue.project_milestone_name.as_deref().unwrap_or("-"),
+                issue.title
+            );
+        }
     }
-    for issue in &response.items {
-        println!(
-            "{}\t{}\t{}\t{}",
-            issue.key, issue.status, issue.priority, issue.title
-        );
+
+    // Always to stderr, including under --json, so a script reading only
+    // stdout cannot silently mistake a truncated list for a complete one.
+    if let Some(warning) = truncation_warning(
+        response.has_next_page,
+        response.count,
+        pagination.all,
+        response.next_cursor.as_deref(),
+    ) {
+        eprintln!("{warning}");
     }
+
     Ok(())
+}
+
+/// Build the warning shown when a listing stopped before the last issue.
+///
+/// Returns `None` when every matching issue was returned.
+fn truncation_warning(
+    has_next_page: bool,
+    count: usize,
+    all: bool,
+    next_cursor: Option<&str>,
+) -> Option<String> {
+    if !has_next_page {
+        return None;
+    }
+
+    let mut message =
+        format!("warning: results were truncated at {count} issues; more issues exist.");
+    if all {
+        message.push_str(&format!(
+            "\n         stopped after the {MAX_ISSUE_PAGES}-page limit."
+        ));
+    } else {
+        message.push_str("\n         re-run with --all to fetch every page.");
+    }
+    if let Some(cursor) = next_cursor {
+        message.push_str(&format!("\n         resume with --cursor {cursor}"));
+    }
+
+    Some(message)
 }
 
 async fn run_update(
@@ -327,11 +844,234 @@ async fn run_update(
     Ok(())
 }
 
+fn print_collection(
+    response: &serde_json::Value,
+    json: bool,
+    id_field: &str,
+    text_field: &str,
+) -> Result<()> {
+    if json {
+        return print_json(response);
+    }
+    for item in response
+        .get("items")
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+    {
+        let id = item
+            .get(id_field)
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("-");
+        let text = item
+            .get(text_field)
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("-");
+        println!("{id}\t{text}");
+    }
+    Ok(())
+}
+
+async fn run_comment(
+    api: &ApiClient,
+    tenant_id: &str,
+    command: &CommentCommand,
+    provider_alias: Option<&str>,
+) -> Result<()> {
+    match command {
+        CommentCommand::List {
+            issue_id,
+            provider,
+            json,
+        } => {
+            let provider = provider_with_alias(provider, provider_alias);
+            let response: serde_json::Value = api
+                .get_query(
+                    &issue_subresource_path(tenant_id, issue_id, "comments"),
+                    &provider_query(provider.as_deref()),
+                )
+                .await?;
+            print_collection(&response, *json, "id", "body")
+        }
+        CommentCommand::Create {
+            issue_id,
+            body,
+            parent_id,
+            provider,
+            json,
+        } => {
+            let request = serde_json::json!({
+                "provider": provider_with_alias(provider, provider_alias),
+                "body": body,
+                "parent_id": parent_id,
+            });
+            let response: serde_json::Value = api
+                .post(
+                    &issue_subresource_path(tenant_id, issue_id, "comments"),
+                    &request,
+                )
+                .await?;
+            if *json {
+                print_json(&response)
+            } else {
+                println!(
+                    "Comment created: {}",
+                    response
+                        .get("id")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or("-")
+                );
+                Ok(())
+            }
+        }
+        CommentCommand::Update {
+            issue_id,
+            comment_id,
+            body,
+            provider,
+            json,
+        } => {
+            let request = serde_json::json!({
+                "provider": provider_with_alias(provider, provider_alias),
+                "body": body,
+            });
+            let path = format!(
+                "{}/{}",
+                issue_subresource_path(tenant_id, issue_id, "comments"),
+                comment_id
+            );
+            let response: serde_json::Value = api.patch(&path, &request).await?;
+            if *json {
+                print_json(&response)
+            } else {
+                println!("Comment updated: {comment_id}");
+                Ok(())
+            }
+        }
+        CommentCommand::Delete {
+            issue_id,
+            comment_id,
+            provider,
+        } => {
+            let provider = provider_with_alias(provider, provider_alias);
+            let mut path = format!(
+                "{}/{}",
+                issue_subresource_path(tenant_id, issue_id, "comments"),
+                comment_id
+            );
+            if let Some(provider) = provider.as_deref() {
+                path.push_str(&format!("?provider={}", urlencoding::encode(provider)));
+            }
+            api.delete(&path).await?;
+            println!("Comment deleted: {comment_id}");
+            Ok(())
+        }
+    }
+}
+
+async fn run_relation(
+    api: &ApiClient,
+    tenant_id: &str,
+    command: &RelationCommand,
+    provider_alias: Option<&str>,
+) -> Result<()> {
+    match command {
+        RelationCommand::List {
+            issue_id,
+            provider,
+            json,
+        } => {
+            let provider = provider_with_alias(provider, provider_alias);
+            let response: serde_json::Value = api
+                .get_query(
+                    &issue_subresource_path(tenant_id, issue_id, "relations"),
+                    &provider_query(provider.as_deref()),
+                )
+                .await?;
+            if *json {
+                return print_json(&response);
+            }
+            for item in response
+                .get("items")
+                .and_then(serde_json::Value::as_array)
+                .into_iter()
+                .flatten()
+            {
+                let id = item
+                    .get("id")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("-");
+                let relation_type = item
+                    .get("relation_type")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("related");
+                let related = item
+                    .get("related_issue")
+                    .and_then(|v| v.get("key"))
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("-");
+                println!("{id}\t{relation_type}\t{related}");
+            }
+            Ok(())
+        }
+        RelationCommand::Create {
+            issue_id,
+            related_issue_id,
+            relation_type,
+            provider,
+            json,
+        } => {
+            let request = serde_json::json!({
+                "provider": provider_with_alias(provider, provider_alias),
+                "related_issue_id": related_issue_id,
+                "relation_type": relation_type,
+            });
+            let response: serde_json::Value = api
+                .post(
+                    &issue_subresource_path(tenant_id, issue_id, "relations"),
+                    &request,
+                )
+                .await?;
+            if *json {
+                print_json(&response)
+            } else {
+                println!(
+                    "Relation created: {}",
+                    response
+                        .get("id")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or("-")
+                );
+                Ok(())
+            }
+        }
+        RelationCommand::Delete {
+            issue_id,
+            relation_id,
+            provider,
+        } => {
+            let provider = provider_with_alias(provider, provider_alias);
+            let mut path = format!(
+                "{}/{}",
+                issue_subresource_path(tenant_id, issue_id, "relations"),
+                relation_id
+            );
+            if let Some(provider) = provider.as_deref() {
+                path.push_str(&format!("?provider={}", urlencoding::encode(provider)));
+            }
+            api.delete(&path).await?;
+            println!("Relation deleted: {relation_id}");
+            Ok(())
+        }
+    }
+}
+
 pub async fn run_issue(
     command: &IssueCommand,
     config: &Configuration,
     tenant_id: &str,
     provider_alias: Option<&str>,
+    pm_settings: &ResolvedPmSettings,
 ) -> Result<()> {
     let api = ApiClient::new(config, tenant_id)?;
 
@@ -344,24 +1084,31 @@ pub async fn run_issue(
             description,
             assignee_id,
             delegate_id,
+            no_delegate,
             label_ids,
             priority,
             project,
             project_id,
             due_date,
+            cycle_id,
+            project_milestone_id,
+            parent_issue_id,
             related_issue_ids,
             skip_if_exists,
             json,
         } => {
             let provider = provider_with_alias(provider, provider_alias);
-            let auto_delegate_to_linear_agent =
-                delegate_id.is_none() && is_linear_provider(&provider);
+            let auto_delegate_to_linear_agent = should_auto_delegate(
+                effective_no_delegate(*no_delegate, pm_settings),
+                delegate_id,
+                &provider,
+            );
             run_create(
                 &api,
                 tenant_id,
                 CreatePmIssueRequest {
                     provider,
-                    team: team.clone(),
+                    team: effective_team(team, team_id, pm_settings),
                     team_id: team_id.clone(),
                     title: title.clone(),
                     description: description.clone(),
@@ -373,6 +1120,9 @@ pub async fn run_issue(
                     project: project.clone(),
                     project_id: project_id.clone(),
                     due_date: due_date.clone(),
+                    cycle_id: cycle_id.clone(),
+                    project_milestone_id: project_milestone_id.clone(),
+                    parent_issue_id: parent_issue_id.clone(),
                     related_issue_ids: related_issue_ids.clone(),
                     skip_if_exists: *skip_if_exists,
                 },
@@ -386,15 +1136,19 @@ pub async fn run_issue(
             team_id,
             project,
             project_id,
+            project_milestone_id,
             include_completed,
+            limit,
+            cursor,
+            all,
             json,
         } => {
             let mut query = vec![("include_completed", include_completed.to_string())];
             if let Some(provider) = provider_with_alias(provider, provider_alias) {
                 query.push(("provider", provider));
             }
-            if let Some(team) = team {
-                query.push(("team", team.clone()));
+            if let Some(team) = effective_team(team, team_id, pm_settings) {
+                query.push(("team", team));
             }
             if let Some(team_id) = team_id {
                 query.push(("team_id", team_id.clone()));
@@ -405,7 +1159,43 @@ pub async fn run_issue(
             if let Some(project_id) = project_id {
                 query.push(("project_id", project_id.clone()));
             }
-            run_list(&api, tenant_id, query, *json).await
+            if let Some(project_milestone_id) = project_milestone_id {
+                query.push(("project_milestone_id", project_milestone_id.clone()));
+            }
+            run_list(
+                &api,
+                tenant_id,
+                query,
+                ListPagination {
+                    limit: *limit,
+                    cursor: cursor.clone(),
+                    all: *all,
+                },
+                *json,
+            )
+            .await
+        }
+        IssueCommand::Get {
+            issue_id,
+            provider,
+            json,
+        } => {
+            let provider = provider_with_alias(provider, provider_alias);
+            let response: PmIssue = api
+                .get_query(
+                    &issue_path(tenant_id, issue_id),
+                    &provider_query(provider.as_deref()),
+                )
+                .await?;
+            if *json {
+                print_json(&response)
+            } else {
+                println!(
+                    "{}\t{}\t{}\t{}",
+                    response.key, response.status, response.priority, response.title
+                );
+                Ok(())
+            }
         }
         IssueCommand::Update {
             issue_id,
@@ -417,42 +1207,145 @@ pub async fn run_issue(
             state_id,
             state,
             title,
+            description,
             assignee_id,
             delegate_id,
+            no_delegate,
             priority,
+            label_ids,
+            added_label_ids,
+            removed_label_ids,
+            project_id,
+            cycle_id,
+            project_milestone_id,
+            due_date,
+            parent_issue_id,
+            remove_parent,
             json,
         } => {
             let provider = provider_with_alias(provider, provider_alias);
-            let auto_delegate_to_linear_agent =
-                delegate_id.is_none() && is_linear_provider(&provider);
+            let auto_delegate_to_linear_agent = should_auto_delegate(
+                effective_no_delegate(*no_delegate, pm_settings),
+                delegate_id,
+                &provider,
+            );
             run_update(
                 &api,
                 tenant_id,
                 issue_id,
                 UpdatePmIssueRequest {
                     provider,
-                    team: team.clone(),
+                    team: effective_team(team, team_id, pm_settings),
                     team_id: team_id.clone(),
                     status_id: status_id.clone(),
                     status: status.clone(),
                     state_id: state_id.clone(),
                     state: state.clone(),
                     title: title.clone(),
+                    description: description.clone(),
                     assignee_id: assignee_id.clone(),
                     delegate_id: delegate_id.clone(),
                     auto_delegate_to_linear_agent,
                     priority: priority.clone(),
+                    label_ids: (!label_ids.is_empty()).then(|| label_ids.clone()),
+                    added_label_ids: added_label_ids.clone(),
+                    removed_label_ids: removed_label_ids.clone(),
+                    project_id: project_id.clone(),
+                    cycle_id: cycle_id.clone(),
+                    project_milestone_id: project_milestone_id.clone(),
+                    due_date: due_date.clone(),
+                    parent_issue_id: parent_issue_id.clone(),
+                    remove_parent: *remove_parent,
                 },
                 *json,
             )
             .await
         }
+        IssueCommand::Delete {
+            issue_id,
+            provider,
+            json,
+        } => {
+            let provider = provider_with_alias(provider, provider_alias);
+            let path = match provider.as_deref() {
+                Some(value) => format!(
+                    "{}?provider={}",
+                    issue_path(tenant_id, issue_id),
+                    urlencoding::encode(value)
+                ),
+                None => issue_path(tenant_id, issue_id),
+            };
+            let response: serde_json::Value = api.delete_json(&path).await?;
+            if *json {
+                print_json(&response)
+            } else {
+                println!(
+                    "Issue {issue_id}: {}",
+                    response
+                        .get("deletion_mode")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or("deleted")
+                );
+                Ok(())
+            }
+        }
+        IssueCommand::Children {
+            issue_id,
+            provider,
+            json,
+        } => {
+            let provider = provider_with_alias(provider, provider_alias);
+            let response: serde_json::Value = api
+                .get_query(
+                    &issue_subresource_path(tenant_id, issue_id, "children"),
+                    &provider_query(provider.as_deref()),
+                )
+                .await?;
+            print_collection(&response, *json, "key", "title")
+        }
+        IssueCommand::Comment { command } => {
+            run_comment(&api, tenant_id, command, provider_alias).await
+        }
+        IssueCommand::Relation { command } => {
+            run_relation(&api, tenant_id, command, provider_alias).await
+        }
     }
 }
 
-pub async fn run(args: &PmArgs, config: &Configuration, tenant_id: &str) -> Result<()> {
+pub async fn run(
+    args: &PmArgs,
+    config: &Configuration,
+    tenant_id: &str,
+    pm_settings: &ResolvedPmSettings,
+) -> Result<()> {
     match &args.command {
-        PmCommand::Issue { command } => run_issue(command, config, tenant_id, None).await,
+        PmCommand::Issue { command } => {
+            run_issue(command, config, tenant_id, None, pm_settings).await
+        }
+        PmCommand::Project { command } => {
+            pm_resource_cli::run_resource("projects", command, config, tenant_id, None).await
+        }
+        PmCommand::Initiative { command } => {
+            pm_resource_cli::run_resource("initiatives", command, config, tenant_id, None).await
+        }
+        PmCommand::Cycle { command } => {
+            pm_resource_cli::run_resource("cycles", command, config, tenant_id, None).await
+        }
+        PmCommand::Team { command } => {
+            pm_resource_cli::run_resource("teams", command, config, tenant_id, None).await
+        }
+        PmCommand::Label { command } => {
+            pm_resource_cli::run_resource("labels", command, config, tenant_id, None).await
+        }
+        PmCommand::Document { command } => {
+            pm_resource_cli::run_resource("documents", command, config, tenant_id, None).await
+        }
+        PmCommand::Milestone { command } => {
+            pm_resource_cli::run_resource("milestones", command, config, tenant_id, None).await
+        }
+        PmCommand::ProjectUpdate { command } => {
+            pm_project_update_cli::run_project_update(command, config, tenant_id, None).await
+        }
     }
 }
 
@@ -460,13 +1353,110 @@ pub async fn run_top_level_issue(
     args: &IssueArgs,
     config: &Configuration,
     tenant_id: &str,
+    pm_settings: &ResolvedPmSettings,
 ) -> Result<()> {
-    run_issue(&args.command, config, tenant_id, None).await
+    run_issue(&args.command, config, tenant_id, None, pm_settings).await
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn no_warning_when_every_issue_was_returned() {
+        assert_eq!(truncation_warning(false, 100, false, None), None);
+    }
+
+    #[test]
+    fn warning_points_at_all_and_the_resume_cursor() {
+        let warning = truncation_warning(true, 100, false, Some("cursor-abc"))
+            .expect("a truncated listing must warn");
+
+        assert!(warning.contains("truncated at 100 issues"));
+        assert!(warning.contains("--all"));
+        assert!(warning.contains("--cursor cursor-abc"));
+    }
+
+    #[test]
+    fn warning_names_the_page_limit_when_all_was_requested() {
+        let warning = truncation_warning(true, 5_000, true, Some("c"))
+            .expect("a truncated listing must warn");
+
+        assert!(warning.contains(&MAX_ISSUE_PAGES.to_string()));
+        assert!(
+            !warning.contains("re-run with --all"),
+            "--all was already used: {warning}"
+        );
+    }
+
+    #[test]
+    fn list_response_defaults_pagination_fields_for_older_apis() {
+        let response: ListPmIssuesResponse =
+            serde_json::from_str(r#"{"items":[],"count":0}"#).unwrap();
+
+        assert!(!response.has_next_page);
+        assert_eq!(response.next_cursor, None);
+    }
+
+    fn issue_json(key: &str, assignee: serde_json::Value) -> serde_json::Value {
+        serde_json::json!({
+            "provider": "linear",
+            "id": format!("id-{key}"),
+            "key": key,
+            "title": format!("Issue {key}"),
+            "url": format!("https://linear.app/issue/{key}"),
+            "status": "Todo",
+            "priority": "none",
+            "assignee": assignee,
+        })
+    }
+
+    #[test]
+    fn list_response_preserves_assigned_and_unassigned_issues() {
+        let response: ListPmIssuesResponse = serde_json::from_value(serde_json::json!({
+            "items": [
+                issue_json(
+                    "PLT-1",
+                    serde_json::json!({
+                        "id": "user-1",
+                        "name": "Alice",
+                        "avatar_url": "https://example.com/alice.png",
+                    }),
+                ),
+                issue_json("PLT-2", serde_json::Value::Null),
+            ],
+            "count": 2,
+            "has_next_page": false,
+            "next_cursor": null,
+        }))
+        .unwrap();
+
+        let value = serde_json::to_value(response).unwrap();
+        assert_eq!(value["items"][0]["assignee"]["id"], "user-1");
+        assert_eq!(value["items"][0]["assignee"]["name"], "Alice");
+        assert_eq!(value["items"][1]["assignee"], serde_json::Value::Null);
+    }
+
+    #[test]
+    fn get_response_preserves_assigned_and_unassigned_issues() {
+        let assigned: PmIssue = serde_json::from_value(issue_json(
+            "PLT-1",
+            serde_json::json!({
+                "id": "user-1",
+                "name": "Alice",
+                "avatar_url": null,
+            }),
+        ))
+        .unwrap();
+        let unassigned: PmIssue =
+            serde_json::from_value(issue_json("PLT-2", serde_json::Value::Null)).unwrap();
+
+        let assigned = serde_json::to_value(assigned).unwrap();
+        let unassigned = serde_json::to_value(unassigned).unwrap();
+        assert_eq!(assigned["assignee"]["id"], "user-1");
+        assert_eq!(assigned["assignee"]["name"], "Alice");
+        assert_eq!(unassigned["assignee"], serde_json::Value::Null);
+    }
 
     #[test]
     fn builds_pm_issue_paths() {
@@ -493,6 +1483,9 @@ mod tests {
             project: None,
             project_id: None,
             due_date: None,
+            cycle_id: None,
+            project_milestone_id: None,
+            parent_issue_id: None,
             related_issue_ids: Vec::new(),
             skip_if_exists: false,
         };
@@ -525,6 +1518,9 @@ mod tests {
             project: None,
             project_id: None,
             due_date: None,
+            cycle_id: None,
+            project_milestone_id: None,
+            parent_issue_id: None,
             related_issue_ids: Vec::new(),
             skip_if_exists: false,
         };
@@ -551,10 +1547,20 @@ mod tests {
             state_id: None,
             state: None,
             title: None,
+            description: None,
             assignee_id: None,
             delegate_id: Some("agent_user_1".to_string()),
             auto_delegate_to_linear_agent: false,
             priority: None,
+            label_ids: None,
+            added_label_ids: Vec::new(),
+            removed_label_ids: Vec::new(),
+            project_id: None,
+            cycle_id: None,
+            project_milestone_id: None,
+            due_date: None,
+            parent_issue_id: None,
+            remove_parent: false,
         };
 
         assert_eq!(
@@ -571,5 +1577,71 @@ mod tests {
         assert!(is_linear_provider(&Some("Linear".to_string())));
         assert!(!is_linear_provider(&Some("jira".to_string())));
         assert!(!is_linear_provider(&None));
+    }
+
+    #[test]
+    fn uses_retry_after_for_first_wait_and_interval_for_later_waits() {
+        let pending = ReconcilePending {
+            retry_after_seconds: 17,
+            reconcile_interval_seconds: 29,
+        };
+
+        assert_eq!(reconcile_delay_seconds(pending, true), 17);
+        assert_eq!(reconcile_delay_seconds(pending, false), 29);
+    }
+
+    #[test]
+    fn auto_delegates_only_without_no_delegate_flag() {
+        let linear = Some("linear".to_string());
+        assert!(should_auto_delegate(false, &None, &linear));
+        assert!(!should_auto_delegate(true, &None, &linear));
+        assert!(!should_auto_delegate(
+            false,
+            &Some("agent_user_1".to_string()),
+            &linear
+        ));
+        assert!(!should_auto_delegate(false, &None, &None));
+        assert!(!should_auto_delegate(
+            false,
+            &None,
+            &Some("jira".to_string())
+        ));
+    }
+
+    #[test]
+    fn profile_no_delegate_is_used_only_without_cli_override() {
+        let enabled = ResolvedPmSettings {
+            no_delegate: Some(true),
+            default_team: None,
+        };
+        let disabled = ResolvedPmSettings {
+            no_delegate: Some(false),
+            default_team: None,
+        };
+
+        assert!(effective_no_delegate(false, &enabled));
+        assert!(effective_no_delegate(true, &disabled));
+        assert!(!effective_no_delegate(false, &disabled));
+    }
+
+    #[test]
+    fn profile_team_fills_only_when_cli_team_fields_are_absent() {
+        let settings = ResolvedPmSettings {
+            no_delegate: None,
+            default_team: Some("Profile Team".to_string()),
+        };
+
+        assert_eq!(
+            effective_team(&None, &None, &settings).as_deref(),
+            Some("Profile Team")
+        );
+        assert_eq!(
+            effective_team(&Some("CLI Team".to_string()), &None, &settings).as_deref(),
+            Some("CLI Team")
+        );
+        assert_eq!(
+            effective_team(&None, &Some("team_cli".to_string()), &settings),
+            None
+        );
     }
 }

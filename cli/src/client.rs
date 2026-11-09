@@ -4,6 +4,7 @@ use serde::de::DeserializeOwned;
 use tachyon_sdk::apis::configuration::Configuration;
 
 use crate::auth;
+use crate::response_contract::TachyonResponseContract;
 
 /// Non-secret context used to explain authentication failures.
 #[derive(Debug, Clone)]
@@ -27,6 +28,8 @@ pub struct HttpError {
     pub body: String,
     /// Extra authentication diagnostics appended for 401 responses.
     pub diagnostics: Option<String>,
+    /// `retry-after` seconds advertised by the server, for 429 responses.
+    pub retry_after_secs: Option<u64>,
 }
 
 impl std::fmt::Display for HttpError {
@@ -52,6 +55,114 @@ pub fn http_error_status(err: &anyhow::Error) -> Option<reqwest::StatusCode> {
     err.downcast_ref::<HttpError>().map(|e| e.status)
 }
 
+/// Header carrying the platform scope that validates access to a tenant the
+/// caller is not a direct member of (e.g. the system tenant that holds the
+/// host Sentry token).
+pub const PLATFORM_ID_HEADER: &str = "x-platform-id";
+
+/// Process-wide platform scope registered once from the CLI global option.
+///
+/// The value is read whenever an [`ApiClient`] or SDK configuration is built,
+/// so every command inherits `--platform-id` without threading it through
+/// each call site.
+static PLATFORM_ID: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+
+/// Register the platform scope for this process. Returns an error when the
+/// value cannot be sent as an HTTP header. Later calls are ignored.
+pub fn set_platform_id(platform_id: Option<&str>) -> Result<()> {
+    let normalized = platform_id
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string);
+    if let Some(value) = &normalized {
+        header::HeaderValue::from_str(value)
+            .with_context(|| format!("invalid --platform-id value: {value}"))?;
+    }
+    let _ = PLATFORM_ID.set(normalized);
+    Ok(())
+}
+
+/// Platform scope registered via [`set_platform_id`], if any.
+pub fn platform_id() -> Option<&'static str> {
+    PLATFORM_ID.get().and_then(|value| value.as_deref())
+}
+
+/// Default headers shared by [`ApiClient`] and the generated SDK client.
+pub fn default_headers(
+    tenant_id: &str,
+    platform_id: Option<&str>,
+    bearer_token: Option<&str>,
+) -> Result<header::HeaderMap> {
+    let mut headers = header::HeaderMap::new();
+    headers.insert("x-operator-id", header::HeaderValue::from_str(tenant_id)?);
+    if let Some(platform_id) = platform_id {
+        headers.insert(
+            PLATFORM_ID_HEADER,
+            header::HeaderValue::from_str(platform_id)?,
+        );
+    }
+    if let Some(token) = bearer_token {
+        headers.insert(
+            header::AUTHORIZATION,
+            header::HeaderValue::from_str(&format!("Bearer {token}"))?,
+        );
+    }
+    Ok(headers)
+}
+
+/// HTTP client for the generated SDK that carries the registered platform
+/// scope. Generated API calls add `x-operator-id` and the bearer token per
+/// request, so only `x-platform-id` is installed as a default header.
+///
+/// The generated SDK is pinned to reqwest 0.12, so this client is built from
+/// the `reqwest12` alias rather than the CLI's own reqwest version.
+pub fn sdk_http_client() -> reqwest12::Client {
+    let mut headers = reqwest12::header::HeaderMap::new();
+    if let Some(platform_id) = platform_id() {
+        if let Ok(value) = reqwest12::header::HeaderValue::from_str(platform_id) {
+            headers.insert(PLATFORM_ID_HEADER, value);
+        }
+    }
+    reqwest12::Client::builder()
+        .default_headers(headers)
+        .build()
+        .expect("reqwest client with default headers should build")
+}
+
+/// Body for [`ApiClient::send`], rebuilt per attempt so a 401 retry can
+/// replay a request whose body was already consumed.
+pub enum RequestBody<'a> {
+    /// No request body.
+    None,
+    /// A JSON body serialized once by the caller.
+    Json(&'a serde_json::Value),
+    /// A multipart form produced fresh for each attempt.
+    Multipart(&'a dyn Fn() -> reqwest::multipart::Form),
+}
+
+impl RequestBody<'_> {
+    fn apply(&self, request: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
+        match self {
+            Self::None => request,
+            Self::Json(value) => request.json(value),
+            Self::Multipart(build) => request.multipart(build()),
+        }
+    }
+}
+
+/// Seconds advertised by a `retry-after` response header, when it is the
+/// integer form. HTTP-date values are ignored; callers fall back to their own
+/// default wait.
+fn retry_after_secs(headers: &header::HeaderMap) -> Option<u64> {
+    headers
+        .get(header::RETRY_AFTER)?
+        .to_str()
+        .ok()?
+        .trim()
+        .parse()
+        .ok()
+}
+
 /// Shared API client that carries Tachyon auth headers.
 pub struct ApiClient {
     pub client: Client,
@@ -71,14 +182,11 @@ impl ApiClient {
         tenant_id: &str,
         auth_diagnostics: Option<AuthDiagnostics>,
     ) -> Result<Self> {
-        let mut headers = header::HeaderMap::new();
-        headers.insert("x-operator-id", header::HeaderValue::from_str(tenant_id)?);
-        if let Some(token) = &config.bearer_access_token {
-            headers.insert(
-                header::AUTHORIZATION,
-                header::HeaderValue::from_str(&format!("Bearer {token}"))?,
-            );
-        }
+        let headers = default_headers(
+            tenant_id,
+            platform_id(),
+            config.bearer_access_token.as_deref(),
+        )?;
         let client = Client::builder().default_headers(headers).build()?;
         let base_url = config.base_path.trim_end_matches('/').to_string();
         Ok(Self {
@@ -90,6 +198,32 @@ impl ApiClient {
 
     /// GET a JSON endpoint and deserialize the response.
     pub async fn get<T: DeserializeOwned>(&self, path: &str) -> Result<T> {
+        let resp = self.get_response(path).await?;
+        resp.json()
+            .await
+            .with_context(|| format!("parse GET {path}"))
+    }
+
+    /// GET an enrolled Tachyon REST endpoint through its compile-time response
+    /// contract. Family rollout keeps unenrolled endpoints on [`Self::get`]
+    /// until their registry entries and producer comparisons are ready.
+    pub async fn get_contract<T: TachyonResponseContract>(&self, path: &str) -> Result<T> {
+        if path != T::PATH || T::METHOD != "GET" {
+            return Err(anyhow!(
+                "response contract {} is registered for {} {}, not GET {path}",
+                T::ID,
+                T::METHOD,
+                T::PATH
+            ));
+        }
+        self.get(path).await
+    }
+
+    /// GET an endpoint and return the successful response before reading its
+    /// body. Callers that need to distinguish response-header, body-transfer,
+    /// and decode time can use this method without bypassing the shared 401
+    /// refresh and HTTP error handling.
+    pub async fn get_response(&self, path: &str) -> Result<reqwest::Response> {
         let url = format!("{}{}", self.base_url, path);
         let resp = self
             .client
@@ -108,15 +242,13 @@ impl ApiClient {
                         .send()
                         .await
                         .with_context(|| format!("GET {url}"))?;
-                    return self.json_or_error("GET", path, retry).await;
+                    return self.response_or_error("GET", path, retry).await;
                 }
             }
             let body = resp.text().await.unwrap_or_default();
             return Err(self.http_error("GET", path, status, &body));
         }
-        resp.json()
-            .await
-            .with_context(|| format!("parse GET {path}"))
+        Ok(resp)
     }
 
     /// GET with query parameters.
@@ -191,6 +323,27 @@ impl ApiClient {
         resp.json()
             .await
             .with_context(|| format!("parse POST {path}"))
+    }
+
+    /// POST a JSON body exactly once and deserialize the response.
+    ///
+    /// Unlike [`Self::post`], this method never replays the request after a
+    /// 401. Use it for non-idempotent operations where the server might have
+    /// accepted the request before the client observes a failure.
+    pub async fn post_once<B: serde::Serialize, T: DeserializeOwned>(
+        &self,
+        path: &str,
+        body: &B,
+    ) -> Result<T> {
+        let url = format!("{}{}", self.base_url, path);
+        let resp = self
+            .client
+            .post(&url)
+            .json(body)
+            .send()
+            .await
+            .with_context(|| format!("POST {url}"))?;
+        self.json_or_error("POST", path, resp).await
     }
 
     /// POST with no response body expected (returns status text).
@@ -373,20 +526,128 @@ impl ApiClient {
         Ok(())
     }
 
+    /// DELETE a JSON endpoint and deserialize the response.
+    pub async fn delete_json<T: DeserializeOwned>(&self, path: &str) -> Result<T> {
+        let url = format!("{}{}", self.base_url, path);
+        let resp = self
+            .client
+            .delete(&url)
+            .send()
+            .await
+            .with_context(|| format!("DELETE {url}"))?;
+        let status = resp.status();
+        if !status.is_success() {
+            if status == reqwest::StatusCode::UNAUTHORIZED {
+                if let Some(token) = self.refresh_bearer_after_401().await {
+                    let retry = self
+                        .client
+                        .delete(&url)
+                        .bearer_auth(token)
+                        .send()
+                        .await
+                        .with_context(|| format!("DELETE {url}"))?;
+                    return self.json_or_error("DELETE", path, retry).await;
+                }
+            }
+            let body = resp.text().await.unwrap_or_default();
+            return Err(self.http_error("DELETE", path, status, &body));
+        }
+        resp.json()
+            .await
+            .with_context(|| format!("parse DELETE {path}"))
+    }
+
+    /// Send a request that needs per-call headers or a non-JSON body, and
+    /// return the successful response without reading it.
+    ///
+    /// The JSON helpers above cover the common case; this one exists for
+    /// endpoints that take an extra header (such as `x-data-purpose`) or a
+    /// multipart upload. It keeps the shared 401-refresh retry, and records
+    /// the `retry-after` seconds on the error so callers can tell the user
+    /// how long to wait after a 429.
+    ///
+    /// `body` is rebuilt for each attempt, so the 401 retry can replay a
+    /// multipart upload that was already consumed by the first attempt.
+    pub async fn send(
+        &self,
+        method: reqwest::Method,
+        path: &str,
+        headers: &[(&str, String)],
+        body: &RequestBody<'_>,
+    ) -> Result<reqwest::Response> {
+        let url = format!("{}{}", self.base_url, path);
+        let method_label = method.as_str().to_string();
+        let attempt = |bearer: Option<String>| {
+            let mut request = self.client.request(method.clone(), &url);
+            for (name, value) in headers {
+                request = request.header(*name, value);
+            }
+            if let Some(token) = bearer {
+                request = request.bearer_auth(token);
+            }
+            body.apply(request)
+        };
+
+        let resp = attempt(None)
+            .send()
+            .await
+            .with_context(|| format!("{method_label} {url}"))?;
+        let status = resp.status();
+        if status.is_success() {
+            return Ok(resp);
+        }
+
+        if status == reqwest::StatusCode::UNAUTHORIZED {
+            if let Some(token) = self.refresh_bearer_after_401().await {
+                let retry = attempt(Some(token))
+                    .send()
+                    .await
+                    .with_context(|| format!("{method_label} {url}"))?;
+                let retry_status = retry.status();
+                if retry_status.is_success() {
+                    return Ok(retry);
+                }
+                let retry_after = retry_after_secs(retry.headers());
+                let body_text = retry.text().await.unwrap_or_default();
+                return Err(self.http_error_with_retry_after(
+                    &method_label,
+                    path,
+                    retry_status,
+                    &body_text,
+                    retry_after,
+                ));
+            }
+        }
+
+        let retry_after = retry_after_secs(resp.headers());
+        let body_text = resp.text().await.unwrap_or_default();
+        Err(self.http_error_with_retry_after(&method_label, path, status, &body_text, retry_after))
+    }
+
     async fn json_or_error<T: DeserializeOwned>(
         &self,
         method: &str,
         path: &str,
         resp: reqwest::Response,
     ) -> Result<T> {
+        let resp = self.response_or_error(method, path, resp).await?;
+        resp.json()
+            .await
+            .with_context(|| format!("parse {method} {path}"))
+    }
+
+    async fn response_or_error(
+        &self,
+        method: &str,
+        path: &str,
+        resp: reqwest::Response,
+    ) -> Result<reqwest::Response> {
         let status = resp.status();
         if !status.is_success() {
             let body = resp.text().await.unwrap_or_default();
             return Err(self.http_error(method, path, status, &body));
         }
-        resp.json()
-            .await
-            .with_context(|| format!("parse {method} {path}"))
+        Ok(resp)
     }
 
     async fn refresh_bearer_after_401(&self) -> Option<String> {
@@ -441,6 +702,17 @@ impl ApiClient {
         status: reqwest::StatusCode,
         body: &str,
     ) -> anyhow::Error {
+        self.http_error_with_retry_after(method, path, status, body, None)
+    }
+
+    fn http_error_with_retry_after(
+        &self,
+        method: &str,
+        path: &str,
+        status: reqwest::StatusCode,
+        body: &str,
+        retry_after_secs: Option<u64>,
+    ) -> anyhow::Error {
         let make = |diagnostics: Option<String>| {
             anyhow::Error::new(HttpError {
                 method: method.to_string(),
@@ -448,6 +720,7 @@ impl ApiClient {
                 status,
                 body: body.to_string(),
                 diagnostics,
+                retry_after_secs,
             })
         };
 
@@ -509,6 +782,7 @@ mod tests {
             status,
             body: status.canonical_reason().unwrap_or("error").to_string(),
             diagnostics: diagnostics.map(str::to_string),
+            retry_after_secs: None,
         })
     }
 
@@ -547,5 +821,27 @@ mod tests {
         let rendered = err.to_string();
         assert!(rendered.contains("status=401 Unauthorized"));
         assert!(rendered.contains("Authentication diagnostics: ..."));
+    }
+}
+
+#[cfg(test)]
+mod platform_scope_tests {
+    use super::*;
+
+    #[test]
+    fn default_headers_include_platform_scope_only_when_set() {
+        let without = default_headers("tn_operator", None, Some("token")).unwrap();
+        assert_eq!(without.get("x-operator-id").unwrap(), "tn_operator");
+        assert!(without.get(PLATFORM_ID_HEADER).is_none());
+        assert_eq!(without.get(header::AUTHORIZATION).unwrap(), "Bearer token");
+
+        let with = default_headers("tn_operator", Some("tn_platform"), None).unwrap();
+        assert_eq!(with.get(PLATFORM_ID_HEADER).unwrap(), "tn_platform");
+        assert!(with.get(header::AUTHORIZATION).is_none());
+    }
+
+    #[test]
+    fn default_headers_reject_platform_scope_that_is_not_a_header_value() {
+        assert!(default_headers("tn_operator", Some("bad\nvalue"), None).is_err());
     }
 }

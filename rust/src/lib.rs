@@ -22,5 +22,8 @@ pub mod procurement;
 #[cfg(feature = "platform-traits")]
 pub mod secrets;
 
+#[cfg(feature = "agent-session")]
+pub mod agent_session;
+
 #[cfg(feature = "worker-runtime")]
 pub mod worker_runtime;

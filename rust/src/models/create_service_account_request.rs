@@ -24,10 +24,7 @@ pub struct CreateServiceAccountRequest {
 
 impl CreateServiceAccountRequest {
     /// Request to create a service account
-    pub fn new(
-        name: String,
-        tenant_id: String,
-    ) -> CreateServiceAccountRequest {
+    pub fn new(name: String, tenant_id: String) -> CreateServiceAccountRequest {
         CreateServiceAccountRequest { name, tenant_id }
     }
 }

@@ -21,6 +21,17 @@ pub enum AppsCommand {
         #[arg(long)]
         json: bool,
     },
+    /// Update a compute app
+    Update {
+        /// App ID (must be specified explicitly)
+        app_id: String,
+        /// GitHub App connection ID; pass an empty string to clear
+        #[arg(long)]
+        connection_id: String,
+        /// Apply the update after reviewing the displayed app and connection
+        #[arg(long)]
+        yes: bool,
+    },
     /// Delete a compute app
     Delete {
         /// App ID or name
@@ -37,16 +48,22 @@ pub enum AppsCommand {
         /// Target environment label for this apply operation
         #[arg(long, default_value = "sandbox")]
         environment: String,
-        /// Required approval token for production apply.
+        /// Change-control approval token for protected production applies.
         ///
-        /// This only gates write execution. The token is never printed or sent
-        /// to the Cloud Apps API by the CLI.
+        /// Optional for self-tenant applies (authorized server-side by
+        /// tenant permissions). Required by the server for applies to
+        /// change-control protected tenants. The token is verified
+        /// fail-fast, forwarded to the server as a dedicated header, and
+        /// never printed.
         #[arg(
             long = "change-control-token",
             env = "TACHYON_CHANGE_CONTROL_APPROVAL_TOKEN",
             hide_env_values = true
         )]
         change_control_token: Option<String>,
+        /// Reconcile only one app's production release-check contract
+        #[arg(long)]
+        release_checks_only: bool,
         /// Preview changes without mutating Cloud Apps
         #[arg(long)]
         dry_run: bool,
@@ -198,6 +215,20 @@ pub(super) struct AppResponse {
     #[serde(default)]
     pub(super) buildspec_strategy: Option<String>,
     #[serde(default)]
+    pub(super) tier: Option<String>,
+    #[serde(default)]
+    pub(super) subnet: Option<String>,
+    /// Lambda memory in MiB the app has. `None` means the per-framework
+    /// default. Read back so `plan` can tell a declaration that took from one
+    /// that did not: a field missing here never equals what the manifest
+    /// says, so every apply would report it as changed forever.
+    #[serde(default)]
+    pub(super) lambda_memory_size: Option<i64>,
+    /// Lambda invocation timeout in seconds the app has. `None` means the
+    /// per-framework default.
+    #[serde(default)]
+    pub(super) lambda_timeout: Option<i64>,
+    #[serde(default)]
     pub(super) watch_paths: Option<Vec<String>>,
     #[serde(default)]
     pub(super) paths_ignore: Option<Vec<String>>,
@@ -268,6 +299,73 @@ pub(super) async fn run_apps_get(api: &ApiClient, app_id: &str, json: bool) -> R
             .as_deref()
             .map(format_created_at)
             .unwrap_or_else(|| "-".to_string())
+    );
+    Ok(())
+}
+
+#[derive(Debug, Serialize)]
+struct UpdateAppRequest<'a> {
+    connection_id: &'a str,
+}
+
+fn display_current_connection(connection_id: Option<&str>) -> &str {
+    connection_id
+        .filter(|id| !id.is_empty())
+        .unwrap_or("<none>")
+}
+
+fn display_requested_connection(connection_id: &str) -> &str {
+    if connection_id.is_empty() {
+        "<clear>"
+    } else {
+        connection_id
+    }
+}
+
+pub(super) async fn run_apps_update(
+    api: &ApiClient,
+    app_id: &str,
+    connection_id: &str,
+    yes: bool,
+) -> Result<()> {
+    let app: AppResponse = api.get(&format!("/v1/compute/apps/{app_id}")).await?;
+    let current_connection = app.connection_id.as_deref().unwrap_or_default();
+
+    println!("App:                  {} ({})", app.name, app.id);
+    println!(
+        "Current connection:   {}",
+        display_current_connection(app.connection_id.as_deref())
+    );
+    println!(
+        "Requested connection: {}",
+        display_requested_connection(connection_id)
+    );
+
+    if current_connection == connection_id {
+        println!();
+        println!("No update needed; the app already has the requested connection.");
+        return Ok(());
+    }
+
+    if !yes {
+        println!();
+        println!("No changes made. Re-run with --yes after verifying the app and connection.");
+        return Ok(());
+    }
+
+    let updated: AppResponse = api
+        .patch(
+            &format!("/v1/apps/{app_id}"),
+            &UpdateAppRequest { connection_id },
+        )
+        .await?;
+
+    println!();
+    println!(
+        "Updated connection for {} ({}): {}",
+        updated.name,
+        updated.id,
+        display_current_connection(updated.connection_id.as_deref())
     );
     Ok(())
 }
@@ -445,15 +543,28 @@ struct IntegrationConnection {
     status: String,
 }
 
-pub(crate) async fn run_apps_apply(
-    api: &ApiClient,
-    tenant_id: &str,
-    file: &Path,
-    selected_app: Option<&str>,
-    environment: &str,
-    change_control_token: Option<&str>,
-    dry_run: bool,
-) -> Result<()> {
+pub(crate) struct AppsApplyInput<'a> {
+    pub(crate) api: &'a ApiClient,
+    pub(crate) tenant_id: &'a str,
+    pub(crate) file: &'a Path,
+    pub(crate) selected_app: Option<&'a str>,
+    pub(crate) environment: &'a str,
+    pub(crate) change_control_token: Option<&'a str>,
+    pub(crate) release_checks_only: bool,
+    pub(crate) dry_run: bool,
+}
+
+pub(crate) async fn run_apps_apply(input: AppsApplyInput<'_>) -> Result<()> {
+    let AppsApplyInput {
+        api,
+        tenant_id,
+        file,
+        selected_app,
+        environment,
+        change_control_token,
+        release_checks_only,
+        dry_run,
+    } = input;
     let manifest = load_cloud_apps_manifest(file)?;
     let manifest_label = file.display().to_string();
     run_apps_apply_manifest(AppsApplyManifestInput {
@@ -464,6 +575,7 @@ pub(crate) async fn run_apps_apply(
         selected_app,
         environment,
         change_control_token,
+        release_checks_only,
         dry_run,
     })
     .await
@@ -477,6 +589,7 @@ pub(crate) struct AppsApplyManifestInput<'a> {
     pub(crate) selected_app: Option<&'a str>,
     pub(crate) environment: &'a str,
     pub(crate) change_control_token: Option<&'a str>,
+    pub(crate) release_checks_only: bool,
     pub(crate) dry_run: bool,
 }
 
@@ -489,10 +602,29 @@ pub(crate) async fn run_apps_apply_manifest(input: AppsApplyManifestInput<'_>) -
         selected_app,
         environment,
         change_control_token,
+        release_checks_only,
         dry_run,
     } = input;
 
+    if release_checks_only && !is_production_environment(environment) {
+        return Err(anyhow!(
+            "--release-checks-only requires --environment production"
+        ));
+    }
     require_production_apply_approval(environment, change_control_token, dry_run)?;
+
+    if release_checks_only {
+        return run_release_checks_only(
+            api,
+            tenant_id,
+            manifest,
+            manifest_label,
+            selected_app,
+            change_control_token,
+            dry_run,
+        )
+        .await;
+    }
 
     let entries = select_app_entries(manifest, selected_app)?;
     let plans = build_app_apply_plans(entries, tenant_id, environment)?;
@@ -505,33 +637,103 @@ pub(crate) async fn run_apps_apply_manifest(input: AppsApplyManifestInput<'_>) -
 
     println!("Manifest:    {manifest_label}");
     println!("Environment: {environment}");
+    println!(
+        "Effective environment: {}",
+        manifest_environment_key(environment)
+    );
     println!("Mode:        {}", if dry_run { "dry-run" } else { "apply" });
     println!();
 
     let mut created = 0;
     let mut updated = 0;
     let mut unchanged = 0;
-    for plan in plans {
+    let total_apps = plans.len();
+    for (index, plan) in plans.into_iter().enumerate() {
+        let fully_completed = index;
+        let app_position = index + 1;
         let existing = live.apps.iter().find(|app| app.name == plan.name);
-        let (action, changed_fields) = classify_app_action(existing, &plan.body);
+        let api_body = app_api_body_with_clears(existing, &plan.body);
+        let (action, changed_fields) = classify_app_action(existing, &api_body);
         let app_id = match (existing, &action, dry_run) {
             (Some(app), ApplyAction::Update, false) => {
                 let updated: AppResponse = api
-                    .patch(&format!("/v1/compute/apps/{}", app.id), &plan.body)
-                    .await?;
+                    .patch(&format!("/v1/compute/apps/{}", app.id), &api_body)
+                    .await
+                    .with_context(|| {
+                        app_apply_failure_context(
+                            &plan.name,
+                            app_position,
+                            total_apps,
+                            fully_completed,
+                        )
+                    })?;
                 updated.id
             }
             (Some(app), _, _) => app.id.clone(),
             (None, ApplyAction::Create, false) => {
-                let created: AppResponse = api.post("/v1/compute/apps", &plan.body).await?;
+                let created: AppResponse = api
+                    .post("/v1/compute/apps", &api_body)
+                    .await
+                    .with_context(|| {
+                        app_apply_failure_context(
+                            &plan.name,
+                            app_position,
+                            total_apps,
+                            fully_completed,
+                        )
+                    })?;
                 created.id
             }
             (None, _, true) => "<new app>".to_string(),
             (None, _, false) => unreachable!(),
         };
 
-        let (env_changed, missing_secrets) =
-            apply_env_plan(api, &app_id, &plan.env_plan, dry_run).await?;
+        let has_iac_env_refs = plan.iac_manifest.is_some();
+        let (env_changed, mut missing_secrets) =
+            apply_env_plan(api, &app_id, &plan.env_plan, dry_run)
+                .await
+                .with_context(|| {
+                    app_apply_failure_context(&plan.name, app_position, total_apps, fully_completed)
+                })?;
+        if has_iac_env_refs {
+            if dry_run {
+                missing_secrets.clear();
+            } else {
+                let manifest = plan
+                    .iac_manifest
+                    .as_ref()
+                    .ok_or_else(|| anyhow!("missing CloudApp IaC manifest for {}", plan.name))
+                    .with_context(|| {
+                        app_apply_failure_context(
+                            &plan.name,
+                            app_position,
+                            total_apps,
+                            fully_completed,
+                        )
+                    })?;
+                apply_compute_cloud_app_manifest(api, manifest, false, change_control_token)
+                    .await
+                    .with_context(|| {
+                        app_apply_failure_context(
+                            &plan.name,
+                            app_position,
+                            total_apps,
+                            fully_completed,
+                        )
+                    })?;
+                missing_secrets =
+                    find_missing_secret_refs(api, &app_id, &plan.env_plan.secret_refs)
+                        .await
+                        .with_context(|| {
+                            app_apply_failure_context(
+                                &plan.name,
+                                app_position,
+                                total_apps,
+                                fully_completed,
+                            )
+                        })?;
+            }
+        }
         match action {
             ApplyAction::Create => created += 1,
             ApplyAction::Update => updated += 1,
@@ -553,9 +755,7 @@ pub(crate) async fn run_apps_apply_manifest(input: AppsApplyManifestInput<'_>) -
         if !env_changed.is_empty() {
             println!("  env:         {}", env_changed.join(", "));
         }
-        let has_server_side_env_refs = !plan.env_plan.server_managed_credentials.is_empty()
-            || !plan.env_plan.internal_service_refs.is_empty();
-        if has_server_side_env_refs {
+        if has_iac_env_refs {
             let refs = plan
                 .env_plan
                 .server_managed_credentials
@@ -567,6 +767,12 @@ pub(crate) async fn run_apps_apply_manifest(input: AppsApplyManifestInput<'_>) -
                     )
                 })
                 .collect::<Vec<_>>();
+            let secret_refs = plan
+                .env_plan
+                .secret_refs
+                .iter()
+                .map(|secret| format!("{}({}; path)", secret.key, secret.target))
+                .collect::<Vec<_>>();
             let internal_refs = plan
                 .env_plan
                 .internal_service_refs
@@ -575,16 +781,15 @@ pub(crate) async fn run_apps_apply_manifest(input: AppsApplyManifestInput<'_>) -
                     format!("{}(internalService:{})", reference.key, reference.app_name)
                 })
                 .collect::<Vec<_>>();
-            let refs = refs.into_iter().chain(internal_refs).collect::<Vec<_>>();
+            let refs = refs
+                .into_iter()
+                .chain(secret_refs)
+                .chain(internal_refs)
+                .collect::<Vec<_>>();
             println!("  managed env: {}", refs.join(", "));
             if dry_run {
                 println!("  next:        run without --dry-run to save/apply the CloudApp manifest server-side");
             } else {
-                let manifest = plan
-                    .iac_manifest
-                    .as_ref()
-                    .ok_or_else(|| anyhow!("missing CloudApp IaC manifest for {}", plan.name))?;
-                apply_compute_cloud_app_manifest(api, manifest).await?;
                 println!("  iac:         applied server-managed env refs");
             }
         }
@@ -607,6 +812,89 @@ pub(crate) async fn run_apps_apply_manifest(input: AppsApplyManifestInput<'_>) -
     Ok(())
 }
 
+fn app_apply_failure_context(
+    app_name: &str,
+    app_position: usize,
+    total_apps: usize,
+    fully_completed: usize,
+) -> String {
+    let remaining = total_apps.saturating_sub(fully_completed);
+    format!(
+        "Cloud Apps apply stopped: fully completed {fully_completed}/{total_apps} apps; \
+         failed app {app_name} ({app_position}/{total_apps}) may be partially applied; \
+         remaining incomplete apps: {remaining}. Re-run the same apply command to resume safely."
+    )
+}
+
+async fn run_release_checks_only(
+    api: &ApiClient,
+    tenant_id: &str,
+    manifest: &Value,
+    manifest_label: &str,
+    selected_app: Option<&str>,
+    change_control_token: Option<&str>,
+    dry_run: bool,
+) -> Result<()> {
+    let entry = select_release_checks_entry(manifest, selected_app)?;
+    let app_name = entry
+        .get("name")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow!("app entry is missing name"))?;
+    let release_check_count = entry
+        .get("production")
+        .and_then(|production| production.get("requiredReleaseChecks"))
+        .map(|checks| {
+            checks
+                .as_array()
+                .map(Vec::len)
+                .ok_or_else(|| anyhow!("production.requiredReleaseChecks must be an array"))
+        })
+        .transpose()?
+        .unwrap_or_default();
+    let iac_manifest = cloud_app_manifest_for_iac(&entry, tenant_id)?;
+
+    println!("Manifest:       {manifest_label}");
+    println!("Environment:    production");
+    println!("App:            {app_name}");
+    println!(
+        "Mode:           {}",
+        if dry_run { "dry-run" } else { "apply" }
+    );
+    println!("Release checks: {release_check_count}");
+
+    if dry_run {
+        println!("No API request sent.");
+        return Ok(());
+    }
+
+    apply_compute_cloud_app_manifest(api, &iac_manifest, true, change_control_token).await?;
+    println!("Release-check contract reconciled for {app_name}.");
+    Ok(())
+}
+
+fn select_release_checks_entry(manifest: &Value, selected_app: Option<&str>) -> Result<Value> {
+    let entry = select_exactly_one_app_entry(manifest, selected_app, "release-checks-only apply")?;
+    crate::manifest::validate::validate_cloud_app_cache_declarations(&entry)?;
+    Ok(entry)
+}
+
+/// Fail-fast verification of an optional change-control approval token
+/// for production Cloud App applies (ADR 0011 Layer 2).
+///
+/// Since PLT-3047, a token is no longer unconditionally required for
+/// production applies: self-tenant applies are authorized server-side by
+/// the caller's `iac:ApplyManifest` / `iac:SaveManifest` permissions,
+/// and protected operations are enforced server-side (ADR 0011 Layer 1,
+/// fail closed). This client-side check therefore only:
+///
+/// - verifies a token *when one is provided* (structure, claims,
+///   environment binding, expiry, and — when
+///   `TACHYON_CHANGE_CONTROL_VERIFICATION_KEY` is configured — the
+///   HMAC-SHA256 signature), failing fast before any API write, and
+/// - prints a notice when no token is provided so operators of
+///   protected tenants learn about the server-side gate up front.
+///
+/// It is NOT an authorization boundary and never logs the token value.
 fn require_production_apply_approval(
     environment: &str,
     change_control_token: Option<&str>,
@@ -616,16 +904,52 @@ fn require_production_apply_approval(
         return Ok(());
     }
 
-    let approved = change_control_token
+    let Some(token) = change_control_token
         .map(str::trim)
-        .is_some_and(|token| !token.is_empty());
-    if approved {
+        .filter(|token| !token.is_empty())
+    else {
+        eprintln!(
+            "note: no change-control token provided; production apply is \
+             authorized server-side by your tenant permissions. Applies to \
+             change-control protected tenants will be rejected without an \
+             approval token."
+        );
         return Ok(());
+    };
+
+    // Key access (env) and clock stay in this thin wrapper; the verification
+    // logic is pure and unit-tested in the `change_control` module.
+    let verification_key = std::env::var(change_control::VERIFICATION_KEY_ENV)
+        .ok()
+        .filter(|key| !key.is_empty());
+    let now_unix = chrono::Utc::now().timestamp();
+
+    let verified = change_control::verify_change_control_token(
+        token,
+        environment,
+        verification_key.as_deref().map(str::as_bytes),
+        now_unix,
+    )?;
+
+    if verified.signature_verified {
+        eprintln!(
+            "change-control approval verified (ref: {})",
+            verified.approval_ref
+        );
+    } else {
+        // No verification key configured: the token is structurally valid,
+        // unexpired, and environment-scoped, but its signature was NOT
+        // checked. The authoritative signature check happens server-side.
+        eprintln!(
+            "warning: change-control token accepted WITHOUT signature verification \
+             (ref: {}); set {} to enforce tamper-evident approval locally. \
+             The authoritative check happens server-side.",
+            verified.approval_ref,
+            change_control::VERIFICATION_KEY_ENV
+        );
     }
 
-    Err(anyhow!(
-        "production Cloud App apply requires change-control approval; pass --change-control-token or set TACHYON_CHANGE_CONTROL_APPROVAL_TOKEN. Use --dry-run to preview without writing."
-    ))
+    Ok(())
 }
 
 fn is_production_environment(environment: &str) -> bool {
@@ -643,6 +967,8 @@ fn build_app_apply_plans(
     entries
         .into_iter()
         .map(|entry| {
+            crate::manifest::validate::validate_cloud_app_cache_declarations(&entry)?;
+            let entry = resolve_app_entry_for_environment(&entry, environment)?;
             let name = entry
                 .get("name")
                 .and_then(Value::as_str)
@@ -650,14 +976,30 @@ fn build_app_apply_plans(
                 .to_string();
             let body = app_entry_to_api_body(&entry)?;
             let env_plan = plan_env_vars(&entry, environment)?;
-            let iac_manifest = if env_plan.server_managed_credentials.is_empty()
+            let sentry_plan = plan_sentry_integration(&entry)?;
+            let has_resource_declarations = has_declarative_resource_declarations(&entry);
+            let has_database_declarations = has_manifest_database_declarations(&entry);
+            let iac_manifest = if env_plan.secret_refs.is_empty()
+                && env_plan.server_managed_credentials.is_empty()
                 && env_plan.internal_service_refs.is_empty()
+                && sentry_plan.is_none()
+                && !has_resource_declarations
+                && !has_database_declarations
             {
                 None
             } else {
-                Some(cloud_app_manifest_for_iac(&entry, tenant_id)?)
+                let mut manifest = cloud_app_manifest_for_iac(&entry, tenant_id)?;
+                let requires_apply_target = sentry_plan
+                    .as_ref()
+                    .is_some_and(|plan| !plan.env_vars.is_empty());
+                if requires_apply_target {
+                    let target = apply_target_for_generated_env(environment)?;
+                    manifest["spec"]["applyTarget"] = Value::String(target.to_string());
+                } else if let Some(target) = apply_target_for_environment(environment) {
+                    manifest["spec"]["applyTarget"] = Value::String(target.to_string());
+                }
+                Some(manifest)
             };
-            let sentry_plan = plan_sentry_integration(&entry)?;
             let runner_backend = effective_build_runner_backend(&entry, environment)?;
             Ok(AppApplyPlan {
                 name,
@@ -669,6 +1011,201 @@ fn build_app_apply_plans(
             })
         })
         .collect()
+}
+
+/// Resolve one app entry before any plan or API write is constructed.
+///
+/// Runtime fields from the selected environment replace top-level app fields,
+/// matching the typed IaC manifest behavior. Resource declarations retain their
+/// environment scope, and the complete overlay map remains available to the
+/// server-side reconciler. Env vars receive an explicit target so the
+/// server-side materializer cannot fall back to a cross-target credential.
+pub(crate) fn resolve_app_entry_for_environment(entry: &Value, environment: &str) -> Result<Value> {
+    let environment = manifest_environment_key(environment.trim());
+    if environment.is_empty() {
+        return Err(anyhow!("--environment must not be empty"));
+    }
+
+    let mut resolved = entry.clone();
+    let resolved_obj = resolved
+        .as_object_mut()
+        .ok_or_else(|| anyhow!("CloudApps app entry must be an object"))?;
+    let selected_overlay = if let Some(environments) = resolved_obj.get("environments") {
+        let environments = environments
+            .as_object()
+            .ok_or_else(|| anyhow!("app environments must be an object"))?;
+        for (overlay_environment, overlay) in environments {
+            let overlay = overlay.as_object().ok_or_else(|| {
+                anyhow!(
+                    "app environment overlay environments.{overlay_environment} must be an object"
+                )
+            })?;
+            validate_environment_overlay_keys(overlay, overlay_environment)?;
+        }
+        let overlay = environments.get(environment).ok_or_else(|| {
+            anyhow!(
+                "app environment overlay environments.{environment} is not defined; refusing to apply the unresolved base entry"
+            )
+        })?;
+        let overlay = overlay.as_object().ok_or_else(|| {
+            anyhow!("app environment overlay environments.{environment} must be an object")
+        })?;
+        Some(overlay.clone())
+    } else {
+        None
+    };
+    if let Some(overlay) = selected_overlay {
+        for (key, value) in &overlay {
+            if is_environment_resource_declaration(key) {
+                continue;
+            }
+            match resolved_obj.get_mut(key) {
+                Some(base) => merge_overlay_value(base, value),
+                None => {
+                    resolved_obj.insert(key.clone(), value.clone());
+                }
+            }
+        }
+    }
+
+    if let Some(env_vars) = resolved_obj.get_mut("envVars") {
+        let env_vars = env_vars
+            .as_array_mut()
+            .ok_or_else(|| anyhow!("envVars must be an array"))?;
+        for env_var in env_vars {
+            let env_var = env_var
+                .as_object_mut()
+                .ok_or_else(|| anyhow!("env var entry must be an object"))?;
+            if !env_var.contains_key("target") {
+                let name = env_var
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .unwrap_or("<unnamed>");
+                let default_target = default_env_target(environment).with_context(|| {
+                    format!(
+                        "env var {name} in environment {environment} must define target explicitly"
+                    )
+                })?;
+                env_var.insert(
+                    "target".to_string(),
+                    Value::String(default_target.to_string()),
+                );
+            }
+        }
+    }
+
+    Ok(resolved)
+}
+
+fn validate_environment_overlay_keys(
+    overlay: &serde_json::Map<String, Value>,
+    environment: &str,
+) -> Result<()> {
+    for key in overlay.keys() {
+        if !ENVIRONMENT_MATERIALIZATION_KEYS.contains(&key.as_str())
+            && !is_environment_resource_declaration(key)
+        {
+            return Err(anyhow!(
+                "app environment overlay environments.{environment} contains unsupported field {key}"
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Fields that describe the selected environment's build or runtime view.
+/// These are materialized onto the top-level entry for REST and env planners.
+const ENVIRONMENT_MATERIALIZATION_KEYS: &[&str] = &[
+    "repository",
+    "rootDirectory",
+    "dockerContext",
+    "framework",
+    "deploymentTarget",
+    "versionRetention",
+    "scaling",
+    "tier",
+    "subnet",
+    "build",
+    "watchPaths",
+    "pathsIgnore",
+    "buildspecStrategy",
+    "envVars",
+    "integrations",
+    "speedInsights",
+    "rum",
+    "middleware",
+    "cache",
+    "livenessProof",
+    "readinessProof",
+    "hooks",
+];
+
+/// Declarative resources whose lifecycle may span multiple environments.
+/// They must retain their original environment scope for server reconciliation.
+const ENVIRONMENT_RESOURCE_DECLARATION_KEYS: &[&str] = &[
+    "worker",
+    "kvNamespaces",
+    "resources",
+    "d1Databases",
+    "provisionedDatabase",
+    "r2Buckets",
+    "customDomains",
+];
+
+fn is_environment_resource_declaration(key: &str) -> bool {
+    ENVIRONMENT_RESOURCE_DECLARATION_KEYS.contains(&key)
+}
+
+/// Named-cluster managed databases (`databases`, PLT-3819) are a
+/// tenant-scoped, base-level declaration reconciled by the server-side
+/// ApplyManifest. They deliberately stay out of
+/// `ENVIRONMENT_RESOURCE_DECLARATION_KEYS`: an overlay-level
+/// `databases` must keep failing overlay validation instead of being
+/// silently ignored by the server.
+fn has_manifest_database_declarations(entry: &Value) -> bool {
+    entry
+        .get("databases")
+        .and_then(Value::as_array)
+        .is_some_and(|databases| !databases.is_empty())
+}
+
+fn has_declarative_resource_declarations(entry: &Value) -> bool {
+    let Some(entry) = entry.as_object() else {
+        return false;
+    };
+    if entry
+        .keys()
+        .any(|key| is_environment_resource_declaration(key))
+    {
+        return true;
+    }
+    entry
+        .get("environments")
+        .and_then(Value::as_object)
+        .into_iter()
+        .flat_map(|environments| environments.values())
+        .filter_map(Value::as_object)
+        .any(|overlay| {
+            overlay
+                .keys()
+                .any(|key| is_environment_resource_declaration(key))
+        })
+}
+
+fn merge_overlay_value(base: &mut Value, overlay: &Value) {
+    match (base.as_object_mut(), overlay.as_object()) {
+        (Some(base), Some(overlay)) => {
+            for (key, value) in overlay {
+                match base.get_mut(key) {
+                    Some(base_value) => merge_overlay_value(base_value, value),
+                    None => {
+                        base.insert(key.clone(), value.clone());
+                    }
+                }
+            }
+        }
+        _ => *base = overlay.clone(),
+    }
 }
 
 async fn preflight_build_runner_backends(api: &ApiClient, plans: &[AppApplyPlan]) -> Result<()> {
@@ -914,6 +1451,7 @@ fn validate_build_runner_backend_at(build: Option<&Value>, path: &str) -> Result
 fn parse_build_runner_backend(value: &str) -> Result<&'static str> {
     match value.trim().to_ascii_lowercase().as_str() {
         "codebuild" | "aws_codebuild" | "aws-codebuild" => Ok("codebuild"),
+        "github_actions" | "github-actions" => Ok("github_actions"),
         "kubernetes_kata" | "kubernetes-kata" | "k8s_kata" | "k8s-kata" | "hetzner_k3s_kata"
         | "hetzner-k3s-kata" => Ok("kubernetes_kata"),
         other => Err(anyhow!("unsupported build runner backend: {other}")),
@@ -966,40 +1504,63 @@ fn enrich_oauth2_client_refs(
             .get(DOCUMENT_TENANT_ID_KEY)
             .and_then(Value::as_str)
             .map(ToString::to_string);
-        let Some(env_vars) = app.get_mut("envVars").and_then(Value::as_array_mut) else {
-            continue;
-        };
-        for env_var in env_vars {
-            let Some(client_ref) = env_var
-                .get_mut("valueFrom")
-                .and_then(Value::as_object_mut)
-                .and_then(|value_from| value_from.get_mut("oauth2ClientRef"))
-                .and_then(Value::as_object_mut)
-            else {
-                continue;
-            };
-            let Some(client_name) = client_ref.get("name").and_then(Value::as_str) else {
-                continue;
-            };
-            let Some(spec) = find_oauth2_client_dependency(
+        if let Some(env_vars) = app.get_mut("envVars") {
+            enrich_oauth2_client_refs_in_env_vars(
+                env_vars,
                 oauth2_clients,
                 app_tenant_id.as_deref(),
-                client_name,
-            )?
-            else {
-                continue;
-            };
-            for key in [
-                "clientType",
-                "redirectUris",
-                "allowedScopes",
-                "grantTypes",
-                "useTachyonUserPool",
-            ] {
-                if !client_ref.contains_key(key) {
-                    if let Some(value) = spec.get(key) {
-                        client_ref.insert(key.to_string(), value.clone());
-                    }
+            )?;
+        }
+        if let Some(environments) = app.get_mut("environments").and_then(Value::as_object_mut) {
+            for overlay in environments.values_mut() {
+                if let Some(env_vars) = overlay.get_mut("envVars") {
+                    enrich_oauth2_client_refs_in_env_vars(
+                        env_vars,
+                        oauth2_clients,
+                        app_tenant_id.as_deref(),
+                    )?;
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn enrich_oauth2_client_refs_in_env_vars(
+    env_vars: &mut Value,
+    oauth2_clients: &HashMap<(Option<String>, String), Value>,
+    app_tenant_id: Option<&str>,
+) -> Result<()> {
+    let env_vars = env_vars
+        .as_array_mut()
+        .ok_or_else(|| anyhow!("envVars must be an array"))?;
+    for env_var in env_vars {
+        let Some(client_ref) = env_var
+            .get_mut("valueFrom")
+            .and_then(Value::as_object_mut)
+            .and_then(|value_from| value_from.get_mut("oauth2ClientRef"))
+            .and_then(Value::as_object_mut)
+        else {
+            continue;
+        };
+        let Some(client_name) = client_ref.get("name").and_then(Value::as_str) else {
+            continue;
+        };
+        let Some(spec) = find_oauth2_client_dependency(oauth2_clients, app_tenant_id, client_name)?
+        else {
+            continue;
+        };
+        for key in [
+            "clientType",
+            "redirectUris",
+            "allowedScopes",
+            "grantTypes",
+            "useTachyonUserPool",
+        ] {
+            if !client_ref.contains_key(key) {
+                if let Some(value) = spec.get(key) {
+                    client_ref.insert(key.to_string(), value.clone());
                 }
             }
         }
@@ -1100,7 +1661,11 @@ fn ensure_unique_app_names(entries: &[Value], selected_app: Option<&str>) -> Res
     ))
 }
 
-pub(super) fn select_single_app_entry(manifest: &Value, app: Option<&str>) -> Result<Value> {
+fn select_exactly_one_app_entry(
+    manifest: &Value,
+    app: Option<&str>,
+    operation: &str,
+) -> Result<Value> {
     let apps = manifest
         .get("spec")
         .and_then(|s| s.get("apps"))
@@ -1108,7 +1673,7 @@ pub(super) fn select_single_app_entry(manifest: &Value, app: Option<&str>) -> Re
         .ok_or_else(|| anyhow!("CloudApps manifest must contain spec.apps[]"))?;
     if app.is_none() && apps.len() != 1 {
         return Err(anyhow!(
-            "sync-secrets requires --app when the CloudApps manifest contains {} apps",
+            "{operation} requires --app when the CloudApps manifest contains {} apps",
             apps.len()
         ));
     }
@@ -1116,9 +1681,13 @@ pub(super) fn select_single_app_entry(manifest: &Value, app: Option<&str>) -> Re
     match entries.as_slice() {
         [entry] => Ok(entry.clone()),
         _ => Err(anyhow!(
-            "sync-secrets requires exactly one selected app; pass --app to disambiguate"
+            "{operation} requires exactly one selected app; pass --app to disambiguate"
         )),
     }
+}
+
+pub(super) fn select_single_app_entry(manifest: &Value, app: Option<&str>) -> Result<Value> {
+    select_exactly_one_app_entry(manifest, app, "sync-secrets")
 }
 
 pub(crate) fn app_entry_to_api_body(entry: &Value) -> Result<Value> {
@@ -1164,6 +1733,21 @@ pub(crate) fn app_entry_to_api_body(entry: &Value) -> Result<Value> {
     copy_string_field(entry, obj, "rootDirectory", "root_directory");
     copy_string_field(entry, obj, "dockerContext", "docker_context");
     copy_string_field(entry, obj, "buildspecStrategy", "buildspec_strategy");
+    // `tier: enterprise` and its `subnet` choose the app's network profile,
+    // which is what gives a Lambda app a route to PrivateLink-only resources.
+    // The manifest schema has always parsed them, but they never reached the
+    // API, so an enterprise app created from a manifest came back standard
+    // and off-network.
+    copy_string_field(entry, obj, "tier", "tier");
+    copy_string_field(entry, obj, "subnet", "subnet");
+    // Same shape of gap as tier/subnet above: `spec.scaling` was parsed and
+    // then went nowhere, so an app declaring 2048 MiB kept being deployed at
+    // the framework default. The app is the only durable home for these -- a
+    // deployment's own scaling config is rebuilt empty on every deploy.
+    if let Some(scaling) = entry.get("scaling").and_then(Value::as_object) {
+        copy_i64_field_from_map(scaling, obj, "lambdaMemorySize", "lambda_memory_size");
+        copy_i64_field_from_map(scaling, obj, "lambdaTimeout", "lambda_timeout");
+    }
     if let Some(command) = build_command {
         obj.insert("build_command".to_string(), Value::String(command));
     }
@@ -1208,6 +1792,19 @@ fn copy_string_field_from_map(
 ) {
     if let Some(value) = source.get(from).and_then(Value::as_str) {
         target.insert(to.to_string(), Value::String(value.to_string()));
+    }
+}
+
+/// Copies an integer field, which the sizing knobs need and the string
+/// helpers above cannot carry.
+fn copy_i64_field_from_map(
+    source: &serde_json::Map<String, Value>,
+    target: &mut serde_json::Map<String, Value>,
+    from: &str,
+    to: &str,
+) {
+    if let Some(value) = source.get(from).and_then(Value::as_i64) {
+        target.insert(to.to_string(), Value::from(value));
     }
 }
 
@@ -1256,6 +1853,39 @@ fn classify_app_action(existing: Option<&AppResponse>, body: &Value) -> (ApplyAc
     }
 }
 
+fn app_api_body_with_clears(existing: Option<&AppResponse>, body: &Value) -> Value {
+    let Some(existing) = existing else {
+        return body.clone();
+    };
+    let mut body = body.clone();
+    let Some(fields) = body.as_object_mut() else {
+        return body;
+    };
+    for field in [
+        "root_directory",
+        "docker_context",
+        "build_command",
+        "install_command",
+        "output_directory",
+        "node_version",
+    ] {
+        if !fields.contains_key(field) && !app_field_value(existing, field).is_null() {
+            fields.insert(field.to_string(), Value::String(String::new()));
+        }
+    }
+    for field in ["watch_paths", "paths_ignore"] {
+        if !fields.contains_key(field) && !app_field_value(existing, field).is_null() {
+            fields.insert(field.to_string(), Value::Array(Vec::new()));
+        }
+    }
+    if !fields.contains_key("buildspec_strategy")
+        && app_field_value(existing, "buildspec_strategy") != json!("inline")
+    {
+        fields.insert("buildspec_strategy".to_string(), json!("inline"));
+    }
+    body
+}
+
 fn manifest_body_fields(body: &Value) -> Vec<String> {
     body.as_object()
         .map(|obj| obj.keys().cloned().collect())
@@ -1281,6 +1911,13 @@ fn app_field_value(app: &AppResponse, field: &str) -> Value {
         "buildspec_strategy" => {
             opt_string_value(app.buildspec_strategy.as_deref().or(Some("inline")))
         }
+        // The API defaults an unset tier to `standard`, so compare against
+        // that rather than null; otherwise a manifest that says `standard`
+        // would show up as a change on every apply.
+        "tier" => opt_string_value(app.tier.as_deref().or(Some("standard"))),
+        "subnet" => opt_string_value(app.subnet.as_deref()),
+        "lambda_memory_size" => opt_i64_value(app.lambda_memory_size),
+        "lambda_timeout" => opt_i64_value(app.lambda_timeout),
         "watch_paths" => match &app.watch_paths {
             Some(paths) if !paths.is_empty() => {
                 Value::Array(paths.iter().map(|p| Value::String(p.clone())).collect())
@@ -1294,6 +1931,13 @@ fn app_field_value(app: &AppResponse, field: &str) -> Value {
             _ => Value::Null,
         },
         _ => Value::Null,
+    }
+}
+
+fn opt_i64_value(value: Option<i64>) -> Value {
+    match value {
+        Some(value) => Value::from(value),
+        None => Value::Null,
     }
 }
 
@@ -1425,6 +2069,54 @@ spec:
     }
 
     #[test]
+    fn load_cloud_apps_manifest_enriches_oauth2_client_refs_in_environment_overlays() {
+        let (_tmp, path) = write_manifest(
+            r#"
+apiVersion: apps.tachy.one/v1alpha
+kind: CloudApps
+metadata:
+  name: first
+  tenantId: tn_01hjjn348rn3t49zz6hvmfq67p
+spec:
+  apps:
+    - name: fieldadmin
+      repository:
+        url: https://github.com/quantum-box/tachyonfield
+        owner: quantum-box
+        name: tachyonfield
+      environments:
+        preview:
+          envVars:
+            - name: COGNITO_CLIENT_ID
+              type: credential
+              valueFrom:
+                oauth2ClientRef:
+                  name: fieldadmin-web
+                  field: clientId
+---
+apiVersion: apps.tachy.one/v1alpha
+kind: OAuth2Client
+metadata:
+  name: fieldadmin-web
+  tenantId: tn_01hjjn348rn3t49zz6hvmfq67p
+spec:
+  clientType: public
+  allowedScopes:
+    - openid
+    - profile
+"#,
+        );
+
+        let manifest = load_cloud_apps_manifest(&path).unwrap();
+        let entries = select_app_entries(&manifest, Some("fieldadmin")).unwrap();
+        let client_ref =
+            &entries[0]["environments"]["preview"]["envVars"][0]["valueFrom"]["oauth2ClientRef"];
+
+        assert_eq!(client_ref["clientType"], "public");
+        assert_eq!(client_ref["allowedScopes"], json!(["openid", "profile"]));
+    }
+
+    #[test]
     fn load_cloud_apps_manifest_skips_unsupported_documents() {
         let (_tmp, path) = write_manifest(
             r#"
@@ -1477,6 +2169,220 @@ spec:
         assert_eq!(body["name"], "field");
     }
 
+    /// The incident: a manifest declared 2048 MiB, `plan` said "changed:
+    /// <none>", and the app kept deploying at the framework default because
+    /// the value never made it into the REST body.
+    #[test]
+    fn api_body_carries_declared_lambda_sizing() {
+        let (_tmp, path) = write_manifest(
+            r#"
+apiVersion: apps.tachy.one/v1alpha
+kind: CloudApps
+spec:
+  apps:
+    - name: field
+      repository:
+        url: https://github.com/quantum-box/tachyonfield
+        owner: quantum-box
+        name: tachyonfield
+      deploymentTarget: lambda
+      scaling:
+        lambdaMemorySize: 2048
+        lambdaTimeout: 60
+"#,
+        );
+
+        let manifest = load_cloud_apps_manifest(&path).unwrap();
+        let entries = select_app_entries(&manifest, Some("field")).unwrap();
+        let body = app_entry_to_api_body(&entries[0]).unwrap();
+
+        assert_eq!(body["lambda_memory_size"], 2048);
+        assert_eq!(body["lambda_timeout"], 60);
+    }
+
+    /// A manifest that says nothing about sizing must not send anything:
+    /// omitting the field is how a caller says "leave it alone", and sending
+    /// a default here would overwrite whatever the app already had.
+    #[test]
+    fn api_body_omits_lambda_sizing_when_not_declared() {
+        let (_tmp, path) = write_manifest(
+            r#"
+apiVersion: apps.tachy.one/v1alpha
+kind: CloudApps
+spec:
+  apps:
+    - name: field
+      repository:
+        url: https://github.com/quantum-box/tachyonfield
+        owner: quantum-box
+        name: tachyonfield
+"#,
+        );
+
+        let manifest = load_cloud_apps_manifest(&path).unwrap();
+        let entries = select_app_entries(&manifest, Some("field")).unwrap();
+        let body = app_entry_to_api_body(&entries[0]).unwrap();
+
+        assert!(body.get("lambda_memory_size").is_none());
+        assert!(body.get("lambda_timeout").is_none());
+    }
+
+    fn app_with_sizing(memory: Option<i64>, timeout: Option<i64>) -> AppResponse {
+        serde_json::from_value(json!({
+            "id": "app_1",
+            "name": "field",
+            "lambda_memory_size": memory,
+            "lambda_timeout": timeout,
+        }))
+        .unwrap()
+    }
+
+    /// Without reading the value back, a declaration never equals what the
+    /// app has, so `plan` reports it as changed on every run and an apply is
+    /// sent forever. It also means an operator cannot tell a declaration that
+    /// took from one that was dropped -- which is how a 2048 MiB manifest sat
+    /// next to a 512 MiB deployment unnoticed.
+    #[test]
+    fn declared_sizing_matching_the_app_is_not_a_change() {
+        let app = app_with_sizing(Some(2048), Some(60));
+        let body = json!({
+            "name": "field",
+            "lambda_memory_size": 2048,
+            "lambda_timeout": 60,
+        });
+
+        let (action, changed) = classify_app_action(Some(&app), &body);
+
+        assert!(matches!(action, ApplyAction::NoChange), "{changed:?}");
+        assert!(changed.is_empty(), "{changed:?}");
+    }
+
+    #[test]
+    fn a_different_declared_size_is_still_a_change() {
+        let app = app_with_sizing(Some(512), None);
+        let body = json!({"name": "field", "lambda_memory_size": 2048});
+
+        let (action, changed) = classify_app_action(Some(&app), &body);
+
+        assert!(matches!(action, ApplyAction::Update));
+        assert_eq!(changed, vec!["lambda_memory_size".to_string()]);
+    }
+
+    #[test]
+    fn api_body_carries_enterprise_network_profile() {
+        let (_tmp, path) = write_manifest(
+            r#"
+apiVersion: apps.tachy.one/v1alpha
+kind: CloudApps
+spec:
+  apps:
+    - name: field
+      repository:
+        url: https://github.com/quantum-box/tachyonfield
+        owner: quantum-box
+        name: tachyonfield
+      framework: cargo_lambda
+      deploymentTarget: lambda
+      tier: enterprise
+      subnet: enterprise-field
+"#,
+        );
+
+        let manifest = load_cloud_apps_manifest(&path).unwrap();
+        let entries = select_app_entries(&manifest, Some("field")).unwrap();
+        let body = app_entry_to_api_body(&entries[0]).unwrap();
+
+        // Without these the app is created on the standard tier with no
+        // subnet, so a Lambda that needs PrivateLink egress silently lands
+        // off-network.
+        assert_eq!(body["tier"], "enterprise");
+        assert_eq!(body["subnet"], "enterprise-field");
+    }
+
+    #[test]
+    fn api_body_omits_network_profile_when_manifest_does() {
+        let (_tmp, path) = write_manifest(
+            r#"
+apiVersion: apps.tachy.one/v1alpha
+kind: CloudApps
+spec:
+  apps:
+    - name: field
+      repository:
+        url: https://github.com/quantum-box/tachyonfield
+        owner: quantum-box
+        name: tachyonfield
+"#,
+        );
+
+        let manifest = load_cloud_apps_manifest(&path).unwrap();
+        let entries = select_app_entries(&manifest, Some("field")).unwrap();
+        let body = app_entry_to_api_body(&entries[0]).unwrap();
+
+        assert!(body.get("tier").is_none());
+        assert!(body.get("subnet").is_none());
+    }
+
+    /// A cargo_lambda app built on GitHub Actions can omit `build.command`;
+    /// apply must accept the backend and derive the command from
+    /// package/binary/release/arch, matching the server-side fallback.
+    #[test]
+    fn apply_plan_accepts_github_actions_cargo_lambda_without_command() {
+        let (_tmp, path) = write_manifest(
+            r#"
+apiVersion: apps.tachy.one/v1alpha
+kind: CloudApps
+spec:
+  apps:
+    - name: library-api
+      repository:
+        url: https://github.com/quantum-box/library
+        owner: quantum-box
+        name: library
+      framework: cargo_lambda
+      deploymentTarget: lambda
+      build:
+        runnerBackend: github_actions
+        package: library-api
+        binary: lambda-library-api
+"#,
+        );
+
+        let manifest = load_cloud_apps_manifest(&path).unwrap();
+        let entries = select_app_entries(&manifest, Some("library-api")).unwrap();
+        let plans =
+            build_app_apply_plans(entries, "tn_01ks18jhh1xvggktfzjx5jqsen", "prod").unwrap();
+        let plan = &plans[0];
+
+        assert_eq!(plan.runner_backend.as_deref(), Some("github_actions"));
+        assert_eq!(
+            plan.body["build_command"],
+            "cargo lambda build --package library-api --bin lambda-library-api --release --arm64"
+        );
+        assert!(plan.body.get("install_command").is_none());
+
+        let availability = BuildRunnerBackendAvailabilityResponse {
+            default_backend: Some("codebuild".to_string()),
+            backends: vec![BuildRunnerBackendStatusResponse {
+                backend: "github_actions".to_string(),
+                available: true,
+            }],
+        };
+        validate_build_runner_backend_availability(&plans, &availability).unwrap();
+    }
+
+    #[test]
+    fn parse_build_runner_backend_matches_server_aliases() {
+        for (input, expected) in [
+            ("github_actions", "github_actions"),
+            ("GitHub-Actions", "github_actions"),
+            ("aws-codebuild", "codebuild"),
+            ("hetzner_k3s_kata", "kubernetes_kata"),
+        ] {
+            assert_eq!(parse_build_runner_backend(input).unwrap(), expected);
+        }
+    }
+
     #[test]
     fn load_cloud_apps_manifest_rejects_unknown_runner_backend() {
         let (_tmp, path) = write_manifest(
@@ -1507,7 +2413,9 @@ spec:
         let entry = json!({
             "name": "field",
             "build": {
-                "runnerBackend": "codebuild"
+                "runnerBackend": "codebuild",
+                "package": "tachyon-field-api",
+                "binary": "bootstrap"
             },
             "environments": {
                 "production": {
@@ -1521,6 +2429,743 @@ spec:
         let backend = effective_build_runner_backend(&entry, "prod").unwrap();
 
         assert_eq!(backend.as_deref(), Some("kubernetes_kata"));
+    }
+
+    #[test]
+    fn apply_plan_resolves_preview_overlay_before_every_planner() {
+        let entry = json!({
+            "name": "tachyon-field-api",
+            "repository": {
+                "url": "https://github.com/quantum-box/tachyonfield",
+                "owner": "quantum-box",
+                "name": "tachyonfield",
+                "defaultBranch": "main"
+            },
+            "framework": "cargo_lambda",
+            "deploymentTarget": "lambda",
+            "rootDirectory": "apps/api-production",
+            "build": {
+                "runnerBackend": "codebuild",
+                "package": "tachyon-field-api",
+                "binary": "bootstrap"
+            },
+            "envVars": [{
+                "name": "DATABASE_URL",
+                "type": "credential",
+                "valueFrom": {
+                    "databaseRef": {
+                        "name": "tidb_field_prod",
+                        "field": "url"
+                    }
+                }
+            }],
+            "environments": {
+                "preview": {
+                    "rootDirectory": "apps/api-preview",
+                    "build": {
+                        "runnerBackend": "kubernetes_kata"
+                    },
+                    "envVars": [{
+                        "name": "DATABASE_URL",
+                        "type": "credential",
+                        "valueFrom": {
+                            "secret": {
+                                "path": "providers/tidb_field_preview",
+                                "field": "DATABASE_URL"
+                            }
+                        }
+                    }]
+                }
+            }
+        });
+
+        let plans =
+            build_app_apply_plans(vec![entry], "tn_01ks18jhh1xvggktfzjx5jqsen", "preview").unwrap();
+        let plan = &plans[0];
+
+        assert_eq!(plan.runner_backend.as_deref(), Some("kubernetes_kata"));
+        assert!(plan.body["build_command"].as_str().is_some_and(|command| {
+            command.contains("--package tachyon-field-api") && command.contains("--bin bootstrap")
+        }));
+        assert!(plan.env_plan.server_managed_credentials.is_empty());
+        assert_eq!(plan.env_plan.secret_refs.len(), 1);
+        assert_eq!(plan.env_plan.secret_refs[0].key, "DATABASE_URL");
+        assert_eq!(plan.env_plan.secret_refs[0].target, "preview");
+        let manifest = plan.iac_manifest.as_ref().unwrap();
+        assert_eq!(
+            manifest["spec"]["environments"]["preview"]["envVars"][0]["valueFrom"]["secret"]
+                ["path"],
+            "providers/tidb_field_preview"
+        );
+        assert!(manifest["spec"]["envVars"][0]["valueFrom"]
+            .get("databaseRef")
+            .is_none());
+        assert_eq!(
+            manifest["spec"]["envVars"][0]["valueFrom"]["secret"]["path"],
+            "providers/tidb_field_preview"
+        );
+        assert_eq!(
+            manifest["spec"]["envVars"][0]["valueFrom"]["secret"]["field"],
+            "DATABASE_URL"
+        );
+        assert_eq!(manifest["spec"]["envVars"][0]["target"], "preview");
+        assert_eq!(plan.body["root_directory"], "apps/api-preview");
+    }
+
+    #[test]
+    fn production_apply_preserves_preview_resource_declarations_for_iac() {
+        let entry = json!({
+            "name": "courseboard-api",
+            "repository": {
+                "url": "https://github.com/quantum-box/courseboard",
+                "owner": "quantum-box",
+                "name": "courseboard"
+            },
+            "rootDirectory": "apps/base",
+            "environments": {
+                "production": {
+                    "rootDirectory": "apps/production"
+                },
+                "preview": {
+                    "rootDirectory": "apps/preview",
+                    "kvNamespaces": [{"binding": "SESSIONS"}],
+                    "worker": {
+                        "generateConfig": true,
+                        "main": "src/index.ts",
+                        "compatibilityDate": "2026-06-18",
+                        "durableObjects": [{ "binding": "ROOMS", "className": "Room" }],
+                        "migrations": [{ "tag": "v1", "newSqliteClasses": ["Room"] }]
+                    },
+                    "resources": [{
+                        "type": "sentry",
+                        "name": "courseboard-preview",
+                        "config": { "organization": "quantum-box", "team": "platform" }
+                    }],
+                    "d1Databases": [{
+                        "binding": "DB",
+                        "databaseName": "courseboard-preview"
+                    }],
+                    "provisionedDatabase": {
+                        "provider": "tidb",
+                        "engine": "mysql",
+                        "envVar": "DATABASE_URL"
+                    },
+                    "r2Buckets": [{
+                        "binding": "ASSETS",
+                        "bucketName": "courseboard-preview"
+                    }],
+                    "customDomains": [{
+                        "hostname": "preview.courseboard.example"
+                    }]
+                }
+            }
+        });
+
+        let plans =
+            build_app_apply_plans(vec![entry], "tn_01ks18jhh1xvggktfzjx5jqsen", "production")
+                .unwrap();
+        let plan = &plans[0];
+        let spec = &plan.iac_manifest.as_ref().unwrap()["spec"];
+
+        assert_eq!(plan.body["root_directory"], "apps/production");
+        assert_eq!(spec["rootDirectory"], "apps/production");
+        assert_eq!(
+            spec["environments"]["preview"]["rootDirectory"],
+            "apps/preview"
+        );
+        for key in ENVIRONMENT_RESOURCE_DECLARATION_KEYS {
+            assert!(
+                spec["environments"]["preview"].get(key).is_some(),
+                "preview resource declaration {key} was dropped"
+            );
+            assert!(
+                spec.get(key).is_none(),
+                "preview resource declaration {key} lost its environment scope"
+            );
+        }
+        assert_eq!(spec["applyTarget"], "production");
+    }
+
+    #[test]
+    fn worker_declaration_alone_triggers_iac_save_and_preserves_migrations() {
+        let worker = json!({
+            "generateConfig": true,
+            "main": "src/index.ts",
+            "compatibilityDate": "2026-06-18",
+            "durableObjects": [{ "binding": "ROOMS", "className": "Room" }],
+            "migrations": [{ "tag": "v1", "newSqliteClasses": ["Room"] }]
+        });
+        let entry = json!({
+            "name": "order-sync",
+            "repository": {
+                "url": "https://github.com/quantum-box/example",
+                "owner": "quantum-box", "name": "example"
+            },
+            "framework": "worker", "deploymentTarget": "cloudflare_workers",
+            "worker": worker.clone()
+        });
+        for environment in ["production", "preview"] {
+            let plans = build_app_apply_plans(
+                vec![entry.clone()],
+                "tn_01hjryxysgey07h5jz5wagqj0m",
+                environment,
+            )
+            .unwrap();
+            assert_eq!(
+                plans[0].iac_manifest.as_ref().unwrap()["spec"]["worker"],
+                worker
+            );
+        }
+    }
+
+    #[test]
+    fn resource_declaration_keys_each_trigger_iac_manifest() {
+        for (key, value) in [
+            ("kvNamespaces", json!([{ "binding": "SESSIONS" }])),
+            ("worker", json!({ "generateConfig": true })),
+            ("resources", json!([])),
+            ("d1Databases", json!([])),
+            (
+                "provisionedDatabase",
+                json!({ "provider": "tidb", "engine": "mysql" }),
+            ),
+            ("r2Buckets", json!([])),
+            ("customDomains", json!([])),
+        ] {
+            let mut preview = serde_json::Map::new();
+            preview.insert(key.to_string(), value);
+            let entry = json!({
+                "name": "resource-app",
+                "repository": {
+                    "url": "https://github.com/quantum-box/resource-app",
+                    "owner": "quantum-box",
+                    "name": "resource-app"
+                },
+                "environments": {
+                    "production": {},
+                    "preview": Value::Object(preview)
+                }
+            });
+
+            let plans =
+                build_app_apply_plans(vec![entry], "tn_01ks18jhh1xvggktfzjx5jqsen", "production")
+                    .unwrap();
+
+            assert!(
+                plans[0].iac_manifest.is_some(),
+                "resource declaration {key} did not trigger an IaC manifest"
+            );
+        }
+    }
+
+    #[test]
+    fn databases_declaration_triggers_iac_manifest_and_passes_through() {
+        // PLT-3819: a base-level `databases` declaration must reach the
+        // server-side ApplyManifest even when the app has no other IaC
+        // trigger (no secret refs, auth, sentry, or resources).
+        let entry = json!({
+            "name": "courseboard-api",
+            "repository": {
+                "url": "https://github.com/quantum-box/courseboard",
+                "owner": "quantum-box",
+                "name": "courseboard"
+            },
+            "databases": [{
+                "name": "tidb_courseboard_prod",
+                "cluster": "txcloud",
+                "provider": "tidb",
+                "user": "courseboard_api"
+            }]
+        });
+
+        let plans =
+            build_app_apply_plans(vec![entry], "tn_01ks18jhh1xvggktfzjx5jqsen", "production")
+                .unwrap();
+        let manifest = plans[0]
+            .iac_manifest
+            .as_ref()
+            .expect("databases declaration did not trigger an IaC manifest");
+
+        assert_eq!(
+            manifest["spec"]["databases"],
+            json!([{
+                "name": "tidb_courseboard_prod",
+                "cluster": "txcloud",
+                "provider": "tidb",
+                "user": "courseboard_api"
+            }])
+        );
+    }
+
+    #[test]
+    fn empty_databases_declaration_does_not_trigger_iac_manifest() {
+        let entry = json!({
+            "name": "plain-app",
+            "repository": {
+                "url": "https://github.com/quantum-box/plain-app",
+                "owner": "quantum-box",
+                "name": "plain-app"
+            },
+            "databases": []
+        });
+
+        let plans =
+            build_app_apply_plans(vec![entry], "tn_01ks18jhh1xvggktfzjx5jqsen", "production")
+                .unwrap();
+
+        assert!(plans[0].iac_manifest.is_none());
+    }
+
+    #[test]
+    fn direct_compute_apply_plan_rejects_invalid_cache_contract() {
+        let entry = json!({
+            "name": "plain-app",
+            "cache": {"rules": [{
+                "name": "public-docs",
+                "paths": ["/docs/*"],
+                "methods": ["POST"],
+                "edgeTtl": "respect-origin"
+            }]}
+        });
+
+        let error =
+            match build_app_apply_plans(vec![entry], "tn_01ks18jhh1xvggktfzjx5jqsen", "production")
+            {
+                Ok(_) => panic!("direct compute apply must validate cache declarations"),
+                Err(error) => error.to_string(),
+            };
+
+        assert!(error.contains("only GET and HEAD"), "{error}");
+    }
+
+    #[test]
+    fn release_checks_only_rejects_invalid_cache_contract_before_api_request() {
+        let manifest = json!({
+            "spec": {
+                "apps": [{
+                    "name": "plain-app",
+                    "cache": {"rules": [{
+                        "name": "public-docs",
+                        "paths": ["/docs/*"],
+                        "methods": ["POST"],
+                        "edgeTtl": "respect-origin"
+                    }]}
+                }]
+            }
+        });
+
+        let error = select_release_checks_entry(&manifest, Some("plain-app"))
+            .expect_err("release-checks-only must validate cache declarations")
+            .to_string();
+
+        assert!(error.contains("only GET and HEAD"), "{error}");
+    }
+
+    #[test]
+    fn databases_in_environment_overlay_is_rejected() {
+        // `databases` is a base-level, tenant-scoped declaration. An
+        // overlay-level declaration would be silently ignored by the
+        // server, so the resolver must fail loud instead.
+        let entry = json!({
+            "name": "courseboard-api",
+            "environments": {
+                "production": {
+                    "databases": [{
+                        "name": "tidb_courseboard_prod",
+                        "cluster": "txcloud",
+                        "provider": "tidb",
+                        "user": "courseboard_api"
+                    }]
+                }
+            }
+        });
+
+        let error =
+            match build_app_apply_plans(vec![entry], "tn_01ks18jhh1xvggktfzjx5jqsen", "production")
+            {
+                Ok(_) => panic!("expected overlay validation to fail"),
+                Err(error) => error,
+            };
+        assert!(error.to_string().contains("unsupported field databases"));
+    }
+
+    #[test]
+    fn resolver_rejects_unsupported_keys_in_unselected_overlay() {
+        let entry = json!({
+            "name": "api",
+            "environments": {
+                "production": {},
+                "preview": { "unsupportedResource": { "enabled": true } }
+            }
+        });
+
+        let error = resolve_app_entry_for_environment(&entry, "production")
+            .unwrap_err()
+            .to_string();
+
+        assert!(error.contains("environments.preview"));
+        assert!(error.contains("unsupported field unsupportedResource"));
+    }
+
+    #[test]
+    fn apply_plan_rejects_invalid_object_secret_fields() {
+        for (field, expected) in [
+            (json!(""), "must not be empty or contain '#'"),
+            (json!("  "), "must not be empty or contain '#'"),
+            (json!("DATABASE#URL"), "must not be empty or contain '#'"),
+            (json!(42), "must be a string"),
+        ] {
+            let entry = json!({
+                "name": "tachyon-field-api",
+                "envVars": [{
+                    "name": "DATABASE_URL",
+                    "type": "credential",
+                    "valueFrom": {
+                        "secret": {
+                            "path": "providers/tidb_field_preview",
+                            "field": field
+                        }
+                    }
+                }]
+            });
+
+            let error = plan_env_vars(&entry, "preview").unwrap_err().to_string();
+
+            assert!(error.contains(expected), "unexpected error: {error}");
+        }
+    }
+
+    #[test]
+    fn apply_plan_rejects_secret_paths_outside_server_contract() {
+        for (secret, expected) in [
+            (
+                json!({"path": "  ", "field": "DATABASE_URL"}),
+                "must not be empty, contain empty segments, or use tenant prefixes",
+            ),
+            (
+                json!({"path": "providers//tidb_field_preview", "field": "DATABASE_URL"}),
+                "must not be empty, contain empty segments, or use tenant prefixes",
+            ),
+            (
+                json!({"path": "tn_other/key", "field": "DATABASE_URL"}),
+                "must not be empty, contain empty segments, or use tenant prefixes",
+            ),
+            (
+                json!({"path": "providers/tidb/preview"}),
+                "object field is required for paths other than '<vault>/<key>'",
+            ),
+            (
+                json!("single_segment"),
+                "object field is required for paths other than '<vault>/<key>'",
+            ),
+        ] {
+            let entry = json!({
+                "name": "tachyon-field-api",
+                "envVars": [{
+                    "name": "DATABASE_URL",
+                    "type": "credential",
+                    "valueFrom": { "secret": secret }
+                }]
+            });
+
+            let error = plan_env_vars(&entry, "preview").unwrap_err().to_string();
+
+            assert!(error.contains(expected), "unexpected error: {error}");
+        }
+    }
+
+    #[test]
+    fn apply_plan_accepts_null_object_secret_field_for_two_segment_path() {
+        let entry = json!({
+            "name": "tachyon-field-api",
+            "envVars": [{
+                "name": "DATABASE_URL",
+                "type": "credential",
+                "valueFrom": {
+                    "secret": {
+                        "path": "providers/tidb_field_preview",
+                        "field": null
+                    }
+                }
+            }]
+        });
+
+        let plan = plan_env_vars(&entry, "preview").unwrap();
+
+        assert_eq!(plan.secret_refs.len(), 1);
+        assert_eq!(plan.secret_refs[0].key, "DATABASE_URL");
+    }
+
+    #[test]
+    fn apply_plan_fails_closed_when_selected_overlay_is_missing() {
+        let entry = json!({
+            "name": "tachyon-field-api",
+            "repository": {
+                "url": "https://github.com/quantum-box/tachyonfield",
+                "owner": "quantum-box",
+                "name": "tachyonfield"
+            },
+            "environments": {
+                "production": {}
+            }
+        });
+
+        let error =
+            match build_app_apply_plans(vec![entry], "tn_01ks18jhh1xvggktfzjx5jqsen", "preview") {
+                Ok(_) => panic!("missing environment overlay must fail closed"),
+                Err(error) => error.to_string(),
+            };
+
+        assert!(error.contains("environments.preview is not defined"));
+        assert!(error.contains("refusing to apply the unresolved base entry"));
+    }
+
+    #[test]
+    fn apply_plan_requires_explicit_target_for_staging_env_vars() {
+        let entry = json!({
+            "name": "tachyon-field-api",
+            "repository": {
+                "url": "https://github.com/quantum-box/tachyonfield",
+                "owner": "quantum-box",
+                "name": "tachyonfield"
+            },
+            "environments": {
+                "staging": {
+                    "envVars": [{
+                        "name": "DATABASE_URL",
+                        "type": "credential",
+                        "valueFrom": {
+                            "secret": "providers/tidb_field_staging#DATABASE_URL"
+                        }
+                    }]
+                }
+            }
+        });
+
+        let error =
+            match build_app_apply_plans(vec![entry], "tn_01ks18jhh1xvggktfzjx5jqsen", "staging") {
+                Ok(_) => panic!("staging env vars without target must fail closed"),
+                Err(error) => error.to_string(),
+            };
+
+        assert!(error.contains("env var DATABASE_URL in environment staging"));
+        assert!(error.contains("must define target explicitly"));
+    }
+
+    #[test]
+    fn apply_plan_accepts_explicit_target_for_staging_env_vars() {
+        let entry = json!({
+            "name": "tachyon-field-api",
+            "repository": {
+                "url": "https://github.com/quantum-box/tachyonfield",
+                "owner": "quantum-box",
+                "name": "tachyonfield"
+            },
+            "environments": {
+                "staging": {
+                    "envVars": [{
+                        "name": "DATABASE_URL",
+                        "type": "credential",
+                        "target": "preview",
+                        "valueFrom": {
+                            "secret": "providers/tidb_field_staging#DATABASE_URL"
+                        }
+                    }]
+                }
+            }
+        });
+
+        let plans =
+            build_app_apply_plans(vec![entry], "tn_01ks18jhh1xvggktfzjx5jqsen", "staging").unwrap();
+
+        assert_eq!(plans[0].env_plan.secret_refs[0].target, "preview");
+    }
+
+    #[test]
+    fn staging_aliases_require_explicit_env_target() {
+        for environment in ["Staging", " STAGE ", " staging "] {
+            let error = default_env_target(environment).unwrap_err().to_string();
+            assert!(error.contains("no safe implicit env var target"));
+        }
+    }
+
+    #[test]
+    fn sentry_only_preview_plan_carries_apply_target() {
+        let entry = json!({
+            "name": "fieldadmin",
+            "repository": {
+                "url": "https://github.com/quantum-box/tachyonfield",
+                "owner": "quantum-box",
+                "name": "tachyonfield"
+            },
+            "environments": {
+                "preview": {
+                    "integrations": {
+                        "sentry": { "project": "fieldadmin-preview" }
+                    }
+                }
+            }
+        });
+
+        let plans =
+            build_app_apply_plans(vec![entry], "tn_01ks18jhh1xvggktfzjx5jqsen", "preview").unwrap();
+
+        assert!(plans[0].sentry_plan.is_some());
+        assert_eq!(
+            plans[0].iac_manifest.as_ref().unwrap()["spec"]["applyTarget"],
+            "preview"
+        );
+    }
+
+    /// The generated-env target guard survives the removal of `auth`
+    /// (ADR-0105); Sentry is now its only trigger.
+    #[test]
+    fn staging_sentry_integration_is_rejected_without_safe_target() {
+        let entry = json!({
+            "name": "fieldadmin",
+            "repository": {
+                "url": "https://github.com/quantum-box/tachyonfield",
+                "owner": "quantum-box",
+                "name": "tachyonfield"
+            },
+            "environments": {
+                "staging": {
+                    "integrations": {
+                        "sentry": { "project": "fieldadmin-staging" }
+                    }
+                }
+            }
+        });
+
+        let error =
+            match build_app_apply_plans(vec![entry], "tn_01ks18jhh1xvggktfzjx5jqsen", "staging") {
+                Ok(_) => panic!("staging generated env vars must fail closed"),
+                Err(error) => error.to_string(),
+            };
+
+        assert!(error.contains("no safe target for generated Sentry env vars"));
+    }
+
+    #[test]
+    fn staging_sentry_with_explicit_env_vars_is_allowed() {
+        let entry = json!({
+            "name": "fieldadmin",
+            "repository": {
+                "url": "https://github.com/quantum-box/tachyonfield",
+                "owner": "quantum-box",
+                "name": "tachyonfield"
+            },
+            "environments": {
+                "staging": {
+                    "integrations": {
+                        "sentry": { "project": "fieldadmin-staging" }
+                    },
+                    "envVars": [
+                        {
+                            "name": "NEXT_PUBLIC_SENTRY_DSN",
+                            "type": "credential",
+                            "target": "preview",
+                            "valueFrom": { "secret": "sentry/public_dsn" }
+                        },
+                        {
+                            "name": "SENTRY_DSN",
+                            "type": "credential",
+                            "target": "preview",
+                            "valueFrom": { "secret": "sentry/server_dsn" }
+                        }
+                    ]
+                }
+            }
+        });
+
+        let plans =
+            build_app_apply_plans(vec![entry], "tn_01ks18jhh1xvggktfzjx5jqsen", "staging").unwrap();
+
+        assert!(plans[0]
+            .sentry_plan
+            .as_ref()
+            .is_some_and(|plan| plan.env_vars.is_empty()));
+    }
+
+    #[test]
+    fn environment_overlay_cannot_rename_app() {
+        let entry = json!({
+            "name": "api",
+            "repository": {
+                "url": "https://github.com/quantum-box/tachyonfield",
+                "owner": "quantum-box",
+                "name": "tachyonfield"
+            },
+            "environments": {
+                "preview": { "name": "admin" }
+            }
+        });
+
+        let error = resolve_app_entry_for_environment(&entry, "preview")
+            .unwrap_err()
+            .to_string();
+
+        assert!(error.contains("unsupported field name"));
+    }
+
+    #[test]
+    fn apply_manifest_success_false_is_rejected() {
+        let error = ensure_apply_manifest_succeeded(&json!({
+            "applyManifest": { "success": false }
+        }))
+        .unwrap_err()
+        .to_string();
+
+        assert!(error.contains("did not report success"));
+    }
+
+    #[test]
+    fn all_target_secret_does_not_satisfy_preview_ref() {
+        let current = BTreeSet::from([("DATABASE_URL".to_string(), "all".to_string())]);
+        let required = vec![SecretEnvRef {
+            key: "DATABASE_URL".to_string(),
+            target: "preview".to_string(),
+        }];
+
+        assert_eq!(
+            missing_secret_refs(&current, &required),
+            vec!["DATABASE_URL(preview)".to_string()]
+        );
+    }
+
+    #[test]
+    fn update_body_clears_optional_fields_removed_by_overlay() {
+        let existing: AppResponse = serde_json::from_value(json!({
+            "id": "app_field",
+            "name": "field",
+            "build_command": "pnpm build:production",
+            "install_command": "pnpm install",
+            "watch_paths": ["apps/field/**"],
+            "buildspec_strategy": "repo:.codebuild/production.yml"
+        }))
+        .unwrap();
+        let body = json!({
+            "name": "field",
+            "repository_url": "https://github.com/quantum-box/tachyonfield",
+            "repository_owner": "quantum-box",
+            "repository_name": "tachyonfield",
+            "default_branch": "main",
+            "framework": "vite",
+            "deployment_target": "cloudflare_pages"
+        });
+
+        let update = app_api_body_with_clears(Some(&existing), &body);
+        let (action, changed) = classify_app_action(Some(&existing), &update);
+
+        assert_eq!(update["build_command"], "");
+        assert_eq!(update["install_command"], "");
+        assert_eq!(update["watch_paths"], json!([]));
+        assert_eq!(update["buildspec_strategy"], "inline");
+        assert_eq!(action, ApplyAction::Update);
+        assert!(changed.contains(&"build_command".to_string()));
+        assert!(changed.contains(&"install_command".to_string()));
+        assert!(changed.contains(&"watch_paths".to_string()));
+        assert!(changed.contains(&"buildspec_strategy".to_string()));
     }
 
     #[test]
@@ -1680,7 +3325,8 @@ pub(crate) fn plan_env_vars(entry: &Value, environment: &str) -> Result<EnvPlan>
                 .get("target")
                 .and_then(Value::as_str)
                 .map(ToString::to_string)
-                .unwrap_or_else(|| default_env_target(environment).to_string());
+                .map(Ok)
+                .unwrap_or_else(|| default_env_target(environment).map(ToString::to_string))?;
             let env_type = env.get("type").and_then(Value::as_str).unwrap_or("plain");
             let value = env.get("value").and_then(Value::as_str);
             let value_from = env.get("valueFrom");
@@ -1690,9 +3336,9 @@ pub(crate) fn plan_env_vars(entry: &Value, environment: &str) -> Result<EnvPlan>
                 }
                 let value_from = value_from
                     .ok_or_else(|| anyhow!("credential env var {key} is missing valueFrom"))?;
-                if let Some(secret) = extract_secret_ref(value_from)? {
+                if extract_secret_ref(value_from)?.is_some() {
                     plan.secret_refs.push(SecretEnvRef {
-                        key: secret,
+                        key: key.to_string(),
                         target,
                     });
                     continue;
@@ -1829,34 +3475,84 @@ async fn validate_sentry_integration(api: &ApiClient) -> Result<()> {
     Ok(())
 }
 
-fn default_env_target(environment: &str) -> &'static str {
-    match environment {
-        "production" | "prod" => "production",
-        "preview" => "preview",
-        _ => "all",
+fn default_env_target(environment: &str) -> Result<&'static str> {
+    match environment.trim().to_ascii_lowercase().as_str() {
+        "production" | "prod" => Ok("production"),
+        "preview" => Ok("preview"),
+        "staging" | "stage" => Err(anyhow!(
+            "environment {environment} has no safe implicit env var target"
+        )),
+        _ => Ok("all"),
     }
+}
+
+fn apply_target_for_environment(environment: &str) -> Option<&'static str> {
+    match environment.trim().to_ascii_lowercase().as_str() {
+        "production" | "prod" => Some("production"),
+        "preview" => Some("preview"),
+        _ => None,
+    }
+}
+
+fn apply_target_for_generated_env(environment: &str) -> Result<&'static str> {
+    apply_target_for_environment(environment).ok_or_else(|| {
+        anyhow!("environment {environment} has no safe target for generated Sentry env vars")
+    })
+}
+
+pub(crate) fn validate_generated_env_target(entry: &Value, environment: &str) -> Result<()> {
+    let generates_sentry_env =
+        plan_sentry_integration(entry)?.is_some_and(|plan| !plan.env_vars.is_empty());
+    if generates_sentry_env {
+        let _ = apply_target_for_generated_env(environment)?;
+    }
+    Ok(())
 }
 
 fn extract_secret_ref(value_from: &Value) -> Result<Option<String>> {
     let Some(secret) = value_from.get("secret") else {
         return Ok(None);
     };
-    let path = if let Some(path) = secret.as_str() {
-        path
+    let (path, field) = if let Some(path) = secret.as_str() {
+        (path, None)
     } else if let Some(path) = secret.get("path").and_then(Value::as_str) {
-        if secret.get("field").is_some() {
-            return Err(anyhow!("valueFrom.secret.field is not supported"));
-        }
-        path
+        let field = match secret.get("field") {
+            None | Some(Value::Null) => None,
+            Some(field) => Some(
+                field
+                    .as_str()
+                    .ok_or_else(|| anyhow!("valueFrom.secret.field must be a string"))?
+                    .trim(),
+            ),
+        };
+        (path, field)
     } else {
         return Err(anyhow!(
             "valueFrom.secret must be a key string or object with path"
         ));
     };
-    if path.is_empty() {
-        return Err(anyhow!("valueFrom.secret must reference a single env key"));
+
+    let reference = path.trim();
+    let parts = reference.split('/').collect::<Vec<_>>();
+    if parts.iter().any(|part| part.is_empty()) || parts[0].starts_with("tn_") {
+        return Err(anyhow!(
+            "valueFrom.secret path must not be empty, contain empty segments, or use tenant prefixes"
+        ));
     }
-    Ok(Some(path.to_string()))
+    if field.is_none() && parts.len() != 2 {
+        return Err(anyhow!(
+            "valueFrom.secret object field is required for paths other than '<vault>/<key>'"
+        ));
+    }
+    if let Some(field) = field {
+        if field.is_empty() || field.contains('#') {
+            return Err(anyhow!(
+                "valueFrom.secret.field must not be empty or contain '#'"
+            ));
+        }
+    }
+
+    Ok(Some(reference.to_string()))
 }
 
 fn server_managed_credential_source(value_from: &Value) -> Option<ServerManagedCredentialSource> {
@@ -1914,9 +3610,25 @@ pub(super) fn cloud_app_manifest_for_iac(entry: &Value, tenant_id: &str) -> Resu
     }))
 }
 
-async fn graphql_request(api: &ApiClient, body: Value) -> Result<Value> {
+/// Header carrying the change-control approval token to the server-side
+/// gate (ADR 0011 Layer 1). Sent as a header, not a GraphQL input field,
+/// so the token never lands in request-body logs.
+const CHANGE_CONTROL_TOKEN_HEADER: &str = "x-tachyon-change-control-token";
+
+async fn graphql_request_with_change_control(
+    api: &ApiClient,
+    body: Value,
+    change_control_token: Option<&str>,
+) -> Result<Value> {
     let url = format!("{}/v1/graphql", api.base_url);
-    let response = api.client.post(url).json(&body).send().await?;
+    let mut request = api.client.post(url).json(&body);
+    if let Some(token) = change_control_token
+        .map(str::trim)
+        .filter(|token| !token.is_empty())
+    {
+        request = request.header(CHANGE_CONTROL_TOKEN_HEADER, token);
+    }
+    let response = request.send().await?;
     let status = response.status();
     if !status.is_success() {
         let body = response.text().await?;
@@ -1934,7 +3646,11 @@ async fn graphql_request(api: &ApiClient, body: Value) -> Result<Value> {
         .ok_or_else(|| anyhow!("missing data in graphql response"))
 }
 
-async fn save_compute_cloud_app_manifest(api: &ApiClient, manifest: &Value) -> Result<()> {
+async fn save_compute_cloud_app_manifest(
+    api: &ApiClient,
+    manifest: &Value,
+    change_control_token: Option<&str>,
+) -> Result<()> {
     let tenant_id = manifest
         .get("metadata")
         .and_then(|metadata| metadata.get("tenantId"))
@@ -1953,17 +3669,33 @@ async fn save_compute_cloud_app_manifest(api: &ApiClient, manifest: &Value) -> R
             }
         }
     });
-    graphql_request(api, body).await?;
+    graphql_request_with_change_control(api, body, change_control_token).await?;
     Ok(())
 }
 
-async fn apply_compute_cloud_app_manifest(api: &ApiClient, manifest: &Value) -> Result<()> {
-    save_compute_cloud_app_manifest(api, manifest).await?;
+async fn apply_compute_cloud_app_manifest(
+    api: &ApiClient,
+    manifest: &Value,
+    release_checks_only: bool,
+    change_control_token: Option<&str>,
+) -> Result<()> {
+    if !release_checks_only {
+        save_compute_cloud_app_manifest(api, manifest, change_control_token).await?;
+    }
     let name = manifest
         .get("metadata")
         .and_then(|metadata| metadata.get("name"))
         .and_then(Value::as_str)
         .ok_or_else(|| anyhow!("CloudApp manifest is missing metadata.name"))?;
+    let mut apply_input = json!({
+        "kind": "CloudApp",
+        "name": name,
+        "dryRun": false,
+    });
+    if release_checks_only {
+        apply_input["releaseChecksOnly"] = Value::Bool(true);
+        apply_input["releaseChecksManifest"] = Value::String(serde_json::to_string(manifest)?);
+    }
     let body = json!({
         "query": r#"
           mutation ApplyManifest($input: ApplyManifestInput!) {
@@ -1971,14 +3703,21 @@ async fn apply_compute_cloud_app_manifest(api: &ApiClient, manifest: &Value) -> 
           }
         "#,
         "variables": {
-            "input": {
-                "kind": "CloudApp",
-                "name": name,
-                "dryRun": false,
-            }
+            "input": apply_input
         }
     });
-    graphql_request(api, body).await?;
+    let data = graphql_request_with_change_control(api, body, change_control_token).await?;
+    ensure_apply_manifest_succeeded(&data)
+}
+
+fn ensure_apply_manifest_succeeded(data: &Value) -> Result<()> {
+    let success = data
+        .get("applyManifest")
+        .and_then(|result| result.get("success"))
+        .and_then(Value::as_bool);
+    if success != Some(true) {
+        return Err(anyhow!("CloudApp applyManifest did not report success"));
+    }
     Ok(())
 }
 
@@ -1995,6 +3734,7 @@ pub(crate) async fn run_apps_sync_secrets(
 
     let manifest = load_cloud_apps_manifest(file)?;
     let entry = select_single_app_entry(&manifest, selected_app)?;
+    let entry = resolve_app_entry_for_environment(&entry, environment)?;
     let app_name = entry
         .get("name")
         .and_then(Value::as_str)
@@ -2082,8 +3822,9 @@ fn collect_sync_secret_refs(entry: &Value, environment: &str) -> Result<Vec<Sync
         let target = env
             .get("target")
             .and_then(Value::as_str)
-            .unwrap_or_else(|| default_env_target(environment))
-            .to_string();
+            .map(ToString::to_string)
+            .map(Ok)
+            .unwrap_or_else(|| default_env_target(environment).map(ToString::to_string))?;
         let Some(value_from) = env.get("valueFrom") else {
             continue;
         };
@@ -2154,33 +3895,44 @@ async fn apply_env_plan(
             .await?;
     }
 
-    let mut missing = Vec::new();
-    if !plan.secret_refs.is_empty() && !dry_run && app_id != "<new app>" {
-        let resp: ListEnvVarsResponse = api
-            .get(&format!("/v1/compute/apps/{app_id}/env"))
-            .await
-            .unwrap_or(ListEnvVarsResponse { env_vars: vec![] });
-        let current = resp
-            .env_vars
-            .into_iter()
-            .filter(|var| var.is_secret.unwrap_or(false))
-            .map(|var| (var.key, var.target.unwrap_or_else(|| "all".to_string())))
-            .collect::<BTreeSet<_>>();
-        for secret in &plan.secret_refs {
-            if !current.contains(&(secret.key.clone(), secret.target.clone()))
-                && !current.contains(&(secret.key.clone(), "all".to_string()))
-            {
-                missing.push(format!("{}({})", secret.key, secret.target));
-            }
-        }
+    let missing = if !plan.secret_refs.is_empty() && !dry_run && app_id != "<new app>" {
+        find_missing_secret_refs(api, app_id, &plan.secret_refs).await?
     } else {
-        missing.extend(
-            plan.secret_refs
-                .iter()
-                .map(|secret| format!("{}({})", secret.key, secret.target)),
-        );
-    }
+        plan.secret_refs
+            .iter()
+            .map(|secret| format!("{}({})", secret.key, secret.target))
+            .collect()
+    };
     Ok((changed, missing))
+}
+
+async fn find_missing_secret_refs(
+    api: &ApiClient,
+    app_id: &str,
+    secret_refs: &[SecretEnvRef],
+) -> Result<Vec<String>> {
+    if secret_refs.is_empty() || app_id == "<new app>" {
+        return Ok(Vec::new());
+    }
+    let resp: ListEnvVarsResponse = api.get(&format!("/v1/compute/apps/{app_id}/env")).await?;
+    let current = resp
+        .env_vars
+        .into_iter()
+        .filter(|var| var.is_secret.unwrap_or(false))
+        .map(|var| (var.key, var.target.unwrap_or_else(|| "all".to_string())))
+        .collect::<BTreeSet<_>>();
+    Ok(missing_secret_refs(&current, secret_refs))
+}
+
+fn missing_secret_refs(
+    current: &BTreeSet<(String, String)>,
+    secret_refs: &[SecretEnvRef],
+) -> Vec<String> {
+    secret_refs
+        .iter()
+        .filter(|secret| !current.contains(&(secret.key.clone(), secret.target.clone())))
+        .map(|secret| format!("{}({})", secret.key, secret.target))
+        .collect()
 }
 
 pub(super) fn run_apps_feedback(tenant_id: &str, app_id: &str, args: &FeedbackArgs) -> Result<()> {

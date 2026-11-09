@@ -97,6 +97,7 @@ docs/CreateShippingDestinationRequest.md
 docs/CreateUserRequest.md
 docs/CreateUserResponse.md
 docs/DefaultApi.md
+docs/DeleteOperatorResponse.md
 docs/DeleteProductResponse.md
 docs/DeleteResponse.md
 docs/DeleteServiceAccountResponse.md
@@ -358,6 +359,7 @@ tachyon_sdk/models/create_service_account_request.py
 tachyon_sdk/models/create_shipping_destination_request.py
 tachyon_sdk/models/create_user_request.py
 tachyon_sdk/models/create_user_response.py
+tachyon_sdk/models/delete_operator_response.py
 tachyon_sdk/models/delete_product_response.py
 tachyon_sdk/models/delete_response.py
 tachyon_sdk/models/delete_service_account_response.py

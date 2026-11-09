@@ -18,9 +18,7 @@ pub struct ListConnectionsResponse {
 }
 
 impl ListConnectionsResponse {
-    pub fn new(
-        connections: Vec<models::ConnectionResponse>,
-    ) -> ListConnectionsResponse {
+    pub fn new(connections: Vec<models::ConnectionResponse>) -> ListConnectionsResponse {
         ListConnectionsResponse { connections }
     }
 }

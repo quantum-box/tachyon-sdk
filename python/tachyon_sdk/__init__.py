@@ -137,6 +137,7 @@ __all__ = [
     "CreateShippingDestinationRequest",
     "CreateUserRequest",
     "CreateUserResponse",
+    "DeleteOperatorResponse",
     "DeleteProductResponse",
     "DeleteResponse",
     "DeleteServiceAccountResponse",
@@ -386,6 +387,7 @@ from tachyon_sdk.models.create_service_account_request import CreateServiceAccou
 from tachyon_sdk.models.create_shipping_destination_request import CreateShippingDestinationRequest as CreateShippingDestinationRequest
 from tachyon_sdk.models.create_user_request import CreateUserRequest as CreateUserRequest
 from tachyon_sdk.models.create_user_response import CreateUserResponse as CreateUserResponse
+from tachyon_sdk.models.delete_operator_response import DeleteOperatorResponse as DeleteOperatorResponse
 from tachyon_sdk.models.delete_product_response import DeleteProductResponse as DeleteProductResponse
 from tachyon_sdk.models.delete_response import DeleteResponse as DeleteResponse
 from tachyon_sdk.models.delete_service_account_response import DeleteServiceAccountResponse as DeleteServiceAccountResponse

@@ -13,18 +13,7 @@ use serde::{Deserialize, Serialize};
 
 /// SupportedFeature : Supported feature capabilities of an LLM model.  Used to filter models by their capabilities and to describe what features each model supports.
 /// Supported feature capabilities of an LLM model.  Used to filter models by their capabilities and to describe what features each model supports.
-#[derive(
-    Clone,
-    Copy,
-    Debug,
-    Eq,
-    PartialEq,
-    Ord,
-    PartialOrd,
-    Hash,
-    Serialize,
-    Deserialize,
-)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
 pub enum SupportedFeature {
     #[serde(rename = "streaming")]
     Streaming,

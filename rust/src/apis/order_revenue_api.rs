@@ -26,22 +26,17 @@ pub enum CalculateRecurringRevenueError {
 pub async fn calculate_recurring_revenue(
     configuration: &configuration::Configuration,
     recurring_revenue_request: models::RecurringRevenueRequest,
-) -> Result<
-    models::RecurringRevenueResponse,
-    Error<CalculateRecurringRevenueError>,
-> {
+) -> Result<models::RecurringRevenueResponse, Error<CalculateRecurringRevenueError>> {
     // add a prefix to parameters to efficiently prevent name collisions
     let p_body_recurring_revenue_request = recurring_revenue_request;
 
-    let uri_str =
-        format!("{}/v1/order/revenue/recurring", configuration.base_path);
+    let uri_str = format!("{}/v1/order/revenue/recurring", configuration.base_path);
     let mut req_builder = configuration
         .client
         .request(reqwest::Method::POST, &uri_str);
 
     if let Some(ref user_agent) = configuration.user_agent {
-        req_builder = req_builder
-            .header(reqwest::header::USER_AGENT, user_agent.clone());
+        req_builder = req_builder.header(reqwest::header::USER_AGENT, user_agent.clone());
     }
     req_builder = req_builder.json(&p_body_recurring_revenue_request);
 
@@ -65,8 +60,7 @@ pub async fn calculate_recurring_revenue(
         }
     } else {
         let content = resp.text().await?;
-        let entity: Option<CalculateRecurringRevenueError> =
-            serde_json::from_str(&content).ok();
+        let entity: Option<CalculateRecurringRevenueError> = serde_json::from_str(&content).ok();
         Err(Error::ResponseError(ResponseContent {
             status,
             content,
