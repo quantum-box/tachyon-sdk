@@ -66,8 +66,7 @@ pub async fn create_operator(
         .request(reqwest::Method::POST, &uri_str);
 
     if let Some(ref user_agent) = configuration.user_agent {
-        req_builder = req_builder
-            .header(reqwest::header::USER_AGENT, user_agent.clone());
+        req_builder = req_builder.header(reqwest::header::USER_AGENT, user_agent.clone());
     }
     req_builder = req_builder.json(&p_body_create_operator_request);
 
@@ -91,8 +90,7 @@ pub async fn create_operator(
         }
     } else {
         let content = resp.text().await?;
-        let entity: Option<CreateOperatorError> =
-            serde_json::from_str(&content).ok();
+        let entity: Option<CreateOperatorError> = serde_json::from_str(&content).ok();
         Err(Error::ResponseError(ResponseContent {
             status,
             content,
@@ -119,8 +117,7 @@ pub async fn delete_operator(
         .request(reqwest::Method::DELETE, &uri_str);
 
     if let Some(ref user_agent) = configuration.user_agent {
-        req_builder = req_builder
-            .header(reqwest::header::USER_AGENT, user_agent.clone());
+        req_builder = req_builder.header(reqwest::header::USER_AGENT, user_agent.clone());
     }
 
     let req = req_builder.build()?;
@@ -143,8 +140,7 @@ pub async fn delete_operator(
         }
     } else {
         let content = resp.text().await?;
-        let entity: Option<DeleteOperatorError> =
-            serde_json::from_str(&content).ok();
+        let entity: Option<DeleteOperatorError> = serde_json::from_str(&content).ok();
         Err(Error::ResponseError(ResponseContent {
             status,
             content,
@@ -162,18 +158,13 @@ pub async fn find_operators_by_user(
     let p_query_platform_id = platform_id;
     let p_query_user_id = user_id;
 
-    let uri_str =
-        format!("{}/v1/auth/operators/by-user", configuration.base_path);
-    let mut req_builder =
-        configuration.client.request(reqwest::Method::GET, &uri_str);
+    let uri_str = format!("{}/v1/auth/operators/by-user", configuration.base_path);
+    let mut req_builder = configuration.client.request(reqwest::Method::GET, &uri_str);
 
-    req_builder = req_builder
-        .query(&[("platform_id", &p_query_platform_id.to_string())]);
-    req_builder =
-        req_builder.query(&[("user_id", &p_query_user_id.to_string())]);
+    req_builder = req_builder.query(&[("platform_id", &p_query_platform_id.to_string())]);
+    req_builder = req_builder.query(&[("user_id", &p_query_user_id.to_string())]);
     if let Some(ref user_agent) = configuration.user_agent {
-        req_builder = req_builder
-            .header(reqwest::header::USER_AGENT, user_agent.clone());
+        req_builder = req_builder.header(reqwest::header::USER_AGENT, user_agent.clone());
     }
 
     let req = req_builder.build()?;
@@ -196,8 +187,7 @@ pub async fn find_operators_by_user(
         }
     } else {
         let content = resp.text().await?;
-        let entity: Option<FindOperatorsByUserError> =
-            serde_json::from_str(&content).ok();
+        let entity: Option<FindOperatorsByUserError> = serde_json::from_str(&content).ok();
         Err(Error::ResponseError(ResponseContent {
             status,
             content,
@@ -215,18 +205,13 @@ pub async fn get_operator_by_alias(
     let p_query_platform_id = platform_id;
     let p_query_alias = alias;
 
-    let uri_str =
-        format!("{}/v1/auth/operators/by-alias", configuration.base_path);
-    let mut req_builder =
-        configuration.client.request(reqwest::Method::GET, &uri_str);
+    let uri_str = format!("{}/v1/auth/operators/by-alias", configuration.base_path);
+    let mut req_builder = configuration.client.request(reqwest::Method::GET, &uri_str);
 
-    req_builder = req_builder
-        .query(&[("platform_id", &p_query_platform_id.to_string())]);
-    req_builder =
-        req_builder.query(&[("alias", &p_query_alias.to_string())]);
+    req_builder = req_builder.query(&[("platform_id", &p_query_platform_id.to_string())]);
+    req_builder = req_builder.query(&[("alias", &p_query_alias.to_string())]);
     if let Some(ref user_agent) = configuration.user_agent {
-        req_builder = req_builder
-            .header(reqwest::header::USER_AGENT, user_agent.clone());
+        req_builder = req_builder.header(reqwest::header::USER_AGENT, user_agent.clone());
     }
 
     let req = req_builder.build()?;
@@ -249,8 +234,7 @@ pub async fn get_operator_by_alias(
         }
     } else {
         let content = resp.text().await?;
-        let entity: Option<GetOperatorByAliasError> =
-            serde_json::from_str(&content).ok();
+        let entity: Option<GetOperatorByAliasError> = serde_json::from_str(&content).ok();
         Err(Error::ResponseError(ResponseContent {
             status,
             content,
@@ -271,12 +255,10 @@ pub async fn get_operator_by_id(
         configuration.base_path,
         id = crate::apis::urlencode(p_path_id)
     );
-    let mut req_builder =
-        configuration.client.request(reqwest::Method::GET, &uri_str);
+    let mut req_builder = configuration.client.request(reqwest::Method::GET, &uri_str);
 
     if let Some(ref user_agent) = configuration.user_agent {
-        req_builder = req_builder
-            .header(reqwest::header::USER_AGENT, user_agent.clone());
+        req_builder = req_builder.header(reqwest::header::USER_AGENT, user_agent.clone());
     }
 
     let req = req_builder.build()?;
@@ -299,8 +281,7 @@ pub async fn get_operator_by_id(
         }
     } else {
         let content = resp.text().await?;
-        let entity: Option<GetOperatorByIdError> =
-            serde_json::from_str(&content).ok();
+        let entity: Option<GetOperatorByIdError> = serde_json::from_str(&content).ok();
         Err(Error::ResponseError(ResponseContent {
             status,
             content,

@@ -100,21 +100,14 @@ pub enum UpdatePolicyError {
 pub async fn check_policies_for_tenants(
     configuration: &configuration::Configuration,
     check_tenants_policy_request: models::CheckTenantsPolicyRequest,
-) -> Result<
-    models::CheckTenantsPolicyResponse,
-    Error<CheckPoliciesForTenantsError>,
-> {
-    let uri_str = format!(
-        "{}/v1/auth/policies/check-tenants",
-        configuration.base_path
-    );
+) -> Result<models::CheckTenantsPolicyResponse, Error<CheckPoliciesForTenantsError>> {
+    let uri_str = format!("{}/v1/auth/policies/check-tenants", configuration.base_path);
     let mut req_builder = configuration
         .client
         .request(reqwest::Method::POST, &uri_str);
 
     if let Some(ref user_agent) = configuration.user_agent {
-        req_builder = req_builder
-            .header(reqwest::header::USER_AGENT, user_agent.clone());
+        req_builder = req_builder.header(reqwest::header::USER_AGENT, user_agent.clone());
     }
     req_builder = req_builder.json(&check_tenants_policy_request);
 
@@ -147,8 +140,7 @@ pub async fn check_policies_for_tenants(
         }
     } else {
         let content = resp.text().await?;
-        let entity: Option<CheckPoliciesForTenantsError> =
-            serde_json::from_str(&content).ok();
+        let entity: Option<CheckPoliciesForTenantsError> = serde_json::from_str(&content).ok();
         Err(Error::ResponseError(ResponseContent {
             status,
             content,
@@ -160,13 +152,9 @@ pub async fn check_policies_for_tenants(
 pub async fn check_policy_for_resource(
     configuration: &configuration::Configuration,
     check_policy_for_resource_request: models::CheckPolicyForResourceRequest,
-) -> Result<
-    models::CheckPolicyForResourceResponse,
-    Error<CheckPolicyForResourceError>,
-> {
+) -> Result<models::CheckPolicyForResourceResponse, Error<CheckPolicyForResourceError>> {
     // add a prefix to parameters to efficiently prevent name collisions
-    let p_body_check_policy_for_resource_request =
-        check_policy_for_resource_request;
+    let p_body_check_policy_for_resource_request = check_policy_for_resource_request;
 
     let uri_str = format!(
         "{}/v1/auth/policies/check-for-resource",
@@ -177,11 +165,9 @@ pub async fn check_policy_for_resource(
         .request(reqwest::Method::POST, &uri_str);
 
     if let Some(ref user_agent) = configuration.user_agent {
-        req_builder = req_builder
-            .header(reqwest::header::USER_AGENT, user_agent.clone());
+        req_builder = req_builder.header(reqwest::header::USER_AGENT, user_agent.clone());
     }
-    req_builder =
-        req_builder.json(&p_body_check_policy_for_resource_request);
+    req_builder = req_builder.json(&p_body_check_policy_for_resource_request);
 
     let req = req_builder.build()?;
     let resp = configuration.client.execute(req).await?;
@@ -203,8 +189,7 @@ pub async fn check_policy_for_resource(
         }
     } else {
         let content = resp.text().await?;
-        let entity: Option<CheckPolicyForResourceError> =
-            serde_json::from_str(&content).ok();
+        let entity: Option<CheckPolicyForResourceError> = serde_json::from_str(&content).ok();
         Err(Error::ResponseError(ResponseContent {
             status,
             content,
@@ -230,8 +215,7 @@ pub async fn delete_policy(
         .request(reqwest::Method::DELETE, &uri_str);
 
     if let Some(ref user_agent) = configuration.user_agent {
-        req_builder = req_builder
-            .header(reqwest::header::USER_AGENT, user_agent.clone());
+        req_builder = req_builder.header(reqwest::header::USER_AGENT, user_agent.clone());
     }
 
     let req = req_builder.build()?;
@@ -243,8 +227,7 @@ pub async fn delete_policy(
         Ok(())
     } else {
         let content = resp.text().await?;
-        let entity: Option<DeletePolicyError> =
-            serde_json::from_str(&content).ok();
+        let entity: Option<DeletePolicyError> = serde_json::from_str(&content).ok();
         Err(Error::ResponseError(ResponseContent {
             status,
             content,
@@ -256,23 +239,17 @@ pub async fn delete_policy(
 pub async fn evaluate_policies_batch(
     configuration: &configuration::Configuration,
     evaluate_policies_batch_request: models::EvaluatePoliciesBatchRequest,
-) -> Result<
-    models::EvaluatePoliciesBatchResponse,
-    Error<EvaluatePoliciesBatchError>,
-> {
+) -> Result<models::EvaluatePoliciesBatchResponse, Error<EvaluatePoliciesBatchError>> {
     // add a prefix to parameters to efficiently prevent name collisions
-    let p_body_evaluate_policies_batch_request =
-        evaluate_policies_batch_request;
+    let p_body_evaluate_policies_batch_request = evaluate_policies_batch_request;
 
-    let uri_str =
-        format!("{}/v1/auth/policies/check", configuration.base_path);
+    let uri_str = format!("{}/v1/auth/policies/check", configuration.base_path);
     let mut req_builder = configuration
         .client
         .request(reqwest::Method::POST, &uri_str);
 
     if let Some(ref user_agent) = configuration.user_agent {
-        req_builder = req_builder
-            .header(reqwest::header::USER_AGENT, user_agent.clone());
+        req_builder = req_builder.header(reqwest::header::USER_AGENT, user_agent.clone());
     }
     req_builder = req_builder.json(&p_body_evaluate_policies_batch_request);
 
@@ -296,8 +273,7 @@ pub async fn evaluate_policies_batch(
         }
     } else {
         let content = resp.text().await?;
-        let entity: Option<EvaluatePoliciesBatchError> =
-            serde_json::from_str(&content).ok();
+        let entity: Option<EvaluatePoliciesBatchError> = serde_json::from_str(&content).ok();
         Err(Error::ResponseError(ResponseContent {
             status,
             content,
@@ -318,12 +294,10 @@ pub async fn get_policy(
         configuration.base_path,
         id = crate::apis::urlencode(p_path_id)
     );
-    let mut req_builder =
-        configuration.client.request(reqwest::Method::GET, &uri_str);
+    let mut req_builder = configuration.client.request(reqwest::Method::GET, &uri_str);
 
     if let Some(ref user_agent) = configuration.user_agent {
-        req_builder = req_builder
-            .header(reqwest::header::USER_AGENT, user_agent.clone());
+        req_builder = req_builder.header(reqwest::header::USER_AGENT, user_agent.clone());
     }
 
     let req = req_builder.build()?;
@@ -346,8 +320,7 @@ pub async fn get_policy(
         }
     } else {
         let content = resp.text().await?;
-        let entity: Option<GetPolicyError> =
-            serde_json::from_str(&content).ok();
+        let entity: Option<GetPolicyError> = serde_json::from_str(&content).ok();
         Err(Error::ResponseError(ResponseContent {
             status,
             content,
@@ -364,16 +337,13 @@ pub async fn list_actions(
     let p_query_context = context;
 
     let uri_str = format!("{}/v1/auth/actions", configuration.base_path);
-    let mut req_builder =
-        configuration.client.request(reqwest::Method::GET, &uri_str);
+    let mut req_builder = configuration.client.request(reqwest::Method::GET, &uri_str);
 
     if let Some(ref param_value) = p_query_context {
-        req_builder =
-            req_builder.query(&[("context", &param_value.to_string())]);
+        req_builder = req_builder.query(&[("context", &param_value.to_string())]);
     }
     if let Some(ref user_agent) = configuration.user_agent {
-        req_builder = req_builder
-            .header(reqwest::header::USER_AGENT, user_agent.clone());
+        req_builder = req_builder.header(reqwest::header::USER_AGENT, user_agent.clone());
     }
 
     let req = req_builder.build()?;
@@ -396,8 +366,7 @@ pub async fn list_actions(
         }
     } else {
         let content = resp.text().await?;
-        let entity: Option<ListActionsError> =
-            serde_json::from_str(&content).ok();
+        let entity: Option<ListActionsError> = serde_json::from_str(&content).ok();
         Err(Error::ResponseError(ResponseContent {
             status,
             content,
@@ -419,8 +388,7 @@ pub async fn register_action(
         .request(reqwest::Method::POST, &uri_str);
 
     if let Some(ref user_agent) = configuration.user_agent {
-        req_builder = req_builder
-            .header(reqwest::header::USER_AGENT, user_agent.clone());
+        req_builder = req_builder.header(reqwest::header::USER_AGENT, user_agent.clone());
     }
     req_builder = req_builder.json(&p_body_register_action_request);
 
@@ -444,8 +412,7 @@ pub async fn register_action(
         }
     } else {
         let content = resp.text().await?;
-        let entity: Option<RegisterActionError> =
-            serde_json::from_str(&content).ok();
+        let entity: Option<RegisterActionError> = serde_json::from_str(&content).ok();
         Err(Error::ResponseError(ResponseContent {
             status,
             content,
@@ -467,8 +434,7 @@ pub async fn register_policy(
         .request(reqwest::Method::POST, &uri_str);
 
     if let Some(ref user_agent) = configuration.user_agent {
-        req_builder = req_builder
-            .header(reqwest::header::USER_AGENT, user_agent.clone());
+        req_builder = req_builder.header(reqwest::header::USER_AGENT, user_agent.clone());
     }
     req_builder = req_builder.json(&p_body_register_policy_request);
 
@@ -492,8 +458,7 @@ pub async fn register_policy(
         }
     } else {
         let content = resp.text().await?;
-        let entity: Option<RegisterPolicyError> =
-            serde_json::from_str(&content).ok();
+        let entity: Option<RegisterPolicyError> = serde_json::from_str(&content).ok();
         Err(Error::ResponseError(ResponseContent {
             status,
             content,
@@ -521,8 +486,7 @@ pub async fn update_policy(
         .request(reqwest::Method::PATCH, &uri_str);
 
     if let Some(ref user_agent) = configuration.user_agent {
-        req_builder = req_builder
-            .header(reqwest::header::USER_AGENT, user_agent.clone());
+        req_builder = req_builder.header(reqwest::header::USER_AGENT, user_agent.clone());
     }
     req_builder = req_builder.json(&p_body_update_policy_request);
 
@@ -546,8 +510,7 @@ pub async fn update_policy(
         }
     } else {
         let content = resp.text().await?;
-        let entity: Option<UpdatePolicyError> =
-            serde_json::from_str(&content).ok();
+        let entity: Option<UpdatePolicyError> = serde_json::from_str(&content).ok();
         Err(Error::ResponseError(ResponseContent {
             status,
             content,

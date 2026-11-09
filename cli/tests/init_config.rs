@@ -473,7 +473,7 @@ fn start_secret_server() -> (String, mpsc::Receiver<String>, thread::JoinHandle<
             let body = if idx == 0 {
                 r#"{"apps":[{"id":"app_configured","name":"configured-app"}]}"#
             } else if req.starts_with("POST /v1/apps/app_configured/secrets ") {
-                r#"{"key":"RESEND_API_KEY","target":"production"}"#
+                r#"{"key":"RESEND_API_KEY","target":"production","secret_ref":"$secret_ref:configured-app/RESEND_API_KEY"}"#
             } else {
                 r#"{"error":"unexpected request"}"#
             };
@@ -1754,6 +1754,14 @@ fn env_set_secret_posts_value_and_updates_manifest_reference_only() {
         "configured-app",
         "tn_01hjryxysgey07h5jz5wagqj0m",
     );
+    let manifest_path = tmp.path().join("tachyon.yml");
+    let manifest = fs::read_to_string(&manifest_path).unwrap();
+    let manifest = manifest.replace("spec:\n", "spec:\n  # Keep this section comment.\n");
+    fs::write(
+        &manifest_path,
+        format!("# Keep this file comment.\n{manifest}"),
+    )
+    .unwrap();
     let (api_url, rx, handle) = start_secret_server();
 
     let mut cmd = isolated_command(tmp.path());
@@ -1792,11 +1800,13 @@ fn env_set_secret_posts_value_and_updates_manifest_reference_only() {
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("Set secret RESEND_API_KEY"));
 
-    let yaml = fs::read_to_string(tmp.path().join("tachyon.yml")).unwrap();
+    let yaml = fs::read_to_string(manifest_path).unwrap();
+    assert!(yaml.starts_with("# Keep this file comment.\n"));
+    assert!(yaml.contains("# Keep this section comment."));
     assert!(yaml.contains("name: RESEND_API_KEY"));
     assert!(yaml.contains("type: credential"));
     assert!(yaml.contains("target: production"));
-    assert!(yaml.contains("secret: RESEND_API_KEY"));
+    assert!(yaml.contains("secret: configured-app/RESEND_API_KEY"));
     assert!(!yaml.contains("\n  value:"));
 }
 

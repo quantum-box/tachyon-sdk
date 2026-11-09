@@ -22,10 +22,7 @@ pub struct ModelsResponse {
 }
 
 impl ModelsResponse {
-    pub fn new(
-        models: Vec<models::ModelInfo>,
-        total_count: i32,
-    ) -> ModelsResponse {
+    pub fn new(models: Vec<models::ModelInfo>, total_count: i32) -> ModelsResponse {
         ModelsResponse {
             models,
             total_count,

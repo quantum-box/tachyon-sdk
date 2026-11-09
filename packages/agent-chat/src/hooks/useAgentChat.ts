@@ -1,13 +1,25 @@
 import { useCallback, useState } from 'react'
+import { useAgentSessions } from './useAgentSessions'
 import { useAgentStream } from './useAgentStream'
 import { useChatRoom } from './useChatRoom'
 
 export function useAgentChat() {
 	const [sessionId, setSessionId] = useState<string | null>(null)
 
+	const sessions = useAgentSessions()
+	const onSessionCreated = useCallback(
+		(id: string) => {
+			setSessionId(id)
+			void sessions.fetchSessions().catch(() => {
+				/* exposed through sessionsError */
+			})
+		},
+		[sessions.fetchSessions],
+	)
+
 	const stream = useAgentStream({
 		sessionId,
-		onSessionCreated: setSessionId,
+		onSessionCreated,
 	})
 
 	const chatRoom = useChatRoom()
@@ -54,7 +66,15 @@ export function useAgentChat() {
 		resetChat: stream.resetChat,
 		refetchMessages: stream.refetchMessages,
 
-		// ChatRoom CRUD
+		// Canonical conversation objects
+		sessions: sessions.sessions,
+		sessionsLoading: sessions.isLoading,
+		sessionsError: sessions.error,
+		fetchSessions: sessions.fetchSessions,
+		createSession: sessions.createSession,
+		deleteSession: sessions.deleteSession,
+
+		// Deprecated compatibility for callers managing legacy ChatRooms.
 		chatRooms: chatRoom.chatRooms,
 		chatRoomLoading: chatRoom.isLoading,
 		chatRoomError: chatRoom.error,

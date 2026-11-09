@@ -10,7 +10,7 @@ import { useAgentChatContext } from '../providers/AgentChatProvider'
 import { PERSISTENCE_KEYS, usePersisted } from './useChatPersistence'
 
 export type UseAgentStreamOptions = {
-	/** Current chatroom/session ID (controlled externally) */
+	/** Current Session ID (legacy IDs remain readable). */
 	sessionId: string | null
 	/** Callback when a new session is created */
 	onSessionCreated?: (id: string) => void
@@ -197,7 +197,7 @@ export function useAgentStream(options: UseAgentStreamOptions) {
 
 	// startTask: execute agent and stream SSE chunks
 	const startTask = useCallback(
-		async (task: string, newRoomTitle?: string) => {
+		async (task: string, newSessionTitle?: string) => {
 			const modelGuardError = validateSelectedModel(
 				selectedModel,
 				availableModels,
@@ -218,8 +218,8 @@ export function useAgentStream(options: UseAgentStreamOptions) {
 			let currentSessionId = sessionId
 			if (!currentSessionId) {
 				try {
-					const room = await client.createChatRoom(newRoomTitle)
-					currentSessionId = room.chatroom.id
+					const session = await client.createSession(newSessionTitle)
+					currentSessionId = session.session_id
 					onSessionCreated?.(currentSessionId)
 				} catch (e) {
 					const err = e instanceof Error ? e : new Error(String(e))

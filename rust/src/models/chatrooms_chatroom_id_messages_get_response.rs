@@ -18,9 +18,7 @@ pub struct ChatroomsChatroomIdMessagesGetResponse {
 }
 
 impl ChatroomsChatroomIdMessagesGetResponse {
-    pub fn new(
-        messages: Vec<models::ChatMessage>,
-    ) -> ChatroomsChatroomIdMessagesGetResponse {
+    pub fn new(messages: Vec<models::ChatMessage>) -> ChatroomsChatroomIdMessagesGetResponse {
         ChatroomsChatroomIdMessagesGetResponse { messages }
     }
 }

@@ -32,10 +32,7 @@ pub struct CreateQuoteRequest {
 
 impl CreateQuoteRequest {
     /// Request body for creating a quote
-    pub fn new(
-        line_items: Vec<models::LineItemRequest>,
-        title: String,
-    ) -> CreateQuoteRequest {
+    pub fn new(line_items: Vec<models::LineItemRequest>, title: String) -> CreateQuoteRequest {
         CreateQuoteRequest {
             client_id: None,
             line_items,

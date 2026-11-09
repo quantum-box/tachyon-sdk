@@ -27,11 +27,7 @@ pub struct DetachUserPolicyRequest {
 
 impl DetachUserPolicyRequest {
     /// Request to detach a policy from a user
-    pub fn new(
-        policy_id: String,
-        tenant_id: String,
-        user_id: String,
-    ) -> DetachUserPolicyRequest {
+    pub fn new(policy_id: String, tenant_id: String, user_id: String) -> DetachUserPolicyRequest {
         DetachUserPolicyRequest {
             policy_id,
             tenant_id,

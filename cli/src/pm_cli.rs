@@ -157,6 +157,9 @@ pub enum IssueCommand {
         /// Legacy project id option
         #[arg(long)]
         project_id: Option<String>,
+        /// Filter issues by project milestone id (requires --project)
+        #[arg(long, visible_alias = "milestone")]
+        project_milestone_id: Option<String>,
         /// Include completed/canceled issues
         #[arg(long)]
         include_completed: bool,
@@ -452,6 +455,8 @@ struct PmIssue {
     status: String,
     priority: String,
     assignee: Option<PmIssueAssignee>,
+    project_milestone_id: Option<String>,
+    project_milestone_name: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -766,8 +771,12 @@ async fn run_list(
     } else {
         for issue in &response.items {
             println!(
-                "{}\t{}\t{}\t{}",
-                issue.key, issue.status, issue.priority, issue.title
+                "{}\t{}\t{}\t{}\t{}",
+                issue.key,
+                issue.status,
+                issue.priority,
+                issue.project_milestone_name.as_deref().unwrap_or("-"),
+                issue.title
             );
         }
     }
@@ -1127,6 +1136,7 @@ pub async fn run_issue(
             team_id,
             project,
             project_id,
+            project_milestone_id,
             include_completed,
             limit,
             cursor,
@@ -1148,6 +1158,9 @@ pub async fn run_issue(
             }
             if let Some(project_id) = project_id {
                 query.push(("project_id", project_id.clone()));
+            }
+            if let Some(project_milestone_id) = project_milestone_id {
+                query.push(("project_milestone_id", project_milestone_id.clone()));
             }
             run_list(
                 &api,

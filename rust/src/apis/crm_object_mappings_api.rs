@@ -33,21 +33,17 @@ pub enum GetObjectMappingsError {
 pub async fn create_object_mapping(
     configuration: &configuration::Configuration,
     create_object_mapping_request: models::CreateObjectMappingRequest,
-) -> Result<models::ObjectMappingResponse, Error<CreateObjectMappingError>>
-{
+) -> Result<models::ObjectMappingResponse, Error<CreateObjectMappingError>> {
     // add a prefix to parameters to efficiently prevent name collisions
-    let p_body_create_object_mapping_request =
-        create_object_mapping_request;
+    let p_body_create_object_mapping_request = create_object_mapping_request;
 
-    let uri_str =
-        format!("{}/v1/crm/object-mappings", configuration.base_path);
+    let uri_str = format!("{}/v1/crm/object-mappings", configuration.base_path);
     let mut req_builder = configuration
         .client
         .request(reqwest::Method::POST, &uri_str);
 
     if let Some(ref user_agent) = configuration.user_agent {
-        req_builder = req_builder
-            .header(reqwest::header::USER_AGENT, user_agent.clone());
+        req_builder = req_builder.header(reqwest::header::USER_AGENT, user_agent.clone());
     }
     req_builder = req_builder.json(&p_body_create_object_mapping_request);
 
@@ -71,8 +67,7 @@ pub async fn create_object_mapping(
         }
     } else {
         let content = resp.text().await?;
-        let entity: Option<CreateObjectMappingError> =
-            serde_json::from_str(&content).ok();
+        let entity: Option<CreateObjectMappingError> = serde_json::from_str(&content).ok();
         Err(Error::ResponseError(ResponseContent {
             status,
             content,
@@ -85,24 +80,18 @@ pub async fn get_object_mappings(
     configuration: &configuration::Configuration,
     entity_id: &str,
     object_name: &str,
-) -> Result<models::ObjectMappingListResponse, Error<GetObjectMappingsError>>
-{
+) -> Result<models::ObjectMappingListResponse, Error<GetObjectMappingsError>> {
     // add a prefix to parameters to efficiently prevent name collisions
     let p_query_entity_id = entity_id;
     let p_query_object_name = object_name;
 
-    let uri_str =
-        format!("{}/v1/crm/object-mappings", configuration.base_path);
-    let mut req_builder =
-        configuration.client.request(reqwest::Method::GET, &uri_str);
+    let uri_str = format!("{}/v1/crm/object-mappings", configuration.base_path);
+    let mut req_builder = configuration.client.request(reqwest::Method::GET, &uri_str);
 
-    req_builder =
-        req_builder.query(&[("entity_id", &p_query_entity_id.to_string())]);
-    req_builder = req_builder
-        .query(&[("object_name", &p_query_object_name.to_string())]);
+    req_builder = req_builder.query(&[("entity_id", &p_query_entity_id.to_string())]);
+    req_builder = req_builder.query(&[("object_name", &p_query_object_name.to_string())]);
     if let Some(ref user_agent) = configuration.user_agent {
-        req_builder = req_builder
-            .header(reqwest::header::USER_AGENT, user_agent.clone());
+        req_builder = req_builder.header(reqwest::header::USER_AGENT, user_agent.clone());
     }
 
     let req = req_builder.build()?;
@@ -125,8 +114,7 @@ pub async fn get_object_mappings(
         }
     } else {
         let content = resp.text().await?;
-        let entity: Option<GetObjectMappingsError> =
-            serde_json::from_str(&content).ok();
+        let entity: Option<GetObjectMappingsError> = serde_json::from_str(&content).ok();
         Err(Error::ResponseError(ResponseContent {
             status,
             content,

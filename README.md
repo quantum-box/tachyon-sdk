@@ -101,12 +101,43 @@ TACHYON_PROFILE=work tachyon compute apps list
 tachyon auth logout --profile personal
 ```
 
+`tachyon auth login` opens your browser and waits on `127.0.0.1` (port 42813,
+42814 or 42815, whichever is free) for the browser to return to
+`http://localhost:{port}/callback`. Set `TACHYON_NO_BROWSER=1` to only print
+the login URL instead of opening it; the browser still has to run on the same
+machine.
+
+When the browser runs on another machine (SSH, containers), use
+`--no-browser`. The CLI prints the login URL and a code such as `ABCD-EFGH`.
+Open the URL, sign in, and enter the code on the confirmation page; the CLI
+then finishes the login:
+
+```sh
+tachyon auth login --no-browser
+```
+
+Only enter the code on a page you opened from the URL your own terminal
+printed.
+
 Resolution order when picking a profile for a command:
 
 1. `--profile <name>` global flag
 2. `TACHYON_PROFILE` env var
 3. `~/.config/tachyon/active_profile` file (set by `auth login` / `auth use`)
 4. `default`
+
+To hand the logged-in user's token to a script without copying it by hand,
+pipe `tachyon auth token` into it:
+
+```sh
+tachyon auth token | node my-script.mjs --token-stdin
+tachyon auth token --profile work | ./tool --token-stdin
+```
+
+`auth token` refreshes the token first when it expires within 10 minutes
+(`--min-validity <seconds>` to change), writes only the token to stdout, and
+refuses to print it to a terminal. It also refuses while `--api-key` /
+`TACHYON_API_KEY` is set, because it only hands out the user's own login.
 
 Existing single-account installs are auto-migrated: an older
 `~/.config/tachyon/credentials.json` is copied to `profiles/default.json`
@@ -299,6 +330,34 @@ cancelled, and timed-out builds return non-zero so automation can stop early.
 > a cloud build and replays it locally in a CodeBuild-compatible Docker
 > container. Phase 1 requires `--mock <path>`; the live build-config endpoint
 > (PLT-913) lands in Phase 2.
+
+### Service accounts and API keys
+
+Set up a service account for automation (for example an IaC apply job) in the
+tenant selected by `TACHYON_TENANT_ID` / `--tenant-id`:
+
+```sh
+# Create the service account. Names must be unique within the tenant; the
+# command stops if one with the same name already exists.
+tachyon org service-accounts create gha.iac-apply.write
+
+# Attach a policy. Both arguments accept an ID or a name.
+tachyon org service-accounts attach-policy gha.iac-apply.write IacApplyWrite
+
+# Issue a key that expires after 90 days (omit --ttl-seconds for no expiry).
+tachyon api-key create gha.iac-apply.write --name github-actions \
+  --ttl-seconds 7776000 --json
+
+# Detach a policy, or delete the service account together with its API keys.
+tachyon org service-accounts detach-policy gha.iac-apply.write IacApplyWrite
+tachyon org service-accounts delete gha.iac-apply.write
+```
+
+A policy name resolves to the policy owned by the current tenant first, then to
+a system policy or a policy shared from an ancestor tenant. If more than one
+policy or service account matches a name, the command stops and lists the
+matching IDs; pass one of those IDs instead. All of these commands accept
+`--json`.
 
 ### Slack notifications
 
@@ -577,3 +636,16 @@ STOREKIT_TYPESCRIPT_OUT=typescript-storekit \
 ## License
 
 MIT © 2026 Quantum Box株式会社
+
+## Feature flags
+
+The `feature-flag` command uses the current authentication profile and an explicit tenant scope.
+
+```sh
+tachyon feature-flag list --tenant-id <tenant-id> --search <key> --json
+tachyon feature-flag get <key> --tenant-id <tenant-id> --json
+tachyon feature-flag enable <key> --tenant-id <tenant-id> --json
+tachyon feature-flag disable <key> --tenant-id <tenant-id> --json
+```
+
+Enable and disable send a desired boolean state rather than toggling the current value, so retries do not invert it. The server resolves the key in the selected scope and enforces inherited-definition and publication-approval rules. These commands do not bypass host publication approvals or mutate the ancestor's row directly. GraphQL errors return a nonzero exit status.

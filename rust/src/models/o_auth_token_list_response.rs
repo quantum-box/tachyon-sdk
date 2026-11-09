@@ -20,9 +20,7 @@ pub struct OAuthTokenListResponse {
 
 impl OAuthTokenListResponse {
     /// Response for OAuth token list
-    pub fn new(
-        tokens: Vec<models::OAuthTokenResponse>,
-    ) -> OAuthTokenListResponse {
+    pub fn new(tokens: Vec<models::OAuthTokenResponse>) -> OAuthTokenListResponse {
         OAuthTokenListResponse { tokens }
     }
 }

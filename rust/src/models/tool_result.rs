@@ -24,11 +24,7 @@ pub struct ToolResult {
 
 impl ToolResult {
     /// Represents a tool execution result
-    pub fn new(
-        is_finished: bool,
-        result: String,
-        tool_id: String,
-    ) -> ToolResult {
+    pub fn new(is_finished: bool, result: String, tool_id: String) -> ToolResult {
         ToolResult {
             is_finished,
             result,

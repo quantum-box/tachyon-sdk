@@ -45,11 +45,7 @@ pub struct Usage {
 
 impl Usage {
     /// Token usage statistics
-    pub fn new(
-        completion_tokens: i32,
-        prompt_tokens: i32,
-        total_tokens: i32,
-    ) -> Usage {
+    pub fn new(completion_tokens: i32, prompt_tokens: i32, total_tokens: i32) -> Usage {
         Usage {
             cache_creation_input_tokens: None,
             cache_read_input_tokens: None,

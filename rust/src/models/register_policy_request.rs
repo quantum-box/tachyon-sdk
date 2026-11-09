@@ -14,10 +14,7 @@ use serde::{Deserialize, Serialize};
 /// RegisterPolicyRequest : Request to register a custom policy
 #[derive(Clone, Default, Debug, PartialEq, Serialize, Deserialize)]
 pub struct RegisterPolicyRequest {
-    #[serde(
-        rename = "actionPatterns",
-        skip_serializing_if = "Option::is_none"
-    )]
+    #[serde(rename = "actionPatterns", skip_serializing_if = "Option::is_none")]
     pub action_patterns: Option<Vec<models::PolicyActionPatternRequest>>,
     #[serde(rename = "actions", skip_serializing_if = "Option::is_none")]
     pub actions: Option<Vec<models::PolicyActionRequest>>,

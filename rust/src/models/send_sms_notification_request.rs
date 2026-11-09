@@ -24,10 +24,7 @@ pub struct SendSmsNotificationRequest {
 
 impl SendSmsNotificationRequest {
     /// Request to send a text SMS notification through Tachyon notification providers.
-    pub fn new(
-        phone_number: String,
-        message: String,
-    ) -> SendSmsNotificationRequest {
+    pub fn new(phone_number: String, message: String) -> SendSmsNotificationRequest {
         SendSmsNotificationRequest {
             phone_number,
             message,

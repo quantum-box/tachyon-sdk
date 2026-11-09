@@ -26,12 +26,7 @@ pub struct UserMessage {
 
 impl UserMessage {
     /// User message content
-    pub fn new(
-        created_at: String,
-        id: String,
-        text: String,
-        user_id: String,
-    ) -> UserMessage {
+    pub fn new(created_at: String, id: String, text: String, user_id: String) -> UserMessage {
         UserMessage {
             created_at,
             id,

@@ -17,10 +17,7 @@ use super::types::TenantId;
 pub trait AuthApp: Debug + Send + Sync + 'static {
     /// Check whether the executor is allowed to perform
     /// the given action.
-    async fn check_policy<'a>(
-        &self,
-        input: &CheckPolicyInput<'a>,
-    ) -> AuthResult<()>;
+    async fn check_policy<'a>(&self, input: &CheckPolicyInput<'a>) -> AuthResult<()>;
 
     /// Evaluate multiple actions in a single batch.
     async fn evaluate_policies_batch<'a>(
@@ -41,10 +38,7 @@ pub trait AuthApp: Debug + Send + Sync + 'static {
     ) -> AuthResult<Option<String>>;
 
     /// Delete an operator.
-    async fn delete_operator<'a>(
-        &self,
-        input: &DeleteOperatorInput<'a>,
-    ) -> AuthResult<()>;
+    async fn delete_operator<'a>(&self, input: &DeleteOperatorInput<'a>) -> AuthResult<()>;
 
     /// Find an operator by its identifier (alias).
     async fn get_operator_by_identifier<'a>(
@@ -59,16 +53,10 @@ pub trait AuthApp: Debug + Send + Sync + 'static {
     ) -> AuthResult<Option<Operator>>;
 
     /// Create a new operator under a platform.
-    async fn create_operator<'a>(
-        &self,
-        input: &CreateOperatorInput<'a>,
-    ) -> AuthResult<Operator>;
+    async fn create_operator<'a>(&self, input: &CreateOperatorInput<'a>) -> AuthResult<Operator>;
 
     /// List authorized OAuth tokens for the executor.
-    async fn oauth_tokens<'a>(
-        &self,
-        input: &OAuthTokenInput<'a>,
-    ) -> AuthResult<Vec<OAuthToken>>;
+    async fn oauth_tokens<'a>(&self, input: &OAuthTokenInput<'a>) -> AuthResult<Vec<OAuthToken>>;
 
     /// Get a specific OAuth token by provider name.
     async fn get_oauth_token_by_provider<'a>(
@@ -77,16 +65,10 @@ pub trait AuthApp: Debug + Send + Sync + 'static {
     ) -> AuthResult<Option<OAuthTokenDetail>>;
 
     /// Save (create or update) an OAuth token.
-    async fn save_oauth_token<'a>(
-        &self,
-        input: &SaveOAuthTokenInput<'a>,
-    ) -> AuthResult<()>;
+    async fn save_oauth_token<'a>(&self, input: &SaveOAuthTokenInput<'a>) -> AuthResult<()>;
 
     /// Delete an OAuth token for a given provider.
-    async fn delete_oauth_token<'a>(
-        &self,
-        input: &DeleteOAuthTokenInput<'a>,
-    ) -> AuthResult<()>;
+    async fn delete_oauth_token<'a>(&self, input: &DeleteOAuthTokenInput<'a>) -> AuthResult<()>;
 
     /// Create a service account in a tenant.
     async fn create_service_account<'a>(
@@ -125,16 +107,10 @@ pub trait AuthApp: Debug + Send + Sync + 'static {
     ) -> AuthResult<Vec<PublicApiKey>>;
 
     /// Attach a policy to a user in a tenant.
-    async fn attach_user_policy<'a>(
-        &self,
-        input: &AttachUserPolicyInput<'a>,
-    ) -> AuthResult<()>;
+    async fn attach_user_policy<'a>(&self, input: &AttachUserPolicyInput<'a>) -> AuthResult<()>;
 
     /// Detach a policy from a user in a tenant.
-    async fn detach_user_policy<'a>(
-        &self,
-        input: &DetachUserPolicyInput<'a>,
-    ) -> AuthResult<()>;
+    async fn detach_user_policy<'a>(&self, input: &DetachUserPolicyInput<'a>) -> AuthResult<()>;
 
     /// Check resource-level permissions.
     async fn check_policy_for_resource<'a>(
@@ -155,16 +131,10 @@ pub trait AuthApp: Debug + Send + Sync + 'static {
     ) -> AuthResult<()>;
 
     /// Add a user to a tenant.
-    async fn add_user_to_tenant<'a>(
-        &self,
-        input: &AddUserToTenantInput<'a>,
-    ) -> AuthResult<()>;
+    async fn add_user_to_tenant<'a>(&self, input: &AddUserToTenantInput<'a>) -> AuthResult<()>;
 
     /// Get a user by ID.
-    async fn get_user_by_id<'a>(
-        &self,
-        input: &GetUserByIdInput<'a>,
-    ) -> AuthResult<Option<User>>;
+    async fn get_user_by_id<'a>(&self, input: &GetUserByIdInput<'a>) -> AuthResult<Option<User>>;
 
     /// Find all users in a tenant.
     async fn find_users_by_tenant<'a>(
@@ -179,10 +149,7 @@ pub trait AuthApp: Debug + Send + Sync + 'static {
     ) -> AuthResult<Option<Policy>>;
 
     /// Register (create) a custom policy with actions.
-    async fn register_policy<'a>(
-        &self,
-        input: &RegisterPolicyInput<'a>,
-    ) -> AuthResult<Policy>;
+    async fn register_policy<'a>(&self, input: &RegisterPolicyInput<'a>) -> AuthResult<Policy>;
 
     /// Find a custom policy by name within a tenant.
     async fn find_policy_by_name<'a>(
@@ -191,10 +158,7 @@ pub trait AuthApp: Debug + Send + Sync + 'static {
     ) -> AuthResult<Option<Policy>>;
 
     /// Attach a policy to a service account.
-    async fn attach_sa_policy<'a>(
-        &self,
-        input: &AttachSaPolicyInput<'a>,
-    ) -> AuthResult<()>;
+    async fn attach_sa_policy<'a>(&self, input: &AttachSaPolicyInput<'a>) -> AuthResult<()>;
 
     /// Create an OAuth2 client.
     async fn create_oauth2_client<'a>(

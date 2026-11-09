@@ -77,8 +77,7 @@ pub async fn create_quote(
         .request(reqwest::Method::POST, &uri_str);
 
     if let Some(ref user_agent) = configuration.user_agent {
-        req_builder = req_builder
-            .header(reqwest::header::USER_AGENT, user_agent.clone());
+        req_builder = req_builder.header(reqwest::header::USER_AGENT, user_agent.clone());
     }
     req_builder = req_builder.json(&p_body_create_quote_request);
 
@@ -102,8 +101,7 @@ pub async fn create_quote(
         }
     } else {
         let content = resp.text().await?;
-        let entity: Option<CreateQuoteError> =
-            serde_json::from_str(&content).ok();
+        let entity: Option<CreateQuoteError> = serde_json::from_str(&content).ok();
         Err(Error::ResponseError(ResponseContent {
             status,
             content,
@@ -124,12 +122,10 @@ pub async fn get_quote(
         configuration.base_path,
         id = crate::apis::urlencode(p_path_id)
     );
-    let mut req_builder =
-        configuration.client.request(reqwest::Method::GET, &uri_str);
+    let mut req_builder = configuration.client.request(reqwest::Method::GET, &uri_str);
 
     if let Some(ref user_agent) = configuration.user_agent {
-        req_builder = req_builder
-            .header(reqwest::header::USER_AGENT, user_agent.clone());
+        req_builder = req_builder.header(reqwest::header::USER_AGENT, user_agent.clone());
     }
 
     let req = req_builder.build()?;
@@ -152,8 +148,7 @@ pub async fn get_quote(
         }
     } else {
         let content = resp.text().await?;
-        let entity: Option<GetQuoteError> =
-            serde_json::from_str(&content).ok();
+        let entity: Option<GetQuoteError> = serde_json::from_str(&content).ok();
         Err(Error::ResponseError(ResponseContent {
             status,
             content,
@@ -181,8 +176,7 @@ pub async fn issue_quote(
         .request(reqwest::Method::POST, &uri_str);
 
     if let Some(ref user_agent) = configuration.user_agent {
-        req_builder = req_builder
-            .header(reqwest::header::USER_AGENT, user_agent.clone());
+        req_builder = req_builder.header(reqwest::header::USER_AGENT, user_agent.clone());
     }
     req_builder = req_builder.json(&p_body_issue_quote_request);
 
@@ -206,8 +200,7 @@ pub async fn issue_quote(
         }
     } else {
         let content = resp.text().await?;
-        let entity: Option<IssueQuoteError> =
-            serde_json::from_str(&content).ok();
+        let entity: Option<IssueQuoteError> = serde_json::from_str(&content).ok();
         Err(Error::ResponseError(ResponseContent {
             status,
             content,
@@ -220,12 +213,10 @@ pub async fn list_quotes(
     configuration: &configuration::Configuration,
 ) -> Result<models::QuoteListResponse, Error<ListQuotesError>> {
     let uri_str = format!("{}/v1/order/quotes", configuration.base_path);
-    let mut req_builder =
-        configuration.client.request(reqwest::Method::GET, &uri_str);
+    let mut req_builder = configuration.client.request(reqwest::Method::GET, &uri_str);
 
     if let Some(ref user_agent) = configuration.user_agent {
-        req_builder = req_builder
-            .header(reqwest::header::USER_AGENT, user_agent.clone());
+        req_builder = req_builder.header(reqwest::header::USER_AGENT, user_agent.clone());
     }
 
     let req = req_builder.build()?;
@@ -248,8 +239,7 @@ pub async fn list_quotes(
         }
     } else {
         let content = resp.text().await?;
-        let entity: Option<ListQuotesError> =
-            serde_json::from_str(&content).ok();
+        let entity: Option<ListQuotesError> = serde_json::from_str(&content).ok();
         Err(Error::ResponseError(ResponseContent {
             status,
             content,
@@ -272,12 +262,10 @@ pub async fn update_quote(
         configuration.base_path,
         id = crate::apis::urlencode(p_path_id)
     );
-    let mut req_builder =
-        configuration.client.request(reqwest::Method::PUT, &uri_str);
+    let mut req_builder = configuration.client.request(reqwest::Method::PUT, &uri_str);
 
     if let Some(ref user_agent) = configuration.user_agent {
-        req_builder = req_builder
-            .header(reqwest::header::USER_AGENT, user_agent.clone());
+        req_builder = req_builder.header(reqwest::header::USER_AGENT, user_agent.clone());
     }
     req_builder = req_builder.json(&p_body_update_quote_request);
 
@@ -301,8 +289,7 @@ pub async fn update_quote(
         }
     } else {
         let content = resp.text().await?;
-        let entity: Option<UpdateQuoteError> =
-            serde_json::from_str(&content).ok();
+        let entity: Option<UpdateQuoteError> = serde_json::from_str(&content).ok();
         Err(Error::ResponseError(ResponseContent {
             status,
             content,

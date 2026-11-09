@@ -28,10 +28,7 @@ pub struct WorkerRuntimeError {
 
 impl WorkerRuntimeError {
     /// Creates a new worker runtime error.
-    pub fn new(
-        code: impl Into<String>,
-        message: impl Into<String>,
-    ) -> Self {
+    pub fn new(code: impl Into<String>, message: impl Into<String>) -> Self {
         Self {
             code: code.into(),
             message: message.into(),
@@ -48,9 +45,7 @@ impl fmt::Display for WorkerRuntimeError {
 impl std::error::Error for WorkerRuntimeError {}
 
 /// Provider selected for a Coding Job.
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize,
-)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum WorkerProviderKind {
     /// Codex CLI provider.
@@ -292,37 +287,26 @@ pub trait WorkerJobQueue: Send + Sync + fmt::Debug {
     ) -> WorkerRuntimeResult<String>;
 
     /// Dequeue the next available job.
-    async fn dequeue(&self)
-        -> WorkerRuntimeResult<Option<WorkerQueuedJob>>;
+    async fn dequeue(&self) -> WorkerRuntimeResult<Option<WorkerQueuedJob>>;
 
     /// Acknowledge successful job processing.
     async fn ack(&self, queue_id: &str) -> WorkerRuntimeResult<()>;
 
     /// Return a job to the queue for retry.
-    async fn nack(
-        &self,
-        queue_id: &str,
-        delay: Duration,
-    ) -> WorkerRuntimeResult<()>;
+    async fn nack(&self, queue_id: &str, delay: Duration) -> WorkerRuntimeResult<()>;
 
     /// Return the current pending job count when the backend can provide it.
     async fn pending_count(&self) -> WorkerRuntimeResult<u64>;
 
     /// Fetch a queued job by backend queue ID.
-    async fn get(
-        &self,
-        queue_id: &str,
-    ) -> WorkerRuntimeResult<Option<WorkerQueuedJob>>;
+    async fn get(&self, queue_id: &str) -> WorkerRuntimeResult<Option<WorkerQueuedJob>>;
 }
 
 /// Executes one worker job.
 #[async_trait]
 pub trait JobExecutor: Send + Sync + fmt::Debug {
     /// Execute a job request and return its normalized result.
-    async fn execute(
-        &self,
-        request: WorkerJobRequest,
-    ) -> WorkerRuntimeResult<WorkerJobResult>;
+    async fn execute(&self, request: WorkerJobRequest) -> WorkerRuntimeResult<WorkerJobResult>;
 }
 
 /// Publishes streaming events for a worker job.
@@ -380,10 +364,7 @@ mod tests {
                 format!("\"{expected}\"")
             );
             assert_eq!(
-                serde_json::from_str::<WorkerProviderKind>(&format!(
-                    "\"{expected}\""
-                ))
-                .unwrap(),
+                serde_json::from_str::<WorkerProviderKind>(&format!("\"{expected}\"")).unwrap(),
                 provider
             );
         }
@@ -411,8 +392,7 @@ mod tests {
         };
 
         let encoded = serde_json::to_string(&job).unwrap();
-        let decoded: WorkerQueuedJob =
-            serde_json::from_str(&encoded).unwrap();
+        let decoded: WorkerQueuedJob = serde_json::from_str(&encoded).unwrap();
 
         assert_eq!(decoded, job);
     }
@@ -424,10 +404,7 @@ mod tests {
 
     #[async_trait]
     impl JobExecutor for RecordingExecutor {
-        async fn execute(
-            &self,
-            request: WorkerJobRequest,
-        ) -> WorkerRuntimeResult<WorkerJobResult> {
+        async fn execute(&self, request: WorkerJobRequest) -> WorkerRuntimeResult<WorkerJobResult> {
             self.prompts.lock().unwrap().push(request.prompt);
             Ok(WorkerJobResult {
                 normalized_output: Some(WorkerNormalizedOutput {
@@ -461,10 +438,7 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(
-            executor.prompts.lock().unwrap().as_slice(),
-            ["Do work"]
-        );
+        assert_eq!(executor.prompts.lock().unwrap().as_slice(), ["Do work"]);
         assert_eq!(
             result.normalized_output.unwrap().body,
             serde_json::json!({"ok": true})

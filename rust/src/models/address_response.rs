@@ -43,11 +43,7 @@ pub struct AddressResponse {
 
 impl AddressResponse {
     /// Address response
-    pub fn new(
-        address1: String,
-        city: String,
-        state: String,
-    ) -> AddressResponse {
+    pub fn new(address1: String, city: String, state: String) -> AddressResponse {
         AddressResponse {
             address1,
             address2: None,

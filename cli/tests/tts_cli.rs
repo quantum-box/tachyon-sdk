@@ -52,14 +52,119 @@ fn request_json_body(request: &str) -> Value {
 }
 
 fn speech_response(audio: &[u8], mime_type: &str) -> String {
+    speech_response_for_model(audio, mime_type, "gemini-2.5-flash-preview-tts")
+}
+
+fn speech_response_for_model(audio: &[u8], mime_type: &str, model: &str) -> String {
     let audio_b64 = base64::engine::general_purpose::STANDARD.encode(audio);
     serde_json::json!({
         "audio_b64": audio_b64,
         "mime_type": mime_type,
-        "model": "gemini-2.5-flash-preview-tts",
+        "model": model,
         "cost_nanodollars": 0,
     })
     .to_string()
+}
+
+#[test]
+fn tts_models_and_synthesize_help_list_the_supported_catalog() {
+    let tmp = TempDir::new().unwrap();
+    let output = isolated_command(tmp.path())
+        .args(["tts", "models"])
+        .output()
+        .expect("run tachyon tts models");
+
+    assert!(output.status.success());
+    let models = String::from_utf8_lossy(&output.stdout);
+    for model in [
+        "gemini-3.8-flash-tts",
+        "gemini-3.8-flash-lite-tts",
+        "gemini-3.1-flash-tts-preview",
+        "gemini-2.5-flash-preview-tts",
+        "gemini-2.5-pro-preview-tts",
+    ] {
+        assert!(models.contains(model), "missing {model} in:\n{models}");
+    }
+    assert!(models.contains("legacy; migrate to Gemini 3.8"), "{models}");
+    assert!(models.contains("(default)"), "{models}");
+
+    let help = isolated_command(tmp.path())
+        .args(["tts", "synthesize", "--help"])
+        .output()
+        .expect("run tachyon tts synthesize --help");
+
+    assert!(help.status.success());
+    let help = String::from_utf8_lossy(&help.stdout);
+    for model in [
+        "gemini-3.8-flash-tts",
+        "gemini-3.8-flash-lite-tts",
+        "gemini-3.1-flash-tts-preview",
+        "gemini-2.5-flash-preview-tts",
+        "gemini-2.5-pro-preview-tts",
+    ] {
+        assert!(help.contains(model), "missing {model} in:\n{help}");
+    }
+}
+
+#[test]
+fn tts_synthesize_rejects_models_outside_the_catalog() {
+    let tmp = TempDir::new().unwrap();
+    let output = isolated_command(tmp.path())
+        .args([
+            "tts",
+            "synthesize",
+            "--text",
+            "hello",
+            "--model",
+            "gemini-9.9-fake-tts",
+        ])
+        .output()
+        .expect("run tachyon tts synthesize with an unsupported model");
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("invalid value"), "{stderr}");
+    assert!(stderr.contains("gemini-3.8-flash-tts"), "{stderr}");
+    assert!(stderr.contains("gemini-3.8-flash-lite-tts"), "{stderr}");
+}
+
+#[test]
+fn tts_synthesize_selects_gemini_3_8_models_and_writes_wav() {
+    let wav = b"RIFF\x28\x00\x00\x00WAVEfmt \x10\x00\x00\x00\x01\x00\x01\x00\xc0\x5d\x00\x00\x80\xbb\x00\x00\x02\x00\x10\x00data\x04\x00\x00\x00\x01\x00\x02\x00";
+
+    for model in ["gemini-3.8-flash-tts", "gemini-3.8-flash-lite-tts"] {
+        let tmp = TempDir::new().unwrap();
+        let (api_url, rx, handle) =
+            start_server(speech_response_for_model(wav, "audio/wav", model));
+
+        let output = isolated_command(tmp.path())
+            .env("TACHYON_API_URL", api_url)
+            .args([
+                "tts",
+                "synthesize",
+                "--text",
+                "hello",
+                "--model",
+                model,
+                "--output",
+                "out.wav",
+            ])
+            .output()
+            .expect("run tachyon tts synthesize for a Gemini 3.8 model");
+
+        assert!(
+            output.status.success(),
+            "tts synthesize failed for {model}\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        handle.join().unwrap();
+        let request = rx.recv().unwrap();
+        let body = request_json_body(&request);
+        assert_eq!(body["model"], model);
+        assert_eq!(body["format"], "wav");
+        assert_eq!(std::fs::read(tmp.path().join("out.wav")).unwrap(), wav);
+    }
 }
 
 #[test]

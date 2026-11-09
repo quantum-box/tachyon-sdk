@@ -57,21 +57,17 @@ pub enum UpdateServiceAccountError {
 pub async fn create_service_account(
     configuration: &configuration::Configuration,
     create_service_account_request: models::CreateServiceAccountRequest,
-) -> Result<models::ServiceAccountResponse, Error<CreateServiceAccountError>>
-{
+) -> Result<models::ServiceAccountResponse, Error<CreateServiceAccountError>> {
     // add a prefix to parameters to efficiently prevent name collisions
-    let p_body_create_service_account_request =
-        create_service_account_request;
+    let p_body_create_service_account_request = create_service_account_request;
 
-    let uri_str =
-        format!("{}/v1/auth/service-accounts", configuration.base_path);
+    let uri_str = format!("{}/v1/auth/service-accounts", configuration.base_path);
     let mut req_builder = configuration
         .client
         .request(reqwest::Method::POST, &uri_str);
 
     if let Some(ref user_agent) = configuration.user_agent {
-        req_builder = req_builder
-            .header(reqwest::header::USER_AGENT, user_agent.clone());
+        req_builder = req_builder.header(reqwest::header::USER_AGENT, user_agent.clone());
     }
     req_builder = req_builder.json(&p_body_create_service_account_request);
 
@@ -95,8 +91,7 @@ pub async fn create_service_account(
         }
     } else {
         let content = resp.text().await?;
-        let entity: Option<CreateServiceAccountError> =
-            serde_json::from_str(&content).ok();
+        let entity: Option<CreateServiceAccountError> = serde_json::from_str(&content).ok();
         Err(Error::ResponseError(ResponseContent {
             status,
             content,
@@ -108,10 +103,7 @@ pub async fn create_service_account(
 pub async fn delete_service_account(
     configuration: &configuration::Configuration,
     id: &str,
-) -> Result<
-    models::DeleteServiceAccountResponse,
-    Error<DeleteServiceAccountError>,
-> {
+) -> Result<models::DeleteServiceAccountResponse, Error<DeleteServiceAccountError>> {
     // add a prefix to parameters to efficiently prevent name collisions
     let p_path_id = id;
 
@@ -125,8 +117,7 @@ pub async fn delete_service_account(
         .request(reqwest::Method::DELETE, &uri_str);
 
     if let Some(ref user_agent) = configuration.user_agent {
-        req_builder = req_builder
-            .header(reqwest::header::USER_AGENT, user_agent.clone());
+        req_builder = req_builder.header(reqwest::header::USER_AGENT, user_agent.clone());
     }
 
     let req = req_builder.build()?;
@@ -149,8 +140,7 @@ pub async fn delete_service_account(
         }
     } else {
         let content = resp.text().await?;
-        let entity: Option<DeleteServiceAccountError> =
-            serde_json::from_str(&content).ok();
+        let entity: Option<DeleteServiceAccountError> = serde_json::from_str(&content).ok();
         Err(Error::ResponseError(ResponseContent {
             status,
             content,
@@ -173,14 +163,11 @@ pub async fn get_service_account(
         configuration.base_path,
         id = crate::apis::urlencode(p_path_id)
     );
-    let mut req_builder =
-        configuration.client.request(reqwest::Method::GET, &uri_str);
+    let mut req_builder = configuration.client.request(reqwest::Method::GET, &uri_str);
 
-    req_builder = req_builder
-        .query(&[("operator_id", &p_query_operator_id.to_string())]);
+    req_builder = req_builder.query(&[("operator_id", &p_query_operator_id.to_string())]);
     if let Some(ref user_agent) = configuration.user_agent {
-        req_builder = req_builder
-            .header(reqwest::header::USER_AGENT, user_agent.clone());
+        req_builder = req_builder.header(reqwest::header::USER_AGENT, user_agent.clone());
     }
 
     let req = req_builder.build()?;
@@ -203,8 +190,7 @@ pub async fn get_service_account(
         }
     } else {
         let content = resp.text().await?;
-        let entity: Option<GetServiceAccountError> =
-            serde_json::from_str(&content).ok();
+        let entity: Option<GetServiceAccountError> = serde_json::from_str(&content).ok();
         Err(Error::ResponseError(ResponseContent {
             status,
             content,
@@ -216,23 +202,16 @@ pub async fn get_service_account(
 pub async fn list_service_accounts(
     configuration: &configuration::Configuration,
     operator_id: &str,
-) -> Result<
-    models::ServiceAccountListResponse,
-    Error<ListServiceAccountsError>,
-> {
+) -> Result<models::ServiceAccountListResponse, Error<ListServiceAccountsError>> {
     // add a prefix to parameters to efficiently prevent name collisions
     let p_query_operator_id = operator_id;
 
-    let uri_str =
-        format!("{}/v1/auth/service-accounts", configuration.base_path);
-    let mut req_builder =
-        configuration.client.request(reqwest::Method::GET, &uri_str);
+    let uri_str = format!("{}/v1/auth/service-accounts", configuration.base_path);
+    let mut req_builder = configuration.client.request(reqwest::Method::GET, &uri_str);
 
-    req_builder = req_builder
-        .query(&[("operator_id", &p_query_operator_id.to_string())]);
+    req_builder = req_builder.query(&[("operator_id", &p_query_operator_id.to_string())]);
     if let Some(ref user_agent) = configuration.user_agent {
-        req_builder = req_builder
-            .header(reqwest::header::USER_AGENT, user_agent.clone());
+        req_builder = req_builder.header(reqwest::header::USER_AGENT, user_agent.clone());
     }
 
     let req = req_builder.build()?;
@@ -255,8 +234,7 @@ pub async fn list_service_accounts(
         }
     } else {
         let content = resp.text().await?;
-        let entity: Option<ListServiceAccountsError> =
-            serde_json::from_str(&content).ok();
+        let entity: Option<ListServiceAccountsError> = serde_json::from_str(&content).ok();
         Err(Error::ResponseError(ResponseContent {
             status,
             content,
@@ -269,24 +247,20 @@ pub async fn update_service_account(
     configuration: &configuration::Configuration,
     id: &str,
     update_service_account_request: models::UpdateServiceAccountRequest,
-) -> Result<models::ServiceAccountResponse, Error<UpdateServiceAccountError>>
-{
+) -> Result<models::ServiceAccountResponse, Error<UpdateServiceAccountError>> {
     // add a prefix to parameters to efficiently prevent name collisions
     let p_path_id = id;
-    let p_body_update_service_account_request =
-        update_service_account_request;
+    let p_body_update_service_account_request = update_service_account_request;
 
     let uri_str = format!(
         "{}/v1/auth/service-accounts/{id}",
         configuration.base_path,
         id = crate::apis::urlencode(p_path_id)
     );
-    let mut req_builder =
-        configuration.client.request(reqwest::Method::PUT, &uri_str);
+    let mut req_builder = configuration.client.request(reqwest::Method::PUT, &uri_str);
 
     if let Some(ref user_agent) = configuration.user_agent {
-        req_builder = req_builder
-            .header(reqwest::header::USER_AGENT, user_agent.clone());
+        req_builder = req_builder.header(reqwest::header::USER_AGENT, user_agent.clone());
     }
     req_builder = req_builder.json(&p_body_update_service_account_request);
 
@@ -310,8 +284,7 @@ pub async fn update_service_account(
         }
     } else {
         let content = resp.text().await?;
-        let entity: Option<UpdateServiceAccountError> =
-            serde_json::from_str(&content).ok();
+        let entity: Option<UpdateServiceAccountError> = serde_json::from_str(&content).ok();
         Err(Error::ResponseError(ResponseContent {
             status,
             content,

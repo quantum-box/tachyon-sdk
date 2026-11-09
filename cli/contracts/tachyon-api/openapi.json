@@ -11683,6 +11683,301 @@
           }
         }
       }
+    },
+    "/v1/integrations/grants": {
+      "get": {
+        "tags": [
+          "Integrations"
+        ],
+        "summary": "List the tenant's grants on integration installations.",
+        "operationId": "list_tenant_grants",
+        "responses": {
+          "200": {
+            "description": "Tenant grants",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListTenantGrantsResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Integrations"
+        ],
+        "summary": "Grant the tenant the use of an installation the caller can reach.",
+        "operationId": "create_tenant_grant",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateTenantGrantRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Grant created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TenantGrantResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid verification or scope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Grant already exists",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/integrations/grants/{id}": {
+      "delete": {
+        "tags": [
+          "Integrations"
+        ],
+        "summary": "Revoke a grant.",
+        "operationId": "revoke_tenant_grant",
+        "responses": {
+          "200": {
+            "description": "Grant revoked",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TenantGrantResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Connection-managed grant",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Grant not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/integrations/grants/{id}/scope": {
+      "patch": {
+        "tags": [
+          "Integrations"
+        ],
+        "summary": "Change the resources a grant reaches.",
+        "operationId": "update_tenant_grant_scope",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateTenantGrantScopeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Scope updated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TenantGrantResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid scope or connection-managed grant",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Grant not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/integrations/github/installation-verifications": {
+      "post": {
+        "tags": [
+          "Integrations"
+        ],
+        "summary": "Start proving which GitHub App installations the caller can reach.",
+        "operationId": "start_github_installation_verification",
+        "responses": {
+          "200": {
+            "description": "Authorization started",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StartGitHubInstallationVerificationResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "GitHub App OAuth is not configured",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/integrations/github/grantable-installations": {
+      "get": {
+        "tags": [
+          "Integrations"
+        ],
+        "summary": "List installations a completed verification lets the caller grant.",
+        "operationId": "list_grantable_github_installations",
+        "parameters": [
+          {
+            "name": "verification",
+            "in": "query",
+            "description": "Value of `github_verification` the GitHub callback redirected with.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Grantable installations",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListGrantableGitHubInstallationsResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid or expired verification",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -14095,7 +14390,7 @@
             ],
             "format": "float",
             "description": "What sampling temperature to use, between 0 and 2",
-            "default": 1.0,
+            "default": 1,
             "maximum": 2,
             "minimum": 0
           },
@@ -14127,7 +14422,7 @@
             ],
             "format": "float",
             "description": "An alternative to sampling with temperature",
-            "default": 1.0,
+            "default": 1,
             "maximum": 1,
             "minimum": 0
           },
@@ -25387,6 +25682,224 @@
             "type": "string"
           },
           "serviceAccountId": {
+            "type": "string"
+          }
+        }
+      },
+      "ListTenantGrantsResponse": {
+        "type": "object",
+        "required": [
+          "grants"
+        ],
+        "properties": {
+          "grants": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TenantGrantResponse"
+            }
+          }
+        }
+      },
+      "CreateTenantGrantRequest": {
+        "type": "object",
+        "required": [
+          "provider",
+          "installation_id",
+          "verification",
+          "resource_scope"
+        ],
+        "properties": {
+          "installation_id": {
+            "type": "string",
+            "description": "GitHub App installation ID."
+          },
+          "provider": {
+            "type": "string",
+            "description": "Provider of the installation. Only `github` is supported."
+          },
+          "resource_scope": {
+            "$ref": "#/components/schemas/ResourceScopeDto"
+          },
+          "verification": {
+            "type": "string",
+            "description": "Value of `github_verification` the GitHub callback redirected with."
+          }
+        }
+      },
+      "TenantGrantResponse": {
+        "type": "object",
+        "required": [
+          "id",
+          "status",
+          "resource_scope",
+          "managed_by_connection",
+          "installation",
+          "created_at",
+          "updated_at"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "id": {
+            "type": "string"
+          },
+          "installation": {
+            "$ref": "#/components/schemas/InstallationResponse"
+          },
+          "managed_by_connection": {
+            "type": "boolean",
+            "description": "Grants derived from a legacy connection follow that connection and\ncannot be changed through the grant API."
+          },
+          "resource_scope": {
+            "$ref": "#/components/schemas/ResourceScopeDto"
+          },
+          "revoked_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "status": {
+            "type": "string"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "UpdateTenantGrantScopeRequest": {
+        "type": "object",
+        "required": [
+          "resource_scope"
+        ],
+        "properties": {
+          "resource_scope": {
+            "$ref": "#/components/schemas/ResourceScopeDto"
+          }
+        }
+      },
+      "StartGitHubInstallationVerificationResponse": {
+        "type": "object",
+        "required": [
+          "authorization_url"
+        ],
+        "properties": {
+          "authorization_url": {
+            "type": "string",
+            "description": "GitHub authorization URL to open in the browser."
+          }
+        }
+      },
+      "ListGrantableGitHubInstallationsResponse": {
+        "type": "object",
+        "required": [
+          "installations"
+        ],
+        "properties": {
+          "installations": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/GrantableGitHubInstallationResponse"
+            }
+          }
+        }
+      },
+      "ResourceScopeDto": {
+        "oneOf": [
+          {
+            "type": "object",
+            "description": "Every resource the installation reaches.",
+            "required": [
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "all"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Only these resources (GitHub: `owner/repo`). Empty denies all.",
+            "required": [
+              "resources",
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "list"
+                ]
+              },
+              "resources": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        ],
+        "description": "Resource scope of a grant."
+      },
+      "InstallationResponse": {
+        "type": "object",
+        "required": [
+          "id",
+          "provider",
+          "kind",
+          "status"
+        ],
+        "properties": {
+          "external_account_name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "external_installation_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "provider": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          }
+        }
+      },
+      "GrantableGitHubInstallationResponse": {
+        "type": "object",
+        "required": [
+          "installation_id",
+          "account_login",
+          "granted"
+        ],
+        "properties": {
+          "account_login": {
+            "type": "string"
+          },
+          "granted": {
+            "type": "boolean"
+          },
+          "installation_id": {
             "type": "string"
           }
         }
