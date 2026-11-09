@@ -164,7 +164,10 @@ pub enum ServiceAccountsCommand {
     Delete {
         /// Service account ID or name
         service_account: String,
+        /// Confirm deletion of the account and its API keys
         #[arg(long)]
+        yes: bool,
+        #[arg(long, requires = "yes")]
         json: bool,
     },
     /// Attach a policy to a service account
@@ -1027,6 +1030,13 @@ async fn run_service_accounts_create(
     name: &str,
     json: bool,
 ) -> Result<()> {
+    let name = name.trim();
+    if name.is_empty() || name.len() > 191 {
+        return Err(anyhow!(
+            "service account name must contain between 1 and 191 bytes"
+        ));
+    }
+
     // Names are how the CLI resolves service accounts, so refuse to create a
     // second one with the same name instead of making later lookups ambiguous.
     let existing: ServiceAccountListResponse = api
@@ -1043,7 +1053,7 @@ async fn run_service_accounts_create(
         tenant_id: tenant_id.to_string(),
         name: name.to_string(),
     };
-    let sa: ServiceAccountResponse = api.post("/v1/auth/service-accounts", &request).await?;
+    let sa: ServiceAccountResponse = api.post_once("/v1/auth/service-accounts", &request).await?;
     if json {
         return print_json(&sa);
     }
@@ -1398,10 +1408,18 @@ pub async fn run(args: &OrgArgs, config: &Configuration, tenant_id: &str) -> Res
             }
             ServiceAccountsCommand::Delete {
                 service_account,
+                yes,
                 json,
             } => {
                 let id =
                     resolve::resolve_service_account_id(&api, tenant_id, service_account).await?;
+                if !yes {
+                    println!("Service account: {id}");
+                    println!("Tenant ID: {tenant_id}");
+                    println!("Deleting the account also deletes its API keys.");
+                    println!("No changes made. Re-run with --yes to delete.");
+                    return Ok(());
+                }
                 run_service_accounts_delete(&api, &id, *json).await
             }
             ServiceAccountsCommand::AttachPolicy {

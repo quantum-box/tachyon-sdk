@@ -313,8 +313,8 @@ pub async fn run(
             }
         },
         ComputeCommand::Preview(preview_args) => match &preview_args.command {
-            Some(PreviewCommand::Create { app, branch }) => {
-                run_preview_create(&api, app, branch).await
+            Some(PreviewCommand::Create { app, branch, wait }) => {
+                run_preview_create(&api, app, branch, *wait).await
             }
             Some(PreviewCommand::Database { command }) => match command {
                 PreviewDatabaseCommand::Delete { app, pr, yes, json } => {

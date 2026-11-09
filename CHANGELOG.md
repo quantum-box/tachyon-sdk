@@ -4,6 +4,7 @@
 
 ### Added
 
+- `tachyon compute preview create --wait` waits for the build and displays its preview URL when available.
 - Add `tachyon org users attach-policy` and `tachyon org users detach-policy`,
   so a user's policies can be granted and revoked from the CLI instead of the
   IAM screen of the web console. `quantum-box/tachyonfield`'s
@@ -58,6 +59,8 @@
 
 ### Changed
 
+- `tachyon org service-accounts delete` requires `--yes` to delete an account and its API keys. Without it, the command displays the resolved target. Update deletion scripts to pass `--yes`.
+- Service account creation validates the name and sends the creation request only once.
 - CLI 0.6.90: `tachyon auth login` no longer hands the authorization code to
   the Tachyon API to relay. It listens on `127.0.0.1` (port 42813, then 42814,
   then 42815) and the browser returns to `http://localhost:{port}/callback`

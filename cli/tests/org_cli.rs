@@ -936,7 +936,14 @@ fn service_accounts_delete_resolves_name_and_sends_delete() {
     let output = run_org(
         tmp.path(),
         api_url,
-        &["org", "service-accounts", "delete", "iac-apply", "--json"],
+        &[
+            "org",
+            "service-accounts",
+            "delete",
+            "iac-apply",
+            "--yes",
+            "--json",
+        ],
     );
     assert_success(&output);
 
@@ -961,7 +968,13 @@ fn service_account_name_ambiguity_suggests_ids() {
     let output = run_org(
         tmp.path(),
         api_url,
-        &["org", "service-accounts", "delete", "gha.iac-apply.write"],
+        &[
+            "org",
+            "service-accounts",
+            "delete",
+            "gha.iac-apply.write",
+            "--yes",
+        ],
     );
     let requests = finish_requests(rx, handle);
     assert_eq!(requests.len(), 1, "nothing may be deleted on ambiguity");
@@ -1026,7 +1039,13 @@ fn service_accounts_delete_resolves_id_shaped_service_account_names() {
     let output = run_org(
         tmp.path(),
         api_url,
-        &["org", "service-accounts", "delete", "team_account123456"],
+        &[
+            "org",
+            "service-accounts",
+            "delete",
+            "team_account123456",
+            "--yes",
+        ],
     );
     assert_success(&output);
 
@@ -1099,6 +1118,7 @@ fn service_accounts_delete_prefers_name_over_canonical_id_shape() {
             "service-accounts",
             "delete",
             "sa_01jz0ddddddddddddddddddddd",
+            "--yes",
         ],
     );
     assert_success(&output);
@@ -1129,6 +1149,7 @@ fn service_accounts_delete_passes_unlisted_canonical_id_to_server() {
             "service-accounts",
             "delete",
             "sa_01jz0eeeeeeeeeeeeeeeeeeeee",
+            "--yes",
         ],
     );
     let requests = finish_requests(rx, handle);
@@ -1588,4 +1609,35 @@ fn detach_policy_with_a_resource_scope_uses_the_scoped_endpoint() {
         request_body(&requests[3])["resourceScope"],
         "trn:library:repo:rp_123456789012",
     );
+}
+
+#[test]
+fn service_accounts_delete_without_yes_only_resolves_the_target() {
+    let tmp = TempDir::new().unwrap();
+    let (api_url, rx, handle) = start_server(vec![sa_lookup()]);
+    let output = run_org(
+        tmp.path(),
+        api_url,
+        &["org", "service-accounts", "delete", "inventory"],
+    );
+
+    assert_success(&output);
+    let requests = finish_requests(rx, handle);
+    assert_eq!(requests.len(), 1);
+    assert!(requests[0].starts_with("GET /v1/auth/service-accounts?"));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("sa_01jz0aaaaaaaaaaaaaaaaaaaaa"));
+    assert!(stdout.contains("Re-run with --yes"));
+}
+
+#[test]
+fn service_accounts_delete_json_requires_yes() {
+    let tmp = TempDir::new().unwrap();
+    let output = run_org(
+        tmp.path(),
+        "http://127.0.0.1:1".to_string(),
+        &["org", "service-accounts", "delete", "inventory", "--json"],
+    );
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("--yes"));
 }
