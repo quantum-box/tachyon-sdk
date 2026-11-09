@@ -4240,7 +4240,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn run_lambda_package_and_upload_puts_cargo_lambda_archive() {
+    async fn run_lambda_package_and_upload_puts_only_fresh_cargo_lambda_archive() {
         let temp = tempfile::tempdir().unwrap();
         let bootstrap = temp
             .path()
@@ -4284,6 +4284,12 @@ mod tests {
             value_from: None,
         });
         let env = workload_env(&workload).unwrap();
+
+        let error = run_lambda_package_and_upload(&workload, temp.path(), &env, future_instant())
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("stale"), "got: {error}");
+        assert!(uploaded.lock().unwrap().is_empty());
 
         let output = run_lambda_package_and_upload(&workload, temp.path(), &env, past_instant())
             .await
