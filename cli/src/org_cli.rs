@@ -661,7 +661,7 @@ fn describe_policy_owner(policy: &PolicyResponse) -> String {
 /// the acting tenant. Names are not unique across owners — two tenants can
 /// both publish `field:admin` — so an ambiguous name fails instead of
 /// silently picking one.
-async fn resolve_policy(
+async fn resolve_user_policy(
     api: &ApiClient,
     tenant_id: &str,
     name_or_id: &str,
@@ -856,7 +856,7 @@ async fn run_users_attach_policy(
         validate_resource_scope(scope)?;
     }
 
-    let policy = resolve_policy(api, tenant_id, policy).await?;
+    let policy = resolve_user_policy(api, tenant_id, policy).await?;
     let user_label = resolve_user_label(api, tenant_id, user_id).await?;
     let listed_before = policy_is_listed_for_user(api, user_id, &policy.id).await;
 
@@ -902,7 +902,7 @@ async fn run_users_detach_policy(
         validate_resource_scope(scope)?;
     }
 
-    let policy = resolve_policy(api, tenant_id, policy).await?;
+    let policy = resolve_user_policy(api, tenant_id, policy).await?;
     let user_label = resolve_user_label(api, tenant_id, user_id).await?;
     let listed_before = policy_is_listed_for_user(api, user_id, &policy.id).await;
 

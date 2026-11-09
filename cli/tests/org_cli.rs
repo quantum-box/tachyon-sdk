@@ -29,6 +29,45 @@ struct MockResponse {
     body: &'static str,
 }
 
+/// Read one HTTP request, including a `content-length` body that may arrive
+/// in a later segment than the headers.
+fn read_request(stream: &mut std::net::TcpStream) -> String {
+    let mut raw = Vec::new();
+    let mut buf = [0_u8; 8192];
+    loop {
+        let n = stream.read(&mut buf).unwrap();
+        if n == 0 {
+            break;
+        }
+        raw.extend_from_slice(&buf[..n]);
+        let text = String::from_utf8_lossy(&raw).to_string();
+        let Some(header_end) = text.find("\r\n\r\n") else {
+            continue;
+        };
+        let content_length = text[..header_end]
+            .lines()
+            .find_map(|line| {
+                let (name, value) = line.split_once(':')?;
+                name.trim()
+                    .eq_ignore_ascii_case("content-length")
+                    .then(|| value.trim().parse::<usize>().ok())?
+            })
+            .unwrap_or(0);
+        if raw.len() >= header_end + 4 + content_length {
+            break;
+        }
+    }
+    String::from_utf8_lossy(&raw).to_string()
+}
+
+/// The JSON body of a raw request captured by [`start_server`].
+fn request_body(request: &str) -> serde_json::Value {
+    let (_, body) = request
+        .split_once("\r\n\r\n")
+        .unwrap_or_else(|| panic!("request has no body:\n{request}"));
+    serde_json::from_str(body).unwrap_or_else(|e| panic!("body {body:?} is not JSON: {e}"))
+}
+
 fn start_server(
     responses: Vec<MockResponse>,
 ) -> (String, mpsc::Receiver<Vec<String>>, thread::JoinHandle<()>) {
@@ -39,9 +78,7 @@ fn start_server(
         let mut requests = Vec::with_capacity(responses.len());
         for response in responses {
             let (mut stream, _) = listener.accept().unwrap();
-            let mut buf = [0_u8; 8192];
-            let n = stream.read(&mut buf).unwrap();
-            requests.push(String::from_utf8_lossy(&buf[..n]).to_string());
+            requests.push(read_request(&mut stream));
 
             let raw_response = if response.body.is_empty() {
                 format!(
