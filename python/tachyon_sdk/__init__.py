@@ -87,6 +87,7 @@ __all__ = [
     "AgentSessionEntry",
     "AgentSource",
     "AgentStatusResponse",
+    "AllowedTenantResponse",
     "ApiKeyListResponse",
     "ApiKeyResponse",
     "Ask",
@@ -106,6 +107,8 @@ __all__ = [
     "ChatroomsChatroomIdMessagesGetResponse",
     "CheckPolicyForResourceRequest",
     "CheckPolicyForResourceResponse",
+    "CheckTenantsPolicyRequest",
+    "CheckTenantsPolicyResponse",
     "CheckoutRequest",
     "CheckoutResponse",
     "Choice",
@@ -134,6 +137,7 @@ __all__ = [
     "CreateShippingDestinationRequest",
     "CreateUserRequest",
     "CreateUserResponse",
+    "DeleteOperatorResponse",
     "DeleteProductResponse",
     "DeleteResponse",
     "DeleteServiceAccountResponse",
@@ -333,6 +337,7 @@ from tachyon_sdk.models.agent_protocol_mode import AgentProtocolMode as AgentPro
 from tachyon_sdk.models.agent_session_entry import AgentSessionEntry as AgentSessionEntry
 from tachyon_sdk.models.agent_source import AgentSource as AgentSource
 from tachyon_sdk.models.agent_status_response import AgentStatusResponse as AgentStatusResponse
+from tachyon_sdk.models.allowed_tenant_response import AllowedTenantResponse as AllowedTenantResponse
 from tachyon_sdk.models.api_key_list_response import ApiKeyListResponse as ApiKeyListResponse
 from tachyon_sdk.models.api_key_response import ApiKeyResponse as ApiKeyResponse
 from tachyon_sdk.models.ask import Ask as Ask
@@ -352,6 +357,8 @@ from tachyon_sdk.models.chatroom_name_generation import ChatroomNameGeneration a
 from tachyon_sdk.models.chatrooms_chatroom_id_messages_get_response import ChatroomsChatroomIdMessagesGetResponse as ChatroomsChatroomIdMessagesGetResponse
 from tachyon_sdk.models.check_policy_for_resource_request import CheckPolicyForResourceRequest as CheckPolicyForResourceRequest
 from tachyon_sdk.models.check_policy_for_resource_response import CheckPolicyForResourceResponse as CheckPolicyForResourceResponse
+from tachyon_sdk.models.check_tenants_policy_request import CheckTenantsPolicyRequest as CheckTenantsPolicyRequest
+from tachyon_sdk.models.check_tenants_policy_response import CheckTenantsPolicyResponse as CheckTenantsPolicyResponse
 from tachyon_sdk.models.checkout_request import CheckoutRequest as CheckoutRequest
 from tachyon_sdk.models.checkout_response import CheckoutResponse as CheckoutResponse
 from tachyon_sdk.models.choice import Choice as Choice
@@ -380,6 +387,7 @@ from tachyon_sdk.models.create_service_account_request import CreateServiceAccou
 from tachyon_sdk.models.create_shipping_destination_request import CreateShippingDestinationRequest as CreateShippingDestinationRequest
 from tachyon_sdk.models.create_user_request import CreateUserRequest as CreateUserRequest
 from tachyon_sdk.models.create_user_response import CreateUserResponse as CreateUserResponse
+from tachyon_sdk.models.delete_operator_response import DeleteOperatorResponse as DeleteOperatorResponse
 from tachyon_sdk.models.delete_product_response import DeleteProductResponse as DeleteProductResponse
 from tachyon_sdk.models.delete_response import DeleteResponse as DeleteResponse
 from tachyon_sdk.models.delete_service_account_response import DeleteServiceAccountResponse as DeleteServiceAccountResponse

@@ -3,23 +3,26 @@ import type {
 	AgentExecuteRequest,
 	AgentMessagesResponse,
 	AgentProtocol,
+	AgentSession,
 	AgentStatusResponse,
 	ChatMessage,
 	ChatRoom,
+	CodingJob,
 	CreateAgentProtocolRequest,
+	CreateAgentSessionResponse,
 	CreateChatRoomResponse,
+	CreateCodingJobRequest,
+	CreateCodingJobResponse,
 	CreateMemoryRequest,
-	CreateToolJobRequest,
-	CreateToolJobResponse,
 	DeleteMessagesResponse,
 	GetAgentProtocolsOptions,
 	GetAgentProtocolsResponse,
 	GetChatroomsResponse,
+	GetCodingJobResponse,
+	GetCodingJobsResponse,
 	GetInsightsResponse,
 	GetMemoriesResponse,
 	GetModelsOptions,
-	GetToolJobResponse,
-	GetToolJobsResponse,
 	ModelInfo,
 	RegenerateInsightsRequest,
 	RestoreMessagesResponse,
@@ -30,7 +33,6 @@ import type {
 	SearchToolsResponse,
 	SubmitToolResultRequest,
 	SubmitToolResultResponse,
-	ToolJob,
 	UpdateAgentProtocolRequest,
 	UserInsight,
 } from './types'
@@ -90,8 +92,48 @@ export class AgentChatClient {
 		return (await response.json()) as T
 	}
 
-	// ── Chatroom API ──────────────────────────────────────────────────
+	// ── Session API ───────────────────────────────────────────────────
 
+	async createSession(name?: string): Promise<CreateAgentSessionResponse> {
+		return this.request<CreateAgentSessionResponse>('/v1/llms/sessions', {
+			method: 'POST',
+			body: JSON.stringify(name === undefined ? {} : { name }),
+		})
+	}
+
+	async getSessions(limit = 20, offset = 0): Promise<AgentSession[]> {
+		const query = new URLSearchParams({
+			limit: String(limit),
+			offset: String(offset),
+		})
+		const data = await this.request<{ sessions: AgentSession[] }>(
+			`/v1/llms/sessions?${query}`,
+		)
+		return data.sessions
+	}
+
+	async getSession(sessionId: string): Promise<AgentSession> {
+		return this.request<AgentSession>(
+			`/v1/llms/sessions/${encodeURIComponent(sessionId)}`,
+		)
+	}
+
+	async deleteSession(sessionId: string): Promise<void> {
+		const response = await fetch(
+			this.buildUrl(`/v1/llms/sessions/${encodeURIComponent(sessionId)}`),
+			{ method: 'DELETE', headers: this.getHeaders() },
+		)
+		if (!response.ok) {
+			const body = await response.text().catch(() => '')
+			throw new Error(
+				`Failed to delete session: ${response.status}${body ? ` - ${body}` : ''}`,
+			)
+		}
+	}
+
+	// Legacy compatibility API. New conversations use Session objects.
+
+	/** @deprecated Use createSession for new conversations. */
 	async createChatRoom(title?: string): Promise<CreateChatRoomResponse> {
 		return this.request<CreateChatRoomResponse>('/v1/llms/chatrooms', {
 			method: 'POST',
@@ -355,11 +397,11 @@ export class AgentChatClient {
 		)
 	}
 
-	// ── Tool Jobs API ────────────────────────────────────────────────
+	// ── Coding Jobs API ────────────────────────────────────────────────
 
-	async createToolJob(payload: CreateToolJobRequest): Promise<ToolJob> {
-		const data = await this.request<CreateToolJobResponse>(
-			'/v1/agent/tool-jobs',
+	async createCodingJob(payload: CreateCodingJobRequest): Promise<CodingJob> {
+		const data = await this.request<CreateCodingJobResponse>(
+			'/v1/agent/coding-jobs',
 			{
 				method: 'POST',
 				body: JSON.stringify(payload),
@@ -368,27 +410,32 @@ export class AgentChatClient {
 		return data.job
 	}
 
-	async getToolJobs(): Promise<ToolJob[]> {
-		const data = await this.request<GetToolJobsResponse>('/v1/agent/tool-jobs')
+	async getCodingJobs(): Promise<CodingJob[]> {
+		const data = await this.request<GetCodingJobsResponse>(
+			'/v1/agent/coding-jobs',
+		)
 		return data.jobs
 	}
 
-	async getToolJob(jobId: string): Promise<ToolJob> {
-		const data = await this.request<GetToolJobResponse>(
-			`/v1/agent/tool-jobs/${jobId}`,
+	async getCodingJob(codingJobId: string): Promise<CodingJob> {
+		const data = await this.request<GetCodingJobResponse>(
+			`/v1/agent/coding-jobs/${codingJobId}`,
 		)
 		return data.job
 	}
 
-	async cancelToolJob(jobId: string): Promise<ToolJob> {
-		return this.request<ToolJob>(`/v1/agent/tool-jobs/${jobId}/cancel`, {
-			method: 'POST',
-		})
+	async cancelCodingJob(codingJobId: string): Promise<CodingJob> {
+		return this.request<CodingJob>(
+			`/v1/agent/coding-jobs/${codingJobId}/cancel`,
+			{
+				method: 'POST',
+			},
+		)
 	}
 
-	async *streamToolJob(jobId: string): AsyncGenerator<AgentChunk> {
+	async *streamCodingJob(codingJobId: string): AsyncGenerator<AgentChunk> {
 		const url = this.buildUrl(
-			`/v1/agent/tool-jobs/${jobId}/stream?format=agent_chunk`,
+			`/v1/agent/coding-jobs/${codingJobId}/stream?format=agent_chunk`,
 		)
 		const response = await fetch(url, {
 			headers: {
@@ -399,7 +446,7 @@ export class AgentChatClient {
 		if (!response.ok) {
 			const body = await response.text().catch(() => '')
 			throw new Error(
-				`Tool job stream failed: ${response.status}${body ? ` - ${body}` : ''}`,
+				`Coding job stream failed: ${response.status}${body ? ` - ${body}` : ''}`,
 			)
 		}
 		yield* this.readSSEStream(response)

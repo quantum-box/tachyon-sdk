@@ -106,6 +106,21 @@ build:
   nodeVersion: "20"
 ```
 
+### Cloudflare Workers / Astro
+
+Apps using the `@astrojs/cloudflare` adapter (Astro 6+) deploy to Workers;
+the adapter no longer supports Pages. The build generates the Worker config,
+so `build.outputDirectory` is not needed. Static-only Astro sites can keep
+using `cloudflare_pages` with `outputDirectory: dist`.
+
+```yaml
+framework: astro
+deploymentTarget: cloudflare_workers
+build:
+  command: npm run build
+  nodeVersion: "22"
+```
+
 ### Lambda / cargo-lambda
 
 ```yaml
@@ -161,6 +176,39 @@ Guidelines:
 - Provider-only keys that are not declared in `tachyon.yml` should be treated as unmanaged and preserved by Tachyon.
 - For secret values, first register or update the actual value through the Tachyon env/secret flow, then commit only the reference.
 
+Internal service references:
+
+```yaml
+envVars:
+  - name: TACHYON_API_URL
+    valueFrom:
+      internalService:
+        appName: tachyon-api
+        field: url
+```
+
+Use `valueFrom.internalService` when one Cloud App needs a server-side URL for
+another Cloud App in the same platform environment. This is a platform-standard
+feature, not an app-specific override.
+
+Guidelines:
+
+- Requires Tachyon CLI `0.6.13` or newer. Released CLI `0.6.12` lacks
+  `valueFrom.internalService` apply/preflight support.
+- `appName` is the target Cloud App registry name.
+- `field` defaults to `url`; omit it unless a future field is documented.
+- The CLI preflights references through `/v1/internal-service-refs/preflight`
+  before app mutation. A missing app or active deployment fails before manifest
+  apply changes are written.
+- The committed manifest stores the reference, not a resolved URL. The
+  control plane materializes a server-managed env reference and the compute
+  runtime resolves it at build/deploy time from active deployment state.
+- Do not use `NEXT_PUBLIC_`, `VITE_`, or other browser-exposed variable names
+  for internal service URLs.
+- Do not replace this with a public `txcloud.app` URL to bypass preflight. That
+  breaks deterministic deploy-time resolution and exposes an internal
+  dependency through public routing.
+
 ## Environment Overlays
 
 Use one Cloud App record with environment-specific build/env config when preview and production differ.
@@ -199,13 +247,20 @@ Before apply:
 1. Confirm the target operator/tenant and API URL.
 2. Verify `tachyon.yml` parses as YAML and contains the intended app name.
 3. Confirm secrets are references only and actual values are already registered.
-4. Run dry-run:
+4. If the manifest uses `valueFrom.internalService`, confirm the local CLI is
+   `0.6.13` or newer:
+
+```bash
+tachyon --version
+```
+
+5. Run dry-run:
 
 ```bash
 tachyon compute apps apply -f tachyon.yml --app <app_name> --environment sandbox --dry-run
 ```
 
-5. Apply only after checking the changed fields:
+6. Apply only after checking the changed fields:
 
 ```bash
 tachyon compute apps apply -f tachyon.yml --app <app_name> --environment sandbox
@@ -216,7 +271,7 @@ After apply, check build/deploy separately with `tachyon compute status` and `ta
 ## Deployment Target Notes
 
 - `cloudflare_pages`: static/frontend output, usually `build.outputDirectory`.
-- `cloudflare_workers`: Worker/Vinext-style target; confirm framework and build command in the app manifest.
+- `cloudflare_workers`: Worker/Vinext-style target, and Astro with `@astrojs/cloudflare`. Valid frameworks are `worker`, `rust_worker`, and `astro`; confirm framework and build command in the app manifest.
 - `lambda`: cargo-lambda or server target. Include `build.package`, `build.binary`, `build.release`, and `build.arch` when needed.
 - `cloud_run`: container/server target. Keep `rootDirectory` and `dockerContext` distinct when Docker context differs from app root.
 

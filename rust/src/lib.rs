@@ -1,11 +1,11 @@
 #![allow(unused_imports)]
 #![allow(clippy::too_many_arguments)]
 
-extern crate serde_repr;
+extern crate reqwest;
 extern crate serde;
 extern crate serde_json;
+extern crate serde_repr;
 extern crate url;
-extern crate reqwest;
 
 pub mod apis;
 pub mod models;
@@ -21,6 +21,9 @@ pub mod procurement;
 
 #[cfg(feature = "platform-traits")]
 pub mod secrets;
+
+#[cfg(feature = "agent-session")]
+pub mod agent_session;
 
 #[cfg(feature = "worker-runtime")]
 pub mod worker_runtime;

@@ -1,0 +1,1345 @@
+//! `tachyon manifest schema` — print a JSON Schema for supported manifest
+//! kinds so agents and editors can read the current spec from the installed
+//! binary instead of relying on hand-written docs.
+//!
+//! The Cloud Apps types below mirror the authoritative server-side spec:
+//! - `packages/iac/src/domain/cloud_app_manifest.rs` (quantum-box/tachyon-apps)
+//! - `packages/compute/domain/src/cloud_app.rs` (quantum-box/tachyon-apps)
+//!
+//! Keep this module in sync when the server spec changes. Longer term the
+//! schema should be generated in tachyon-apps from those types and served
+//! through the API; this module is the interim, CLI-local source.
+
+use anyhow::Result;
+use clap::{Args, ValueEnum};
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+
+use crate::commands::auth::manifest::AuthManifest;
+
+#[derive(Debug, Clone, Args)]
+pub struct SchemaArgs {
+    /// Manifest kind to describe
+    #[arg(long, value_enum, default_value_t = SchemaKind::CloudApps)]
+    pub kind: SchemaKind,
+    /// Emit compact JSON instead of pretty-printed output
+    #[arg(long)]
+    pub compact: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum SchemaKind {
+    /// Cloud Apps manifest (kind: CloudApps / CloudApp)
+    CloudApps,
+    /// Auth manifest (custom actions and policies)
+    Auth,
+    /// OAuth2 protected resource (kind: OAuth2Resource, RFC 8707 target)
+    OAuth2Resource,
+}
+
+pub(crate) fn run(args: &SchemaArgs) -> Result<()> {
+    let schema = match args.kind {
+        SchemaKind::CloudApps => schemars::schema_for!(CloudAppsDocument),
+        SchemaKind::Auth => schemars::schema_for!(AuthManifest),
+        SchemaKind::OAuth2Resource => {
+            schemars::schema_for!(super::oauth2_resource::OAuth2ResourceManifest)
+        }
+    };
+    let output = if args.compact {
+        serde_json::to_string(&schema)?
+    } else {
+        serde_json::to_string_pretty(&schema)?
+    };
+    println!("{output}");
+    Ok(())
+}
+
+/// A Cloud Apps manifest document.
+///
+/// Two document forms are accepted in `tachyon.yml` (multi-document YAML is
+/// supported): `kind: CloudApps` declaring several apps under `spec.apps[]`,
+/// and `kind: CloudApp` declaring a single app whose `spec` is the app spec
+/// itself. `OAuth2Client` documents may accompany them to satisfy
+/// `valueFrom.oauth2ClientRef` references.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(untagged)]
+#[schemars(title = "CloudAppsManifestDocument")]
+pub enum CloudAppsDocument {
+    /// Repo-level manifest declaring multiple apps (`kind: CloudApps`).
+    CloudApps(Box<CloudAppsManifest>),
+    /// Single-app manifest (`kind: CloudApp`).
+    CloudApp(Box<CloudAppManifest>),
+}
+
+/// Repo-level Cloud Apps manifest (`kind: CloudApps`).
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct CloudAppsManifest {
+    /// Manifest API version. Always `apps.tachy.one/v1alpha`.
+    pub api_version: CloudAppsApiVersion,
+    pub kind: CloudAppsKind,
+    pub metadata: CloudAppsMetadata,
+    pub spec: CloudAppsSpec,
+}
+
+/// Single-app Cloud App manifest (`kind: CloudApp`).
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct CloudAppManifest {
+    /// Manifest API version. Always `apps.tachy.one/v1alpha`.
+    pub api_version: CloudAppsApiVersion,
+    pub kind: CloudAppKind,
+    pub metadata: CloudAppsMetadata,
+    pub spec: CloudAppSpec,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub enum CloudAppsApiVersion {
+    #[serde(rename = "apps.tachy.one/v1alpha")]
+    V1Alpha,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub enum CloudAppsKind {
+    CloudApps,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub enum CloudAppKind {
+    CloudApp,
+}
+
+/// Manifest metadata.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct CloudAppsMetadata {
+    /// Manifest name. For `kind: CloudApp` this is also the app name.
+    pub name: String,
+    /// Tenant that owns the declared apps (e.g. `tn_01hj...`). When omitted
+    /// the CLI's active tenant is used.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tenant_id: Option<String>,
+    /// Cross-document ordering hints, e.g. `["OAuth2Client/my-client"]`.
+    /// Referenced documents are applied first.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub depends_on: Option<Vec<String>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct CloudAppsSpec {
+    /// Declared apps. Each entry is an app name plus a Cloud App spec.
+    pub apps: Vec<CloudAppsEntry>,
+}
+
+/// Single app entry inside `kind: CloudApps`.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct CloudAppsEntry {
+    /// App name, unique within the tenant.
+    pub name: String,
+    #[serde(flatten)]
+    pub spec: CloudAppSpec,
+}
+
+/// Cloud App spec: repository, build, deployment, env vars, and managed
+/// resources for one app.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct CloudAppSpec {
+    /// Source repository. Required for apps built from GitHub.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repository: Option<RepositorySpec>,
+    /// Directory (relative to repo root) containing the app.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub root_directory: Option<String>,
+    /// Docker build context directory for `framework: docker`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub docker_context: Option<String>,
+    /// Application framework. Defaults to `next_js`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub framework: Option<Framework>,
+    /// Deployment target. Defaults to `cloud_run`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deployment_target: Option<DeploymentTarget>,
+    /// Lambda published version retention count. Omitted uses the compute
+    /// default; values below the compute minimum are clamped.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version_retention: Option<u16>,
+    /// Runtime sizing for the deployed function.
+    ///
+    /// This schema is what the CLI sends: a key it does not model is dropped
+    /// while parsing, so the server never sees it and `plan` reports no
+    /// change. Keep it in step with `CloudAppManifestSpec` in tachyon-apps.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scaling: Option<ScalingSpec>,
+    /// Service tier. `enterprise` opts Lambda apps into a dedicated network
+    /// profile (e.g. TiDB Serverless PrivateLink subnet).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tier: Option<CloudAppTier>,
+    /// Named network subnet profile for enterprise-tier apps.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subnet: Option<String>,
+    /// Build configuration.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub build: Option<BuildSpec>,
+    /// Only trigger auto-builds when changed files match these path globs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub watch_paths: Option<Vec<String>>,
+    /// Skip auto-builds when all changed files match these path globs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub paths_ignore: Option<Vec<String>>,
+    /// Buildspec source strategy, e.g. `repo:.codebuild/my_buildspec.yml`
+    /// to use a buildspec checked into the repository.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub buildspec_strategy: Option<String>,
+    /// Environment variables. `type: credential` entries are resolved via
+    /// `valueFrom` and stored in Secrets Manager; plain entries are set
+    /// directly.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub env_vars: Vec<EnvVarSpec>,
+    /// Third-party integrations that inject build/runtime config.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub integrations: Option<IntegrationsSpec>,
+    /// Declarative managed resources (e.g. Sentry projects).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub resources: Vec<ResourceSpec>,
+    /// Cloudflare D1 database bindings.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub d1_databases: Vec<D1DatabaseSpec>,
+    /// Managed relational database provisioned at deploy time
+    /// (`provider: tidb`) with connection URL secret injection.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provisioned_database: Option<ProvisionedDatabaseSpec>,
+    /// Cloudflare R2 bucket bindings.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub r2_buckets: Vec<R2BucketSpec>,
+    /// Cloudflare Workers KV namespace declarations.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub kv_namespaces: Vec<KvNamespaceSpec>,
+    /// Control-plane generated Wrangler configuration.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub worker: Option<WorkerSpec>,
+    /// Opt-in Speed Insights (Core Web Vitals collection). Only honored for
+    /// static deployment targets.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub speed_insights: Option<SpeedInsightsSpec>,
+    /// Opt-in Real User Monitoring. Only honored for static deployment
+    /// targets.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rum: Option<RumSpec>,
+    /// Declarative edge middleware evaluated by txcloud-proxy before the app
+    /// origin receives a request.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub middleware: Option<MiddlewareConfig>,
+    /// Opt-in shared-cache desired state. Omission preserves the current
+    /// delivery behavior; an explicit empty `rules` list clears the managed
+    /// set once reconciliation is implemented.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_optional_cache"
+    )]
+    #[schemars(with = "CloudAppCacheSpec")]
+    pub cache: Option<CloudAppCacheSpec>,
+    /// Production liveness probe evaluated by tachyon-reconcile.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub liveness_proof: Option<ProofConfig>,
+    /// Production readiness probe evaluated by tachyon-reconcile before a
+    /// deployment is considered complete.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub readiness_proof: Option<ProofConfig>,
+    /// Deploy lifecycle hooks. `preDeploy` hooks run before the provider
+    /// deploy; `postDeploy` hooks run after a successful deployment. Any
+    /// hook failure fails the deployment.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hooks: Option<DeployHooksSpec>,
+    /// Custom domains attached to a Cloudflare Pages app.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub custom_domains: Vec<CustomDomainSpec>,
+    /// Environment-specific overrides (preview / staging / production).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub environments: Option<EnvironmentOverrides>,
+}
+
+/// Cloudflare Workers configuration owned by the manifest.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WorkerSpec {
+    #[serde(default)]
+    pub generate_config: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub main: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub compatibility_date: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub compatibility_flags: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub observability: Option<WorkerObservabilitySpec>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub durable_objects: Vec<WorkerDurableObjectBinding>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub migrations: Vec<WorkerDurableObjectMigration>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WorkerObservabilitySpec {
+    #[serde(default)]
+    pub enabled: bool,
+}
+
+/// A Durable Object namespace local to the Worker being deployed.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WorkerDurableObjectBinding {
+    pub binding: String,
+    pub class_name: String,
+}
+
+/// Additive SQLite migration; keep existing tags and append new steps.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WorkerDurableObjectMigration {
+    pub tag: String,
+    pub new_sqlite_classes: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct KvNamespaceSpec {
+    pub binding: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+}
+
+/// Source repository settings.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct RepositorySpec {
+    /// Repository URL, e.g. `https://github.com/quantum-box/tachyon-apps`.
+    pub url: String,
+    /// Repository owner (GitHub org or user).
+    pub owner: String,
+    /// Repository name.
+    pub name: String,
+    /// Branch that production builds track. Defaults to `main`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_branch: Option<String>,
+}
+
+/// Supported application frameworks.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum Framework {
+    /// Next.js app.
+    NextJs,
+    /// Prebuilt static site; `build.outputDirectory` is served as-is.
+    Static,
+    /// Dockerfile-based app (use with `deploymentTarget: cloud_run`).
+    Docker,
+    /// Rust HTTP server built with `cargo build --release`. On Lambda it
+    /// runs behind the Lambda Web Adapter; Cloudflare Pages is not
+    /// supported.
+    RustServer,
+    /// Native Rust AWS Lambda built with `cargo lambda` (produces a
+    /// `bootstrap` binary). Use `build.package` / `build.binary`.
+    CargoLambda,
+    /// Vite app built to static output.
+    Vite,
+    Remix,
+    /// Astro site. Static output deploys with `deploymentTarget:
+    /// cloudflare_pages`; apps using the `@astrojs/cloudflare` adapter
+    /// deploy with `deploymentTarget: cloudflare_workers`.
+    Astro,
+    CreateReactApp,
+    /// Cloudflare Workers script (raw Workers or edge frameworks such as
+    /// Hono). Only valid with `deploymentTarget: cloudflare_workers`.
+    Worker,
+    SvelteKit,
+    Nuxt,
+    /// Project deployed as serverless functions (Vercel/Netlify-style).
+    /// Deployed to Lambda by default.
+    ServerlessFunctions,
+    /// Cloudflare's Vite-based Next.js reimplementation; smaller bundles
+    /// than next-on-pages. Deployed to Cloudflare via wrangler.
+    Vinext,
+}
+
+/// Where the application is deployed.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum DeploymentTarget {
+    CloudRun,
+    CloudflarePages,
+    Lambda,
+    /// Cloudflare Workers (edge functions). Only valid with
+    /// `framework: worker`, `rust_worker`, or `astro`.
+    CloudflareWorkers,
+    /// AWS ECS. Apps on ECS are deployed externally; the Cloud App registry
+    /// only records the target for visibility.
+    Ecs,
+}
+
+/// Cloud App service tier.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum CloudAppTier {
+    Standard,
+    Enterprise,
+}
+
+/// Build configuration.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct BuildSpec {
+    /// Build runner backend. Aliases such as `aws_codebuild`, `k8s-kata`,
+    /// and `hetzner-k3s-kata` are normalized by the CLI.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub runner_backend: Option<BuildRunnerBackend>,
+    /// Build command, e.g. `pnpm run build`. For `framework: cargo_lambda`
+    /// it is derived from `package` / `binary` / `release` / `arch` when
+    /// omitted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub command: Option<String>,
+    /// Dependency install command, e.g.
+    /// `pnpm install --filter my-app... --frozen-lockfile`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub install_command: Option<String>,
+    /// Build output directory (relative to repo root) for static-style
+    /// deployments, e.g. `apps/my-app/dist`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output_directory: Option<String>,
+    /// Node.js major version, e.g. `"22"`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub node_version: Option<String>,
+    /// Cargo package to build (`framework: cargo_lambda` only).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub package: Option<String>,
+    /// Cargo binary name (`framework: cargo_lambda` only).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub binary: Option<String>,
+    /// Build in release mode. Defaults to `true`
+    /// (`framework: cargo_lambda` only).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub release: Option<bool>,
+    /// Target architecture, `arm64` (default) or `x86_64`
+    /// (`framework: cargo_lambda` only).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub arch: Option<String>,
+}
+
+/// Explicit Cloud App build runner backend.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum BuildRunnerBackend {
+    Codebuild,
+    GithubActions,
+    KubernetesKata,
+}
+
+/// Single environment variable entry.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct EnvVarSpec {
+    /// Environment variable name, e.g. `TACHYON_CLIENT_ID`.
+    pub name: String,
+    /// `credential` resolves the value via `valueFrom` and stores it in
+    /// Secrets Manager. Defaults to `plain`.
+    #[serde(default, rename = "type", skip_serializing_if = "Option::is_none")]
+    pub env_type: Option<EnvVarType>,
+    /// Static plain-text value. Not allowed for `type: credential`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub value: Option<String>,
+    /// Dynamic value resolved from another IaC resource.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub value_from: Option<ValueFromSpec>,
+    /// Deployment scope the variable applies to: `production`, `preview`,
+    /// or `all` (CLI apply only; defaults to the apply environment).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target: Option<EnvVarTarget>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum EnvVarType {
+    Credential,
+    Plain,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum EnvVarTarget {
+    Production,
+    Preview,
+    All,
+}
+
+/// Source for a dynamically resolved env var value. Exactly one reference
+/// field should be set.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ValueFromSpec {
+    /// Reference to an OAuth2Client manifest's credentials.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub oauth2_client_ref: Option<OAuth2ClientRef>,
+    /// Reference to a storage provider's configuration field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub storage_ref: Option<StorageRef>,
+    /// Reference to a TiDB database credential field stored in Secrets
+    /// Manager (manual provisioning).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub database_ref: Option<DatabaseRef>,
+    /// Reference to a tenant-scoped secret vault key registered with
+    /// `tachyon compute env set`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub secret: Option<SecretRef>,
+    /// Reference to another Cloud App's active deployment URL.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub compute_deployment_ref: Option<ComputeDeploymentRef>,
+    /// Server-side internal service origin of another Cloud App (never
+    /// falls back to public txcloud.app URLs).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub internal_service: Option<InternalServiceRef>,
+}
+
+/// Reference to a specific field in an OAuth2Client manifest's stored
+/// secret.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct OAuth2ClientRef {
+    /// Name of the OAuth2Client manifest (matches its `metadata.name`).
+    pub name: String,
+    /// Field to extract: `clientId`, `clientSecret`, or `userPoolId`.
+    pub field: String,
+    /// Redirect URIs used when the reference auto-provisions the client.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub redirect_uris: Vec<String>,
+    /// Allowed OAuth2 scopes used for auto-provisioning.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub allowed_scopes: Vec<String>,
+    /// Allowed grant types used for auto-provisioning.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub grant_types: Vec<String>,
+    /// Create the client in Tachyon's shared Cognito user pool. Defaults to
+    /// `true`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub use_tachyon_user_pool: Option<bool>,
+}
+
+/// Reference to a storage provider's configuration field.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct StorageRef {
+    /// Provider name in ProjectConfig, e.g. `cloudflare_r2` or
+    /// `cloudflare_images`.
+    pub name: String,
+    /// Field to extract: `bucket`, `endpoint`, `access_key_id`,
+    /// `secret_access_key`, `account_id`, `api_token`, `delivery_url`,
+    /// `provider`, or `region`.
+    pub field: String,
+}
+
+/// Reference to a TiDB database credential field. The connection secret is
+/// expected at `{tenantId}/{name}/tidb` in Secrets Manager.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct DatabaseRef {
+    /// Database name used to locate the secret, e.g. `tidb_myapp_prod`.
+    pub name: String,
+    /// Field to extract from the secret: `url` (connection URL).
+    pub field: String,
+}
+
+/// Reference to a tenant-scoped secret vault key. The string form
+/// (`secret: contact/RESEND_API_KEY`) and the object form
+/// (`secret: { path: contact/RESEND_API_KEY }`) are both accepted.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", untagged)]
+pub enum SecretRef {
+    Path(String),
+    Object {
+        path: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        field: Option<String>,
+    },
+}
+
+/// Reference to another Cloud App's deployment field, e.g.
+/// `{ appName: library-api, field: publicUrl }`.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ComputeDeploymentRef {
+    pub app_name: String,
+    pub field: String,
+}
+
+/// Reference to a Cloud App internal service origin, e.g.
+/// `{ appName: library-api }`.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct InternalServiceRef {
+    pub app_name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub field: Option<String>,
+}
+
+/// Third-party integrations.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct IntegrationsSpec {
+    /// Sentry project backing this app. Injects `SENTRY_DSN` /
+    /// `NEXT_PUBLIC_SENTRY_DSN` from the connected Sentry integration.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sentry: Option<SentryIntegrationSpec>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct SentryIntegrationSpec {
+    /// Sentry project name.
+    pub project: String,
+}
+
+/// Declarative managed resource requested by the app.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "type")]
+pub enum ResourceSpec {
+    /// Managed Sentry project.
+    #[serde(rename = "sentry")]
+    Sentry(SentryResourceSpec),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct SentryResourceSpec {
+    /// Resource name.
+    pub name: String,
+    pub config: SentryResourceConfigSpec,
+    /// Env vars injected from the managed resource.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub env_inject: Vec<ResourceEnvInjectSpec>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct SentryResourceConfigSpec {
+    pub organization: String,
+    pub team: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub platform: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_rules: Option<bool>,
+    /// DSN kind requested for injection: `public` or `secret`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dsn: Option<SentryDsnKind>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum SentryDsnKind {
+    Public,
+    Secret,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ResourceEnvInjectSpec {
+    /// Env var name to inject.
+    pub key: String,
+    /// Resource field to inject: `dsn.public` or `dsn.secret`.
+    pub value_from: ResourceEnvValueFrom,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub enum ResourceEnvValueFrom {
+    #[serde(rename = "dsn.public")]
+    DsnPublic,
+    #[serde(rename = "dsn.secret")]
+    DsnSecret,
+}
+
+/// Cloudflare D1 database binding.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct D1DatabaseSpec {
+    /// Worker binding name.
+    pub binding: String,
+    pub database_name: String,
+    /// Migrations directory. Defaults to `migrations`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub migrations_dir: Option<String>,
+}
+
+/// Managed relational database provisioned at deploy time.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ProvisionedDatabaseSpec {
+    /// Provisioning provider. Currently only `tidb`.
+    pub provider: ProvisionedDatabaseProvider,
+    /// SQL engine exposed to the app. Currently only `mysql`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub engine: Option<ProvisionedDatabaseEngine>,
+    /// Env var name that receives the connection URL. Defaults to
+    /// `DATABASE_URL`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub env_var: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ProvisionedDatabaseProvider {
+    Tidb,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ProvisionedDatabaseEngine {
+    Mysql,
+}
+
+/// Cloudflare R2 bucket binding.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct R2BucketSpec {
+    /// Worker binding name.
+    pub binding: String,
+    pub bucket_name: String,
+}
+
+/// Speed Insights (Core Web Vitals collection) switch.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct SpeedInsightsSpec {
+    pub enabled: bool,
+}
+
+/// Real User Monitoring switch.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct RumSpec {
+    pub enabled: bool,
+}
+
+/// Declarative edge middleware evaluated by txcloud-proxy.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct MiddlewareConfig {
+    pub enabled: bool,
+    /// Only `declarative` is supported.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mode: Option<MiddlewareMode>,
+    /// Behavior when middleware evaluation fails. Defaults to `closed`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub failure_policy: Option<MiddlewareFailurePolicy>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub rules: Vec<MiddlewareRule>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum MiddlewareMode {
+    Declarative,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum MiddlewareFailurePolicy {
+    Open,
+    Closed,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct MiddlewareRule {
+    /// Request path pattern (must start with `/`).
+    pub path: String,
+    pub action: MiddlewareAction,
+    /// Redirect/rewrite destination.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub destination: Option<String>,
+    /// Redirect status code.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status_code: Option<u16>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub request_headers: BTreeMap<String, String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub response_headers: BTreeMap<String, String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum MiddlewareAction {
+    Next,
+    Redirect,
+    Rewrite,
+}
+
+/// Shared-cache declaration owned by one Cloud App manifest.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct CloudAppCacheSpec {
+    /// Named rules. The field is presence-sensitive: omission is invalid,
+    /// while an explicit empty list represents an empty managed set.
+    pub rules: Vec<CloudAppCacheRuleSpec>,
+}
+
+fn deserialize_optional_cache<'de, D>(
+    deserializer: D,
+) -> Result<Option<CloudAppCacheSpec>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    CloudAppCacheSpec::deserialize(deserializer).map(Some)
+}
+
+/// One shared-cache rule scoped to origin-relative paths on this app.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct CloudAppCacheRuleSpec {
+    #[schemars(
+        length(min = 1),
+        extend(
+            "pattern" = r"^(?!.*[\u0000-\u001F\u007F-\u009F])(?!.*\p{Default_Ignorable_Code_Point})\S(?:.*\S)?$"
+        )
+    )]
+    pub name: String,
+    #[schemars(length(min = 1))]
+    pub paths: Vec<CloudAppCachePathPattern>,
+    #[schemars(length(min = 1))]
+    pub methods: Vec<CloudAppCacheMethod>,
+    /// Defaults to `true`. The initial contract accepts only `true` when the
+    /// field is present.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_only_anonymous"
+    )]
+    #[schemars(with = "bool", extend("const" = true))]
+    pub only_anonymous: Option<bool>,
+    pub edge_ttl: CloudAppCacheEdgeTtl,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "UPPERCASE")]
+pub enum CloudAppCacheMethod {
+    Get,
+    Head,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum CloudAppCacheEdgeTtl {
+    RespectOrigin,
+}
+
+/// Origin-relative path pattern accepted by the shared-cache contract.
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+#[serde(transparent)]
+#[schemars(
+    transparent,
+    extend(
+        "pattern" = r"^/(?!/)(?!\.{1,2}(?:/|$))(?!.*//)(?!.*/\.{1,2}(?:/|$))(?!.*[?#\\%\s\u0000-\u001F\u007F-\u009F])(?!.*\p{Default_Ignorable_Code_Point}).*$"
+    )
+)]
+pub struct CloudAppCachePathPattern(String);
+
+impl<'de> Deserialize<'de> for CloudAppCachePathPattern {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let path = String::deserialize(deserializer)?;
+        if is_safe_cache_path_pattern(&path) {
+            Ok(Self(path))
+        } else {
+            Err(serde::de::Error::custom(
+                "cache path must be an unambiguous origin-relative path pattern",
+            ))
+        }
+    }
+}
+
+pub(super) fn is_safe_cache_path_pattern(path: &str) -> bool {
+    if !path.starts_with('/')
+        || path.starts_with("//")
+        || path.contains("//")
+        || path
+            .chars()
+            .any(|character| matches!(character, '?' | '#' | '\\' | '%'))
+        || contains_disallowed_cache_character(path)
+    {
+        return false;
+    }
+
+    path.split('/')
+        .skip(1)
+        .all(|segment| !matches!(segment, "." | ".."))
+}
+
+pub(super) fn contains_disallowed_cache_character(value: &str) -> bool {
+    static DEFAULT_IGNORABLE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+
+    value
+        .chars()
+        .any(|character| character.is_control() || character.is_whitespace())
+        || DEFAULT_IGNORABLE
+            .get_or_init(|| {
+                regex::Regex::new(r"\p{Default_Ignorable_Code_Point}")
+                    .expect("default-ignorable Unicode property must compile")
+            })
+            .is_match(value)
+}
+
+fn deserialize_only_anonymous<'de, D>(deserializer: D) -> Result<Option<bool>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = bool::deserialize(deserializer)?;
+    if value {
+        Ok(Some(true))
+    } else {
+        Err(serde::de::Error::custom(
+            "onlyAnonymous must be true when present",
+        ))
+    }
+}
+
+/// Liveness/readiness probe configuration.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ProofConfig {
+    /// HTTP path to probe (must start with `/`).
+    pub path: String,
+    /// Expected HTTP status code. Defaults to `200`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expected_status: Option<u16>,
+    /// Optional exact response body match.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expected_body: Option<String>,
+}
+
+/// Deploy lifecycle hooks.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct DeployHooksSpec {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub pre_deploy: Vec<DeployHookSpec>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub post_deploy: Vec<DeployHookSpec>,
+}
+
+/// A single deploy lifecycle hook. Exactly one of `command` or
+/// `lambdaInvoke` should be set.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct DeployHookSpec {
+    pub name: String,
+    /// Shell command executed by the deploy runner.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub command: Option<DeployCommandHookSpec>,
+    /// Lambda invocation hook.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lambda_invoke: Option<DeployLambdaInvokeHookSpec>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub env_vars: Vec<EnvVarSpec>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timeout_seconds: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct DeployCommandHookSpec {
+    pub run: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub working_directory: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct DeployLambdaInvokeHookSpec {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub function_name: Option<String>,
+    /// Invoke the Lambda backing this Cloud App by name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub app_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub payload: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub qualifier: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub invocation_type: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub log_type: Option<String>,
+}
+
+/// Custom domain attached to a Cloudflare Pages app.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct CustomDomainSpec {
+    pub hostname: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub zone_id: Option<String>,
+}
+
+/// Runtime sizing for a Cloud App's deployed function.
+///
+/// Only the Lambda deployment target reads these. Omitted leaves the
+/// per-framework default in place.
+///
+/// This is the only durable home for the values: `PATCH /v1/apps/:id/scaling`
+/// writes onto the *active deployment*, and a new deployment starts from an
+/// empty scaling config, so a value set that way is discarded by the next
+/// deploy.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ScalingSpec {
+    /// Lambda memory in MiB (128-10240). Raise it for a function that decodes
+    /// what it is sent: the 512 MiB default is a ceiling an image or PDF
+    /// reader hits as an out-of-memory kill.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lambda_memory_size: Option<i32>,
+    /// Lambda invocation timeout in seconds (1-900).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lambda_timeout: Option<i32>,
+}
+
+/// Environment-specific overrides. Each overlay accepts the same fields as
+/// the app spec (except `environments`); set fields replace the base value
+/// for that runtime environment.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct EnvironmentOverrides {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preview: Option<Box<CloudAppSpec>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub staging: Option<Box<CloudAppSpec>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub production: Option<Box<CloudAppSpec>>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The CLI is the transport: a key this schema does not model is invisible
+    /// to `plan`, so an operator declaring it sees "changed: <none>" and has no
+    /// way to tell a no-op from a dropped field. That is how a Lambda memory
+    /// bump looked applied while the app kept the 512 MiB default.
+    #[test]
+    fn cloud_app_spec_round_trips_scaling() {
+        let spec: CloudAppSpec =
+            serde_yaml::from_str("scaling:\n  lambdaMemorySize: 2048\n  lambdaTimeout: 60\n")
+                .unwrap();
+        let scaling = spec.scaling.clone().expect("scaling must survive parsing");
+        assert_eq!(scaling.lambda_memory_size, Some(2048));
+        assert_eq!(scaling.lambda_timeout, Some(60));
+
+        let rendered = serde_json::to_value(&spec).unwrap();
+        assert_eq!(rendered["scaling"]["lambdaMemorySize"], 2048);
+        assert_eq!(rendered["scaling"]["lambdaTimeout"], 60);
+    }
+
+    /// An overlay accepts the same fields as the base entry, so a preview that
+    /// does not need production's headroom can say so.
+    #[test]
+    fn environment_overlay_accepts_scaling() {
+        let spec: CloudAppSpec = serde_yaml::from_str(
+            "environments:\n  preview:\n    scaling:\n      lambdaMemorySize: 512\n",
+        )
+        .unwrap();
+        let preview = spec
+            .environments
+            .and_then(|environments| environments.preview)
+            .expect("preview overlay");
+        assert_eq!(
+            preview
+                .scaling
+                .and_then(|scaling| scaling.lambda_memory_size),
+            Some(512)
+        );
+    }
+
+    #[test]
+    fn cloud_app_spec_round_trips_cache_declaration() {
+        let value = serde_json::json!({
+            "cache": {
+                "rules": [{
+                    "name": "public-docs",
+                    "paths": ["/docs/*"],
+                    "methods": ["GET", "HEAD"],
+                    "edgeTtl": "respect-origin"
+                }]
+            }
+        });
+
+        let spec: CloudAppSpec = serde_json::from_value(value.clone()).unwrap();
+        assert_eq!(serde_json::to_value(spec).unwrap(), value);
+    }
+
+    #[test]
+    fn cloud_app_cache_schema_is_fail_closed() {
+        let schema = serde_json::to_value(schemars::schema_for!(CloudAppCacheRuleSpec)).unwrap();
+        let properties = &schema["properties"];
+
+        assert_eq!(properties["paths"]["minItems"], 1);
+        assert_eq!(properties["methods"]["minItems"], 1);
+        assert!(properties["name"]["pattern"]
+            .as_str()
+            .is_some_and(|pattern| {
+                pattern.contains("\\S") && pattern.contains("\\p{Default_Ignorable_Code_Point}")
+            }));
+        assert_eq!(properties["onlyAnonymous"]["const"], true);
+        assert_eq!(
+            properties["edgeTtl"]["$ref"],
+            "#/$defs/CloudAppCacheEdgeTtl"
+        );
+        assert!(schema["$defs"]["CloudAppCachePathPattern"]["pattern"]
+            .as_str()
+            .is_some_and(|pattern| {
+                pattern.contains("\\u0000") && pattern.contains("\\p{Default_Ignorable_Code_Point}")
+            }));
+
+        let false_value = serde_yaml::from_str::<CloudAppSpec>(
+            "cache:\n  rules:\n    - name: public-docs\n      paths: ['/docs/*']\n      methods: [GET]\n      onlyAnonymous: false\n      edgeTtl: respect-origin\n",
+        )
+        .expect_err("onlyAnonymous false must fail in the CLI transport");
+        assert!(false_value
+            .to_string()
+            .contains("onlyAnonymous must be true"));
+
+        let unsafe_path = serde_yaml::from_str::<CloudAppSpec>(
+            "cache:\n  rules:\n    - name: public-docs\n      paths: ['https://other.example/docs/*']\n      methods: [GET]\n      edgeTtl: respect-origin\n",
+        )
+        .expect_err("absolute cache path must fail in the CLI transport");
+        assert!(unsafe_path
+            .to_string()
+            .contains("origin-relative path pattern"));
+    }
+
+    #[test]
+    fn cloud_app_cache_requires_rules_but_preserves_explicit_empty_set() {
+        assert!(serde_yaml::from_str::<CloudAppSpec>("cache: {}\n").is_err());
+        assert!(serde_yaml::from_str::<CloudAppSpec>("cache: null\n").is_err());
+        assert!(serde_yaml::from_str::<CloudAppSpec>(
+            "cache:\n  rules:\n    - name: public-docs\n      paths: ['/docs/\u{a0}*']\n      methods: [GET]\n      edgeTtl: respect-origin\n"
+        )
+        .is_err());
+        assert!(serde_yaml::from_str::<CloudAppSpec>(
+            "cache:\n  rules:\n    - name: public-docs\n      paths: ['/docs/\u{feff}*']\n      methods: [GET]\n      edgeTtl: respect-origin\n"
+        )
+        .is_err());
+        for invisible in ['\u{200b}', '\u{200c}', '\u{2060}', '\u{180b}'] {
+            let manifest = format!(
+                "cache:\n  rules:\n    - name: public-docs\n      paths: ['/docs/{invisible}*']\n      methods: [GET]\n      edgeTtl: respect-origin\n"
+            );
+            assert!(
+                serde_yaml::from_str::<CloudAppSpec>(&manifest).is_err(),
+                "default-ignorable U+{:04X} must fail",
+                invisible as u32
+            );
+        }
+
+        let spec = serde_yaml::from_str::<CloudAppSpec>("cache:\n  rules: []\n").unwrap();
+        assert!(spec.cache.unwrap().rules.is_empty());
+
+        let schema = serde_json::to_value(schemars::schema_for!(CloudAppSpec)).unwrap();
+        assert!(schema["required"]
+            .as_array()
+            .is_none_or(|required| !required.iter().any(|field| field == "cache")));
+        assert_eq!(
+            schema["properties"]["cache"]["$ref"],
+            "#/$defs/CloudAppCacheSpec"
+        );
+    }
+
+    #[test]
+    fn cloud_apps_schema_lists_all_frameworks_and_targets() {
+        let schema = schemars::schema_for!(CloudAppsDocument);
+        let rendered = serde_json::to_string(&schema).unwrap();
+        for framework in [
+            "next_js",
+            "static",
+            "docker",
+            "rust_server",
+            "cargo_lambda",
+            "vite",
+            "remix",
+            "astro",
+            "create_react_app",
+            "worker",
+            "svelte_kit",
+            "nuxt",
+            "serverless_functions",
+            "vinext",
+        ] {
+            assert!(
+                rendered.contains(&format!("\"{framework}\"")),
+                "schema is missing framework {framework}"
+            );
+        }
+        for target in [
+            "cloud_run",
+            "cloudflare_pages",
+            "lambda",
+            "cloudflare_workers",
+            "ecs",
+        ] {
+            assert!(
+                rendered.contains(&format!("\"{target}\"")),
+                "schema is missing deployment target {target}"
+            );
+        }
+    }
+
+    #[test]
+    fn auth_schema_generates() {
+        let schema = schemars::schema_for!(AuthManifest);
+        let rendered = serde_json::to_string(&schema).unwrap();
+        assert!(rendered.contains("actions"));
+        assert!(rendered.contains("policies"));
+    }
+
+    #[test]
+    fn typed_model_preserves_worker_durable_objects_and_kv() {
+        let worker = serde_json::json!({
+            "generateConfig": true, "main": "src/index.ts", "compatibilityDate": "2026-06-18",
+            "compatibilityFlags": ["nodejs_compat"], "observability": {"enabled": true},
+            "durableObjects": [{"binding": "ROOMS", "className": "Room"}],
+            "migrations": [{"tag": "v1", "newSqliteClasses": ["Room"]}]
+        });
+        let value = serde_json::json!({
+            "worker": worker, "kvNamespaces": [{"binding": "SESSIONS", "title": "sessions"}],
+            "environments": {"preview": {"worker": worker}}
+        });
+        let spec: CloudAppSpec = serde_json::from_value(value.clone()).unwrap();
+        assert_eq!(serde_json::to_value(spec).unwrap(), value);
+        let schema = serde_json::to_value(schemars::schema_for!(CloudAppSpec)).unwrap();
+        assert!(schema["properties"].get("worker").is_some());
+        assert!(schema["properties"].get("kvNamespaces").is_some());
+    }
+
+    #[test]
+    fn typed_model_accepts_real_world_manifest() {
+        // Shape mirrors a real repo-level tachyon.yml: a Workers frontend
+        // with credential env vars plus a cargo_lambda API with an
+        // environment overlay.
+        let yaml = r#"
+apiVersion: apps.tachy.one/v1alpha
+kind: CloudApps
+metadata:
+  name: example-apps
+  tenantId: tn_01example000000000000000000
+spec:
+  apps:
+  - name: example-console
+    repository:
+      url: https://github.com/example-org/example-apps
+      owner: example-org
+      name: example-apps
+      defaultBranch: main
+    rootDirectory: apps/console
+    framework: worker
+    deploymentTarget: cloudflare_workers
+    build:
+      installCommand: pnpm install --filter console... --frozen-lockfile
+      command: pnpm run build
+      nodeVersion: '22'
+    envVars:
+    - name: OPEN_NEXT_DEPLOY
+      value: 'true'
+    - name: DATABASE_URL
+      type: credential
+      valueFrom:
+        databaseRef:
+          name: tidb_example_prod
+          field: url
+    - name: EXAMPLE_API_KEY
+      type: credential
+      valueFrom:
+        secret: example/EXAMPLE_API_KEY
+    readinessProof:
+      path: /api/health
+  - name: example-api
+    repository:
+      url: https://github.com/example-org/example-apps
+      owner: example-org
+      name: example-apps
+      defaultBranch: main
+    rootDirectory: ''
+    framework: cargo_lambda
+    deploymentTarget: lambda
+    buildspecStrategy: repo:.codebuild/example_api_lambda_buildspec.yml
+    build:
+      runnerBackend: kubernetes_kata
+      package: example-api
+      binary: lambda-example-api
+      release: true
+      arch: arm64
+    environments:
+      preview:
+        build:
+          runnerBackend: codebuild
+      production:
+        build:
+          runnerBackend: github_actions
+"#;
+        let document: CloudAppsDocument = serde_yaml::from_str(yaml).unwrap();
+        let CloudAppsDocument::CloudApps(manifest) = document else {
+            panic!("expected kind: CloudApps document");
+        };
+        assert_eq!(manifest.spec.apps.len(), 2);
+        assert!(matches!(
+            manifest.spec.apps[0].spec.framework,
+            Some(Framework::Worker)
+        ));
+        assert!(matches!(
+            manifest.spec.apps[1]
+                .spec
+                .build
+                .as_ref()
+                .unwrap()
+                .runner_backend,
+            Some(BuildRunnerBackend::KubernetesKata)
+        ));
+        assert!(matches!(
+            manifest.spec.apps[1]
+                .spec
+                .environments
+                .as_ref()
+                .unwrap()
+                .production
+                .as_ref()
+                .unwrap()
+                .build
+                .as_ref()
+                .unwrap()
+                .runner_backend,
+            Some(BuildRunnerBackend::GithubActions)
+        ));
+    }
+
+    #[test]
+    fn typed_model_accepts_single_cloud_app_document() {
+        let yaml = r#"
+apiVersion: apps.tachy.one/v1alpha
+kind: CloudApp
+metadata:
+  name: example-app
+  tenantId: tn_01example000000000000000000
+spec:
+  envVars:
+  - name: TACHYON_CLIENT_ID
+    type: credential
+    valueFrom:
+      oauth2ClientRef:
+        name: example-app-admin
+        field: clientId
+"#;
+        let document: CloudAppsDocument = serde_yaml::from_str(yaml).unwrap();
+        assert!(matches!(document, CloudAppsDocument::CloudApp(_)));
+    }
+}

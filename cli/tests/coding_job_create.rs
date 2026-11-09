@@ -24,7 +24,7 @@ fn isolated_command(home: &Path) -> Command {
     cmd
 }
 
-fn start_tool_jobs_server() -> (String, mpsc::Receiver<String>, thread::JoinHandle<()>) {
+fn start_coding_jobs_server() -> (String, mpsc::Receiver<String>, thread::JoinHandle<()>) {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let url = format!("http://{}", listener.local_addr().unwrap());
     let (tx, rx) = mpsc::channel();
@@ -35,9 +35,31 @@ fn start_tool_jobs_server() -> (String, mpsc::Receiver<String>, thread::JoinHand
         let req = String::from_utf8_lossy(&buf[..n]).to_string();
         tx.send(req).unwrap();
 
-        let body = r#"{"job":{"id":"job_01testtooljob","provider":"codex","status":"queued"}}"#;
+        let body = r#"{"job":{"coding_job_id":"job_01testcodingjob","provider":"codex","status":"queued","prompt":"inspect","context_paths":[],"output_profile":null,"environment":{},"metadata":{},"executor":{"operator_id":"tn_test1234567890"},"use_worktree":false,"auto_merge":false,"created_at":"2026-08-01T00:00:00Z","updated_at":"2026-08-01T00:00:00Z"}}"#;
         let response = format!(
             "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+            body.len(),
+            body
+        );
+        stream.write_all(response.as_bytes()).unwrap();
+    });
+    (url, rx, handle)
+}
+
+fn start_cloud_coding_server() -> (String, mpsc::Receiver<String>, thread::JoinHandle<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    let (tx, rx) = mpsc::channel();
+    let handle = thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let mut buf = [0_u8; 32768];
+        let n = stream.read(&mut buf).unwrap();
+        let req = String::from_utf8_lossy(&buf[..n]).to_string();
+        tx.send(req).unwrap();
+
+        let body = r#"{"coding_job_id":"job_01cloudcoding","job_run_id":"jr_01cloudcoding","worker_id":"kubernetes-jobrun","provider":"containerized_codex","execution_backend":"kubernetes_job_run","status":"queued"}"#;
+        let response = format!(
+            "HTTP/1.1 201 Created\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
             body.len(),
             body
         );
@@ -52,6 +74,7 @@ fn request_json_body(request: &str) -> Value {
 }
 
 fn write_cloud_apps_manifest(tmp: &TempDir) {
+    fs::create_dir_all(tmp.path().join("repos/tachyonfield")).unwrap();
     fs::write(
         tmp.path().join("tachyon.yml"),
         r#"
@@ -88,18 +111,122 @@ spec:
     .unwrap();
 }
 
+fn expected_repo_cwd(tmp: &TempDir) -> String {
+    fs::canonicalize(tmp.path().join("repos/tachyonfield"))
+        .unwrap()
+        .display()
+        .to_string()
+}
+
 #[test]
-fn tool_jobs_create_uses_repo_local_path_as_cwd() {
+fn coding_jobs_run_posts_cloud_coding_request() {
     let tmp = TempDir::new().unwrap();
-    write_cloud_apps_manifest(&tmp);
-    let (api_url, rx, handle) = start_tool_jobs_server();
+    let (api_url, rx, handle) = start_cloud_coding_server();
 
     let output = isolated_command(tmp.path())
         .current_dir(tmp.path())
         .env("TACHYON_API_URL", api_url)
         .args([
             "ops",
-            "tool-jobs",
+            "coding-jobs",
+            "run",
+            "--repo",
+            "https://github.com/quantum-box/tachyonfield.git",
+            "--branch",
+            "main",
+            "--resume-coding-job-id",
+            "job_01parentcodingjob",
+            "--timeout-seconds",
+            "900",
+            "--sandbox",
+            "workspace-write",
+            "--prompt",
+            "implement change",
+            "--json",
+        ])
+        .output()
+        .expect("run tachyon ops coding-jobs run");
+
+    assert!(
+        output.status.success(),
+        "coding-jobs run failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    handle.join().unwrap();
+    let req = rx.recv().unwrap();
+    assert!(req.starts_with("POST /v1/agent/cloud-coding-jobs "));
+    assert!(req.contains("authorization: Bearer test-token"));
+    assert!(req.contains("x-operator-id: tn_test1234567890"));
+    let body = request_json_body(&req);
+    assert_eq!(body["prompt"], "implement change");
+    assert_eq!(
+        body["repository_url"],
+        "https://github.com/quantum-box/tachyonfield.git"
+    );
+    assert_eq!(body["branch"], "main");
+    assert_eq!(body["resume_coding_job_id"], "job_01parentcodingjob");
+    assert_eq!(body["timeout_seconds"], 900);
+    assert_eq!(body["sandbox"], "workspace-write");
+    for operator_managed in [
+        "metadata",
+        "resources",
+        "environment",
+        "image",
+        "model",
+        "output_profile",
+        "runner_pool_id",
+        "worker_id",
+        "github_token_secret",
+        "codex_access_token_secret",
+        "openai_api_key_secret",
+        "git_push_branch",
+        "git_commit_message",
+    ] {
+        assert!(body.get(operator_managed).is_none(), "{operator_managed}");
+    }
+}
+
+#[test]
+fn coding_jobs_run_supports_an_empty_workspace() {
+    let tmp = TempDir::new().unwrap();
+    let (api_url, rx, handle) = start_cloud_coding_server();
+
+    let output = isolated_command(tmp.path())
+        .current_dir(tmp.path())
+        .env("TACHYON_API_URL", api_url)
+        .args([
+            "ops",
+            "coding-jobs",
+            "run",
+            "--prompt",
+            "implement change",
+            "--json",
+        ])
+        .output()
+        .expect("run tachyon ops coding-jobs run");
+
+    assert!(output.status.success());
+    handle.join().unwrap();
+    let body = request_json_body(&rx.recv().unwrap());
+    assert_eq!(body["prompt"], "implement change");
+    assert!(body.get("repository_url").is_none());
+    assert!(body.get("branch").is_none());
+}
+
+#[test]
+fn coding_jobs_create_uses_repo_local_path_as_cwd() {
+    let tmp = TempDir::new().unwrap();
+    write_cloud_apps_manifest(&tmp);
+    let (api_url, rx, handle) = start_coding_jobs_server();
+
+    let output = isolated_command(tmp.path())
+        .current_dir(tmp.path())
+        .env("TACHYON_API_URL", api_url)
+        .args([
+            "ops",
+            "coding-jobs",
             "create",
             "--provider",
             "codex",
@@ -110,43 +237,40 @@ fn tool_jobs_create_uses_repo_local_path_as_cwd() {
             "--json",
         ])
         .output()
-        .expect("run tachyon ops tool-jobs create");
+        .expect("run tachyon ops coding-jobs create");
 
     assert!(
         output.status.success(),
-        "tool-jobs create failed\nstdout:\n{}\nstderr:\n{}",
+        "coding-jobs create failed\nstdout:\n{}\nstderr:\n{}",
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
 
     handle.join().unwrap();
     let req = rx.recv().unwrap();
-    assert!(req.starts_with("POST /v1/agent/tool-jobs "));
+    assert!(req.starts_with("POST /v1/agent/coding-jobs "));
     assert!(req.contains("authorization: Bearer test-token"));
     assert!(req.contains("x-operator-id: tn_test1234567890"));
     let body = request_json_body(&req);
     assert_eq!(body["provider"], "codex");
     assert_eq!(body["prompt"], "inspect");
-    assert_eq!(
-        body["metadata"]["cwd"],
-        tmp.path().join("repos/tachyonfield").display().to_string()
-    );
+    assert_eq!(body["metadata"]["cwd"], expected_repo_cwd(&tmp));
     assert_eq!(body["metadata"]["source"], "tachyon-cli");
     assert_eq!(body["metadata"]["codex_mode"], "app_server_ws");
 }
 
 #[test]
-fn tool_jobs_create_uses_cloud_app_repo_local_path_as_cwd() {
+fn coding_jobs_create_uses_cloud_app_repo_local_path_as_cwd() {
     let tmp = TempDir::new().unwrap();
     write_cloud_apps_manifest(&tmp);
-    let (api_url, rx, handle) = start_tool_jobs_server();
+    let (api_url, rx, handle) = start_coding_jobs_server();
 
     let output = isolated_command(tmp.path())
         .current_dir(tmp.path())
         .env("TACHYON_API_URL", api_url)
         .args([
             "ops",
-            "tool-jobs",
+            "coding-jobs",
             "create",
             "--provider",
             "codex",
@@ -157,11 +281,11 @@ fn tool_jobs_create_uses_cloud_app_repo_local_path_as_cwd() {
             "--json",
         ])
         .output()
-        .expect("run tachyon ops tool-jobs create");
+        .expect("run tachyon ops coding-jobs create");
 
     assert!(
         output.status.success(),
-        "tool-jobs create failed\nstdout:\n{}\nstderr:\n{}",
+        "coding-jobs create failed\nstdout:\n{}\nstderr:\n{}",
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
@@ -169,14 +293,11 @@ fn tool_jobs_create_uses_cloud_app_repo_local_path_as_cwd() {
     handle.join().unwrap();
     let req = rx.recv().unwrap();
     let body = request_json_body(&req);
-    assert_eq!(
-        body["metadata"]["cwd"],
-        tmp.path().join("repos/tachyonfield").display().to_string()
-    );
+    assert_eq!(body["metadata"]["cwd"], expected_repo_cwd(&tmp));
 }
 
 #[test]
-fn tool_jobs_create_rejects_multiple_cwd_selectors() {
+fn coding_jobs_create_rejects_multiple_cwd_selectors() {
     let tmp = TempDir::new().unwrap();
     write_cloud_apps_manifest(&tmp);
 
@@ -185,7 +306,7 @@ fn tool_jobs_create_rejects_multiple_cwd_selectors() {
         vec!["--cwd", "/tmp/repo", "--cloud-app", "fieldadmin"],
         vec!["--repo", "tachyonfield", "--cloud-app", "fieldadmin"],
     ] {
-        let mut command_args = vec!["ops", "tool-jobs", "create", "--provider", "codex"];
+        let mut command_args = vec!["ops", "coding-jobs", "create", "--provider", "codex"];
         command_args.extend(args);
         command_args.extend(["--prompt", "inspect"]);
 
@@ -193,7 +314,7 @@ fn tool_jobs_create_rejects_multiple_cwd_selectors() {
             .current_dir(tmp.path())
             .args(command_args)
             .output()
-            .expect("run tachyon ops tool-jobs create");
+            .expect("run tachyon ops coding-jobs create");
 
         assert!(!output.status.success());
         assert!(String::from_utf8_lossy(&output.stderr)
@@ -202,7 +323,7 @@ fn tool_jobs_create_rejects_multiple_cwd_selectors() {
 }
 
 #[test]
-fn tool_jobs_create_reports_unknown_repo() {
+fn coding_jobs_create_reports_unknown_repo() {
     let tmp = TempDir::new().unwrap();
     write_cloud_apps_manifest(&tmp);
 
@@ -210,7 +331,7 @@ fn tool_jobs_create_reports_unknown_repo() {
         .current_dir(tmp.path())
         .args([
             "ops",
-            "tool-jobs",
+            "coding-jobs",
             "create",
             "--provider",
             "codex",
@@ -220,7 +341,7 @@ fn tool_jobs_create_reports_unknown_repo() {
             "inspect",
         ])
         .output()
-        .expect("run tachyon ops tool-jobs create");
+        .expect("run tachyon ops coding-jobs create");
 
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -229,7 +350,7 @@ fn tool_jobs_create_reports_unknown_repo() {
 }
 
 #[test]
-fn tool_jobs_create_reports_unknown_cloud_app() {
+fn coding_jobs_create_reports_unknown_cloud_app() {
     let tmp = TempDir::new().unwrap();
     write_cloud_apps_manifest(&tmp);
 
@@ -237,7 +358,7 @@ fn tool_jobs_create_reports_unknown_cloud_app() {
         .current_dir(tmp.path())
         .args([
             "ops",
-            "tool-jobs",
+            "coding-jobs",
             "create",
             "--provider",
             "codex",
@@ -247,7 +368,7 @@ fn tool_jobs_create_reports_unknown_cloud_app() {
             "inspect",
         ])
         .output()
-        .expect("run tachyon ops tool-jobs create");
+        .expect("run tachyon ops coding-jobs create");
 
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);

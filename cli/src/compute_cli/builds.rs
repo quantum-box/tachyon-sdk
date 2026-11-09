@@ -1,0 +1,1874 @@
+use super::*;
+
+// --- Builds subcommands ---
+
+#[derive(Debug, Clone, Args)]
+pub struct PreviewArgs {
+    #[command(subcommand)]
+    pub command: Option<PreviewCommand>,
+    /// App ID or name (legacy shortcut; use `preview create --app`)
+    #[arg(hide = true)]
+    pub app_id: Option<String>,
+    /// Branch to build (legacy shortcut; use `preview create --branch`)
+    #[arg(long, hide = true)]
+    pub branch: Option<String>,
+    /// Pull request number (legacy shortcut)
+    #[arg(long, hide = true)]
+    pub pr: Option<i32>,
+}
+
+#[derive(Debug, Clone, Subcommand)]
+pub enum PreviewCommand {
+    /// Create a preview build for a branch
+    Create {
+        /// App ID or name
+        #[arg(long)]
+        app: String,
+        /// Branch to build
+        #[arg(long)]
+        branch: String,
+        /// Wait for the build to finish and print its preview URL
+        #[arg(long)]
+        wait: bool,
+    },
+    /// Manage a pull request's managed preview database
+    Database {
+        #[command(subcommand)]
+        command: PreviewDatabaseCommand,
+    },
+}
+
+#[derive(Debug, Clone, Subcommand)]
+pub enum PreviewDatabaseCommand {
+    /// Delete a pull request's preview database so the next build recreates it
+    ///
+    /// The recovery hatch for a preview database that has become unusable —
+    /// a migration that died partway leaves SQLx refusing that migration
+    /// forever, and rewriting an already-applied migration leaves a checksum
+    /// the database disagrees with. Neither is repairable from the build
+    /// side.
+    ///
+    /// This is destructive and immediate: any data entered through the
+    /// preview is gone. The database itself is recreated by the next build,
+    /// not by this command.
+    Delete {
+        /// App ID or name
+        #[arg(long)]
+        app: String,
+        /// Pull request number
+        #[arg(long)]
+        pr: i32,
+        /// Delete without asking for confirmation
+        #[arg(long)]
+        yes: bool,
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+#[derive(Debug, Clone, Subcommand)]
+pub enum BuildsCommand {
+    /// List builds for an app
+    List {
+        /// App ID or name
+        app_id: Option<String>,
+        /// Maximum number of builds to display
+        #[arg(long, default_value_t = 10)]
+        limit: usize,
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+        /// Maximum time to wait for the builds response
+        #[arg(
+            long,
+            default_value_t = BUILDS_LIST_DEFAULT_TIMEOUT_SECS,
+            value_parser = clap::value_parser!(u64).range(1..)
+        )]
+        timeout_secs: u64,
+        /// Maximum time to wait for optional preview URLs
+        #[arg(
+            long,
+            default_value_t = BUILDS_LIST_DEFAULT_PREVIEW_TIMEOUT_SECS,
+            value_parser = clap::value_parser!(u64).range(1..)
+        )]
+        preview_timeout_secs: u64,
+        /// Print per-stage request and rendering timings to stderr
+        #[arg(long)]
+        verbose: bool,
+    },
+    /// Get details of a specific build
+    Get {
+        /// Build ID
+        build_id: String,
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// Trigger a new build
+    Trigger {
+        /// App ID or name
+        app_id: Option<String>,
+        /// Branch to build (optional)
+        #[arg(long)]
+        branch: Option<String>,
+        /// Pull request number to (re-)fire a preview build for.
+        /// The PR's head branch and commit are resolved server-side.
+        #[arg(long)]
+        pr: Option<i32>,
+    },
+    /// Cancel a running build
+    Cancel {
+        /// Build ID
+        build_id: String,
+    },
+    /// Fetch build logs
+    Logs {
+        /// App ID (used to resolve latest build if --build-id is not given)
+        app_id: Option<String>,
+        /// Build ID (defaults to the latest build)
+        #[arg(long)]
+        build_id: Option<String>,
+        /// Keep polling until the build is complete
+        #[arg(long)]
+        follow: bool,
+        /// Emit compact JSON Lines for coding agents
+        #[arg(long)]
+        agent: bool,
+    },
+    /// Watch build logs and final status until completion
+    Watch {
+        /// App ID or name (optional when --build-id is specified)
+        app_id: Option<String>,
+        /// Build ID (defaults to the latest build for the given app)
+        #[arg(long)]
+        build_id: Option<String>,
+        /// Poll interval in seconds
+        #[arg(long, default_value_t = 5)]
+        interval_secs: u64,
+        /// Maximum wait time in seconds
+        #[arg(long)]
+        timeout_secs: Option<u64>,
+        /// Do not print build logs, only status/result
+        #[arg(long)]
+        no_logs: bool,
+        /// Emit compact JSON Lines for coding agents
+        #[arg(long)]
+        agent: bool,
+    },
+    /// Reproduce a cloud build locally in Docker.
+    ///
+    /// Phase 1: requires `--mock <path>` pointing at a local build-config
+    /// fixture (PLT-914). Phase 2 (PLT-913) will fetch the buildspec and
+    /// environment from tachyon-api given the build id.
+    Reproduce {
+        /// Build ID to reproduce (informational in --mock mode).
+        build_id: String,
+        /// Path to a local mock build-config (json or yaml). Required until
+        /// PLT-913 endpoint is available.
+        #[arg(long)]
+        mock: Option<PathBuf>,
+        /// Source tree to mount into the container (defaults to cwd).
+        #[arg(long)]
+        source_dir: Option<PathBuf>,
+        /// Override the CodeBuild image (e.g.
+        /// public.ecr.aws/codebuild/amazonlinux-x86_64-standard:5.0).
+        #[arg(long)]
+        image: Option<String>,
+        /// Print the docker invocation instead of running it.
+        #[arg(long)]
+        dry_run: bool,
+    },
+    /// Run a Cloud App build workload from a JobRun spec.
+    #[command(hide = true)]
+    RunJob {
+        /// Environment variable that contains the BuildWorkloadSpec JSON.
+        #[arg(long, default_value = "TACHYON_BUILD_WORKLOAD_SPEC_JSON")]
+        spec_env: String,
+    },
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub(super) struct ListBuildsResponse {
+    pub(super) builds: Vec<BuildResponse>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub(super) struct BuildResponse {
+    pub(super) id: String,
+    pub(super) app_id: String,
+    #[serde(default)]
+    pub(super) trigger: Option<String>,
+    #[serde(default)]
+    pub(super) source_branch: Option<String>,
+    #[serde(default)]
+    pub(super) commit_sha: Option<String>,
+    #[serde(default)]
+    pub(super) commit_message: Option<String>,
+    #[serde(default)]
+    pub(super) pr_number: Option<i32>,
+    pub(super) status: String,
+    #[serde(default)]
+    pub(super) artifact_status: Option<String>,
+    #[serde(default)]
+    pub(super) deploy_hook_status: Option<String>,
+    #[serde(default)]
+    pub(super) duration_secs: Option<i32>,
+    #[serde(default)]
+    pub(super) error_message: Option<String>,
+    /// Output of the Tachyon IaC (plan/apply) step.
+    ///
+    /// `error_message` only carries the tail of the application
+    /// build log, so an IaC failure never shows up there. This
+    /// field is the only place the IaC failure is reported.
+    #[serde(default)]
+    pub(super) iac_plan_output: Option<String>,
+    #[serde(default)]
+    pub(super) iac_success: Option<bool>,
+    #[serde(default)]
+    pub(super) created_at: Option<String>,
+    #[serde(default)]
+    pub(super) updated_at: Option<String>,
+    #[serde(default)]
+    pub(super) job_run: Option<BuildJobRunResponse>,
+    #[serde(default)]
+    pub(super) stuck: Option<BuildStuckResponse>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub(super) struct BuildJobRunResponse {
+    pub(super) job_run_id: String,
+    #[serde(default)]
+    pub(super) status: Option<String>,
+    pub(super) phase: String,
+    #[serde(default)]
+    pub(super) runner_id: Option<String>,
+    #[serde(default)]
+    pub(super) claimed_at: Option<String>,
+    #[serde(default)]
+    pub(super) started_at: Option<String>,
+    #[serde(default)]
+    pub(super) finished_at: Option<String>,
+    #[serde(default)]
+    pub(super) queued_elapsed_secs: Option<i64>,
+    #[serde(default)]
+    pub(super) running_elapsed_secs: Option<i64>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub(super) struct BuildStuckResponse {
+    pub(super) reason: String,
+    pub(super) threshold_secs: i64,
+    pub(super) elapsed_secs: i64,
+}
+
+#[derive(Debug, Deserialize)]
+pub(super) struct BuildLogsResponse {
+    pub(super) lines: Vec<BuildLogLineResponse>,
+    pub(super) next_token: Option<String>,
+    pub(super) is_complete: bool,
+}
+
+#[derive(Debug, Deserialize)]
+pub(super) struct BuildLogLineResponse {
+    pub(super) timestamp: i64,
+    pub(super) message: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub(super) enum AgentBuildEvent<'a> {
+    Build {
+        build_id: &'a str,
+        status: &'a str,
+        artifact_status: &'a str,
+        deploy_hook_status: &'a str,
+    },
+    Log {
+        build_id: &'a str,
+        timestamp: i64,
+        message: String,
+    },
+    Result {
+        build_id: &'a str,
+        status: &'a str,
+        artifact_status: &'a str,
+        deploy_hook_status: &'a str,
+        exit_code: i32,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        error_message: Option<&'a str>,
+    },
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct TriggerBuildRequest {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    branch: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pr_number: Option<i32>,
+}
+
+#[derive(Debug, Serialize)]
+struct CreatePreviewBuildRequest {
+    source_branch: String,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(super) struct BuildsListOptions {
+    pub(super) timeout: Duration,
+    pub(super) preview_timeout: Duration,
+    pub(super) verbose: bool,
+    pub(super) command_started: Instant,
+}
+
+impl BuildResponse {
+    fn artifact_status(&self) -> &str {
+        self.artifact_status.as_deref().unwrap_or(&self.status)
+    }
+
+    fn deploy_hook_status(&self) -> &str {
+        self.deploy_hook_status.as_deref().unwrap_or("legacy")
+    }
+}
+
+pub(super) fn print_builds_list_timing(verbose: bool, stage: &str, elapsed: Duration) {
+    if verbose {
+        eprintln!("[timing] {stage}: {:.3}s", elapsed.as_secs_f64());
+    }
+}
+
+pub(super) async fn wait_for_builds_list_stage<T, F>(
+    stage: &str,
+    request_started: Instant,
+    timeout: Duration,
+    deadline: tokio::time::Instant,
+    future: F,
+) -> Result<T>
+where
+    F: Future<Output = Result<T>>,
+{
+    tokio::pin!(future);
+    let progress = tokio::time::sleep(BUILDS_LIST_PROGRESS_DELAY);
+    tokio::pin!(progress);
+    let deadline_timer = tokio::time::sleep_until(deadline);
+    tokio::pin!(deadline_timer);
+
+    loop {
+        tokio::select! {
+            result = &mut future => return result,
+            _ = &mut deadline_timer => {
+                return Err(anyhow!(
+                    "timed out waiting for {stage} after {}s",
+                    timeout.as_secs()
+                ));
+            }
+            _ = &mut progress => {
+                eprintln!(
+                    "Still waiting for {stage}... {}s elapsed (timeout: {}s).",
+                    request_started.elapsed().as_secs(),
+                    timeout.as_secs()
+                );
+                progress
+                    .as_mut()
+                    .reset(tokio::time::Instant::now() + BUILDS_LIST_PROGRESS_INTERVAL);
+            }
+        }
+    }
+}
+
+async fn fetch_builds_list_json<T: serde::de::DeserializeOwned>(
+    api: &ApiClient,
+    path: &str,
+    label: &str,
+    timeout: Duration,
+    verbose: bool,
+) -> Result<T> {
+    let request_started = Instant::now();
+    let deadline = tokio::time::Instant::now() + timeout;
+
+    let headers_started = Instant::now();
+    let headers_stage = format!("{label} response headers");
+    let response = wait_for_builds_list_stage(
+        &headers_stage,
+        request_started,
+        timeout,
+        deadline,
+        api.get_response(path),
+    )
+    .await;
+    print_builds_list_timing(verbose, &headers_stage, headers_started.elapsed());
+    let response = response?;
+
+    let body_started = Instant::now();
+    let body_stage = format!("{label} response body");
+    let body_context = format!("read GET {path} response body");
+    let body = wait_for_builds_list_stage(
+        &body_stage,
+        request_started,
+        timeout,
+        deadline,
+        async move { response.bytes().await.with_context(|| body_context) },
+    )
+    .await;
+    let body_elapsed = body_started.elapsed();
+    print_builds_list_timing(verbose, &body_stage, body_elapsed);
+    let body = body?;
+    if verbose {
+        eprintln!("[timing] {label} response bytes: {}", body.len());
+    }
+
+    let decode_started = Instant::now();
+    let decoded = serde_json::from_slice(&body).with_context(|| format!("parse GET {path}"));
+    print_builds_list_timing(
+        verbose,
+        &format!("{label} JSON decode"),
+        decode_started.elapsed(),
+    );
+    let decoded = decoded?;
+    print_builds_list_timing(
+        verbose,
+        &format!("{label} total"),
+        request_started.elapsed(),
+    );
+    Ok(decoded)
+}
+
+pub(super) async fn run_builds_list(
+    api: &ApiClient,
+    app_id: &str,
+    limit: usize,
+    json: bool,
+    options: BuildsListOptions,
+) -> Result<()> {
+    let builds_path = format!("/v1/compute/apps/{app_id}/builds?limit={limit}");
+    let resp: ListBuildsResponse = match fetch_builds_list_json(
+        api,
+        &builds_path,
+        "builds",
+        options.timeout,
+        options.verbose,
+    )
+    .await
+    {
+        Ok(resp) => resp,
+        Err(error) => {
+            print_builds_list_timing(
+                options.verbose,
+                "command total",
+                options.command_started.elapsed(),
+            );
+            return Err(error);
+        }
+    };
+    if json {
+        let render_started = Instant::now();
+        let builds = &resp.builds[..resp.builds.len().min(limit)];
+        let result = print_json(&builds);
+        print_builds_list_timing(options.verbose, "render output", render_started.elapsed());
+        print_builds_list_timing(
+            options.verbose,
+            "command total",
+            options.command_started.elapsed(),
+        );
+        return result;
+    }
+    if resp.builds.is_empty() {
+        let render_started = Instant::now();
+        println!("No builds found for app {app_id}");
+        print_builds_list_timing(options.verbose, "render output", render_started.elapsed());
+        print_builds_list_timing(
+            options.verbose,
+            "command total",
+            options.command_started.elapsed(),
+        );
+        return Ok(());
+    }
+    let render_started = Instant::now();
+    let builds = &resp.builds[..resp.builds.len().min(limit)];
+    println!(
+        "{:<26}  {:<11}  {:<11}  {:<12}  {:<24}  {:<20}  {:<8}  {:<19}",
+        "BUILD ID",
+        "EFFECTIVE",
+        "ARTIFACT",
+        "DEPLOY HOOK",
+        "EXECUTION",
+        "BRANCH",
+        "COMMIT",
+        "CREATED AT"
+    );
+    println!(
+        "{:-<26}  {:-<11}  {:-<11}  {:-<12}  {:-<24}  {:-<20}  {:-<8}  {:-<19}",
+        "", "", "", "", "", "", "", ""
+    );
+    for build in builds {
+        println!(
+            "{:<26}  {:<11}  {:<11}  {:<12}  {:<24}  {:<20}  {:<8}  {:<19}",
+            build.id,
+            build.status,
+            build.artifact_status(),
+            build.deploy_hook_status(),
+            truncate(build_execution_label(build).as_deref().unwrap_or("-"), 24),
+            truncate(build.source_branch.as_deref().unwrap_or("-"), 20),
+            truncate_sha(build.commit_sha.as_deref().unwrap_or("-")),
+            build
+                .created_at
+                .as_deref()
+                .map(format_created_at)
+                .unwrap_or_else(|| "-".to_string()),
+        );
+    }
+    print_builds_list_timing(
+        options.verbose,
+        "render build table",
+        render_started.elapsed(),
+    );
+
+    // Show active preview URLs below the build list.
+    let build_pr_numbers: HashMap<&str, i32> = builds
+        .iter()
+        .filter_map(|build| build.pr_number.map(|pr| (build.id.as_str(), pr)))
+        .collect();
+    let preview_url = format!("/v1/compute/apps/{app_id}/deployments?environment=preview");
+    match fetch_builds_list_json::<ListDeploymentsResponse>(
+        api,
+        &preview_url,
+        "preview deployments",
+        options.preview_timeout,
+        options.verbose,
+    )
+    .await
+    {
+        Ok(dep_resp) => {
+            let preview_render_started = Instant::now();
+            let active: Vec<_> = dep_resp
+                .deployments
+                .iter()
+                .filter(|d| d.status == "active" || d.status == "deploying")
+                .collect();
+            if !active.is_empty() {
+                println!();
+                println!("Preview URLs:");
+                for dep in &active {
+                    let branch = dep.source_branch.as_deref().unwrap_or("-");
+                    let pr_number = dep.pr_number.or_else(|| {
+                        dep.build_id
+                            .as_deref()
+                            .and_then(|build_id| build_pr_numbers.get(build_id).copied())
+                    });
+                    println!("  [{branch}] {}", dep.display_url_with_pr(pr_number));
+                }
+            }
+            print_builds_list_timing(
+                options.verbose,
+                "render preview URLs",
+                preview_render_started.elapsed(),
+            );
+        }
+        Err(error) => {
+            eprintln!("Warning: preview URLs unavailable: {error}");
+        }
+    }
+    print_builds_list_timing(
+        options.verbose,
+        "command total",
+        options.command_started.elapsed(),
+    );
+    Ok(())
+}
+
+pub(super) async fn run_builds_get(api: &ApiClient, build_id: &str, json: bool) -> Result<()> {
+    let build: BuildResponse = api.get(&format!("/v1/compute/builds/{build_id}")).await?;
+    if json {
+        return print_json(&build);
+    }
+    println!("ID:       {}", build.id);
+    println!("App ID:   {}", build.app_id);
+    println!("Effective:   {}", build.status);
+    println!("Artifact:    {}", build.artifact_status());
+    println!("Deploy Hook: {}", build.deploy_hook_status());
+    println!(
+        "Branch:   {}",
+        build.source_branch.as_deref().unwrap_or("-")
+    );
+    println!("Commit:   {}", build.commit_sha.as_deref().unwrap_or("-"));
+    println!(
+        "Message:  {}",
+        build.commit_message.as_deref().unwrap_or("-")
+    );
+    println!("Trigger:  {}", build.trigger.as_deref().unwrap_or("-"));
+    if let Some(dur) = build.duration_secs {
+        println!("Duration: {dur}s");
+    }
+    if let Some(err) = &build.error_message {
+        println!("Error:    {err}");
+    }
+    print_build_iac_diagnostics(&build);
+    print_build_job_run_diagnostics(&build);
+    println!(
+        "Created:  {}",
+        build
+            .created_at
+            .as_deref()
+            .map(format_created_at)
+            .unwrap_or_else(|| "-".to_string())
+    );
+
+    // Fetch the associated deployment to show the preview URL.
+    if build.artifact_status() == "succeeded" {
+        let url: String = format!("/v1/compute/apps/{}/deployments", build.app_id);
+        if let Ok(resp) = api.get::<ListDeploymentsResponse>(&url).await {
+            if let Some(dep) = resp
+                .deployments
+                .iter()
+                .find(|d| d.build_id.as_deref() == Some(&build.id))
+            {
+                let pr_number = dep.pr_number.or(build.pr_number);
+                println!("Preview:  {}", dep.display_url_with_pr(pr_number));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn git_output(args: &[&str]) -> Result<String> {
+    let output = Command::new("git")
+        .args(args)
+        .output()
+        .map_err(|e| anyhow!("failed to run git: {e}"))?;
+    if !output.status.success() {
+        return Err(anyhow!("`git {}` failed", args.join(" ")));
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
+fn detect_current_git_branch() -> Result<String> {
+    let branch = git_output(&["rev-parse", "--abbrev-ref", "HEAD"])
+        .map_err(|e| anyhow!("{e}; not inside a git repository? Pass --branch explicitly."))?;
+    if branch.is_empty() || branch == "HEAD" {
+        return Err(anyhow!("detached HEAD state; pass --branch explicitly"));
+    }
+    Ok(branch)
+}
+
+/// Extract `(owner, repo)` from a GitHub remote URL
+/// (`git@github.com:owner/repo.git` or `https://github.com/owner/repo`).
+pub(super) fn parse_github_remote(url: &str) -> Option<(String, String)> {
+    let rest = url
+        .strip_prefix("git@github.com:")
+        .or_else(|| url.strip_prefix("ssh://git@github.com/"))
+        .or_else(|| url.strip_prefix("https://github.com/"))
+        .or_else(|| url.strip_prefix("http://github.com/"))?;
+    let rest = rest.strip_suffix(".git").unwrap_or(rest);
+    let mut parts = rest.splitn(2, '/');
+    let owner = parts.next()?.trim();
+    let repo = parts.next()?.trim().trim_end_matches('/');
+    if owner.is_empty() || repo.is_empty() {
+        return None;
+    }
+    Some((owner.to_string(), repo.to_string()))
+}
+
+/// Find cloud apps whose connected repository matches the
+/// `origin` remote of the current git repository. A repo can
+/// back multiple apps (e.g. two frontends), so all matches are
+/// returned.
+async fn resolve_apps_by_git_remote(api: &ApiClient) -> Result<Vec<AppResponse>> {
+    let remote_url = git_output(&["remote", "get-url", "origin"]).map_err(|e| {
+        anyhow!(
+            "{e}; could not auto-detect the app. Pass an app name, \
+             set metadata.name in tachyon.yml, or run inside a git \
+             repository with an `origin` remote."
+        )
+    })?;
+    let (owner, repo) = parse_github_remote(&remote_url)
+        .ok_or_else(|| anyhow!("unsupported git remote URL: {remote_url}"))?;
+
+    let resp: ListAppsResponse = api.get("/v1/compute/apps").await?;
+    let apps: Vec<AppResponse> = resp
+        .apps
+        .into_iter()
+        .filter(|app| {
+            app.repository_owner.as_deref() == Some(owner.as_str())
+                && app.repository_name.as_deref() == Some(repo.as_str())
+        })
+        .collect();
+
+    if apps.is_empty() {
+        return Err(anyhow!(
+            "no cloud apps found for repository {owner}/{repo} in the \
+             current tenant (check `tachyon switch` / `tachyon compute apps list`)"
+        ));
+    }
+    Ok(apps)
+}
+
+pub(super) async fn run_preview(
+    api: &ApiClient,
+    app_id: &Option<String>,
+    project_config: Option<&ProjectConfig>,
+    branch: Option<&str>,
+    pr: Option<i32>,
+) -> Result<()> {
+    let branch_name = match branch {
+        Some(b) => b.to_string(),
+        None => detect_current_git_branch()?,
+    };
+    println!("Branch: {branch_name}");
+
+    // App resolution: explicit arg > tachyon.yml > git remote match.
+    let targets: Vec<(String, String)> = match app_id_or_default(app_id, project_config) {
+        Ok(app) => {
+            let id = resolve::resolve_app_id(api, app).await?;
+            vec![(id, app.to_string())]
+        }
+        Err(_) => resolve_apps_by_git_remote(api)
+            .await?
+            .into_iter()
+            .map(|app| (app.id, app.name))
+            .collect(),
+    };
+
+    for (id, name) in &targets {
+        println!("App: {name}");
+        run_builds_trigger(api, id, Some(&branch_name), pr).await?;
+    }
+    Ok(())
+}
+
+pub(super) async fn run_preview_create(
+    api: &ApiClient,
+    app: &str,
+    branch: &str,
+    wait: bool,
+) -> Result<()> {
+    let app_id = resolve::resolve_app_id(api, app).await?;
+    let req = CreatePreviewBuildRequest {
+        source_branch: branch.to_string(),
+    };
+    let mut build: BuildResponse = api.post(&format!("/v1/apps/{app_id}/builds"), &req).await?;
+
+    println!("Preview build created: {}", build.id);
+    println!("Status: {}", build.status);
+    if let Some(branch) = build.source_branch.as_deref() {
+        println!("Branch: {branch}");
+    }
+    if let Some(pr_number) = build.pr_number {
+        println!("PR: #{pr_number}");
+    }
+    if !wait {
+        return Ok(());
+    }
+
+    let build_id = build.id.clone();
+    while !is_terminal_build_status(&build.status) {
+        build = api.get(&format!("/v1/compute/builds/{build_id}")).await?;
+        if !is_terminal_build_status(&build.status) {
+            sleep(Duration::from_secs(5)).await;
+        }
+    }
+    if !is_success_build_status(&build.status) {
+        let error = build.error_message.as_deref().unwrap_or("no error details");
+        return Err(anyhow!(
+            "preview build {build_id} finished with status {}: {error}",
+            build.status
+        ));
+    }
+
+    println!("Build {build_id} completed successfully.");
+    let deployments: ListDeploymentsResponse = api
+        .get_query(
+            &format!("/v1/compute/apps/{app_id}/deployments"),
+            &[("environment", "preview")],
+        )
+        .await?;
+    if let Some(deployment) = deployments
+        .deployments
+        .iter()
+        .find(|deployment| deployment.build_id.as_deref() == Some(build_id.as_str()))
+    {
+        let pr_number = deployment.pr_number.or(build.pr_number);
+        println!("Preview URL: {}", deployment.display_url_with_pr(pr_number));
+    } else {
+        eprintln!("No preview deployment found for build {build_id}");
+    }
+    Ok(())
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub(super) struct DeletePreviewDatabaseResponse {
+    pub(super) deleted: bool,
+}
+
+pub(super) async fn run_preview_database_delete(
+    api: &ApiClient,
+    app: &str,
+    pr: i32,
+    assume_yes: bool,
+    json: bool,
+) -> Result<()> {
+    if pr <= 0 {
+        anyhow::bail!("--pr must be a positive pull request number");
+    }
+    let app_id = resolve::resolve_app_id(api, app).await?;
+
+    if !assume_yes {
+        // Deleting takes the preview offline until the next build and drops
+        // whatever a reviewer entered through it, so an unattended
+        // invocation must not do that silently.
+        println!("App: {app_id}");
+        println!("Pull request: #{pr}");
+        println!();
+        println!("This deletes the preview database, its user, and its credential secret.");
+        println!("Data entered through the preview will be lost.");
+        println!("The next build for this pull request provisions a fresh database.");
+        println!();
+        println!("No changes made. Re-run with --yes to delete.");
+        return Ok(());
+    }
+
+    let resp: DeletePreviewDatabaseResponse = api
+        .delete_json(&format!("/v1/apps/{app_id}/previews/{pr}/database"))
+        .await?;
+
+    if json {
+        return print_json(&resp);
+    }
+    if resp.deleted {
+        println!("Deleted the preview database for {app_id} PR #{pr}.");
+        println!("The next build for this pull request provisions a fresh one.");
+    } else {
+        println!("No preview database was provisioned for {app_id} PR #{pr}.");
+    }
+    Ok(())
+}
+
+pub(super) async fn run_builds_trigger(
+    api: &ApiClient,
+    app_id: &str,
+    branch: Option<&str>,
+    pr: Option<i32>,
+) -> Result<()> {
+    let req = TriggerBuildRequest {
+        branch: branch.map(String::from),
+        pr_number: pr,
+    };
+    let build: BuildResponse = api
+        .post(&format!("/v1/compute/apps/{app_id}/builds"), &req)
+        .await?;
+    println!("Build triggered: {}", build.id);
+    println!("Status: {}", build.status);
+    if let Some(branch) = build.source_branch.as_deref() {
+        println!("Branch: {branch}");
+    }
+    if let Some(pr_number) = build.pr_number {
+        println!("PR: #{pr_number} (preview build)");
+    }
+    Ok(())
+}
+
+pub(super) async fn run_builds_cancel(api: &ApiClient, build_id: &str) -> Result<()> {
+    api.post_no_body(&format!("/v1/compute/builds/{build_id}/cancel"))
+        .await?;
+    println!("Build {build_id} cancelled.");
+    Ok(())
+}
+
+pub(super) async fn run_builds_logs(
+    api: &ApiClient,
+    app_id: Option<&str>,
+    build_id: Option<&str>,
+    follow: bool,
+    agent: bool,
+) -> Result<()> {
+    let resolved_build_id = match build_id {
+        Some(id) => id.to_string(),
+        None => {
+            let app_id = app_id
+                .ok_or_else(|| anyhow!("app_id required when --build-id is not specified"))?;
+            let resp: ListBuildsResponse = api
+                .get(&format!("/v1/compute/apps/{app_id}/builds"))
+                .await?;
+            resp.builds
+                .into_iter()
+                .next()
+                .ok_or_else(|| anyhow!("no builds found for app {app_id}"))?
+                .id
+        }
+    };
+
+    let mut next_token: Option<String> = None;
+    let mut is_complete = false;
+    let mut last_none_token_signature: Option<Vec<(i64, String)>> = None;
+    let mut no_progress_none_token_polls = 0_usize;
+    let follow_interval = build_logs_follow_interval();
+    loop {
+        let path = format!("/v1/compute/builds/{resolved_build_id}/logs");
+        let logs: BuildLogsResponse = if let Some(token) = &next_token {
+            api.get_query(&path, &[("next_token", token.as_str())])
+                .await?
+        } else {
+            api.get(&path).await?
+        };
+
+        let response_next_token = logs.next_token.clone();
+        let none_token_signature = response_next_token
+            .is_none()
+            .then(|| build_log_lines_signature(&logs.lines));
+        let no_progress_none_token_response = follow
+            && !logs.is_complete
+            && response_next_token.is_none()
+            && none_token_signature.as_ref().is_some_and(|signature| {
+                signature.is_empty() || last_none_token_signature.as_ref() == Some(signature)
+            });
+
+        if !no_progress_none_token_response {
+            for line in &logs.lines {
+                if agent {
+                    print_agent_event(&AgentBuildEvent::Log {
+                        build_id: &resolved_build_id,
+                        timestamp: line.timestamp,
+                        message: compact_agent_message(&line.message),
+                    })?;
+                } else {
+                    println!("[{}] {}", format_timestamp_ms(line.timestamp), line.message);
+                }
+            }
+        }
+
+        if logs.is_complete {
+            is_complete = true;
+            break;
+        }
+
+        if let Some(signature) = none_token_signature {
+            last_none_token_signature = Some(signature);
+        } else {
+            last_none_token_signature = None;
+        }
+        if no_progress_none_token_response {
+            no_progress_none_token_polls += 1;
+        } else {
+            no_progress_none_token_polls = 0;
+        }
+
+        next_token = response_next_token;
+        if follow {
+            if no_progress_none_token_polls >= BUILD_LOGS_MAX_NO_PROGRESS_NONE_TOKEN_POLLS {
+                break;
+            }
+            sleep(follow_interval).await;
+        } else {
+            break;
+        }
+    }
+
+    if follow && is_complete {
+        let build: BuildResponse = api
+            .get(&format!("/v1/compute/builds/{resolved_build_id}"))
+            .await?;
+        if agent {
+            let exit_code = if is_success_build_status(&build.status) {
+                0
+            } else {
+                1
+            };
+            print_agent_event(&AgentBuildEvent::Result {
+                build_id: &resolved_build_id,
+                status: &build.status,
+                artifact_status: build.artifact_status(),
+                deploy_hook_status: build.deploy_hook_status(),
+                exit_code,
+                error_message: build.error_message.as_deref(),
+            })?;
+        }
+        if !is_success_build_status(&build.status) {
+            return Err(anyhow!("build {resolved_build_id} failed"));
+        }
+    }
+
+    Ok(())
+}
+
+fn build_log_lines_signature(lines: &[BuildLogLineResponse]) -> Vec<(i64, String)> {
+    lines
+        .iter()
+        .map(|line| (line.timestamp, line.message.clone()))
+        .collect()
+}
+
+/// Print the Tachyon IaC step result.
+///
+/// A build whose application artifact compiled fine can still fail in
+/// the IaC step. That failure is reported only here: `error_message`
+/// carries the tail of the application build log, which for such a
+/// build ends on a successful compile and hides the real cause.
+fn print_build_iac_diagnostics(build: &BuildResponse) {
+    let Some(output) = build
+        .iac_plan_output
+        .as_deref()
+        .map(str::trim)
+        .filter(|output| !output.is_empty())
+    else {
+        return;
+    };
+
+    let result = match build.iac_success {
+        Some(true) => "succeeded",
+        Some(false) => "failed",
+        None => "unknown",
+    };
+    println!("IaC:      {result}");
+    for line in output.lines() {
+        println!("          {line}");
+    }
+}
+
+fn print_build_job_run_diagnostics(build: &BuildResponse) {
+    let Some(execution) = build_execution_label(build) else {
+        return;
+    };
+    println!("Execution: {execution}");
+
+    if let Some(job_run) = &build.job_run {
+        println!("JobRun:   {}", job_run.job_run_id);
+        println!(
+            "Phase:    {} ({})",
+            job_run.phase,
+            job_run.status.as_deref().unwrap_or("missing")
+        );
+        println!("Runner:   {}", job_run.runner_id.as_deref().unwrap_or("-"));
+        if let Some(seconds) = job_run.queued_elapsed_secs {
+            println!("Queue:    {}", format_build_seconds(seconds));
+        }
+        if let Some(seconds) = job_run.running_elapsed_secs {
+            println!("Running:  {}", format_build_seconds(seconds));
+        }
+    }
+
+    if let Some(stuck) = &build.stuck {
+        println!(
+            "Stuck:    {} for {} (threshold {})",
+            stuck_reason_label(stuck.reason.as_str()),
+            format_build_seconds(stuck.elapsed_secs),
+            format_build_seconds(stuck.threshold_secs)
+        );
+    }
+}
+
+fn build_execution_label(build: &BuildResponse) -> Option<String> {
+    if let Some(job_run) = &build.job_run {
+        return Some(phase_label(job_run.phase.as_str()).to_string());
+    }
+    build
+        .stuck
+        .as_ref()
+        .map(|stuck| stuck_reason_label(stuck.reason.as_str()).to_string())
+}
+
+fn phase_label(phase: &str) -> &str {
+    match phase {
+        "waiting_for_runner" => "Waiting for runner",
+        "claimed_waiting_for_start" => "Runner claimed",
+        "running_on_runner" => "Running on runner",
+        "finalizing_deployment" => "Finalizing deployment",
+        "completed" => "JobRun completed",
+        "job_run_missing" => "JobRun missing",
+        other => other,
+    }
+}
+
+fn stuck_reason_label(reason: &str) -> &str {
+    match reason {
+        "dispatch_not_started" => "Dispatch not started",
+        "never_claimed" => "Runner not claimed",
+        "claimed_job_run" => "Claimed JobRun is still active",
+        "finalizing_deployment" => "Finalizing deployment",
+        "job_run_missing" => "JobRun missing",
+        "job_run_unknown" => "Unknown JobRun state",
+        other => other,
+    }
+}
+
+fn format_build_seconds(seconds: i64) -> String {
+    if seconds < 60 {
+        return format!("{}s", seconds.max(0));
+    }
+    let minutes = seconds / 60;
+    let remainder = seconds % 60;
+    if remainder == 0 {
+        format!("{minutes}m")
+    } else {
+        format!("{minutes}m {remainder}s")
+    }
+}
+
+fn build_logs_follow_interval() -> Duration {
+    std::env::var("TACHYON_COMPUTE_BUILD_LOGS_FOLLOW_INTERVAL_MS")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .map(Duration::from_millis)
+        .unwrap_or(BUILD_LOGS_FOLLOW_INTERVAL)
+}
+
+pub(super) async fn run_builds_watch(
+    api: &ApiClient,
+    app_id: Option<&str>,
+    build_id: Option<&str>,
+    interval_secs: u64,
+    timeout_secs: Option<u64>,
+    no_logs: bool,
+    agent: bool,
+) -> Result<()> {
+    let resolved_build_id = match build_id {
+        Some(id) => id.to_string(),
+        None => {
+            let app_id = app_id
+                .ok_or_else(|| anyhow!("app_id required when --build-id is not specified"))?;
+            let resp: ListBuildsResponse = api
+                .get(&format!("/v1/compute/apps/{app_id}/builds"))
+                .await?;
+            resp.builds
+                .into_iter()
+                .next()
+                .ok_or_else(|| anyhow!("no builds found for app {app_id}"))?
+                .id
+        }
+    };
+
+    let interval = Duration::from_secs(interval_secs.max(1));
+    let started = Instant::now();
+    let timeout = timeout_secs.map(Duration::from_secs);
+    let mut next_token: Option<String> = None;
+    let mut last_status: Option<String> = None;
+    let mut last_artifact_status: Option<String> = None;
+    let mut last_deploy_hook_status: Option<String> = None;
+    let mut last_execution: Option<String> = None;
+
+    loop {
+        if let Some(timeout) = timeout {
+            if started.elapsed() >= timeout {
+                if agent {
+                    print_agent_event(&AgentBuildEvent::Result {
+                        build_id: &resolved_build_id,
+                        status: "timeout",
+                        artifact_status: "unknown",
+                        deploy_hook_status: "unknown",
+                        exit_code: 124,
+                        error_message: Some("watch timed out"),
+                    })?;
+                }
+                return Err(anyhow!("build {resolved_build_id} watch timed out"));
+            }
+        }
+
+        let build: BuildResponse = api
+            .get(&format!("/v1/compute/builds/{resolved_build_id}"))
+            .await?;
+        if last_status.as_deref() != Some(build.status.as_str())
+            || last_artifact_status.as_deref() != Some(build.artifact_status())
+            || last_deploy_hook_status.as_deref() != Some(build.deploy_hook_status())
+        {
+            if agent {
+                print_agent_event(&AgentBuildEvent::Build {
+                    build_id: &resolved_build_id,
+                    status: &build.status,
+                    artifact_status: build.artifact_status(),
+                    deploy_hook_status: build.deploy_hook_status(),
+                })?;
+            } else {
+                println!(
+                    "Build {}: effective={}, artifact={}, deploy_hook={}",
+                    resolved_build_id,
+                    build.status,
+                    build.artifact_status(),
+                    build.deploy_hook_status()
+                );
+            }
+            last_status = Some(build.status.clone());
+            last_artifact_status = Some(build.artifact_status().to_string());
+            last_deploy_hook_status = Some(build.deploy_hook_status().to_string());
+        }
+        if !agent {
+            let execution = build_execution_label(&build);
+            if execution.is_some() && execution != last_execution {
+                if let Some(execution) = execution.as_deref() {
+                    println!("Execution: {execution}");
+                }
+                last_execution = execution;
+            }
+        }
+
+        if !no_logs {
+            let path = format!("/v1/compute/builds/{resolved_build_id}/logs");
+            let logs_result: Result<BuildLogsResponse> = if let Some(token) = &next_token {
+                api.get_query(&path, &[("next_token", token.as_str())])
+                    .await
+            } else {
+                api.get(&path).await
+            };
+            let logs = match logs_result {
+                Ok(logs) => logs,
+                Err(err)
+                    if !is_terminal_build_status(&build.status)
+                        && is_http_not_found_error(&err) =>
+                {
+                    sleep(interval).await;
+                    continue;
+                }
+                Err(err) => return Err(err),
+            };
+            for line in &logs.lines {
+                if agent {
+                    print_agent_event(&AgentBuildEvent::Log {
+                        build_id: &resolved_build_id,
+                        timestamp: line.timestamp,
+                        message: compact_agent_message(&line.message),
+                    })?;
+                } else {
+                    println!("[{}] {}", format_timestamp_ms(line.timestamp), line.message);
+                }
+            }
+            next_token = logs.next_token;
+        }
+
+        if is_terminal_build_status(&build.status) {
+            let exit_code = if is_success_build_status(&build.status) {
+                0
+            } else {
+                1
+            };
+            if agent {
+                print_agent_event(&AgentBuildEvent::Result {
+                    build_id: &resolved_build_id,
+                    status: &build.status,
+                    artifact_status: build.artifact_status(),
+                    deploy_hook_status: build.deploy_hook_status(),
+                    exit_code,
+                    error_message: build.error_message.as_deref(),
+                })?;
+            } else if exit_code == 0 {
+                println!("Build {resolved_build_id} completed successfully.");
+            }
+            if exit_code != 0 {
+                return Err(anyhow!(
+                    "build {resolved_build_id} finished with status {}",
+                    build.status
+                ));
+            }
+            return Ok(());
+        }
+
+        sleep(interval).await;
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(super) struct RuntimeLogTailOptions {
+    pub(super) raw_json: bool,
+}
+
+#[derive(Debug, Default)]
+pub(super) struct SseEvent {
+    pub(super) event: Option<String>,
+    pub(super) data: Vec<String>,
+}
+
+pub(super) async fn run_runtime_log_tail(
+    api: &ApiClient,
+    app_id: &str,
+    options: RuntimeLogTailOptions,
+) -> Result<()> {
+    let url = format!("{}/v1/compute/apps/{app_id}/logs/tail", api.base_url);
+    let mut backoff = Duration::from_secs(1);
+    let max_backoff = Duration::from_secs(30);
+
+    loop {
+        let result = tokio::select! {
+            biased;
+            signal = tokio::signal::ctrl_c() => {
+                signal?;
+                eprintln!("runtime log tail stopped.");
+                return Ok(());
+            }
+            result = run_runtime_log_tail_once(api, &url, options) => result,
+        };
+
+        if let Err(error) = result {
+            eprintln!("runtime log tail error: {error}");
+        } else {
+            eprintln!("runtime log tail disconnected.");
+        }
+
+        eprintln!("reconnecting in {}s...", backoff.as_secs());
+        tokio::select! {
+            biased;
+            signal = tokio::signal::ctrl_c() => {
+                signal?;
+                eprintln!("runtime log tail stopped.");
+                return Ok(());
+            }
+            _ = sleep(backoff) => {}
+        }
+        backoff = std::cmp::min(backoff * 2, max_backoff);
+    }
+}
+
+pub(super) async fn run_runtime_log_tail_once(
+    api: &ApiClient,
+    url: &str,
+    options: RuntimeLogTailOptions,
+) -> Result<()> {
+    let mut resp = api
+        .client
+        .get(url)
+        .header(reqwest::header::ACCEPT, "text/event-stream")
+        .send()
+        .await
+        .map_err(|e| anyhow!("GET {url} failed: {e}"))?;
+    let status = resp.status();
+    if !status.is_success() {
+        let body = resp.text().await.unwrap_or_default();
+        return Err(anyhow!(
+            "runtime log tail failed: status={status}, body={body}"
+        ));
+    }
+
+    let mut utf8 = Utf8ChunkBuffer::default();
+    let mut pending = String::new();
+    while let Some(chunk) = resp.chunk().await? {
+        pending.push_str(&utf8.push_chunk(&chunk)?);
+        for event in drain_sse_events(&mut pending) {
+            if print_runtime_log_tail_event(&event, options.raw_json)? {
+                return Err(anyhow!("runtime log tail stream error"));
+            }
+        }
+        std::io::stdout().flush().ok();
+    }
+    pending.push_str(&utf8.finish()?);
+    if let Some(event) = parse_sse_event(&pending) {
+        if print_runtime_log_tail_event(&event, options.raw_json)? {
+            return Err(anyhow!("runtime log tail stream error"));
+        }
+        std::io::stdout().flush().ok();
+    }
+
+    Ok(())
+}
+
+#[derive(Debug, Default)]
+pub(super) struct Utf8ChunkBuffer {
+    pending: Vec<u8>,
+}
+
+impl Utf8ChunkBuffer {
+    pub(super) fn push_chunk(&mut self, chunk: &[u8]) -> Result<String> {
+        self.pending.extend_from_slice(chunk);
+        let valid_len = match std::str::from_utf8(&self.pending) {
+            Ok(_) => self.pending.len(),
+            Err(error) if error.error_len().is_none() => error.valid_up_to(),
+            Err(error) => {
+                return Err(anyhow!(
+                    "runtime log tail received invalid UTF-8 at byte {}",
+                    error.valid_up_to()
+                ));
+            }
+        };
+        if valid_len == 0 {
+            return Ok(String::new());
+        }
+        let text = std::str::from_utf8(&self.pending[..valid_len])
+            .expect("valid_up_to must point at a UTF-8 boundary")
+            .to_string();
+        self.pending.drain(..valid_len);
+        Ok(text)
+    }
+
+    pub(super) fn finish(self) -> Result<String> {
+        if self.pending.is_empty() {
+            return Ok(String::new());
+        }
+        String::from_utf8(self.pending)
+            .map_err(|error| anyhow!("runtime log tail ended with incomplete UTF-8: {error}"))
+    }
+}
+
+pub(super) fn drain_sse_events(pending: &mut String) -> Vec<SseEvent> {
+    let mut events = Vec::new();
+    while let Some((pos, delimiter_len)) = find_sse_event_boundary(pending) {
+        let raw = pending[..pos].to_string();
+        pending.drain(..pos + delimiter_len);
+        if let Some(event) = parse_sse_event(&raw) {
+            events.push(event);
+        }
+    }
+    events
+}
+
+fn find_sse_event_boundary(input: &str) -> Option<(usize, usize)> {
+    match (input.find("\r\n\r\n"), input.find("\n\n")) {
+        (Some(crlf), Some(lf)) if crlf <= lf => Some((crlf, 4)),
+        (Some(_), Some(lf)) => Some((lf, 2)),
+        (Some(crlf), None) => Some((crlf, 4)),
+        (None, Some(lf)) => Some((lf, 2)),
+        (None, None) => None,
+    }
+}
+
+fn parse_sse_event(raw: &str) -> Option<SseEvent> {
+    let mut event = SseEvent::default();
+    for line in raw.lines() {
+        let line = line.trim_end_matches('\r');
+        if line.is_empty() || line.starts_with(':') {
+            continue;
+        }
+        if let Some(value) = line.strip_prefix("event:") {
+            event.event = Some(value.trim().to_string());
+        } else if let Some(value) = line.strip_prefix("data:") {
+            event.data.push(value.trim_start().to_string());
+        }
+    }
+    (!event.data.is_empty()).then_some(event)
+}
+
+fn print_runtime_log_tail_event(event: &SseEvent, raw_json: bool) -> Result<bool> {
+    let data = event.data.join("\n");
+    if event.event.as_deref() == Some("error") {
+        eprintln!(
+            "runtime log tail stream error: {}",
+            format_runtime_log_line(&data)
+        );
+        return Ok(true);
+    }
+
+    if raw_json {
+        println!("{data}");
+    } else {
+        for line in format_runtime_log_lines(&data) {
+            println!("{line}");
+        }
+    }
+    Ok(false)
+}
+
+pub(super) fn format_runtime_log_lines(data: &str) -> Vec<String> {
+    let Ok(value) = serde_json::from_str::<Value>(data) else {
+        return vec![data.to_string()];
+    };
+    let Some(object) = value.as_object() else {
+        return vec![format_runtime_log_value(&value)];
+    };
+
+    let timestamp = runtime_log_timestamp(object);
+    let mut lines = Vec::new();
+
+    if let Some(summary) = runtime_log_request_summary(object) {
+        lines.push(format!("{timestamp} {summary}"));
+    }
+
+    if let Some(exceptions) = object.get("exceptions").and_then(Value::as_array) {
+        for exception in exceptions {
+            lines.push(format!(
+                "{timestamp} ERROR {}",
+                format_runtime_log_exception(exception)
+            ));
+        }
+    }
+
+    if let Some(logs) = object.get("logs").and_then(Value::as_array) {
+        for log in logs {
+            lines.push(format!("{timestamp} {}", format_runtime_log_console(log)));
+        }
+    }
+
+    if lines.is_empty() {
+        lines.push(format!(
+            "{timestamp} {}",
+            runtime_log_generic_summary(object, &value)
+        ));
+    }
+
+    lines
+}
+
+fn format_runtime_log_line(data: &str) -> String {
+    format_runtime_log_lines(data).join(" | ")
+}
+
+fn runtime_log_timestamp(object: &serde_json::Map<String, Value>) -> String {
+    let millis = object
+        .get("eventTimestamp")
+        .or_else(|| object.get("timestamp"))
+        .and_then(value_to_i64);
+    if let Some(millis) = millis {
+        return match Utc.timestamp_millis_opt(millis) {
+            chrono::LocalResult::Single(dt) => format!("[{}]", dt.format("%H:%M:%S")),
+            _ => format!("[{millis}]"),
+        };
+    }
+
+    let timestamp = object
+        .get("timestamp")
+        .or_else(|| object.get("eventTimestamp"))
+        .and_then(Value::as_str);
+    if let Some(timestamp) = timestamp {
+        if let Ok(parsed) = DateTime::parse_from_rfc3339(timestamp) {
+            return format!("[{}]", parsed.with_timezone(&Utc).format("%H:%M:%S"));
+        }
+    }
+
+    format!("[{}]", Utc::now().format("%H:%M:%S"))
+}
+
+fn runtime_log_request_summary(object: &serde_json::Map<String, Value>) -> Option<String> {
+    let request = object.get("request")?.as_object()?;
+    let method = request
+        .get("method")
+        .or_else(|| request.get("requestMethod"))
+        .and_then(Value::as_str)
+        .unwrap_or("REQUEST");
+    let url = request
+        .get("url")
+        .or_else(|| request.get("path"))
+        .and_then(Value::as_str)
+        .unwrap_or("-");
+    let path = runtime_log_url_path(url);
+    let status = object
+        .get("response")
+        .and_then(Value::as_object)
+        .and_then(|response| {
+            response
+                .get("status")
+                .or_else(|| response.get("statusCode"))
+                .and_then(value_to_i64)
+        })
+        .map(|status| status.to_string())
+        .unwrap_or_else(|| "-".to_string());
+    let cpu = object
+        .get("cpuTime")
+        .or_else(|| object.get("cpu_time"))
+        .and_then(value_to_i64);
+    let source = object
+        .get("scriptName")
+        .or_else(|| object.get("source"))
+        .and_then(Value::as_str);
+
+    let mut line = format!("{method} {path} {status}");
+    if let Some(cpu) = cpu {
+        line.push_str(&format!("  (cpu: {cpu}ms)"));
+    }
+    if let Some(source) = source {
+        line.push_str(&format!("  source={source}"));
+    }
+    Some(line)
+}
+
+fn runtime_log_generic_summary(object: &serde_json::Map<String, Value>, value: &Value) -> String {
+    let level = object
+        .get("level")
+        .or_else(|| object.get("severity"))
+        .and_then(Value::as_str)
+        .map(|level| level.to_ascii_uppercase());
+    let source = object
+        .get("source")
+        .or_else(|| object.get("scriptName"))
+        .and_then(Value::as_str);
+    let message = runtime_log_message(object).unwrap_or_else(|| format_runtime_log_value(value));
+
+    let mut parts = Vec::new();
+    if let Some(level) = level {
+        parts.push(level);
+    }
+    parts.push(message);
+    if let Some(source) = source {
+        parts.push(format!("source={source}"));
+    }
+    parts.join(" ")
+}
+
+fn runtime_log_message(object: &serde_json::Map<String, Value>) -> Option<String> {
+    for key in ["message", "outcome", "event"] {
+        if let Some(value) = object.get(key) {
+            let text = format_runtime_log_value(value);
+            if !text.is_empty() {
+                return Some(text);
+            }
+        }
+    }
+    None
+}
+
+fn runtime_log_url_path(url: &str) -> String {
+    if let Ok(parsed) = reqwest::Url::parse(url) {
+        let mut path = parsed.path().to_string();
+        if let Some(query) = parsed.query() {
+            path.push('?');
+            path.push_str(query);
+        }
+        if path.is_empty() {
+            "/".to_string()
+        } else {
+            path
+        }
+    } else {
+        url.to_string()
+    }
+}
+
+fn format_runtime_log_console(value: &Value) -> String {
+    if let Some(object) = value.as_object() {
+        let level = object
+            .get("level")
+            .or_else(|| object.get("severity"))
+            .and_then(Value::as_str)
+            .map(|level| level.to_ascii_uppercase());
+        let message = object
+            .get("message")
+            .or_else(|| object.get("text"))
+            .or_else(|| object.get("args"))
+            .map(format_runtime_log_value)
+            .unwrap_or_else(|| format_runtime_log_value(value));
+        if let Some(level) = level {
+            return format!("{level} {message}");
+        }
+        return message;
+    }
+    format_runtime_log_value(value)
+}
+
+fn format_runtime_log_exception(value: &Value) -> String {
+    if let Some(object) = value.as_object() {
+        let name = object
+            .get("name")
+            .and_then(Value::as_str)
+            .unwrap_or("Exception");
+        let message = object
+            .get("message")
+            .or_else(|| object.get("text"))
+            .map(format_runtime_log_value)
+            .unwrap_or_else(|| format_runtime_log_value(value));
+        if message.starts_with(name) {
+            message
+        } else {
+            format!("{name}: {message}")
+        }
+    } else {
+        format_runtime_log_value(value)
+    }
+}
+
+fn format_runtime_log_value(value: &Value) -> String {
+    match value {
+        Value::Null => String::new(),
+        Value::String(s) => s.clone(),
+        Value::Array(items) => items
+            .iter()
+            .map(format_runtime_log_value)
+            .filter(|item| !item.is_empty())
+            .collect::<Vec<_>>()
+            .join(" "),
+        _ => serde_json::to_string(value).unwrap_or_else(|_| value.to_string()),
+    }
+}
+
+fn value_to_i64(value: &Value) -> Option<i64> {
+    value
+        .as_i64()
+        .or_else(|| value.as_u64().and_then(|value| i64::try_from(value).ok()))
+        .or_else(|| value.as_f64().map(|value| value as i64))
+}
+
+/// Reproduce a Cloud Apps build locally in Docker. See `build_reproduce` for
+/// the parsing/invocation logic; this function wires CLI args and exit codes.
+pub(super) fn run_builds_reproduce(
+    build_id: &str,
+    mock_path: Option<&std::path::Path>,
+    source_dir: Option<&std::path::Path>,
+    image_override: Option<&str>,
+    dry_run: bool,
+) -> Result<()> {
+    let mock_path = mock_path.ok_or_else(|| {
+        anyhow!(
+            "Phase 1: --mock <path> is required. \
+             The build-config endpoint (PLT-913) is not yet available; \
+             pass a local YAML/JSON fixture matching BuildConfig."
+        )
+    })?;
+
+    let config = build_reproduce::load_mock_config(mock_path)?;
+    let spec = build_reproduce::BuildSpec::parse(&config.buildspec)?;
+
+    let owned_cwd;
+    let source_dir: &std::path::Path = match source_dir {
+        Some(p) => p,
+        None => {
+            owned_cwd = std::env::current_dir()?;
+            owned_cwd.as_path()
+        }
+    };
+
+    let invocation = build_reproduce::build_invocation(&config, &spec, source_dir, image_override);
+
+    eprintln!("=== reproduce build {build_id} ===");
+    eprintln!("  config build_id: {}", config.build_id);
+    eprintln!("  image:           {}", invocation.image);
+    eprintln!("  source:          {}", invocation.source_dir.display());
+    if !config.environment.secret_names.is_empty() {
+        eprintln!(
+            "  secrets (names): {}",
+            config.environment.secret_names.join(", ")
+        );
+        eprintln!("  (secret values are not provided in mock mode)");
+    }
+    eprintln!();
+
+    if dry_run {
+        println!("{}", invocation.to_display_string());
+        return Ok(());
+    }
+
+    let exit_code = invocation.execute()?;
+    if exit_code != 0 {
+        return Err(anyhow!("reproduce build exited with code {exit_code}"));
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn build_with_job_run(
+        phase: &str,
+        status: Option<&str>,
+        stuck: Option<BuildStuckResponse>,
+    ) -> BuildResponse {
+        BuildResponse {
+            id: "bld_test".to_string(),
+            app_id: "app_test".to_string(),
+            trigger: Some("manual".to_string()),
+            source_branch: Some("main".to_string()),
+            commit_sha: Some("0123456789abcdef".to_string()),
+            commit_message: None,
+            pr_number: None,
+            status: "building".to_string(),
+            artifact_status: Some("building".to_string()),
+            deploy_hook_status: Some("expected".to_string()),
+            duration_secs: None,
+            error_message: None,
+            iac_plan_output: None,
+            iac_success: None,
+            created_at: None,
+            updated_at: None,
+            job_run: Some(BuildJobRunResponse {
+                job_run_id: "jr_test".to_string(),
+                status: status.map(ToString::to_string),
+                phase: phase.to_string(),
+                runner_id: None,
+                claimed_at: None,
+                started_at: None,
+                finished_at: None,
+                queued_elapsed_secs: Some(901),
+                running_elapsed_secs: None,
+            }),
+            stuck,
+        }
+    }
+
+    /// A build that failed in the IaC step still carries an
+    /// error_message describing a successful application build, so
+    /// the IaC fields must be deserialized and reported.
+    #[test]
+    fn build_response_deserializes_iac_fields() {
+        let build: BuildResponse = serde_json::from_str(
+            r#"{
+                "id": "bld_test",
+                "app_id": "app_test",
+                "status": "failed",
+                "error_message": "Finished `release` profile",
+                "iac_plan_output": "GLIBC_2.39 not found",
+                "iac_success": false
+            }"#,
+        )
+        .expect("build response with IaC fields must deserialize");
+
+        assert_eq!(
+            build.iac_plan_output.as_deref(),
+            Some("GLIBC_2.39 not found")
+        );
+        assert_eq!(build.iac_success, Some(false));
+    }
+
+    /// The API omits the IaC fields for builds that never ran an
+    /// IaC step, so they must stay optional.
+    #[test]
+    fn build_response_deserializes_without_iac_fields() {
+        let build: BuildResponse = serde_json::from_str(
+            r#"{"id": "bld_test", "app_id": "app_test", "status": "succeeded"}"#,
+        )
+        .expect("build response without IaC fields must deserialize");
+
+        assert!(build.iac_plan_output.is_none());
+        assert!(build.iac_success.is_none());
+        assert_eq!(build.artifact_status(), "succeeded");
+        assert_eq!(build.deploy_hook_status(), "legacy");
+    }
+
+    #[test]
+    fn build_response_deserializes_independent_build_gate_statuses() {
+        let build: BuildResponse = serde_json::from_str(
+            r#"{
+                "id": "bld_test",
+                "app_id": "app_test",
+                "status": "failed",
+                "artifact_status": "succeeded",
+                "deploy_hook_status": "not_reported"
+            }"#,
+        )
+        .expect("independent build gate statuses must deserialize");
+
+        assert_eq!(build.status, "failed");
+        assert_eq!(build.artifact_status(), "succeeded");
+        assert_eq!(build.deploy_hook_status(), "not_reported");
+    }
+
+    #[test]
+    fn build_execution_label_prefers_job_run_phase() {
+        let build = build_with_job_run(
+            "waiting_for_runner",
+            Some("pending"),
+            Some(BuildStuckResponse {
+                reason: "never_claimed".to_string(),
+                threshold_secs: 900,
+                elapsed_secs: 901,
+            }),
+        );
+
+        assert_eq!(
+            build_execution_label(&build).as_deref(),
+            Some("Waiting for runner")
+        );
+    }
+
+    #[test]
+    fn build_execution_label_uses_stuck_reason_without_job_run() {
+        let mut build = build_with_job_run("waiting_for_runner", None, None);
+        build.job_run = None;
+        build.stuck = Some(BuildStuckResponse {
+            reason: "never_claimed".to_string(),
+            threshold_secs: 900,
+            elapsed_secs: 901,
+        });
+
+        assert_eq!(
+            build_execution_label(&build).as_deref(),
+            Some("Runner not claimed")
+        );
+    }
+
+    #[test]
+    fn format_build_seconds_matches_console_labels() {
+        assert_eq!(format_build_seconds(59), "59s");
+        assert_eq!(format_build_seconds(60), "1m");
+        assert_eq!(format_build_seconds(901), "15m 1s");
+    }
+}

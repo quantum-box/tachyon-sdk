@@ -93,10 +93,7 @@ pub struct MultiTenancy {
 }
 
 impl MultiTenancy {
-    pub fn new(
-        platform: Option<PlatformId>,
-        operator: Option<OperatorId>,
-    ) -> Self {
+    pub fn new(platform: Option<PlatformId>, operator: Option<OperatorId>) -> Self {
         Self { platform, operator }
     }
 
@@ -125,8 +122,8 @@ impl MultiTenancyAction for MultiTenancy {
     }
 
     fn get_operator_id(&self) -> AuthResult<OperatorId> {
-        self.operator.clone().ok_or_else(|| {
-            AuthError::BadRequest("Operator ID is required".to_string())
-        })
+        self.operator
+            .clone()
+            .ok_or_else(|| AuthError::BadRequest("Operator ID is required".to_string()))
     }
 }

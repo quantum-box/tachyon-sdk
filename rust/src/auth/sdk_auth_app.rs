@@ -640,6 +640,7 @@ impl AuthApp for SdkAuthApp {
         Ok(OAuth2ClientCreated {
             client_id: response.client_id,
             client_secret: response.client_secret,
+            provider_user_pool_id: response.provider_user_pool_id.flatten(),
         })
     }
 

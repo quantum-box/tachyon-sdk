@@ -1,13 +1,13 @@
 
 # AgentChunkEventOneOf10
 
-Emitted when a tool job is created, before sync polling begins. Frontend can use the job_id to subscribe to the tool job\'s own SSE stream for real-time progress.
+Emitted when a coding job is created, before sync polling begins. Frontend can use the coding_job_id to subscribe to the coding job\'s own SSE stream for real-time progress.
 
 ## Properties
 
 Name | Type
 ------------ | -------------
-`jobId` | string
+`codingJobId` | string
 `provider` | string
 `toolId` | string
 `type` | string
@@ -19,7 +19,7 @@ import type { AgentChunkEventOneOf10 } from '@tachyon/sdk'
 
 // TODO: Update the object below with actual values
 const example = {
-  "jobId": null,
+  "codingJobId": null,
   "provider": null,
   "toolId": null,
   "type": null,
@@ -37,5 +37,4 @@ console.log(exampleParsed)
 ```
 
 [[Back to top]](#) [[Back to API list]](../README.md#api-endpoints) [[Back to Model list]](../README.md#models) [[Back to README]](../README.md)
-
 

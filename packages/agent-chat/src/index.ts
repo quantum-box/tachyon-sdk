@@ -4,15 +4,18 @@ export type { AgentChatClientConfig } from './client/AgentChatClient'
 
 // API factory functions
 export { createChatroomApi } from './client/chatroom-api'
+export { createSessionApi } from './client/session-api'
 export { createAgentApi } from './client/agent-api'
 export { createMemoryApi } from './client/memory-api'
 export { createProtocolApi } from './client/protocol-api'
 export { createInsightApi } from './client/insight-api'
-export { createToolJobApi } from './client/tool-job-api'
+export { createCodingJobApi } from './client/coding-job-api'
 export { createToolSearchApi } from './client/tool-search-api'
 
 // Types
 export type {
+	AgentSession,
+	CreateAgentSessionResponse,
 	AgentChunk,
 	AgentSource,
 	ClientToolDefinition,
@@ -47,14 +50,14 @@ export type {
 	// Tool Result
 	SubmitToolResultRequest,
 	SubmitToolResultResponse,
-	// Tool Jobs
-	ToolJobStatus,
-	ToolJobBilling,
-	ToolJob,
-	CreateToolJobRequest,
-	CreateToolJobResponse,
-	GetToolJobsResponse,
-	GetToolJobResponse,
+	// Coding Jobs
+	CodingJobStatus,
+	CodingJobBilling,
+	CodingJob,
+	CreateCodingJobRequest,
+	CreateCodingJobResponse,
+	GetCodingJobsResponse,
+	GetCodingJobResponse,
 	// Tool Search
 	ToolSearchTool,
 	ToolSearchResultGroup,
@@ -75,13 +78,14 @@ export type {
 
 // --- Hooks ---
 export { useAgentChat } from './hooks/useAgentChat'
+export { useAgentSessions } from './hooks/useAgentSessions'
 export { useAgentStream } from './hooks/useAgentStream'
 export type { UseAgentStreamOptions } from './hooks/useAgentStream'
 export { useChatRoom } from './hooks/useChatRoom'
 export { useSavedMemory } from './hooks/useSavedMemory'
 export { useAgentProtocols } from './hooks/useAgentProtocols'
 export { useUserInsights } from './hooks/useUserInsights'
-export { useToolJobs } from './hooks/useToolJobs'
+export { useCodingJobs } from './hooks/useCodingJobs'
 export {
 	usePersisted,
 	PERSISTENCE_KEYS,

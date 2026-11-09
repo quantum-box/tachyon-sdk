@@ -1,4 +1,4 @@
-//! Worker runtime boundary for Tachyon Tool Jobs.
+//! Worker runtime boundary for Tachyon Coding Jobs.
 //!
 //! This module contains the stable traits and DTOs needed by a worker
 //! runtime. It intentionally avoids Tachyon server-side crates so SDK
@@ -28,10 +28,7 @@ pub struct WorkerRuntimeError {
 
 impl WorkerRuntimeError {
     /// Creates a new worker runtime error.
-    pub fn new(
-        code: impl Into<String>,
-        message: impl Into<String>,
-    ) -> Self {
+    pub fn new(code: impl Into<String>, message: impl Into<String>) -> Self {
         Self {
             code: code.into(),
             message: message.into(),
@@ -47,16 +44,12 @@ impl fmt::Display for WorkerRuntimeError {
 
 impl std::error::Error for WorkerRuntimeError {}
 
-/// Provider selected for a Tool Job.
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize,
-)]
+/// Provider selected for a Coding Job.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum WorkerProviderKind {
     /// Codex CLI provider.
     Codex,
-    /// Cloud App Build provider.
-    CloudAppBuild,
     /// Claude Code CLI provider.
     ClaudeCode,
     /// Containerized Codex provider.
@@ -71,7 +64,6 @@ impl fmt::Display for WorkerProviderKind {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Codex => write!(f, "codex"),
-            Self::CloudAppBuild => write!(f, "cloud_app_build"),
             Self::ClaudeCode => write!(f, "claude_code"),
             Self::ContainerizedCodex => {
                 write!(f, "containerized_codex")
@@ -100,8 +92,8 @@ pub struct WorkerExecutorContext {
 pub struct WorkerJobPayload {
     /// Execution state ID that owns this job.
     pub execution_state_id: String,
-    /// Tool Job ID for tracking.
-    pub tool_job_id: String,
+    /// Coding Job ID for tracking.
+    pub coding_job_id: String,
     /// Provider name as received from the API or queue backend.
     pub provider: String,
     /// Prompt or task to execute.
@@ -132,8 +124,8 @@ pub enum WorkerQueuedJobStatus {
 pub struct WorkerQueuedJob {
     /// Backend-specific queue entry ID.
     pub queue_id: String,
-    /// Tool Job ID.
-    pub job_id: String,
+    /// Coding Job ID.
+    pub coding_job_id: String,
     /// Job payload.
     pub payload: WorkerJobPayload,
     /// Current queue status.
@@ -151,8 +143,8 @@ pub struct WorkerQueuedJob {
 /// Request passed to a job executor.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct WorkerJobRequest {
-    /// Tool Job ID.
-    pub job_id: String,
+    /// Coding Job ID.
+    pub coding_job_id: String,
     /// Selected provider.
     pub provider: WorkerProviderKind,
     /// Prompt or task to execute.
@@ -282,64 +274,53 @@ pub trait WorkerJobQueue: Send + Sync + fmt::Debug {
     /// Enqueue a job for immediate processing.
     async fn enqueue(
         &self,
-        job_id: &str,
+        coding_job_id: &str,
         payload: WorkerJobPayload,
     ) -> WorkerRuntimeResult<String>;
 
     /// Enqueue a job after a delay.
     async fn enqueue_with_delay(
         &self,
-        job_id: &str,
+        coding_job_id: &str,
         payload: WorkerJobPayload,
         delay: Duration,
     ) -> WorkerRuntimeResult<String>;
 
     /// Dequeue the next available job.
-    async fn dequeue(&self)
-        -> WorkerRuntimeResult<Option<WorkerQueuedJob>>;
+    async fn dequeue(&self) -> WorkerRuntimeResult<Option<WorkerQueuedJob>>;
 
     /// Acknowledge successful job processing.
     async fn ack(&self, queue_id: &str) -> WorkerRuntimeResult<()>;
 
     /// Return a job to the queue for retry.
-    async fn nack(
-        &self,
-        queue_id: &str,
-        delay: Duration,
-    ) -> WorkerRuntimeResult<()>;
+    async fn nack(&self, queue_id: &str, delay: Duration) -> WorkerRuntimeResult<()>;
 
     /// Return the current pending job count when the backend can provide it.
     async fn pending_count(&self) -> WorkerRuntimeResult<u64>;
 
     /// Fetch a queued job by backend queue ID.
-    async fn get(
-        &self,
-        queue_id: &str,
-    ) -> WorkerRuntimeResult<Option<WorkerQueuedJob>>;
+    async fn get(&self, queue_id: &str) -> WorkerRuntimeResult<Option<WorkerQueuedJob>>;
 }
 
 /// Executes one worker job.
 #[async_trait]
 pub trait JobExecutor: Send + Sync + fmt::Debug {
     /// Execute a job request and return its normalized result.
-    async fn execute(
-        &self,
-        request: WorkerJobRequest,
-    ) -> WorkerRuntimeResult<WorkerJobResult>;
+    async fn execute(&self, request: WorkerJobRequest) -> WorkerRuntimeResult<WorkerJobResult>;
 }
 
 /// Publishes streaming events for a worker job.
 #[async_trait]
 pub trait WorkerEventPublisher: Send + Sync + fmt::Debug {
-    /// Publish an event for a specific Tool Job.
+    /// Publish an event for a specific Coding Job.
     async fn publish(
         &self,
-        job_id: &str,
+        coding_job_id: &str,
         event: WorkerStreamEvent,
     ) -> WorkerRuntimeResult<()>;
 
     /// Close event resources for a job.
-    async fn close(&self, job_id: &str) -> WorkerRuntimeResult<()>;
+    async fn close(&self, coding_job_id: &str) -> WorkerRuntimeResult<()>;
 }
 
 /// Runtime lifecycle handle for a worker process.
@@ -367,7 +348,6 @@ mod tests {
     fn worker_provider_kind_names_are_stable() {
         let cases = [
             (WorkerProviderKind::Codex, "codex"),
-            (WorkerProviderKind::CloudAppBuild, "cloud_app_build"),
             (WorkerProviderKind::ClaudeCode, "claude_code"),
             (
                 WorkerProviderKind::ContainerizedCodex,
@@ -384,10 +364,7 @@ mod tests {
                 format!("\"{expected}\"")
             );
             assert_eq!(
-                serde_json::from_str::<WorkerProviderKind>(&format!(
-                    "\"{expected}\""
-                ))
-                .unwrap(),
+                serde_json::from_str::<WorkerProviderKind>(&format!("\"{expected}\"")).unwrap(),
                 provider
             );
         }
@@ -398,10 +375,10 @@ mod tests {
         let now = Utc::now();
         let job = WorkerQueuedJob {
             queue_id: "queue-1".to_string(),
-            job_id: "job-1".to_string(),
+            coding_job_id: "job-1".to_string(),
             payload: WorkerJobPayload {
                 execution_state_id: "exec-1".to_string(),
-                tool_job_id: "job-1".to_string(),
+                coding_job_id: "job-1".to_string(),
                 provider: "codex".to_string(),
                 prompt: "Write tests".to_string(),
                 retry_count: 2,
@@ -415,8 +392,7 @@ mod tests {
         };
 
         let encoded = serde_json::to_string(&job).unwrap();
-        let decoded: WorkerQueuedJob =
-            serde_json::from_str(&encoded).unwrap();
+        let decoded: WorkerQueuedJob = serde_json::from_str(&encoded).unwrap();
 
         assert_eq!(decoded, job);
     }
@@ -428,10 +404,7 @@ mod tests {
 
     #[async_trait]
     impl JobExecutor for RecordingExecutor {
-        async fn execute(
-            &self,
-            request: WorkerJobRequest,
-        ) -> WorkerRuntimeResult<WorkerJobResult> {
+        async fn execute(&self, request: WorkerJobRequest) -> WorkerRuntimeResult<WorkerJobResult> {
             self.prompts.lock().unwrap().push(request.prompt);
             Ok(WorkerJobResult {
                 normalized_output: Some(WorkerNormalizedOutput {
@@ -450,7 +423,7 @@ mod tests {
 
         let result = boxed
             .execute(WorkerJobRequest {
-                job_id: "job-1".to_string(),
+                coding_job_id: "job-1".to_string(),
                 provider: WorkerProviderKind::Codex,
                 prompt: "Do work".to_string(),
                 context_paths: vec![],
@@ -465,10 +438,7 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(
-            executor.prompts.lock().unwrap().as_slice(),
-            ["Do work"]
-        );
+        assert_eq!(executor.prompts.lock().unwrap().as_slice(), ["Do work"]);
         assert_eq!(
             result.normalized_output.unwrap().body,
             serde_json::json!({"ok": true})

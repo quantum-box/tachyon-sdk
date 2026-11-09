@@ -1,8 +1,10 @@
 mod apply;
 mod discovery;
+mod oauth2_resource;
 mod plan;
 mod reconcile;
-mod validate;
+mod schema;
+pub(crate) mod validate;
 
 use anyhow::{anyhow, Result};
 use clap::{Args, Subcommand};
@@ -25,6 +27,8 @@ pub enum ManifestCommand {
     Apply(ApplyArgs),
     /// Reconcile local manifest desired state with live resources
     Reconcile(ApplyArgs),
+    /// Print a JSON Schema for a supported manifest kind (for agents/editors)
+    Schema(schema::SchemaArgs),
 }
 
 #[derive(Debug, Clone, Args)]
@@ -48,6 +52,18 @@ pub struct ApplyArgs {
     /// Environment label for CloudApps manifest operations
     #[arg(long, default_value = "sandbox")]
     pub environment: String,
+    /// Change-control approval token for protected production applys.
+    ///
+    /// Optional for self-tenant operations (authorized server-side by
+    /// tenant permissions); required by the server for change-control
+    /// protected tenants. Verified fail-fast, forwarded as a dedicated
+    /// header, and never printed.
+    #[arg(
+        long = "change-control-token",
+        env = "TACHYON_CHANGE_CONTROL_APPROVAL_TOKEN",
+        hide_env_values = true
+    )]
+    pub change_control_token: Option<String>,
     /// Remove resources absent from manifest where supported
     #[arg(long)]
     pub prune: bool,
@@ -65,6 +81,7 @@ pub async fn run(
     tenant_id: Option<&str>,
 ) -> Result<()> {
     match &args.command {
+        ManifestCommand::Schema(schema_args) => schema::run(schema_args),
         ManifestCommand::Validate(validate_args) => validate::run(validate_args),
         ManifestCommand::Plan(apply_args) => {
             let config = config.ok_or_else(|| anyhow!("manifest plan requires tenant context"))?;
@@ -90,6 +107,7 @@ pub async fn run(
 
 pub fn context_file(args: &ManifestArgs) -> Option<&Path> {
     match &args.command {
+        ManifestCommand::Schema(_) => None,
         ManifestCommand::Validate(args) => args.file.as_deref(),
         ManifestCommand::Plan(args)
         | ManifestCommand::Apply(args)
@@ -98,7 +116,10 @@ pub fn context_file(args: &ManifestArgs) -> Option<&Path> {
 }
 
 pub fn needs_tenant(args: &ManifestArgs) -> bool {
-    !matches!(args.command, ManifestCommand::Validate(_))
+    !matches!(
+        args.command,
+        ManifestCommand::Validate(_) | ManifestCommand::Schema(_)
+    )
 }
 
 pub async fn reconcile_alias(

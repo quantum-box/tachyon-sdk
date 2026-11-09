@@ -4,6 +4,7 @@ use std::path::Path;
 use std::process::Command;
 use std::sync::mpsc;
 use std::thread;
+use std::time::Duration;
 
 use tempfile::TempDir;
 
@@ -52,6 +53,32 @@ fn start_server_with_responses(
                 body
             );
             stream.write_all(response.as_bytes()).unwrap();
+        }
+    });
+    (url, rx, handle)
+}
+
+fn start_server_with_body_delays(
+    responses: Vec<(Duration, &'static str)>,
+) -> (String, mpsc::Receiver<String>, thread::JoinHandle<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    let (tx, rx) = mpsc::channel();
+    let handle = thread::spawn(move || {
+        for (body_delay, body) in responses {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut buf = [0_u8; 8192];
+            let n = stream.read(&mut buf).unwrap();
+            tx.send(String::from_utf8_lossy(&buf[..n]).to_string())
+                .unwrap();
+            let headers = format!(
+                "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n",
+                body.len()
+            );
+            stream.write_all(headers.as_bytes()).unwrap();
+            stream.flush().unwrap();
+            thread::sleep(body_delay);
+            let _ = stream.write_all(body.as_bytes());
         }
     });
     (url, rx, handle)
@@ -171,7 +198,7 @@ fn compute_builds_watch_keeps_terminal_log_404_as_error() {
 fn compute_builds_watch_agent_emits_compact_jsonl_and_exits_success() {
     let tmp = TempDir::new().unwrap();
     let (api_url, rx, handle) = start_server(vec![
-        r#"{"id":"bld_test1234567890","app_id":"app_test1234567890","status":"succeeded","error_message":null}"#,
+        r#"{"id":"bld_test1234567890","app_id":"app_test1234567890","status":"succeeded","artifact_status":"succeeded","deploy_hook_status":"succeeded","error_message":null}"#,
         r#"{"lines":[{"timestamp":1767225600000,"message":"build finished"}],"next_token":null,"is_complete":true}"#,
     ]);
 
@@ -211,10 +238,57 @@ fn compute_builds_watch_agent_emits_compact_jsonl_and_exits_success() {
     assert_eq!(lines.len(), 3, "stdout:\n{stdout}");
     assert_eq!(lines[0]["type"], "build");
     assert_eq!(lines[0]["status"], "succeeded");
+    assert_eq!(lines[0]["artifact_status"], "succeeded");
+    assert_eq!(lines[0]["deploy_hook_status"], "succeeded");
     assert_eq!(lines[1]["type"], "log");
     assert_eq!(lines[1]["message"], "build finished");
     assert_eq!(lines[2]["type"], "result");
     assert_eq!(lines[2]["exit_code"], 0);
+}
+
+#[test]
+fn compute_builds_watch_uses_effective_status_for_deploy_hook_failure_exit() {
+    let tmp = TempDir::new().unwrap();
+    let (api_url, rx, handle) = start_server(vec![
+        r#"{"id":"bld_test1234567890","app_id":"app_test1234567890","status":"failed","artifact_status":"succeeded","deploy_hook_status":"failed","error_message":"deploy hook failed"}"#,
+    ]);
+
+    let output = isolated_command(tmp.path())
+        .env("TACHYON_API_URL", api_url)
+        .args([
+            "compute",
+            "builds",
+            "watch",
+            "--build-id",
+            "bld_test1234567890",
+            "--no-logs",
+            "--agent",
+        ])
+        .output()
+        .expect("run tachyon compute builds watch");
+
+    assert!(
+        !output.status.success(),
+        "deploy hook failure must produce a failing exit status\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+
+    let request = rx.recv().unwrap();
+    handle.join().unwrap();
+    assert!(request.starts_with("GET /v1/compute/builds/bld_test1234567890 "));
+
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let lines: Vec<serde_json::Value> = stdout
+        .lines()
+        .map(|line| serde_json::from_str(line).expect("json line"))
+        .collect();
+    assert_eq!(lines.len(), 2, "stdout:\n{stdout}");
+    assert_eq!(lines[0]["artifact_status"], "succeeded");
+    assert_eq!(lines[0]["deploy_hook_status"], "failed");
+    assert_eq!(lines[1]["type"], "result");
+    assert_eq!(lines[1]["status"], "failed");
+    assert_eq!(lines[1]["exit_code"], 1);
 }
 
 #[test]
@@ -257,6 +331,174 @@ fn compute_builds_watch_latest_build_uses_app_builds_endpoint() {
 }
 
 #[test]
+fn compute_builds_logs_follow_stops_after_repeated_none_token_no_progress() {
+    let tmp = TempDir::new().unwrap();
+    let (api_url, rx, handle) = start_server(vec![
+        r#"{"lines":[],"next_token":null,"is_complete":false}"#,
+        r#"{"lines":[],"next_token":null,"is_complete":false}"#,
+        r#"{"lines":[],"next_token":null,"is_complete":false}"#,
+    ]);
+
+    let output = isolated_command(tmp.path())
+        .env("TACHYON_API_URL", api_url)
+        .env("TACHYON_COMPUTE_BUILD_LOGS_FOLLOW_INTERVAL_MS", "1")
+        .args([
+            "compute",
+            "builds",
+            "logs",
+            "--build-id",
+            "bld_test1234567890",
+            "--follow",
+        ])
+        .output()
+        .expect("run tachyon compute builds logs --follow");
+
+    assert!(
+        output.status.success(),
+        "logs follow failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+
+    let first_req = rx.recv().unwrap();
+    let second_req = rx.recv().unwrap();
+    let third_req = rx.recv().unwrap();
+    handle.join().unwrap();
+    assert!(first_req.starts_with("GET /v1/compute/builds/bld_test1234567890/logs "));
+    assert!(second_req.starts_with("GET /v1/compute/builds/bld_test1234567890/logs "));
+    assert!(third_req.starts_with("GET /v1/compute/builds/bld_test1234567890/logs "));
+    assert!(
+        String::from_utf8(output.stdout).unwrap().is_empty(),
+        "stdout should not include duplicate no-progress logs",
+    );
+}
+
+#[test]
+fn compute_builds_logs_follow_continues_when_new_logs_arrive_without_token() {
+    let tmp = TempDir::new().unwrap();
+    let (api_url, rx, handle) = start_server(vec![
+        r#"{"lines":[],"next_token":null,"is_complete":false}"#,
+        r#"{"lines":[{"timestamp":1767225600000,"message":"installing"}],"next_token":null,"is_complete":false}"#,
+        r#"{"lines":[{"timestamp":1767225600000,"message":"installing"},{"timestamp":1767225601000,"message":"build finished"}],"next_token":null,"is_complete":true}"#,
+        r#"{"id":"bld_test1234567890","app_id":"app_test1234567890","status":"succeeded","error_message":null}"#,
+    ]);
+
+    let output = isolated_command(tmp.path())
+        .env("TACHYON_API_URL", api_url)
+        .env("TACHYON_COMPUTE_BUILD_LOGS_FOLLOW_INTERVAL_MS", "1")
+        .args([
+            "compute",
+            "builds",
+            "logs",
+            "--build-id",
+            "bld_test1234567890",
+            "--follow",
+        ])
+        .output()
+        .expect("run tachyon compute builds logs --follow");
+
+    assert!(
+        output.status.success(),
+        "logs follow failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+
+    let first_req = rx.recv().unwrap();
+    let second_req = rx.recv().unwrap();
+    let third_req = rx.recv().unwrap();
+    let fourth_req = rx.recv().unwrap();
+    handle.join().unwrap();
+    assert!(first_req.starts_with("GET /v1/compute/builds/bld_test1234567890/logs "));
+    assert!(second_req.starts_with("GET /v1/compute/builds/bld_test1234567890/logs "));
+    assert!(third_req.starts_with("GET /v1/compute/builds/bld_test1234567890/logs "));
+    assert!(fourth_req.starts_with("GET /v1/compute/builds/bld_test1234567890 "));
+
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("installing"), "stdout:\n{stdout}");
+    assert!(stdout.contains("build finished"), "stdout:\n{stdout}");
+}
+
+#[test]
+fn compute_builds_logs_follow_continues_when_next_token_advances() {
+    let tmp = TempDir::new().unwrap();
+    let (api_url, rx, handle) = start_server(vec![
+        r#"{"lines":[],"next_token":"n1","is_complete":false}"#,
+        r#"{"lines":[],"next_token":"n2","is_complete":false}"#,
+        r#"{"lines":[{"timestamp":1767225600000,"message":"build finished"}],"next_token":null,"is_complete":true}"#,
+        r#"{"id":"bld_test1234567890","app_id":"app_test1234567890","status":"succeeded","error_message":null}"#,
+    ]);
+
+    let output = isolated_command(tmp.path())
+        .env("TACHYON_API_URL", api_url)
+        .env("TACHYON_COMPUTE_BUILD_LOGS_FOLLOW_INTERVAL_MS", "1")
+        .args([
+            "compute",
+            "builds",
+            "logs",
+            "--build-id",
+            "bld_test1234567890",
+            "--follow",
+        ])
+        .output()
+        .expect("run tachyon compute builds logs --follow");
+
+    assert!(
+        output.status.success(),
+        "logs follow failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+
+    let first_req = rx.recv().unwrap();
+    let second_req = rx.recv().unwrap();
+    let third_req = rx.recv().unwrap();
+    let fourth_req = rx.recv().unwrap();
+    handle.join().unwrap();
+    assert!(first_req.starts_with("GET /v1/compute/builds/bld_test1234567890/logs "));
+    assert!(second_req.starts_with("GET /v1/compute/builds/bld_test1234567890/logs?next_token=n1 "));
+    assert!(third_req.starts_with("GET /v1/compute/builds/bld_test1234567890/logs?next_token=n2 "));
+    assert!(fourth_req.starts_with("GET /v1/compute/builds/bld_test1234567890 "));
+
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("build finished"), "stdout:\n{stdout}");
+}
+
+#[test]
+fn compute_builds_logs_without_follow_fetches_once() {
+    let tmp = TempDir::new().unwrap();
+    let (api_url, rx, handle) = start_server(vec![
+        r#"{"lines":[{"timestamp":1767225600000,"message":"first page"}],"next_token":"n1","is_complete":false}"#,
+    ]);
+
+    let output = isolated_command(tmp.path())
+        .env("TACHYON_API_URL", api_url)
+        .args([
+            "compute",
+            "builds",
+            "logs",
+            "--build-id",
+            "bld_test1234567890",
+        ])
+        .output()
+        .expect("run tachyon compute builds logs");
+
+    assert!(
+        output.status.success(),
+        "logs failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+
+    let request = rx.recv().unwrap();
+    handle.join().unwrap();
+    assert!(request.starts_with("GET /v1/compute/builds/bld_test1234567890/logs "));
+
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("first page"), "stdout:\n{stdout}");
+}
+
+#[test]
 fn compute_builds_list_prefers_public_preview_url() {
     let tmp = TempDir::new().unwrap();
     let app_id = "app_01kp4vm07tr3d4375597d15gkp";
@@ -281,7 +523,7 @@ fn compute_builds_list_prefers_public_preview_url() {
     let first_req = rx.recv().unwrap();
     let second_req = rx.recv().unwrap();
     handle.join().unwrap();
-    assert!(first_req.starts_with(&format!("GET /v1/compute/apps/{app_id}/builds ")));
+    assert!(first_req.starts_with(&format!("GET /v1/compute/apps/{app_id}/builds?limit=10 ")));
     assert!(second_req.starts_with(&format!(
         "GET /v1/compute/apps/{app_id}/deployments?environment=preview "
     )));
@@ -323,7 +565,7 @@ fn compute_builds_list_converts_pages_dev_preview_url_using_build_pr_number() {
     let first_req = rx.recv().unwrap();
     let second_req = rx.recv().unwrap();
     handle.join().unwrap();
-    assert!(first_req.starts_with(&format!("GET /v1/compute/apps/{app_id}/builds ")));
+    assert!(first_req.starts_with(&format!("GET /v1/compute/apps/{app_id}/builds?limit=10 ")));
     assert!(second_req.starts_with(&format!(
         "GET /v1/compute/apps/{app_id}/deployments?environment=preview "
     )));
@@ -341,14 +583,175 @@ fn compute_builds_list_converts_pages_dev_preview_url_using_build_pr_number() {
 }
 
 #[test]
-fn compute_preview_create_wait_prints_preview_url() {
+fn compute_builds_list_sends_limit_and_reports_stage_timings() {
+    let tmp = TempDir::new().unwrap();
+    let app_id = "app_01kp4vm07tr3d4375597d15gkp";
+    let (api_url, rx, handle) = start_server(vec![
+        r#"{"builds":[{"id":"bld_01kp4vm07tr3d4375597d15gka","app_id":"app_01kp4vm07tr3d4375597d15gkp","status":"succeeded"}]}"#,
+    ]);
+
+    let output = isolated_command(tmp.path())
+        .env("TACHYON_API_URL", api_url)
+        .args([
+            "compute",
+            "builds",
+            "list",
+            app_id,
+            "--limit",
+            "3",
+            "--timeout-secs",
+            "1",
+            "--verbose",
+            "--json",
+        ])
+        .output()
+        .expect("run tachyon compute builds list");
+
+    assert!(
+        output.status.success(),
+        "builds list failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+
+    let request = rx.recv().unwrap();
+    handle.join().unwrap();
+    assert!(request.starts_with(&format!("GET /v1/compute/apps/{app_id}/builds?limit=3 ")));
+
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    for stage in [
+        "[timing] resolve app:",
+        "[timing] builds response headers:",
+        "[timing] builds response body:",
+        "[timing] builds response bytes:",
+        "[timing] builds JSON decode:",
+        "[timing] render output:",
+        "[timing] command total:",
+    ] {
+        assert!(stderr.contains(stage), "missing {stage}\nstderr:\n{stderr}");
+    }
+    assert!(
+        !stderr.contains("Still waiting"),
+        "fast request should not emit progress\nstderr:\n{stderr}"
+    );
+}
+
+#[test]
+fn compute_builds_list_times_out_slow_body_with_progress() {
+    let tmp = TempDir::new().unwrap();
+    let app_id = "app_01kp4vm07tr3d4375597d15gkp";
+    let (api_url, rx, handle) = start_server_with_body_delays(vec![(
+        Duration::from_secs(4),
+        r#"{"builds":[{"id":"bld_01kp4vm07tr3d4375597d15gka","app_id":"app_01kp4vm07tr3d4375597d15gkp","status":"succeeded"}]}"#,
+    )]);
+
+    let output = isolated_command(tmp.path())
+        .env("TACHYON_API_URL", api_url)
+        .args([
+            "compute",
+            "builds",
+            "list",
+            app_id,
+            "--limit",
+            "3",
+            "--timeout-secs",
+            "3",
+            "--verbose",
+            "--json",
+        ])
+        .output()
+        .expect("run tachyon compute builds list");
+
+    assert!(
+        !output.status.success(),
+        "slow builds response unexpectedly succeeded\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+
+    let request = rx.recv().unwrap();
+    handle.join().unwrap();
+    assert!(request.starts_with(&format!("GET /v1/compute/apps/{app_id}/builds?limit=3 ")));
+
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(
+        stderr.contains("[timing] builds response headers:"),
+        "stderr:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("Still waiting for builds response body... 2s elapsed"),
+        "stderr:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("timed out waiting for builds response body after 3s"),
+        "stderr:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("[timing] command total:"),
+        "stderr:\n{stderr}"
+    );
+}
+
+#[test]
+fn compute_builds_list_warns_and_succeeds_when_preview_body_times_out() {
     let tmp = TempDir::new().unwrap();
     let app_id = "app_01kp4vm07tr3d4375597d15gkp";
     let build_id = "bld_01kp4vm07tr3d4375597d15gka";
+    let (api_url, rx, handle) = start_server_with_body_delays(vec![
+        (
+            Duration::ZERO,
+            r#"{"builds":[{"id":"bld_01kp4vm07tr3d4375597d15gka","app_id":"app_01kp4vm07tr3d4375597d15gkp","status":"succeeded"}]}"#,
+        ),
+        (Duration::from_secs(2), r#"{"deployments":[]}"#),
+    ]);
+
+    let output = isolated_command(tmp.path())
+        .env("TACHYON_API_URL", api_url)
+        .args([
+            "compute",
+            "builds",
+            "list",
+            app_id,
+            "--limit",
+            "3",
+            "--preview-timeout-secs",
+            "1",
+        ])
+        .output()
+        .expect("run tachyon compute builds list");
+
+    assert!(
+        output.status.success(),
+        "preview timeout should preserve the build list\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+
+    let first_request = rx.recv().unwrap();
+    let second_request = rx.recv().unwrap();
+    handle.join().unwrap();
+    assert!(first_request.starts_with(&format!("GET /v1/compute/apps/{app_id}/builds?limit=3 ")));
+    assert!(second_request.starts_with(&format!(
+        "GET /v1/compute/apps/{app_id}/deployments?environment=preview "
+    )));
+
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains(build_id), "stdout:\n{stdout}");
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(
+        stderr.contains(
+            "Warning: preview URLs unavailable: timed out waiting for preview deployments response body after 1s"
+        ),
+        "stderr:\n{stderr}"
+    );
+}
+
+#[test]
+fn compute_preview_create_posts_manual_branch_build() {
+    let tmp = TempDir::new().unwrap();
+    let app_id = "app_01kp4vm07tr3d4375597d15gkp";
     let (api_url, rx, handle) = start_server(vec![
-        r#"{"id":"bld_01kp4vm07tr3d4375597d15gka","app_id":"app_01kp4vm07tr3d4375597d15gkp","status":"queued","source_branch":"feature/plt-1883","created_at":"2026-06-11T00:00:00Z"}"#,
-        r#"{"id":"bld_01kp4vm07tr3d4375597d15gka","app_id":"app_01kp4vm07tr3d4375597d15gkp","status":"succeeded","source_branch":"feature/plt-1883","created_at":"2026-06-11T00:00:00Z"}"#,
-        r#"{"deployments":[{"id":"dep_01kp4vm07tr3d4375597d15gkb","app_id":"app_01kp4vm07tr3d4375597d15gkp","build_id":"bld_01kp4vm07tr3d4375597d15gka","status":"active","source_branch":"feature/plt-1883","url":"https://8383df2f.moverent.pages.dev","public_url":"https://preview-plt-1883--moverent.txcloud.app","created_at":"2026-06-11T00:00:00Z"}]}"#,
+        r#"{"id":"bld_01kp4vm07tr3d4375597d15gka","app_id":"app_01kp4vm07tr3d4375597d15gkp","status":"queued","source_branch":"feature/manual-preview","created_at":"2026-05-07T00:00:00Z"}"#,
     ]);
 
     let output = isolated_command(tmp.path())
@@ -360,8 +763,7 @@ fn compute_preview_create_wait_prints_preview_url() {
             "--app",
             app_id,
             "--branch",
-            "feature/plt-1883",
-            "--wait",
+            "feature/manual-preview",
         ])
         .output()
         .expect("run tachyon compute preview create");
@@ -373,43 +775,35 @@ fn compute_preview_create_wait_prints_preview_url() {
         String::from_utf8_lossy(&output.stderr),
     );
 
-    let trigger_req = rx.recv().unwrap();
-    let status_req = rx.recv().unwrap();
-    let deployments_req = rx.recv().unwrap();
+    let request = rx.recv().unwrap();
     handle.join().unwrap();
-    assert!(trigger_req.starts_with(&format!("POST /v1/compute/apps/{app_id}/builds ")));
+    assert!(request.starts_with(&format!("POST /v1/apps/{app_id}/builds ")));
+    assert!(request.contains("authorization: Bearer test-token"));
+    assert!(request.contains("x-operator-id: tn_test1234567890"));
     assert!(
-        trigger_req.contains(r#""source_branch":"feature/plt-1883""#),
-        "request:\n{trigger_req}"
+        request.contains(r#""source_branch":"feature/manual-preview""#),
+        "request:\n{request}"
     );
-    assert!(
-        !trigger_req.contains(r#""branch":"feature/plt-1883""#),
-        "request:\n{trigger_req}"
-    );
-    assert!(status_req.starts_with(&format!("GET /v1/compute/builds/{build_id} ")));
-    assert!(deployments_req.starts_with(&format!(
-        "GET /v1/compute/apps/{app_id}/deployments?environment=preview "
-    )));
 
     let stdout = String::from_utf8(output.stdout).unwrap();
     assert!(
-        stdout.contains("Preview build triggered: bld_01kp4vm07tr3d4375597d15gka"),
+        stdout.contains("Preview build created: bld_01kp4vm07tr3d4375597d15gka"),
         "stdout:\n{stdout}"
     );
     assert!(
-        stdout.contains("Preview URL: https://preview-plt-1883--moverent.txcloud.app"),
+        stdout.contains("Branch: feature/manual-preview"),
         "stdout:\n{stdout}"
     );
 }
 
 #[test]
-fn compute_preview_create_wait_reports_failed_build() {
+fn compute_preview_create_wait_prints_the_matching_preview_url() {
     let tmp = TempDir::new().unwrap();
     let app_id = "app_01kp4vm07tr3d4375597d15gkp";
-    let build_id = "bld_01kp4vm07tr3d4375597d15gka";
     let (api_url, rx, handle) = start_server(vec![
-        r#"{"id":"bld_01kp4vm07tr3d4375597d15gka","app_id":"app_01kp4vm07tr3d4375597d15gkp","status":"queued","source_branch":"feature/plt-1883","created_at":"2026-06-11T00:00:00Z"}"#,
-        r#"{"id":"bld_01kp4vm07tr3d4375597d15gka","app_id":"app_01kp4vm07tr3d4375597d15gkp","status":"failed","source_branch":"feature/plt-1883","error_message":"buildspec failed","created_at":"2026-06-11T00:00:00Z"}"#,
+        r#"{"id":"bld_test","app_id":"app_test","status":"queued"}"#,
+        r#"{"id":"bld_test","app_id":"app_test","status":"succeeded"}"#,
+        r#"{"deployments":[{"id":"dep_old","build_id":"bld_old","status":"active","public_url":"https://old.example.test"},{"id":"dep_test","build_id":"bld_test","status":"active","public_url":"https://preview.example.test"}]}"#,
     ]);
 
     let output = isolated_command(tmp.path())
@@ -421,28 +815,54 @@ fn compute_preview_create_wait_reports_failed_build() {
             "--app",
             app_id,
             "--branch",
-            "feature/plt-1883",
+            "feature/preview",
             "--wait",
         ])
         .output()
-        .expect("run tachyon compute preview create");
+        .unwrap();
 
     assert!(
-        !output.status.success(),
-        "preview create unexpectedly succeeded\nstdout:\n{}\nstderr:\n{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr),
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
     );
-
-    let trigger_req = rx.recv().unwrap();
-    let status_req = rx.recv().unwrap();
     handle.join().unwrap();
-    assert!(trigger_req.starts_with(&format!("POST /v1/compute/apps/{app_id}/builds ")));
-    assert!(status_req.starts_with(&format!("GET /v1/compute/builds/{build_id} ")));
-
-    let stderr = String::from_utf8(output.stderr).unwrap();
+    let requests: Vec<_> = rx.into_iter().collect();
+    assert!(requests[1].starts_with("GET /v1/compute/builds/bld_test "));
+    assert!(requests[2].starts_with(&format!(
+        "GET /v1/compute/apps/{app_id}/deployments?environment=preview "
+    )));
+    let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
-        stderr.contains("Build bld_01kp4vm07tr3d4375597d15gka failed: buildspec failed"),
-        "stderr:\n{stderr}"
+        stdout.contains("Preview URL: https://preview.example.test"),
+        "{stdout}"
     );
+}
+
+#[test]
+fn compute_preview_create_wait_reports_the_build_failure() {
+    let tmp = TempDir::new().unwrap();
+    let (api_url, _requests, handle) = start_server(vec![
+        r#"{"id":"bld_test","app_id":"app_test","status":"queued"}"#,
+        r#"{"id":"bld_test","app_id":"app_test","status":"failed","error_message":"deploy hook failed"}"#,
+    ]);
+    let output = isolated_command(tmp.path())
+        .env("TACHYON_API_URL", api_url)
+        .args([
+            "compute",
+            "preview",
+            "create",
+            "--app",
+            "app_01kp4vm07tr3d4375597d15gkp",
+            "--branch",
+            "feature/preview",
+            "--wait",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr)
+        .contains("bld_test finished with status failed: deploy hook failed"));
+    handle.join().unwrap();
 }

@@ -1,0 +1,97 @@
+name: Publish CLI npm
+
+on:
+  release:
+    types:
+      - published
+  workflow_run:
+    workflows:
+      - Auto Release CLI
+      - Release CLI
+    types:
+      - completed
+  workflow_dispatch:
+
+jobs:
+  publish:
+    name: Publish
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'release' && startsWith(github.event.release.tag_name, 'tachyon-cli-v')) ||
+      (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success')
+    runs-on: ubuntu-latest
+    # npm trusted publishing: the job proves it is this workflow with an
+    # OIDC token instead of an npm token.
+    permissions:
+      contents: read
+      id-token: write
+    defaults:
+      run:
+        working-directory: packages/cli
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          registry-url: "https://registry.npmjs.org"
+
+      - name: Use an npm that supports trusted publishing
+        run: npm install -g npm@^11.5.1
+
+      - name: Check package
+        run: npm run check
+
+      - name: Verify release tag matches package version
+        if: github.event_name == 'release'
+        run: |
+          PKG_VERSION=$(node -p "require('./package.json').version")
+          EXPECTED_TAG="tachyon-cli-v${PKG_VERSION}"
+          if [ "${{ github.event.release.tag_name }}" != "$EXPECTED_TAG" ]; then
+            echo "release tag ${{ github.event.release.tag_name }} does not match package version ${PKG_VERSION}" >&2
+            exit 1
+          fi
+
+      - name: Verify GitHub release exists for package version
+        if: github.event_name != 'release'
+        run: |
+          PKG_VERSION=$(node -p "require('./package.json').version")
+          gh release view "tachyon-cli-v${PKG_VERSION}" --json tagName,assets --jq '
+            if (.assets | length) == 0 then
+              error("release has no assets")
+            else
+              .tagName
+            end
+          '
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+      - name: Check if already published
+        id: check
+        run: |
+          PKG_NAME=$(node -p "require('./package.json').name")
+          PKG_VERSION=$(node -p "require('./package.json').version")
+          if npm view "${PKG_NAME}@${PKG_VERSION}" version 2>/dev/null; then
+            echo "already_published=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "already_published=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Summarize skipped publish
+        if: steps.check.outputs.already_published == 'true'
+        run: |
+          PKG_NAME=$(node -p "require('./package.json').name")
+          PKG_VERSION=$(node -p "require('./package.json').version")
+          echo "::notice title=Publish skipped::${PKG_NAME}@${PKG_VERSION} is already published on npm."
+          {
+            echo "## Publish skipped"
+            echo
+            echo "\`${PKG_NAME}@${PKG_VERSION}\` is already published on npm, so nothing was published."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Publish
+        if: steps.check.outputs.already_published == 'false'
+        run: npm publish --access public

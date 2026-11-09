@@ -7,16 +7,7 @@ use std::str::FromStr;
 /// Deserialize, etc.).
 macro_rules! def_sdk_id {
     ($name:ident, $prefix:expr) => {
-        #[derive(
-            Clone,
-            Eq,
-            PartialEq,
-            Hash,
-            Ord,
-            PartialOrd,
-            Serialize,
-            Deserialize,
-        )]
+        #[derive(Clone, Eq, PartialEq, Hash, Ord, PartialOrd, Serialize, Deserialize)]
         #[serde(transparent)]
         pub struct $name(String);
 

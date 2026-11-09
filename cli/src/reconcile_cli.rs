@@ -1,10 +1,10 @@
 use anyhow::Result;
 use clap::Args;
+use serde::Deserialize;
 use serde_json::Value;
 use std::path::PathBuf;
 use tachyon_sdk::apis::configuration::Configuration;
 
-use crate::client::ApiClient;
 use crate::commands::auth::manifest as auth_manifest;
 use crate::compute_cli;
 
@@ -26,6 +26,19 @@ pub struct ReconcileArgs {
     #[arg(long, default_value = "sandbox")]
     pub environment: String,
 
+    /// Change-control approval token for protected production reconciles.
+    ///
+    /// Optional for self-tenant operations (authorized server-side by
+    /// tenant permissions); required by the server for change-control
+    /// protected tenants. Verified fail-fast, forwarded as a dedicated
+    /// header, and never printed.
+    #[arg(
+        long = "change-control-token",
+        env = "TACHYON_CHANGE_CONTROL_APPROVAL_TOKEN",
+        hide_env_values = true
+    )]
+    pub change_control_token: Option<String>,
+
     /// Remove resources absent from the CloudApps manifest
     /// (auth prune is unsupported – no delete endpoint)
     #[arg(long)]
@@ -38,8 +51,6 @@ pub struct ReconcileArgs {
 
 #[allow(dead_code)]
 pub async fn run(args: &ReconcileArgs, config: &Configuration, tenant_id: &str) -> Result<()> {
-    let api = ApiClient::new(config, tenant_id)?;
-
     // --- 1. Cloud Apps reconcile ---
     // Only run if the file exists and contains a CloudApps / CloudApp manifest.
     let cloud_apps_file = args
@@ -56,6 +67,8 @@ pub async fn run(args: &ReconcileArgs, config: &Configuration, tenant_id: &str) 
                     file: cloud_apps_file.clone(),
                     app: args.app.clone(),
                     environment: args.environment.clone(),
+                    change_control_token: args.change_control_token.clone(),
+                    release_checks_only: false,
                     dry_run: args.dry_run,
                 },
             },
@@ -75,7 +88,7 @@ pub async fn run(args: &ReconcileArgs, config: &Configuration, tenant_id: &str) 
     // Auto-discovers auth manifest from tachyon.yml auth.manifest section
     // and .tachyon/manifests/**/*.yml.  Silently skipped if nothing is found.
     let auth_result = auth_manifest::reconcile(
-        &api,
+        config,
         tenant_id,
         args.dry_run,
         None, // auto-discovery; --file is for Cloud Apps
@@ -99,11 +112,16 @@ fn is_cloud_apps_manifest(path: &std::path::Path) -> bool {
     let Ok(content) = std::fs::read_to_string(path) else {
         return false;
     };
-    let Ok(value) = serde_yaml::from_str::<Value>(&content) else {
-        return false;
-    };
-    matches!(
-        value.get("kind").and_then(Value::as_str),
-        Some("CloudApps") | Some("CloudApp")
-    )
+    for document in serde_yaml::Deserializer::from_str(&content) {
+        let Ok(value) = Value::deserialize(document) else {
+            return false;
+        };
+        if matches!(
+            value.get("kind").and_then(Value::as_str),
+            Some("CloudApps") | Some("CloudApp")
+        ) {
+            return true;
+        }
+    }
+    false
 }

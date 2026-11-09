@@ -30,30 +30,22 @@ pub async fn send_sms_notification(
     x_operator_id: &str,
     authorization: &str,
     send_sms_notification_request: models::SendSmsNotificationRequest,
-) -> Result<
-    models::SendSmsNotificationResponse,
-    Error<SendSmsNotificationError>,
-> {
+) -> Result<models::SendSmsNotificationResponse, Error<SendSmsNotificationError>> {
     // add a prefix to parameters to efficiently prevent name collisions
     let p_header_x_operator_id = x_operator_id;
     let p_header_authorization = authorization;
-    let p_body_send_sms_notification_request =
-        send_sms_notification_request;
+    let p_body_send_sms_notification_request = send_sms_notification_request;
 
-    let uri_str =
-        format!("{}/v1/notifications/sms", configuration.base_path);
+    let uri_str = format!("{}/v1/notifications/sms", configuration.base_path);
     let mut req_builder = configuration
         .client
         .request(reqwest::Method::POST, &uri_str);
 
     if let Some(ref user_agent) = configuration.user_agent {
-        req_builder = req_builder
-            .header(reqwest::header::USER_AGENT, user_agent.clone());
+        req_builder = req_builder.header(reqwest::header::USER_AGENT, user_agent.clone());
     }
-    req_builder = req_builder
-        .header("x-operator-id", p_header_x_operator_id.to_string());
-    req_builder = req_builder
-        .header("Authorization", p_header_authorization.to_string());
+    req_builder = req_builder.header("x-operator-id", p_header_x_operator_id.to_string());
+    req_builder = req_builder.header("Authorization", p_header_authorization.to_string());
     req_builder = req_builder.json(&p_body_send_sms_notification_request);
 
     let req = req_builder.build()?;
@@ -76,8 +68,7 @@ pub async fn send_sms_notification(
         }
     } else {
         let content = resp.text().await?;
-        let entity: Option<SendSmsNotificationError> =
-            serde_json::from_str(&content).ok();
+        let entity: Option<SendSmsNotificationError> = serde_json::from_str(&content).ok();
         Err(Error::ResponseError(ResponseContent {
             status,
             content,

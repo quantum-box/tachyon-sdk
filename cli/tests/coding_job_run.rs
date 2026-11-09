@@ -63,7 +63,7 @@ fi
   printf 'TACHYON_OPERATOR_ID=%s\n' "${{TACHYON_OPERATOR_ID:-}}"
   printf 'TACHYON_QUIC_GATEWAY_URL=%s\n' "${{TACHYON_QUIC_GATEWAY_URL:-}}"
   printf 'TACHYON_AUTH_TOKEN=%s\n' "${{TACHYON_AUTH_TOKEN:-}}"
-  printf 'TOOL_JOB_OPERATOR_ID=%s\n' "${{TOOL_JOB_OPERATOR_ID:-}}"
+  printf 'CODING_JOB_OPERATOR_ID=%s\n' "${{CODING_JOB_OPERATOR_ID:-}}"
   printf 'QUIC_GATEWAY_ADDR=%s\n' "${{QUIC_GATEWAY_ADDR:-}}"
   printf 'RUST_LOG=%s\n' "${{RUST_LOG:-}}"
   printf 'MANAGE_OPENCODE_SERVER=%s\n' "${{MANAGE_OPENCODE_SERVER:-}}"
@@ -85,7 +85,7 @@ fi
 }
 
 #[test]
-fn tool_job_run_uses_active_profile_config_and_streams_docker_output() {
+fn coding_job_run_uses_active_profile_config_and_streams_docker_output() {
     let tmp = TempDir::new().unwrap();
     write_profile(tmp.path(), "work", "profile-token", "op_profile");
     for root in config_roots(tmp.path()) {
@@ -110,7 +110,7 @@ fn tool_job_run_uses_active_profile_config_and_streams_docker_output() {
             "--api-url",
             "https://api.test.example",
             "agent",
-            "tool-job",
+            "coding-job",
             "run",
             "--quic-gateway-url",
             "quic.test.example:4433",
@@ -118,30 +118,30 @@ fn tool_job_run_uses_active_profile_config_and_streams_docker_output() {
             "tachyond:test",
         ])
         .output()
-        .expect("run tachyon agent tool-job run");
+        .expect("run tachyon agent coding-job run");
 
     assert!(
         output.status.success(),
-        "tool-job run failed\nstdout:\n{}\nstderr:\n{}",
+        "coding-job run failed\nstdout:\n{}\nstderr:\n{}",
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("Starting tachyond tool job worker..."));
-    assert!(stdout.contains("Stop with: tachyon agent tool-job stop"));
-    assert!(stdout.contains("Logs with: docker logs -f tachyond-tool-job-worker"));
+    assert!(stdout.contains("Starting tachyond coding job worker..."));
+    assert!(stdout.contains("Stop with: tachyon agent coding-job stop"));
+    assert!(stdout.contains("Logs with: docker logs -f tachyond-coding-job-worker"));
     assert!(stdout.contains("fake docker stdout"));
     assert!(String::from_utf8_lossy(&output.stderr).contains("fake docker stderr"));
 
     let capture = fs::read_to_string(capture_path).unwrap();
     assert!(capture.contains("args=run|--pull|always|--rm|"));
-    assert!(capture.contains("--label|com.tachyon.role=tool-job-worker|"));
+    assert!(capture.contains("--label|com.tachyon.role=coding-job-worker|"));
     assert!(capture.contains("-e|TACHYON_API_URL=https://api.test.example|"));
     assert!(capture.contains("-e|TACHYON_API_KEY=profile-token|"));
     assert!(capture.contains("-e|TACHYON_OPERATOR_ID=op_profile|"));
     assert!(capture.contains("-e|TACHYON_QUIC_GATEWAY_URL=quic.test.example:4433|"));
     assert!(capture.contains("-e|TACHYON_AUTH_TOKEN=profile-token|"));
-    assert!(capture.contains("-e|TOOL_JOB_OPERATOR_ID=op_profile|"));
+    assert!(capture.contains("-e|CODING_JOB_OPERATOR_ID=op_profile|"));
     assert!(capture.contains("-e|QUIC_GATEWAY_ADDR=quic.test.example:4433|"));
     assert!(capture.contains("-e|RUST_LOG=warn,streaming=info,llms=info,tachyon_code=info|"));
     assert!(capture.contains("-e|TACHYOND_ENABLE_OPENCODE=false|"));

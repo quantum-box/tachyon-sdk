@@ -5,6 +5,7 @@ use std::path::Path;
 use std::process::{Command, Stdio};
 use std::sync::mpsc;
 use std::thread;
+use std::time::{Duration, Instant};
 
 use tempfile::TempDir;
 
@@ -19,8 +20,27 @@ fn isolated_command(home: &Path) -> Command {
         .env_remove("TACHYON_CONFIG")
         .env_remove("TACHYON_TENANT_ID")
         .env_remove("TACHYON_PROFILE")
+        .env_remove("TACHYON_CHANGE_CONTROL_APPROVAL_TOKEN")
+        .env_remove("TACHYON_CHANGE_CONTROL_VERIFICATION_KEY")
         .env_remove("TACHYON_SECRET_VALUE");
     cmd
+}
+
+/// Build a structurally valid `tcct.v1` change-control token scoped to
+/// `production` with a far-future expiry, for tests that must pass the
+/// production apply gate. No verification key is configured in these tests,
+/// so the signature segment is not checked; the gate accepts the structural
+/// token and warns that the signature is unverified (ADR 0011). This is a
+/// test fixture, not a real approval credential.
+fn production_change_control_token() -> String {
+    use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+    use base64::Engine;
+    // exp = 2100-01-01T00:00:00Z, well beyond any test run.
+    let payload = r#"{"ref":"PLT-2722-test","env":"production","exp":4102444800}"#;
+    let payload_b64 = URL_SAFE_NO_PAD.encode(payload);
+    // Signature is unchecked without a verification key; a placeholder segment
+    // keeps the token structurally well-formed.
+    format!("tcct.v1.{payload_b64}.unsigned")
 }
 
 fn write_project_config(dir: &Path, name: &str, tenant_id: &str) {
@@ -31,6 +51,10 @@ fn write_project_config(dir: &Path, name: &str, tenant_id: &str) {
         ),
     )
     .unwrap();
+}
+
+fn build_runner_backend_availability_body() -> &'static str {
+    r#"{"default_backend":null,"backends":[{"backend":"codebuild","available":true},{"backend":"kubernetes_kata","available":true}]}"#
 }
 
 fn start_compute_server() -> (String, mpsc::Receiver<String>, thread::JoinHandle<()>) {
@@ -66,7 +90,7 @@ fn start_apply_server() -> (String, mpsc::Receiver<String>, thread::JoinHandle<(
     let url = format!("http://{}", listener.local_addr().unwrap());
     let (tx, rx) = mpsc::channel();
     let handle = thread::spawn(move || {
-        for _ in 0..4 {
+        for _ in 0..8 {
             let (mut stream, _) = listener.accept().unwrap();
             let mut buf = [0_u8; 8192];
             let n = stream.read(&mut buf).unwrap();
@@ -75,12 +99,16 @@ fn start_apply_server() -> (String, mpsc::Receiver<String>, thread::JoinHandle<(
 
             let body = if req.starts_with("GET /v1/compute/apps ") {
                 r#"{"apps":[]}"#
+            } else if req.starts_with("GET /v1/build-runner-backends ") {
+                build_runner_backend_availability_body()
             } else if req.starts_with("POST /v1/compute/apps ") {
                 r#"{"id":"app_created","name":"bakuure-api","repository_url":"https://github.com/quantum-box/erp","repository_owner":"quantum-box","repository_name":"erp","default_branch":"main","framework":"cargo_lambda","deployment_target":"lambda","root_directory":"apps/bakuure-api","docker_context":".","build_command":"cargo lambda build --package bakuure-api --bin lambda-bakuure-api --release --arm64","buildspec_strategy":"repo:.codebuild/bakuure_api_lambda_buildspec.yml"}"#
             } else if req.starts_with("PUT /v1/compute/apps/app_created/env ") {
                 r#"{"env_vars":[{"id":"env_01testtesttesttesttesttest","key":"ENVIRONMENT","value":"sandbox","target":"all","is_secret":false}]}"#
             } else if req.starts_with("GET /v1/compute/apps/app_created/env ") {
                 r#"{"env_vars":[{"id":"env_secret","key":"DATABASE_URL","value":"********","target":"all","is_secret":true}]}"#
+            } else if req.starts_with("POST /v1/graphql ") {
+                r#"{"data":{"saveManifest":{"kind":"CloudApp"},"applyManifest":{"success":true}}}"#
             } else {
                 r#"{"error":"unexpected request"}"#
             };
@@ -95,6 +123,336 @@ fn start_apply_server() -> (String, mpsc::Receiver<String>, thread::JoinHandle<(
                 body
             );
             stream.write_all(response.as_bytes()).unwrap();
+        }
+    });
+    (url, rx, handle)
+}
+
+fn start_resource_apply_server() -> (String, mpsc::Receiver<String>, thread::JoinHandle<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    let (tx, rx) = mpsc::channel();
+    let handle = thread::spawn(move || {
+        for _ in 0..5 {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut buf = [0_u8; 16384];
+            let n = stream.read(&mut buf).unwrap();
+            let req = String::from_utf8_lossy(&buf[..n]).to_string();
+            tx.send(req.clone()).unwrap();
+
+            let body = if req.starts_with("GET /v1/build-runner-backends ") {
+                build_runner_backend_availability_body()
+            } else if req.starts_with("GET /v1/compute/apps ") {
+                r#"{"apps":[]}"#
+            } else if req.starts_with("POST /v1/compute/apps ") {
+                r#"{"id":"app_courseboard","name":"courseboard-api","repository_url":"https://github.com/quantum-box/courseboard","repository_owner":"quantum-box","repository_name":"courseboard","default_branch":"main","framework":"rust_server","deployment_target":"cloud_run"}"#
+            } else if req.starts_with("POST /v1/graphql ") {
+                r#"{"data":{"saveManifest":{"kind":"CloudApp"},"applyManifest":{"success":true}}}"#
+            } else {
+                r#"{"error":"unexpected request"}"#
+            };
+            let status = if body.contains("unexpected request") {
+                "HTTP/1.1 500 Internal Server Error"
+            } else {
+                "HTTP/1.1 200 OK"
+            };
+            let response = format!(
+                "{status}\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            stream.write_all(response.as_bytes()).unwrap();
+        }
+    });
+    (url, rx, handle)
+}
+
+fn start_collecting_apply_server() -> (String, mpsc::Receiver<Vec<String>>, thread::JoinHandle<()>)
+{
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    let (tx, rx) = mpsc::channel();
+    let handle = thread::spawn(move || {
+        let deadline = Instant::now() + Duration::from_secs(3);
+        let mut requests = Vec::new();
+        loop {
+            match listener.accept() {
+                Ok((mut stream, _)) => {
+                    stream.set_nonblocking(false).unwrap();
+                    let mut buf = [0_u8; 8192];
+                    let n = stream.read(&mut buf).unwrap();
+                    let req = String::from_utf8_lossy(&buf[..n]).to_string();
+                    requests.push(req.clone());
+
+                    let body = if req.starts_with("GET /v1/compute/apps ") {
+                        r#"{"apps":[]}"#
+                    } else if req.starts_with("GET /v1/build-runner-backends ") {
+                        build_runner_backend_availability_body()
+                    } else if req.starts_with("POST /v1/internal-service-refs/preflight ") {
+                        r#"{"checked":1}"#
+                    } else if req.starts_with("POST /v1/compute/apps ") {
+                        r#"{"id":"app_created","name":"valid-app","repository_url":"https://github.com/quantum-box/erp","repository_owner":"quantum-box","repository_name":"erp","default_branch":"main","framework":"next_js","deployment_target":"cloud_run"}"#
+                    } else if req.starts_with("POST /v1/graphql ") {
+                        r#"{"data":{"saveManifest":{"kind":"CloudApp"},"applyManifest":{"success":true}}}"#
+                    } else {
+                        r#"{"error":"unexpected request"}"#
+                    };
+                    let status = if body.contains("unexpected request") {
+                        "HTTP/1.1 500 Internal Server Error"
+                    } else {
+                        "HTTP/1.1 200 OK"
+                    };
+                    let response = format!(
+                        "{status}\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+                        body.len(),
+                        body
+                    );
+                    stream.write_all(response.as_bytes()).unwrap();
+                }
+                Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
+                    if Instant::now() >= deadline {
+                        tx.send(requests).unwrap();
+                        return;
+                    }
+                    thread::sleep(Duration::from_millis(10));
+                }
+                Err(err) => panic!("accept apply request: {err}"),
+            }
+        }
+    });
+    (url, rx, handle)
+}
+
+fn start_resumable_multi_app_apply_server(
+) -> (String, mpsc::Receiver<Vec<String>>, thread::JoinHandle<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    let (tx, rx) = mpsc::channel();
+    let handle = thread::spawn(move || {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let mut requests = Vec::new();
+        let mut first_created = false;
+        let mut second_created = false;
+        let mut apply_attempts = 0;
+        let mut iac_applied = false;
+
+        loop {
+            match listener.accept() {
+                Ok((mut stream, _)) => {
+                    stream.set_nonblocking(false).unwrap();
+                    let mut buf = [0_u8; 16384];
+                    let n = stream.read(&mut buf).unwrap();
+                    let req = String::from_utf8_lossy(&buf[..n]).to_string();
+                    requests.push(req.clone());
+
+                    let (status, body) = if req.starts_with("GET /v1/build-runner-backends ") {
+                        (
+                            "HTTP/1.1 200 OK",
+                            build_runner_backend_availability_body().to_string(),
+                        )
+                    } else if req.starts_with("GET /v1/compute/apps/app_second/env ") {
+                        let body = if iac_applied {
+                            r#"{"env_vars":[{"id":"env_secret","key":"DATABASE_URL","value":"********","target":"all","is_secret":true}]}"#
+                        } else {
+                            r#"{"env_vars":[]}"#
+                        };
+                        ("HTTP/1.1 200 OK", body.to_string())
+                    } else if req.starts_with("GET /v1/compute/apps ") {
+                        let body = match (first_created, second_created) {
+                            (false, false) => r#"{"apps":[]}"#,
+                            (true, false) => {
+                                r#"{"apps":[{"id":"app_first","name":"first-app","framework":"next_js","repository_url":"https://github.com/quantum-box/first-repo","repository_owner":"quantum-box","repository_name":"first-repo","default_branch":"main","deployment_target":"cloud_run"}]}"#
+                            }
+                            (true, true) => {
+                                r#"{"apps":[{"id":"app_first","name":"first-app","framework":"next_js","repository_url":"https://github.com/quantum-box/first-repo","repository_owner":"quantum-box","repository_name":"first-repo","default_branch":"main","deployment_target":"cloud_run"},{"id":"app_second","name":"second-app","framework":"next_js","repository_url":"https://github.com/quantum-box/second-repo","repository_owner":"quantum-box","repository_name":"second-repo","default_branch":"main","deployment_target":"cloud_run"}]}"#
+                            }
+                            (false, true) => unreachable!(),
+                        };
+                        ("HTTP/1.1 200 OK", body.to_string())
+                    } else if req.starts_with("POST /v1/compute/apps ")
+                        && req.contains(r#""name":"first-app""#)
+                    {
+                        first_created = true;
+                        (
+                                "HTTP/1.1 200 OK",
+                                r#"{"id":"app_first","name":"first-app","framework":"next_js","repository_url":"https://github.com/quantum-box/first-repo","repository_owner":"quantum-box","repository_name":"first-repo","default_branch":"main","deployment_target":"cloud_run"}"#.to_string(),
+                            )
+                    } else if req.starts_with("POST /v1/compute/apps ")
+                        && req.contains(r#""name":"second-app""#)
+                    {
+                        second_created = true;
+                        (
+                                "HTTP/1.1 200 OK",
+                                r#"{"id":"app_second","name":"second-app","framework":"next_js","repository_url":"https://github.com/quantum-box/second-repo","repository_owner":"quantum-box","repository_name":"second-repo","default_branch":"main","deployment_target":"cloud_run"}"#.to_string(),
+                            )
+                    } else if req.starts_with("POST /v1/graphql ") && req.contains("SaveManifest") {
+                        (
+                            "HTTP/1.1 200 OK",
+                            r#"{"data":{"saveManifest":{"kind":"CloudApp"}}}"#.to_string(),
+                        )
+                    } else if req.starts_with("POST /v1/graphql ") && req.contains("ApplyManifest")
+                    {
+                        apply_attempts += 1;
+                        if apply_attempts == 1 {
+                            (
+                                "HTTP/1.1 503 Service Unavailable",
+                                r#"{"error":"injected later app apply failure"}"#.to_string(),
+                            )
+                        } else {
+                            iac_applied = true;
+                            (
+                                "HTTP/1.1 200 OK",
+                                r#"{"data":{"applyManifest":{"success":true}}}"#.to_string(),
+                            )
+                        }
+                    } else {
+                        (
+                            "HTTP/1.1 500 Internal Server Error",
+                            r#"{"error":"unexpected request"}"#.to_string(),
+                        )
+                    };
+                    let response = format!(
+                        "{status}\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+                        body.len(),
+                        body
+                    );
+                    stream.write_all(response.as_bytes()).unwrap();
+
+                    if iac_applied && req.starts_with("GET /v1/compute/apps/app_second/env ") {
+                        tx.send(requests).unwrap();
+                        return;
+                    }
+                }
+                Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
+                    if Instant::now() >= deadline {
+                        tx.send(requests).unwrap();
+                        return;
+                    }
+                    thread::sleep(Duration::from_millis(10));
+                }
+                Err(err) => panic!("accept resumable apply request: {err}"),
+            }
+        }
+    });
+    (url, rx, handle)
+}
+
+fn start_internal_service_preflight_error_server(
+) -> (String, mpsc::Receiver<Vec<String>>, thread::JoinHandle<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    let (tx, rx) = mpsc::channel();
+    let handle = thread::spawn(move || {
+        let deadline = Instant::now() + Duration::from_secs(3);
+        let mut requests = Vec::new();
+        loop {
+            match listener.accept() {
+                Ok((mut stream, _)) => {
+                    stream.set_nonblocking(false).unwrap();
+                    let mut buf = [0_u8; 8192];
+                    let n = stream.read(&mut buf).unwrap();
+                    let req = String::from_utf8_lossy(&buf[..n]).to_string();
+                    requests.push(req.clone());
+
+                    let (status, body) = if req.starts_with("GET /v1/build-runner-backends ") {
+                        ("HTTP/1.1 200 OK", build_runner_backend_availability_body())
+                    } else if req.starts_with("POST /v1/internal-service-refs/preflight ") {
+                        (
+                            "HTTP/1.1 400 Bad Request",
+                            r#"{"error":"internalService preflight failed: env var fieldadmin:TACHYON_FIELD_API_URL references missing internalService app tachyon-field-api in production"}"#,
+                        )
+                    } else {
+                        (
+                            "HTTP/1.1 500 Internal Server Error",
+                            r#"{"error":"unexpected request"}"#,
+                        )
+                    };
+                    let response = format!(
+                        "{status}\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+                        body.len(),
+                        body
+                    );
+                    stream.write_all(response.as_bytes()).unwrap();
+                }
+                Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
+                    if Instant::now() >= deadline {
+                        tx.send(requests).unwrap();
+                        return;
+                    }
+                    thread::sleep(Duration::from_millis(10));
+                }
+                Err(err) => panic!("accept apply request: {err}"),
+            }
+        }
+    });
+    (url, rx, handle)
+}
+
+fn start_apply_graphql_error_server() -> (String, mpsc::Receiver<String>, thread::JoinHandle<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    let (tx, rx) = mpsc::channel();
+    let handle = thread::spawn(move || {
+        for _ in 0..6 {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut buf = [0_u8; 8192];
+            let n = stream.read(&mut buf).unwrap();
+            let req = String::from_utf8_lossy(&buf[..n]).to_string();
+            tx.send(req.clone()).unwrap();
+
+            let mut should_stop = false;
+            let (status, content_type, body) = if req.starts_with("GET /v1/compute/apps ") {
+                ("HTTP/1.1 200 OK", "application/json", r#"{"apps":[]}"#)
+            } else if req.starts_with("GET /v1/build-runner-backends ") {
+                (
+                    "HTTP/1.1 200 OK",
+                    "application/json",
+                    build_runner_backend_availability_body(),
+                )
+            } else if req.starts_with("POST /v1/compute/apps ") {
+                (
+                    "HTTP/1.1 200 OK",
+                    "application/json",
+                    r#"{"id":"app_created","name":"bakuure-api","repository_url":"https://github.com/quantum-box/erp","repository_owner":"quantum-box","repository_name":"erp","default_branch":"main","framework":"cargo_lambda","deployment_target":"lambda","root_directory":"apps/bakuure-api","docker_context":".","build_command":"cargo lambda build --package bakuure-api --bin lambda-bakuure-api --release --arm64"}"#,
+                )
+            } else if req.starts_with("PUT /v1/compute/apps/app_created/env ") {
+                (
+                    "HTTP/1.1 200 OK",
+                    "application/json",
+                    r#"{"env_vars":[{"id":"env_01testtesttesttesttesttest","key":"DATABASE_URL","value":"********","target":"all","is_secret":true}]}"#,
+                )
+            } else if req.starts_with("GET /v1/compute/apps/app_created/env ") {
+                (
+                    "HTTP/1.1 200 OK",
+                    "application/json",
+                    r#"{"env_vars":[{"id":"env_secret","key":"DATABASE_URL","value":"********","target":"all","is_secret":true}]}"#,
+                )
+            } else if req.starts_with("POST /v1/graphql ") {
+                should_stop = true;
+                (
+                    "HTTP/1.1 502 Bad Gateway",
+                    "text/html",
+                    "<html>upstream unavailable</html>",
+                )
+            } else {
+                (
+                    "HTTP/1.1 500 Internal Server Error",
+                    "application/json",
+                    r#"{"error":"unexpected request"}"#,
+                )
+            };
+            let response = format!(
+                "{status}\r\ncontent-type: {content_type}\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            stream.write_all(response.as_bytes()).unwrap();
+            if should_stop {
+                break;
+            }
         }
     });
     (url, rx, handle)
@@ -115,7 +473,7 @@ fn start_secret_server() -> (String, mpsc::Receiver<String>, thread::JoinHandle<
             let body = if idx == 0 {
                 r#"{"apps":[{"id":"app_configured","name":"configured-app"}]}"#
             } else if req.starts_with("POST /v1/apps/app_configured/secrets ") {
-                r#"{"key":"RESEND_API_KEY","target":"production"}"#
+                r#"{"key":"RESEND_API_KEY","target":"production","secret_ref":"$secret_ref:configured-app/RESEND_API_KEY"}"#
             } else {
                 r#"{"error":"unexpected request"}"#
             };
@@ -162,6 +520,43 @@ fn start_env_mutation_server() -> (String, mpsc::Receiver<String>, thread::JoinH
                 "HTTP/1.1 500 Internal Server Error"
             } else if body.is_empty() {
                 "HTTP/1.1 204 No Content"
+            } else {
+                "HTTP/1.1 200 OK"
+            };
+            let response = format!(
+                "{status}\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            stream.write_all(response.as_bytes()).unwrap();
+        }
+    });
+    (url, rx, handle)
+}
+
+fn start_sync_secrets_server() -> (String, mpsc::Receiver<String>, thread::JoinHandle<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    let (tx, rx) = mpsc::channel();
+    let handle = thread::spawn(move || {
+        for idx in 0..2 {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut buf = [0_u8; 8192];
+            let n = stream.read(&mut buf).unwrap();
+            let req = String::from_utf8_lossy(&buf[..n]).to_string();
+            tx.send(req.clone()).unwrap();
+
+            let body = if idx == 0 && req.starts_with("GET /v1/compute/apps ") {
+                r#"{"apps":[{"id":"app_tachyon_field_api","name":"tachyon-field-api"}]}"#
+            } else if idx == 1
+                && req.starts_with("POST /v1/compute/apps/app_tachyon_field_api/secrets/sync ")
+            {
+                r#"{"synced":1,"skipped":[]}"#
+            } else {
+                r#"{"error":"unexpected request"}"#
+            };
+            let status = if body.contains("unexpected request") {
+                "HTTP/1.1 500 Internal Server Error"
             } else {
                 "HTTP/1.1 200 OK"
             };
@@ -268,7 +663,7 @@ fn compute_builds_list_uses_project_config_from_parent_dir() {
     handle.join().unwrap();
     assert!(first.starts_with("GET /v1/compute/apps "));
     assert!(first.contains("x-operator-id: op_123456789012"));
-    assert!(second.starts_with("GET /v1/compute/apps/app_configured/builds "));
+    assert!(second.starts_with("GET /v1/compute/apps/app_configured/builds?limit=10 "));
     assert!(second.contains("x-operator-id: op_123456789012"));
 }
 
@@ -297,7 +692,7 @@ fn explicit_app_id_overrides_project_config_name() {
     let _first = rx.recv().unwrap();
     let second = rx.recv().unwrap();
     handle.join().unwrap();
-    assert!(second.starts_with("GET /v1/compute/apps/app_explicit/builds "));
+    assert!(second.starts_with("GET /v1/compute/apps/app_explicit/builds?limit=10 "));
 }
 
 #[test]
@@ -335,7 +730,9 @@ spec:
         - name: DATABASE_URL
           type: credential
           valueFrom:
-            secret: DATABASE_URL
+            secret:
+              path: providers/tidb_bakuure
+              field: DATABASE_URL
 "#,
     )
     .unwrap();
@@ -369,19 +766,445 @@ spec:
     let second = rx.recv().unwrap();
     let third = rx.recv().unwrap();
     let fourth = rx.recv().unwrap();
+    let fifth = rx.recv().unwrap();
+    let sixth = rx.recv().unwrap();
+    let seventh = rx.recv().unwrap();
+    let eighth = rx.recv().unwrap();
     handle.join().unwrap();
 
-    assert!(first.starts_with("GET /v1/compute/apps "));
-    assert!(second.starts_with("POST /v1/compute/apps "));
-    assert!(second.contains("\"root_directory\":\"apps/bakuure-api\""));
-    assert!(second.contains("\"docker_context\":\".\""));
-    assert!(!second.contains("mysql://"));
-    assert!(third.starts_with("PUT /v1/compute/apps/app_created/env "));
-    assert!(third.contains("\"key\":\"ENVIRONMENT\""));
-    assert!(fourth.starts_with("GET /v1/compute/apps/app_created/env "));
+    assert!(first.starts_with("GET /v1/build-runner-backends "));
+    assert!(second.starts_with("GET /v1/compute/apps "));
+    assert!(third.starts_with("POST /v1/compute/apps "));
+    assert!(third.contains("\"root_directory\":\"apps/bakuure-api\""));
+    assert!(third.contains("\"docker_context\":\".\""));
+    assert!(!third.contains("mysql://"));
+    assert!(fourth.starts_with("PUT /v1/compute/apps/app_created/env "));
+    assert!(fourth.contains("\"key\":\"ENVIRONMENT\""));
+    assert!(fifth.starts_with("GET /v1/compute/apps/app_created/env "));
+    assert!(sixth.starts_with("POST /v1/graphql "));
+    assert!(sixth.contains("SaveManifest"));
+    assert!(sixth.contains(r#"\"path\":\"providers/tidb_bakuure\""#));
+    assert!(sixth.contains(r#"\"field\":\"DATABASE_URL\""#));
+    assert!(seventh.starts_with("POST /v1/graphql "));
+    assert!(seventh.contains("ApplyManifest"));
+    assert!(!seventh.contains("releaseChecksOnly"));
+    assert!(eighth.starts_with("GET /v1/compute/apps/app_created/env "));
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("CREATED bakuure-api (app_created)"));
     assert!(stdout.contains("Environment: sandbox"));
+    assert!(stdout.contains("iac:         applied server-managed env refs"));
+    assert!(!stdout.contains("missing secrets:"));
+    assert!(!stdout.contains("tachyon compute env set"));
+}
+
+#[test]
+fn compute_apps_apply_allows_production_without_change_control_token() {
+    // PLT-3047: self-tenant production applies are authorized server-side
+    // by tenant permissions; the CLI no longer demands a token up front.
+    let tmp = TempDir::new().unwrap();
+    let manifest = tmp.path().join("tachyon.yml");
+    fs::write(
+        &manifest,
+        r#"
+apiVersion: apps.tachy.one/v1alpha
+kind: CloudApps
+metadata:
+  name: valid-app
+spec:
+  apps:
+    - name: valid-app
+      repository:
+        url: https://github.com/quantum-box/tachyonfield
+        owner: quantum-box
+        name: tachyonfield
+      framework: next_js
+      deploymentTarget: cloudflare_workers
+"#,
+    )
+    .unwrap();
+    let (api_url, rx, handle) = start_collecting_apply_server();
+
+    let mut cmd = isolated_command(tmp.path());
+    let output = cmd
+        .current_dir(tmp.path())
+        .env("TACHYON_API_URL", api_url)
+        .env("TACHYON_API_KEY", "test-token")
+        .env("TACHYON_TENANT_ID", "tn_01hjryxysgey07h5jz5wagqj0m")
+        .args([
+            "compute",
+            "apps",
+            "apply",
+            "-f",
+            manifest.to_str().unwrap(),
+            "--environment",
+            "production",
+        ])
+        .output()
+        .expect("run compute apps apply");
+
+    assert!(
+        output.status.success(),
+        "token-less production apply failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let requests = rx.recv_timeout(Duration::from_secs(5)).unwrap();
+    handle.join().unwrap();
+    assert!(
+        requests
+            .iter()
+            .any(|request| request.starts_with("POST /v1/compute/apps ")),
+        "token-less apply must reach the API; requests: {requests:#?}"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    // The operator is told that authorization happens server-side and
+    // that protected tenants still need an approval token.
+    assert!(stderr.contains("no change-control token provided"));
+    assert!(stderr.contains("protected"));
+    assert!(!stderr.contains("test-token"));
+}
+
+#[test]
+fn production_apply_sends_preview_only_resource_declaration_to_apply_manifest() {
+    let tmp = TempDir::new().unwrap();
+    let manifest = tmp.path().join("tachyon.yml");
+    fs::write(
+        &manifest,
+        r#"
+apiVersion: apps.tachy.one/v1alpha
+kind: CloudApps
+metadata:
+  name: courseboard
+spec:
+  apps:
+    - name: courseboard-api
+      repository:
+        url: https://github.com/quantum-box/courseboard
+        owner: quantum-box
+        name: courseboard
+      framework: rust_server
+      deploymentTarget: cloud_run
+      environments:
+        production: {}
+        preview:
+          provisionedDatabase:
+            provider: tidb
+            engine: mysql
+            envVar: DATABASE_URL
+"#,
+    )
+    .unwrap();
+    let (api_url, rx, handle) = start_resource_apply_server();
+
+    let mut cmd = isolated_command(tmp.path());
+    let output = cmd
+        .current_dir(tmp.path())
+        .env("TACHYON_API_URL", api_url)
+        .env("TACHYON_API_KEY", "test-token")
+        .env("TACHYON_TENANT_ID", "tn_01hjryxysgey07h5jz5wagqj0m")
+        .args([
+            "compute",
+            "apps",
+            "apply",
+            "-f",
+            manifest.to_str().unwrap(),
+            "--environment",
+            "production",
+        ])
+        .output()
+        .expect("run production compute apps apply");
+    assert!(
+        output.status.success(),
+        "apply failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let availability = rx.recv().unwrap();
+    let list = rx.recv().unwrap();
+    let create = rx.recv().unwrap();
+    let save = rx.recv().unwrap();
+    let apply = rx.recv().unwrap();
+    handle.join().unwrap();
+
+    assert!(availability.starts_with("GET /v1/build-runner-backends "));
+    assert!(list.starts_with("GET /v1/compute/apps "));
+    assert!(create.starts_with("POST /v1/compute/apps "));
+    assert!(save.starts_with("POST /v1/graphql "));
+    assert!(save.contains("SaveManifest"));
+    let save_body = save.split_once("\r\n\r\n").unwrap().1;
+    let save_request: serde_json::Value = serde_json::from_str(save_body).unwrap();
+    let saved_manifest: serde_json::Value = serde_json::from_str(
+        save_request["variables"]["input"]["manifest"]
+            .as_str()
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        saved_manifest["spec"]["environments"]["preview"]["provisionedDatabase"]["provider"],
+        "tidb"
+    );
+    assert_eq!(
+        saved_manifest["spec"]["environments"]["preview"]["provisionedDatabase"]["envVar"],
+        "DATABASE_URL"
+    );
+    assert!(saved_manifest["spec"].get("provisionedDatabase").is_none());
+    assert_eq!(saved_manifest["spec"]["applyTarget"], "production");
+    assert!(apply.starts_with("POST /v1/graphql "));
+    assert!(apply.contains("ApplyManifest"));
+}
+
+#[test]
+fn compute_apps_apply_rejects_production_with_unstructured_token_before_api_write() {
+    // Regression for PLT-2722: a non-empty but unstructured token (the old
+    // gate accepted any non-empty string) must now be rejected before any
+    // API write.
+    let tmp = TempDir::new().unwrap();
+    let manifest = tmp.path().join("tachyon.yml");
+    fs::write(
+        &manifest,
+        r#"
+apiVersion: apps.tachy.one/v1alpha
+kind: CloudApps
+metadata:
+  name: valid-app
+spec:
+  apps:
+    - name: valid-app
+      repository:
+        url: https://github.com/quantum-box/tachyonfield
+        owner: quantum-box
+        name: tachyonfield
+      framework: next_js
+      deploymentTarget: cloudflare_workers
+"#,
+    )
+    .unwrap();
+    let (api_url, rx, handle) = start_collecting_apply_server();
+
+    let mut cmd = isolated_command(tmp.path());
+    let output = cmd
+        .current_dir(tmp.path())
+        .env("TACHYON_API_URL", api_url)
+        .env("TACHYON_API_KEY", "test-token")
+        .env("TACHYON_TENANT_ID", "tn_01hjryxysgey07h5jz5wagqj0m")
+        .args([
+            "compute",
+            "apps",
+            "apply",
+            "-f",
+            manifest.to_str().unwrap(),
+            "--environment",
+            "production",
+            "--change-control-token",
+            "dummy-approved-token",
+        ])
+        .output()
+        .expect("run compute apps apply");
+
+    assert!(
+        !output.status.success(),
+        "unstructured token unexpectedly passed the gate\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let requests = rx.recv_timeout(Duration::from_secs(5)).unwrap();
+    handle.join().unwrap();
+    assert!(
+        requests.is_empty(),
+        "approval gate must reject before any API request; requests: {requests:#?}"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("not a valid approval token"));
+    // The token value must never be echoed.
+    assert!(!stderr.contains("dummy-approved-token"));
+}
+
+#[test]
+fn compute_apps_apply_allows_production_with_change_control_token() {
+    let tmp = TempDir::new().unwrap();
+    let manifest = tmp.path().join("tachyon.yml");
+    fs::write(
+        &manifest,
+        r#"
+apiVersion: apps.tachy.one/v1alpha
+kind: CloudApps
+metadata:
+  name: valid-app
+spec:
+  apps:
+    - name: valid-app
+      repository:
+        url: https://github.com/quantum-box/tachyonfield
+        owner: quantum-box
+        name: tachyonfield
+      framework: next_js
+      deploymentTarget: cloudflare_workers
+"#,
+    )
+    .unwrap();
+    let (api_url, rx, handle) = start_collecting_apply_server();
+
+    let mut cmd = isolated_command(tmp.path());
+    let output = cmd
+        .current_dir(tmp.path())
+        .env("TACHYON_API_URL", api_url)
+        .env("TACHYON_API_KEY", "test-token")
+        .env("TACHYON_TENANT_ID", "tn_01hjryxysgey07h5jz5wagqj0m")
+        .args([
+            "compute",
+            "apps",
+            "apply",
+            "-f",
+            manifest.to_str().unwrap(),
+            "--environment",
+            "production",
+            "--change-control-token",
+            &production_change_control_token(),
+        ])
+        .output()
+        .expect("run compute apps apply");
+
+    assert!(
+        output.status.success(),
+        "approved production apply failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let requests = rx.recv_timeout(Duration::from_secs(5)).unwrap();
+    handle.join().unwrap();
+    assert!(
+        requests
+            .iter()
+            .any(|request| request.starts_with("GET /v1/compute/apps ")),
+        "approved apply must pass the local gate and read live apps; requests: {requests:#?}"
+    );
+    assert!(
+        requests
+            .iter()
+            .any(|request| request.starts_with("POST /v1/compute/apps ")),
+        "approved apply must pass the local gate and create the app; requests: {requests:#?}"
+    );
+    let joined_requests = requests.join("\n");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let token = production_change_control_token();
+    assert!(!joined_requests.contains(&token));
+    assert!(!stdout.contains(&token));
+    assert!(!stderr.contains(&token));
+    // No verification key configured: the gate accepts the structural token
+    // but warns that the signature was not verified (ADR 0011).
+    assert!(stderr.contains("WITHOUT signature verification"));
+    assert!(stdout.contains("Environment: production"));
+    assert!(stdout.contains("CREATED valid-app (app_created)"));
+}
+
+#[test]
+fn compute_apps_release_checks_only_skips_app_and_env_mutations() {
+    let tmp = TempDir::new().unwrap();
+    let manifest = tmp.path().join("tachyon.yml");
+    fs::write(
+        &manifest,
+        r#"
+apiVersion: apps.tachy.one/v1alpha
+kind: CloudApps
+metadata:
+  name: field
+spec:
+  apps:
+    - name: tachyon-field-api
+      repository:
+        url: https://github.com/quantum-box/tachyonfield
+        owner: quantum-box
+        name: tachyonfield
+      framework: cargo_lambda
+      deploymentTarget: lambda
+      production:
+        requiredReleaseChecks:
+          - repository: quantum-box/tachyonfield
+            name: Production deploy migration invariant
+            sameCommit: true
+      envVars:
+        - name: PUBLIC_FLAG
+          value: enabled
+        - name: DATABASE_URL
+          type: credential
+          valueFrom:
+            secret:
+              path: providers/tidb_field_production
+              field: DATABASE_URL
+"#,
+    )
+    .unwrap();
+    let (api_url, rx, handle) = start_collecting_apply_server();
+    let token = production_change_control_token();
+
+    let mut cmd = isolated_command(tmp.path());
+    let output = cmd
+        .current_dir(tmp.path())
+        .env("TACHYON_API_URL", api_url)
+        .env("TACHYON_API_KEY", "test-token")
+        .env("TACHYON_TENANT_ID", "tn_01hjryxysgey07h5jz5wagqj0m")
+        .args([
+            "compute",
+            "apps",
+            "apply",
+            "-f",
+            manifest.to_str().unwrap(),
+            "--environment",
+            "production",
+            "--change-control-token",
+            &token,
+            "--release-checks-only",
+        ])
+        .output()
+        .expect("run release-checks-only apply");
+
+    assert!(
+        output.status.success(),
+        "release-checks-only apply failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let requests = rx.recv_timeout(Duration::from_secs(5)).unwrap();
+    handle.join().unwrap();
+    assert_eq!(
+        requests.len(),
+        1,
+        "isolated apply must send one combined applyManifest request: {requests:#?}"
+    );
+    assert!(requests
+        .iter()
+        .all(|request| request.starts_with("POST /v1/graphql ")));
+    assert!(!requests[0].contains("saveManifest"));
+    assert!(requests[0].contains("applyManifest"));
+    assert!(requests[0].contains("releaseChecksOnly"));
+    assert!(requests[0].contains("releaseChecksManifest"));
+    assert!(requests[0].contains("true"));
+    let requests_joined = requests.join("\n");
+    assert!(!requests_joined.contains("/v1/compute/apps/"));
+    assert!(!requests_joined.contains("PUT /"));
+    // PLT-3047: the token now travels to the server-side gate, but only
+    // as the dedicated header — never inside the GraphQL request body.
+    let header_line = format!("x-tachyon-change-control-token: {token}");
+    assert!(
+        requests_joined.contains(&header_line),
+        "token must be forwarded as the change-control header: {requests:#?}"
+    );
+    assert!(requests.iter().all(|request| {
+        let body = request.split("\r\n\r\n").nth(1).unwrap_or("");
+        !body.contains(&token)
+    }));
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stdout.contains("Release-check contract reconciled for tachyon-field-api."));
+    assert!(!stdout.contains(&token));
+    assert!(!stderr.contains(&token));
 }
 
 #[test]
@@ -416,7 +1239,9 @@ spec:
         - name: DATABASE_URL
           type: credential
           valueFrom:
-            secret: DATABASE_URL
+            secret:
+              path: providers/tidb_bakuure
+              field: DATABASE_URL
 "#,
     )
     .unwrap();
@@ -449,15 +1274,476 @@ spec:
     let second = rx.recv().unwrap();
     let third = rx.recv().unwrap();
     let fourth = rx.recv().unwrap();
+    let fifth = rx.recv().unwrap();
+    let sixth = rx.recv().unwrap();
+    let seventh = rx.recv().unwrap();
+    let eighth = rx.recv().unwrap();
     handle.join().unwrap();
 
-    assert!(first.starts_with("GET /v1/compute/apps "));
-    assert!(second.starts_with("POST /v1/compute/apps "));
-    assert!(third.starts_with("PUT /v1/compute/apps/app_created/env "));
-    assert!(fourth.starts_with("GET /v1/compute/apps/app_created/env "));
+    assert!(first.starts_with("GET /v1/build-runner-backends "));
+    assert!(second.starts_with("GET /v1/compute/apps "));
+    assert!(third.starts_with("POST /v1/compute/apps "));
+    assert!(fourth.starts_with("PUT /v1/compute/apps/app_created/env "));
+    assert!(fifth.starts_with("GET /v1/compute/apps/app_created/env "));
+    assert!(sixth.starts_with("POST /v1/graphql "));
+    assert!(sixth.contains("SaveManifest"));
+    assert!(seventh.starts_with("POST /v1/graphql "));
+    assert!(seventh.contains("ApplyManifest"));
+    assert!(eighth.starts_with("GET /v1/compute/apps/app_created/env "));
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("=== Cloud Apps Manifest Apply ==="));
     assert!(stdout.contains("CREATED bakuure-api (app_created)"));
+}
+
+#[test]
+fn compute_apps_apply_preflights_all_apps_before_mutation() {
+    let tmp = TempDir::new().unwrap();
+    let manifest = tmp.path().join("tachyon.yml");
+    fs::write(
+        &manifest,
+        r#"
+apiVersion: apps.tachy.one/v1alpha
+kind: CloudApps
+metadata:
+  name: atomic-apply
+spec:
+  apps:
+    - name: valid-app
+      repository:
+        url: https://github.com/quantum-box/erp
+        owner: quantum-box
+        name: erp
+    - name: invalid-app
+      envVars:
+        - name: BROKEN
+          value: missing-repository-should-fail-before-valid-app-is-created
+"#,
+    )
+    .unwrap();
+    let (api_url, rx, handle) = start_collecting_apply_server();
+
+    let mut cmd = isolated_command(tmp.path());
+    let output = cmd
+        .current_dir(tmp.path())
+        .env("TACHYON_API_URL", api_url)
+        .env("TACHYON_API_KEY", "test-token")
+        .env("TACHYON_TENANT_ID", "tn_01hjryxysgey07h5jz5wagqj0m")
+        .args([
+            "compute",
+            "apps",
+            "apply",
+            "-f",
+            manifest.to_str().unwrap(),
+            "--environment",
+            "sandbox",
+        ])
+        .output()
+        .expect("run compute apps apply");
+
+    assert!(
+        !output.status.success(),
+        "apply unexpectedly succeeded\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let requests = rx.recv_timeout(Duration::from_secs(5)).unwrap();
+    handle.join().unwrap();
+
+    assert!(
+        requests.iter().all(|request| !request.starts_with("POST ")),
+        "preflight failure must not create the first app; requests: {requests:#?}"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("app entry invalid-app is missing repository"));
+}
+
+#[test]
+fn compute_apps_apply_reports_partial_progress_and_resumes_idempotently() {
+    let tmp = TempDir::new().unwrap();
+    let manifest = tmp.path().join("tachyon.yml");
+    fs::write(
+        &manifest,
+        r#"
+apiVersion: apps.tachy.one/v1alpha
+kind: CloudApps
+metadata:
+  name: resumable-apply
+spec:
+  apps:
+    - name: first-app
+      repository:
+        url: https://github.com/quantum-box/first-repo
+        owner: quantum-box
+        name: first-repo
+    - name: second-app
+      repository:
+        url: https://github.com/quantum-box/second-repo
+        owner: quantum-box
+        name: second-repo
+      envVars:
+        - name: DATABASE_URL
+          type: credential
+          valueFrom:
+            secret: providers/second-app-database
+"#,
+    )
+    .unwrap();
+    let (api_url, rx, handle) = start_resumable_multi_app_apply_server();
+
+    let mut first = isolated_command(tmp.path());
+    let first_output = first
+        .current_dir(tmp.path())
+        .env("TACHYON_API_URL", &api_url)
+        .env("TACHYON_API_KEY", "test-token")
+        .env("TACHYON_TENANT_ID", "tn_01hjryxysgey07h5jz5wagqj0m")
+        .args([
+            "compute",
+            "apps",
+            "apply",
+            "-f",
+            manifest.to_str().unwrap(),
+            "--environment",
+            "sandbox",
+        ])
+        .output()
+        .expect("run first compute apps apply");
+
+    assert!(
+        !first_output.status.success(),
+        "first apply unexpectedly succeeded\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&first_output.stdout),
+        String::from_utf8_lossy(&first_output.stderr)
+    );
+    let first_stdout = String::from_utf8_lossy(&first_output.stdout);
+    let first_stderr = String::from_utf8_lossy(&first_output.stderr);
+    assert!(first_stdout.contains("CREATED first-app (app_first)"));
+    assert!(!first_stdout.contains("CREATED second-app"));
+    assert!(first_stderr.contains("fully completed 1/2 apps"));
+    assert!(first_stderr.contains("failed app second-app (2/2)"));
+    assert!(first_stderr.contains("may be partially applied"));
+    assert!(first_stderr.contains("remaining incomplete apps: 1"));
+    assert!(first_stderr.contains("Re-run the same apply command to resume safely."));
+    assert!(first_stderr.contains("graphql request failed: status=503 Service Unavailable"));
+
+    let mut second = isolated_command(tmp.path());
+    let second_output = second
+        .current_dir(tmp.path())
+        .env("TACHYON_API_URL", api_url)
+        .env("TACHYON_API_KEY", "test-token")
+        .env("TACHYON_TENANT_ID", "tn_01hjryxysgey07h5jz5wagqj0m")
+        .args([
+            "compute",
+            "apps",
+            "apply",
+            "-f",
+            manifest.to_str().unwrap(),
+            "--environment",
+            "sandbox",
+        ])
+        .output()
+        .expect("resume compute apps apply");
+
+    assert!(
+        second_output.status.success(),
+        "resumed apply failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&second_output.stdout),
+        String::from_utf8_lossy(&second_output.stderr)
+    );
+    let second_stdout = String::from_utf8_lossy(&second_output.stdout);
+    assert!(second_stdout.contains("UNCHANGED first-app (app_first)"));
+    assert!(second_stdout.contains("UNCHANGED second-app (app_second)"));
+    assert!(second_stdout.contains("Summary: 0 created, 0 updated, 2 unchanged"));
+
+    let requests = rx.recv_timeout(Duration::from_secs(10)).unwrap();
+    handle.join().unwrap();
+    assert_eq!(
+        requests
+            .iter()
+            .filter(|request| {
+                request.starts_with("POST /v1/compute/apps ")
+                    && request.contains(r#""name":"first-app""#)
+            })
+            .count(),
+        1,
+        "first app must not be created again on resume: {requests:#?}"
+    );
+    assert_eq!(
+        requests
+            .iter()
+            .filter(|request| {
+                request.starts_with("POST /v1/compute/apps ")
+                    && request.contains(r#""name":"second-app""#)
+            })
+            .count(),
+        1,
+        "partially applied app must not be created again on resume: {requests:#?}"
+    );
+    assert!(
+        requests
+            .iter()
+            .all(|request| !request.starts_with("PATCH /v1/compute/apps/")),
+        "matching apps must not be patched on resume: {requests:#?}"
+    );
+    assert_eq!(
+        requests
+            .iter()
+            .filter(|request| {
+                request.starts_with("POST /v1/graphql ") && request.contains("ApplyManifest")
+            })
+            .count(),
+        2,
+        "failed applyManifest must be retried exactly once: {requests:#?}"
+    );
+}
+
+#[test]
+fn compute_apps_apply_preflights_internal_service_refs_before_mutation() {
+    let tmp = TempDir::new().unwrap();
+    let manifest = tmp.path().join("tachyon.yml");
+    fs::write(
+        &manifest,
+        r#"
+apiVersion: apps.tachy.one/v1alpha
+kind: CloudApps
+metadata:
+  name: fieldadmin
+spec:
+  apps:
+    - name: fieldadmin
+      repository:
+        url: https://github.com/quantum-box/tachyonfield
+        owner: quantum-box
+        name: tachyonfield
+      envVars:
+        - name: TACHYON_FIELD_API_URL
+          valueFrom:
+            internalService:
+              appName: tachyon-field-api
+"#,
+    )
+    .unwrap();
+    let (api_url, rx, handle) = start_internal_service_preflight_error_server();
+
+    let mut cmd = isolated_command(tmp.path());
+    let output = cmd
+        .current_dir(tmp.path())
+        .env("TACHYON_API_URL", api_url)
+        .env("TACHYON_API_KEY", "test-token")
+        .env("TACHYON_TENANT_ID", "tn_01hjryxysgey07h5jz5wagqj0m")
+        .args([
+            "compute",
+            "apps",
+            "apply",
+            "-f",
+            manifest.to_str().unwrap(),
+            "--environment",
+            "production",
+            "--change-control-token",
+            &production_change_control_token(),
+        ])
+        .output()
+        .expect("run compute apps apply");
+
+    assert!(
+        !output.status.success(),
+        "apply unexpectedly succeeded\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let requests = rx.recv_timeout(Duration::from_secs(5)).unwrap();
+    handle.join().unwrap();
+
+    let runner_preflight = requests
+        .iter()
+        .position(|request| request.starts_with("GET /v1/build-runner-backends "));
+    let internal_service_preflight = requests
+        .iter()
+        .position(|request| request.starts_with("POST /v1/internal-service-refs/preflight "));
+    let create_app = requests
+        .iter()
+        .position(|request| request.starts_with("POST /v1/compute/apps "));
+
+    assert!(runner_preflight.is_some(), "requests: {requests:#?}");
+    let internal_service_preflight =
+        internal_service_preflight.expect("missing internalService preflight");
+    assert!(
+        create_app.is_none(),
+        "preflight failure must not mutate: {requests:#?}"
+    );
+    assert!(requests[internal_service_preflight].contains("TACHYON_FIELD_API_URL"));
+    assert!(requests[internal_service_preflight].contains("tachyon-field-api"));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("POST /v1/internal-service-refs/preflight failed"));
+    assert!(stderr.contains("internalService preflight failed"));
+    assert!(stderr.contains("tachyon-field-api"));
+    assert!(!stderr.contains(&production_change_control_token()));
+}
+
+#[test]
+fn compute_apps_apply_reports_raw_graphql_http_error_body() {
+    let tmp = TempDir::new().unwrap();
+    let manifest = tmp.path().join("tachyon.yml");
+    fs::write(
+        &manifest,
+        r#"
+apiVersion: apps.tachy.one/v1alpha
+kind: CloudApps
+metadata:
+  name: bakuure-api
+spec:
+  apps:
+    - name: bakuure-api
+      repository:
+        url: https://github.com/quantum-box/erp
+        owner: quantum-box
+        name: erp
+        defaultBranch: main
+      rootDirectory: apps/bakuure-api
+      dockerContext: "."
+      framework: cargo_lambda
+      deploymentTarget: lambda
+      build:
+        package: bakuure-api
+        binary: lambda-bakuure-api
+      envVars:
+        - name: DATABASE_URL
+          type: credential
+          valueFrom:
+            databaseRef:
+              name: app-db
+              field: connectionString
+"#,
+    )
+    .unwrap();
+    let (api_url, rx, handle) = start_apply_graphql_error_server();
+
+    let mut cmd = isolated_command(tmp.path());
+    let output = cmd
+        .current_dir(tmp.path())
+        .env("TACHYON_API_URL", api_url)
+        .env("TACHYON_API_KEY", "test-token")
+        .env("TACHYON_TENANT_ID", "tn_01hjryxysgey07h5jz5wagqj0m")
+        .args([
+            "compute",
+            "apps",
+            "apply",
+            "-f",
+            manifest.to_str().unwrap(),
+            "--environment",
+            "sandbox",
+        ])
+        .output()
+        .expect("run compute apps apply");
+
+    assert!(
+        !output.status.success(),
+        "apply unexpectedly succeeded\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let _list = rx.recv().unwrap();
+    let _availability = rx.recv().unwrap();
+    let _create = rx.recv().unwrap();
+    let graphql = rx.recv().unwrap();
+    handle.join().unwrap();
+
+    assert!(graphql.starts_with("POST /v1/graphql "));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("graphql request failed: status=502 Bad Gateway"));
+    assert!(stderr.contains("body=<html>upstream unavailable</html>"));
+    assert!(!stderr.contains("error decoding response body"));
+}
+
+#[test]
+fn compute_apps_sync_secrets_resolves_preview_overlay_and_preserves_object_secret_ref() {
+    let tmp = TempDir::new().unwrap();
+    let manifest = tmp.path().join("tachyon.yml");
+    fs::write(
+        &manifest,
+        r#"
+apiVersion: apps.tachy.one/v1alpha
+kind: CloudApps
+metadata:
+  name: tachyon-field-api
+spec:
+  apps:
+    - name: tachyon-field-api
+      repository:
+        url: https://github.com/quantum-box/tachyonfield
+        owner: quantum-box
+        name: tachyonfield
+      framework: cargo_lambda
+      deploymentTarget: lambda
+      envVars:
+        - name: DATABASE_URL
+          type: credential
+          valueFrom:
+            databaseRef:
+              name: tidb_field_prod
+              field: url
+      environments:
+        preview:
+          envVars:
+            - name: DATABASE_URL
+              type: credential
+              valueFrom:
+                secret:
+                  path: providers/tidb_field_preview
+                  field: DATABASE_URL
+"#,
+    )
+    .unwrap();
+    let (api_url, rx, handle) = start_sync_secrets_server();
+
+    let mut cmd = isolated_command(tmp.path());
+    let output = cmd
+        .current_dir(tmp.path())
+        .env("TACHYON_API_URL", api_url)
+        .env("TACHYON_API_KEY", "placeholder")
+        .env("TACHYON_TENANT_ID", "tn_01hjryxysgey07h5jz5wagqj0m")
+        .args([
+            "compute",
+            "apps",
+            "sync-secrets",
+            "-f",
+            manifest.to_str().unwrap(),
+            "--environment",
+            "preview",
+        ])
+        .output()
+        .expect("run compute apps sync-secrets");
+    assert!(
+        output.status.success(),
+        "sync-secrets failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let first = rx.recv().unwrap();
+    let second = rx.recv().unwrap();
+    handle.join().unwrap();
+
+    assert!(first.starts_with("GET /v1/compute/apps "));
+    assert!(second.starts_with("POST /v1/compute/apps/app_tachyon_field_api/secrets/sync "));
+    assert!(second.contains(r#""app_name":"tachyon-field-api""#));
+    assert!(second.contains(r#""environment":"preview""#));
+    assert!(second.contains(r#""key":"DATABASE_URL""#));
+    assert!(second.contains(r#""source":"secretRef""#));
+    assert!(second.contains(r#""target":"preview""#));
+    assert!(second.contains(r#""path":"providers/tidb_field_preview""#));
+    assert!(second.contains(r#""field":"DATABASE_URL""#));
+    assert!(!second.contains("databaseRef"));
+    assert!(!second.contains("tidb_field_prod"));
+    assert!(!second.contains("secret-value"));
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("Secret refs:"));
+    assert!(stdout.contains("DATABASE_URL(preview; secretRef)"));
+    assert!(stdout.contains("Synced 1 secret reference(s)."));
+    assert!(!stdout.contains("providers/tidb_field_preview"));
 }
 
 #[test]
@@ -468,6 +1754,14 @@ fn env_set_secret_posts_value_and_updates_manifest_reference_only() {
         "configured-app",
         "tn_01hjryxysgey07h5jz5wagqj0m",
     );
+    let manifest_path = tmp.path().join("tachyon.yml");
+    let manifest = fs::read_to_string(&manifest_path).unwrap();
+    let manifest = manifest.replace("spec:\n", "spec:\n  # Keep this section comment.\n");
+    fs::write(
+        &manifest_path,
+        format!("# Keep this file comment.\n{manifest}"),
+    )
+    .unwrap();
     let (api_url, rx, handle) = start_secret_server();
 
     let mut cmd = isolated_command(tmp.path());
@@ -506,11 +1800,13 @@ fn env_set_secret_posts_value_and_updates_manifest_reference_only() {
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("Set secret RESEND_API_KEY"));
 
-    let yaml = fs::read_to_string(tmp.path().join("tachyon.yml")).unwrap();
+    let yaml = fs::read_to_string(manifest_path).unwrap();
+    assert!(yaml.starts_with("# Keep this file comment.\n"));
+    assert!(yaml.contains("# Keep this section comment."));
     assert!(yaml.contains("name: RESEND_API_KEY"));
     assert!(yaml.contains("type: credential"));
     assert!(yaml.contains("target: production"));
-    assert!(yaml.contains("secret: RESEND_API_KEY"));
+    assert!(yaml.contains("secret: configured-app/RESEND_API_KEY"));
     assert!(!yaml.contains("\n  value:"));
 }
 
@@ -560,6 +1856,103 @@ fn env_set_secret_reads_value_from_stdin_when_piped() {
     let post_req = rx.recv().unwrap();
     handle.join().unwrap();
 
+    assert!(post_req.contains(r#""value":"from-stdin""#));
+}
+
+#[test]
+fn env_set_secret_accepts_app_then_key_after_secret_with_value_flag() {
+    let tmp = TempDir::new().unwrap();
+    write_project_config(
+        tmp.path(),
+        "configured-app",
+        "tn_01hjryxysgey07h5jz5wagqj0m",
+    );
+    let (api_url, rx, handle) = start_secret_server();
+
+    let output = isolated_command(tmp.path())
+        .current_dir(tmp.path())
+        .env("TACHYON_API_URL", api_url)
+        .env("TACHYON_API_KEY", "x")
+        .args([
+            "env",
+            "set",
+            "--secret",
+            "configured-app",
+            "RESEND_API_KEY",
+            "--value",
+            "from-flag",
+            "--target",
+            "production",
+        ])
+        .output()
+        .expect("run env set secret");
+
+    assert!(
+        output.status.success(),
+        "env set secret failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let _list_req = rx.recv().unwrap();
+    let post_req = rx.recv().unwrap();
+    handle.join().unwrap();
+
+    assert!(post_req.starts_with("POST /v1/apps/app_configured/secrets "));
+    assert!(post_req.contains(r#""key":"RESEND_API_KEY""#));
+    assert!(post_req.contains(r#""value":"from-flag""#));
+}
+
+#[test]
+fn env_set_secret_accepts_app_then_key_after_secret_with_piped_stdin() {
+    let tmp = TempDir::new().unwrap();
+    write_project_config(
+        tmp.path(),
+        "configured-app",
+        "tn_01hjryxysgey07h5jz5wagqj0m",
+    );
+    let (api_url, rx, handle) = start_secret_server();
+
+    let mut child = isolated_command(tmp.path())
+        .current_dir(tmp.path())
+        .env("TACHYON_API_URL", api_url)
+        .env("TACHYON_API_KEY", "x")
+        .args([
+            "env",
+            "set",
+            "--secret",
+            "configured-app",
+            "RESEND_API_KEY",
+            "--target",
+            "production",
+        ])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn env set secret");
+
+    child
+        .stdin
+        .take()
+        .expect("stdin")
+        .write_all(b"from-stdin\n")
+        .expect("write stdin");
+    let output = child.wait_with_output().expect("wait env set secret");
+
+    assert!(
+        output.status.success(),
+        "env set secret failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let _list_req = rx.recv().unwrap();
+    let post_req = rx.recv().unwrap();
+    handle.join().unwrap();
+
+    assert!(post_req.starts_with("POST /v1/apps/app_configured/secrets "));
+    assert!(post_req.contains(r#""key":"RESEND_API_KEY""#));
     assert!(post_req.contains(r#""value":"from-stdin""#));
 }
 

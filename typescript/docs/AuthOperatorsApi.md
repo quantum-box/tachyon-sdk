@@ -5,6 +5,7 @@ All URIs are relative to *http://localhost*
 | Method | HTTP request | Description |
 |------------- | ------------- | -------------|
 | [**createOperator**](AuthOperatorsApi.md#createoperatoroperation) | **POST** /v1/auth/operators | Create an operator under a platform |
+| [**deleteOperator**](AuthOperatorsApi.md#deleteoperator) | **DELETE** /v1/auth/operators/{id} | Delete an operator |
 | [**findOperatorsByUser**](AuthOperatorsApi.md#findoperatorsbyuser) | **GET** /v1/auth/operators/by-user | Find operators accessible to a user under a platform |
 | [**getOperatorByAlias**](AuthOperatorsApi.md#getoperatorbyalias) | **GET** /v1/auth/operators/by-alias | Get an operator by alias within a platform |
 | [**getOperatorById**](AuthOperatorsApi.md#getoperatorbyid) | **GET** /v1/auth/operators/{id} | Get an operator by ID |
@@ -75,6 +76,75 @@ No authorization required
 | **400** | Bad request |  -  |
 
 [[Back to top]](#) [[Back to API list]](../README.md#api-endpoints) [[Back to Model list]](../README.md#models) [[Back to README]](../README.md)
+
+
+## deleteOperator
+
+> DeleteOperatorResponse deleteOperator(id)
+
+Delete an operator
+
+The acting tenant scope (`x-operator-id`, falling back to `x-platform-id`) must be the target operator itself or its parent platform. The parent platform is resolved from the target record, so callers do not need to supply `x-platform-id`.
+
+### Example
+
+```ts
+import {
+  Configuration,
+  AuthOperatorsApi,
+} from '@tachyon/sdk';
+import type { DeleteOperatorRequest } from '@tachyon/sdk';
+
+async function example() {
+  console.log("🚀 Testing @tachyon/sdk SDK...");
+  const api = new AuthOperatorsApi();
+
+  const body = {
+    // string | Operator ID
+    id: id_example,
+  } satisfies DeleteOperatorRequest;
+
+  try {
+    const data = await api.deleteOperator(body);
+    console.log(data);
+  } catch (error) {
+    console.error(error);
+  }
+}
+
+// Run the test
+example().catch(console.error);
+```
+
+### Parameters
+
+
+| Name | Type | Description  | Notes |
+|------------- | ------------- | ------------- | -------------|
+| **id** | `string` | Operator ID | [Defaults to `undefined`] |
+
+### Return type
+
+[**DeleteOperatorResponse**](DeleteOperatorResponse.md)
+
+### Authorization
+
+No authorization required
+
+### HTTP request headers
+
+- **Content-Type**: Not defined
+- **Accept**: `application/json`
+
+
+### HTTP response details
+| Status code | Description | Response headers |
+|-------------|-------------|------------------|
+| **200** | Operator deleted |  -  |
+| **403** | Forbidden |  -  |
+| **404** | Operator not found |  -  |
+
+[[Back to top]](#) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to Model list]](../README.md#documentation-for-models) [[Back to README]](../README.md)
 
 
 ## findOperatorsByUser

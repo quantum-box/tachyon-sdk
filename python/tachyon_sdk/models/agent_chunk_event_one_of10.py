@@ -24,19 +24,19 @@ from typing_extensions import Self
 
 class AgentChunkEventOneOf10(BaseModel):
     """
-    Emitted when a tool job is created, before sync polling begins. Frontend can use the job_id to subscribe to the tool job's own SSE stream for real-time progress.
+    Emitted when a coding job is created, before sync polling begins. Frontend can use the coding_job_id to subscribe to the coding job's own SSE stream for real-time progress.
     """ # noqa: E501
-    job_id: StrictStr
+    coding_job_id: StrictStr
     provider: StrictStr
     tool_id: StrictStr
     type: StrictStr
-    __properties: ClassVar[List[str]] = ["job_id", "provider", "tool_id", "type"]
+    __properties: ClassVar[List[str]] = ["coding_job_id", "provider", "tool_id", "type"]
 
     @field_validator('type')
     def type_validate_enum(cls, value):
         """Validates the enum"""
-        if value not in set(['tool_job_started']):
-            raise ValueError("must be one of enum values ('tool_job_started')")
+        if value not in set(['coding_job_started']):
+            raise ValueError("must be one of enum values ('coding_job_started')")
         return value
 
     model_config = ConfigDict(
@@ -90,11 +90,10 @@ class AgentChunkEventOneOf10(BaseModel):
             return cls.model_validate(obj)
 
         _obj = cls.model_validate({
-            "job_id": obj.get("job_id"),
+            "coding_job_id": obj.get("coding_job_id"),
             "provider": obj.get("provider"),
             "tool_id": obj.get("tool_id"),
             "type": obj.get("type")
         })
         return _obj
-
 

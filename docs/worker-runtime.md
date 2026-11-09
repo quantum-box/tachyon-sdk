@@ -1,6 +1,6 @@
 # Tachyon Worker Runtime
 
-`tachyon worker` runs an OSS Tool Job worker on a customer VPS or PC. It
+`tachyon worker` runs an OSS Coding Job worker on a customer VPS or PC. It
 replaces the separately distributed `tachyond` binary while keeping the runtime
 boundary simple: the worker talks to Tachyon Cloud only through public REST
 APIs.
@@ -33,9 +33,9 @@ Before installation it performs a best-effort CLI self update unless
 ## Runtime Model
 
 - Default provider is `containerized_codex`.
-- Jobs are claimed from `POST /v1/agent/tool-jobs/claim`.
+- Jobs are claimed from `POST /v1/agent/coding-jobs/claim`.
 - Results are reported to
-  `POST /v1/agent/tool-jobs/{job_id}/worker-complete`.
+  `POST /v1/agent/coding-jobs/{coding_job_id}/worker-complete`.
 - Worker registration and heartbeat use the public worker APIs under
   `/v1/agent/workers`.
 - Containerized jobs run through Docker with `codex exec --json <prompt>`.
@@ -51,7 +51,7 @@ for the current process.
 
 `worker start` uses the selected CLI auth profile only during installation. It
 creates or reuses a service account named `tachyon-worker-<worker_id>`, issues a
-dedicated API key, attaches `ToolJobWorkerPolicy`, and writes that key to
+dedicated API key, attaches `CodingJobWorkerPolicy`, and writes that key to
 `/etc/tachyon/worker.env` with owner-only permissions.
 
 The long-running systemd process uses that worker API key. It does not need the
@@ -109,10 +109,10 @@ The systemd commands wrap `systemctl` and `journalctl` for the local
 ### Foreground
 
 1. Run `tachyon --tenant-id tn_xxxx worker run`.
-2. Create a Tool Job with provider `containerized_codex`.
+2. Create a Coding Job with provider `containerized_codex`.
 3. Watch the shell output for claim and completion.
 4. Stop the worker with `Ctrl-C`.
-5. Fetch the Tool Job from the API and confirm `status` is `succeeded` or
+5. Fetch the Coding Job from the API and confirm `status` is `succeeded` or
    `failed` with the worker's result payload.
 
 ### Systemd
@@ -120,9 +120,9 @@ The systemd commands wrap `systemctl` and `journalctl` for the local
 1. Install on a Linux host with Docker and systemd.
 2. Run `sudo tachyon --tenant-id tn_xxxx worker start`.
 3. Confirm `sudo tachyon worker status` is active.
-4. Create a Tool Job with provider `containerized_codex`.
+4. Create a Coding Job with provider `containerized_codex`.
 5. Watch `sudo tachyon worker logs --follow` for claim and completion.
-6. Fetch the Tool Job from the API and confirm `status` is `succeeded` or
+6. Fetch the Coding Job from the API and confirm `status` is `succeeded` or
    `failed` with the worker's result payload.
 
 ## Security Notes

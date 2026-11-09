@@ -11,8 +11,8 @@ use crate::resolve;
 
 const DEFAULT_TACHYOND_IMAGE: &str = "ghcr.io/quantum-box/tachyond:latest";
 const DEFAULT_QUIC_GATEWAY_URL: &str = "quic.n1.tachy.one:4433";
-const DEFAULT_TACHYOND_CONTAINER_NAME: &str = "tachyond-tool-job-worker";
-const TACHYOND_CONTAINER_LABEL: &str = "com.tachyon.role=tool-job-worker";
+const DEFAULT_TACHYOND_CONTAINER_NAME: &str = "tachyond-coding-job-worker";
+const TACHYOND_CONTAINER_LABEL: &str = "com.tachyon.role=coding-job-worker";
 
 #[derive(Debug, Clone, Args)]
 pub struct AgentArgs {
@@ -73,11 +73,11 @@ pub enum AgentCommand {
         #[arg(long)]
         json: bool,
     },
-    /// Run local tachyond worker for tool jobs
-    #[command(name = "tool-job", alias = "tool-jobs")]
-    ToolJob {
+    /// Run local tachyond worker for coding jobs
+    #[command(name = "coding-job", alias = "coding-jobs")]
+    CodingJob {
         #[command(subcommand)]
-        command: ToolJobCommand,
+        command: CodingJobCommand,
     },
 }
 
@@ -185,15 +185,15 @@ pub enum MemoryCommand {
 }
 
 #[derive(Debug, Clone, Subcommand)]
-pub enum ToolJobCommand {
-    /// Run tachyond locally via Docker and process tool jobs
-    Run(ToolJobRunArgs),
-    /// Stop a local tachyond tool job worker container
-    Stop(ToolJobStopArgs),
+pub enum CodingJobCommand {
+    /// Run tachyond locally via Docker and process coding jobs
+    Run(CodingJobRunArgs),
+    /// Stop a local tachyond coding job worker container
+    Stop(CodingJobStopArgs),
 }
 
 #[derive(Debug, Clone, Args)]
-pub struct ToolJobRunArgs {
+pub struct CodingJobRunArgs {
     /// Tachyond container image to run
     #[arg(long, env = "TACHYON_TACHYOND_IMAGE", default_value = DEFAULT_TACHYOND_IMAGE)]
     pub image: String,
@@ -257,7 +257,7 @@ pub struct ToolJobRunArgs {
 }
 
 #[derive(Debug, Clone, Args)]
-pub struct ToolJobStopArgs {
+pub struct CodingJobStopArgs {
     /// Tachyond container image to stop when no matching name is found
     #[arg(long, env = "TACHYON_TACHYOND_IMAGE", default_value = DEFAULT_TACHYOND_IMAGE)]
     pub image: String,
@@ -281,7 +281,7 @@ pub struct ToolJobStopArgs {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct ToolJobDockerConfig {
+struct CodingJobDockerConfig {
     image: String,
     api_url: String,
     api_key: String,
@@ -298,9 +298,9 @@ struct ToolJobDockerConfig {
     opencode_health_interval_secs: u64,
 }
 
-impl ToolJobDockerConfig {
+impl CodingJobDockerConfig {
     fn from_runtime(
-        args: &ToolJobRunArgs,
+        args: &CodingJobRunArgs,
         config: &Configuration,
         tenant_id: &str,
     ) -> Result<Self> {
@@ -346,7 +346,7 @@ impl ToolJobDockerConfig {
             // tachyond currently reads these names. Keep them until tachyond
             // accepts the Tachyon-prefixed aliases directly.
             ("TACHYON_AUTH_TOKEN", self.api_key.clone()),
-            ("TOOL_JOB_OPERATOR_ID", self.operator_id.clone()),
+            ("CODING_JOB_OPERATOR_ID", self.operator_id.clone()),
             ("QUIC_GATEWAY_ADDR", self.quic_gateway_url.clone()),
             ("RUST_LOG", self.rust_log.clone()),
             ("TACHYOND_ENABLE_OPENCODE", self.enable_opencode.to_string()),
@@ -396,7 +396,7 @@ impl ToolJobDockerConfig {
     }
 
     fn print_startup_summary(&self) {
-        println!("Starting tachyond tool job worker...");
+        println!("Starting tachyond coding job worker...");
         println!("  image: {}", self.image);
         println!(
             "  container: {}",
@@ -422,7 +422,7 @@ impl ToolJobDockerConfig {
                 "disabled"
             }
         );
-        println!("Stop with: tachyon agent tool-job stop");
+        println!("Stop with: tachyon agent coding-job stop");
         if let Some(name) = &self.name {
             println!("Logs with: docker logs -f {name}");
         }
@@ -435,12 +435,9 @@ impl ToolJobDockerConfig {
 #[derive(Debug, Deserialize, Serialize)]
 struct SessionResponse {
     id: String,
-    #[serde(default)]
-    agent_id: Option<String>,
-    #[serde(default)]
-    status: Option<String>,
-    #[serde(default)]
-    created_at: Option<String>,
+    name: Option<String>,
+    created_at: String,
+    updated_at: String,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -476,7 +473,7 @@ struct AgentDiagnosticsExecutionState {
     execution_id: String,
     status: String,
     #[serde(default)]
-    pending_tool_job_id: Option<String>,
+    pending_coding_job_id: Option<String>,
     #[serde(default)]
     pending_sub_agent_execution_id: Option<String>,
     #[serde(default)]
@@ -486,7 +483,7 @@ struct AgentDiagnosticsExecutionState {
 }
 
 #[derive(Debug, Deserialize, Serialize)]
-struct AgentDiagnosticsToolJob {
+struct AgentDiagnosticsCodingJob {
     id: String,
     provider: String,
     status: String,
@@ -522,7 +519,7 @@ struct AgentDiagnosticsFlags {
     #[serde(default)]
     has_tool_result: bool,
     #[serde(default)]
-    has_tool_job_started: bool,
+    has_coding_job_started: bool,
     #[serde(default)]
     has_attempt_completion: bool,
     #[serde(default)]
@@ -563,7 +560,7 @@ struct AgentDiagnosticsResponse {
     #[serde(default)]
     flags: AgentDiagnosticsFlags,
     anomalies: Vec<AgentDiagnosticsAnomaly>,
-    related_tool_jobs: Vec<AgentDiagnosticsToolJob>,
+    related_coding_jobs: Vec<AgentDiagnosticsCodingJob>,
     execution_states: Vec<AgentDiagnosticsExecutionState>,
 }
 
@@ -576,64 +573,69 @@ struct AgentEventsResponse {
 #[derive(Debug, Deserialize, Serialize)]
 struct ProtocolResponse {
     id: String,
-    #[serde(default)]
-    name: Option<String>,
-    #[serde(default)]
+    tenant_id: String,
+    title: String,
+    protocol_name: String,
     description: Option<String>,
-    #[serde(default)]
-    model: Option<String>,
-    #[serde(default)]
-    system_prompt: Option<String>,
-    #[serde(default)]
-    created_at: Option<String>,
+    markdown: String,
+    created_at: String,
+    updated_at: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct ProtocolListResponse {
+    items: Vec<ProtocolResponse>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
 struct WorkerResponse {
     id: String,
-    #[serde(default)]
     name: Option<String>,
-    #[serde(default)]
-    status: Option<String>,
-    #[serde(default)]
-    last_heartbeat: Option<String>,
-    #[serde(default)]
-    created_at: Option<String>,
+    status: String,
+    last_heartbeat_at: Option<String>,
+    created_at: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct WorkerListResponse {
+    workers: Vec<WorkerResponse>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
 struct WorktreeResponse {
-    #[serde(default)]
-    task_id: Option<String>,
-    #[serde(default)]
-    status: Option<String>,
-    #[serde(default)]
-    branch: Option<String>,
-    #[serde(default)]
-    repository_url: Option<String>,
-    #[serde(default)]
-    created_at: Option<String>,
+    path: String,
+    branch_name: String,
+    task_id: String,
+    status: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct WorktreeListResponse {
+    worktrees: Vec<WorktreeResponse>,
+    total: usize,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
 struct AgentStatusResponse {
-    #[serde(default)]
-    status: Option<String>,
-    #[serde(default)]
-    agent_id: Option<String>,
-    #[serde(default)]
-    session_id: Option<String>,
+    is_running: bool,
+    progress: u8,
+    state: String,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
 struct MemoryResponse {
     id: String,
-    #[serde(default)]
-    content: Option<String>,
-    #[serde(default)]
-    status: Option<String>,
-    #[serde(default)]
-    created_at: Option<String>,
+    clause: String,
+    raw_facts: Vec<String>,
+    status: String,
+    source: String,
+    created_at: String,
+    updated_at: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct MemoryListResponse {
+    memories: Vec<MemoryResponse>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -665,17 +667,17 @@ async fn run_sessions_list(api: &ApiClient, json: bool) -> Result<()> {
         return Ok(());
     }
     println!(
-        "{:<28}  {:<28}  {:<12}  CREATED AT",
-        "ID", "AGENT ID", "STATUS"
+        "{:<28}  {:<28}  {:<19}  UPDATED AT",
+        "ID", "NAME", "CREATED AT"
     );
-    println!("{:-<28}  {:-<28}  {:-<12}  {:-<19}", "", "", "", "");
+    println!("{:-<28}  {:-<28}  {:-<19}  {:-<19}", "", "", "", "");
     for s in &sessions {
         println!(
-            "{:<28}  {:<28}  {:<12}  {}",
+            "{:<28}  {:<28}  {:<19}  {}",
             s.id,
-            s.agent_id.as_deref().unwrap_or("-"),
-            s.status.as_deref().unwrap_or("-"),
-            s.created_at.as_deref().unwrap_or("-"),
+            truncate(s.name.as_deref().unwrap_or("-"), 28),
+            s.created_at,
+            s.updated_at,
         );
     }
     Ok(())
@@ -739,8 +741,8 @@ fn enabled_flags(flags: &AgentDiagnosticsFlags) -> Vec<&'static str> {
     if flags.has_tool_result {
         values.push("tool_result");
     }
-    if flags.has_tool_job_started {
-        values.push("tool_job_started");
+    if flags.has_coding_job_started {
+        values.push("coding_job_started");
     }
     if flags.has_attempt_completion {
         values.push("attempt_completion");
@@ -807,8 +809,8 @@ async fn run_session_inspect(
                 "  {}  {:<12} retries={}",
                 state.execution_id, state.status, state.retry_count
             );
-            if let Some(job_id) = &state.pending_tool_job_id {
-                println!("    pending job: {job_id}");
+            if let Some(coding_job_id) = &state.pending_coding_job_id {
+                println!("    pending job: {coding_job_id}");
             }
             if let Some(execution_id) = &state.pending_sub_agent_execution_id {
                 println!("    pending sub-agent execution: {execution_id}");
@@ -825,10 +827,10 @@ async fn run_session_inspect(
         println!("  {event_type:<24} {count}");
     }
 
-    if !diagnostics.related_tool_jobs.is_empty() {
+    if !diagnostics.related_coding_jobs.is_empty() {
         println!();
-        println!("Related Tool Jobs:");
-        for job in &diagnostics.related_tool_jobs {
+        println!("Related Coding Jobs:");
+        for job in &diagnostics.related_coding_jobs {
             println!(
                 "  {}  {:<12} {:<12} raw_events={} artifacts={}",
                 job.id, job.provider, job.status, job.raw_event_count, job.artifact_count
@@ -919,7 +921,8 @@ async fn run_session_diagnose(
 }
 
 async fn run_protocols_list(api: &ApiClient, json: bool) -> Result<()> {
-    let protocols: Vec<ProtocolResponse> = api.get("/v1/llms/agent-protocols").await?;
+    let response: ProtocolListResponse = api.get("/v1/llms/agent-protocols").await?;
+    let protocols = response.items;
     if json {
         return print_json(&protocols);
     }
@@ -927,14 +930,17 @@ async fn run_protocols_list(api: &ApiClient, json: bool) -> Result<()> {
         println!("No agent protocols found.");
         return Ok(());
     }
-    println!("{:<28}  {:<24}  {:<16}  DESCRIPTION", "ID", "NAME", "MODEL");
-    println!("{:-<28}  {:-<24}  {:-<16}  {:-<40}", "", "", "", "");
+    println!(
+        "{:<28}  {:<28}  {:<28}  DESCRIPTION",
+        "ID", "PROTOCOL NAME", "TITLE"
+    );
+    println!("{:-<28}  {:-<28}  {:-<28}  {:-<40}", "", "", "", "");
     for p in &protocols {
         println!(
-            "{:<28}  {:<24}  {:<16}  {}",
+            "{:<28}  {:<28}  {:<28}  {}",
             p.id,
-            truncate(p.name.as_deref().unwrap_or("-"), 24),
-            p.model.as_deref().unwrap_or("-"),
+            truncate(&p.protocol_name, 28),
+            truncate(&p.title, 28),
             truncate(p.description.as_deref().unwrap_or("-"), 40),
         );
     }
@@ -947,19 +953,20 @@ async fn run_protocols_get(api: &ApiClient, id: &str, json: bool) -> Result<()> 
         return print_json(&p);
     }
     println!("ID:          {}", p.id);
-    println!("Name:        {}", p.name.as_deref().unwrap_or("-"));
+    println!("Tenant ID:   {}", p.tenant_id);
+    println!("Title:       {}", p.title);
+    println!("Protocol:    {}", p.protocol_name);
     println!("Description: {}", p.description.as_deref().unwrap_or("-"));
-    println!("Model:       {}", p.model.as_deref().unwrap_or("-"));
-    if let Some(prompt) = &p.system_prompt {
-        println!("System prompt:");
-        println!("  {}", prompt.replace('\n', "\n  "));
-    }
-    println!("Created:     {}", p.created_at.as_deref().unwrap_or("-"));
+    println!("Markdown:");
+    println!("  {}", p.markdown.replace('\n', "\n  "));
+    println!("Created:     {}", p.created_at);
+    println!("Updated:     {}", p.updated_at);
     Ok(())
 }
 
 async fn run_workers_list(api: &ApiClient, json: bool) -> Result<()> {
-    let workers: Vec<WorkerResponse> = api.get("/v1/agent/workers").await?;
+    let response: WorkerListResponse = api.get("/v1/agent/workers").await?;
+    let workers = response.workers;
     if json {
         return print_json(&workers);
     }
@@ -980,9 +987,9 @@ async fn run_workers_list(api: &ApiClient, json: bool) -> Result<()> {
             "{:<28}  {:<20}  {:<12}  {:<20}  {}",
             w.id,
             truncate(w.name.as_deref().unwrap_or("-"), 20),
-            w.status.as_deref().unwrap_or("-"),
-            w.last_heartbeat.as_deref().unwrap_or("-"),
-            w.created_at.as_deref().unwrap_or("-"),
+            w.status,
+            w.last_heartbeat_at.as_deref().unwrap_or("-"),
+            w.created_at,
         );
     }
     Ok(())
@@ -995,12 +1002,12 @@ async fn run_workers_get(api: &ApiClient, worker_id: &str, json: bool) -> Result
     }
     println!("ID:             {}", w.id);
     println!("Name:           {}", w.name.as_deref().unwrap_or("-"));
-    println!("Status:         {}", w.status.as_deref().unwrap_or("-"));
+    println!("Status:         {}", w.status);
     println!(
         "Last heartbeat: {}",
-        w.last_heartbeat.as_deref().unwrap_or("-")
+        w.last_heartbeat_at.as_deref().unwrap_or("-")
     );
-    println!("Created:        {}", w.created_at.as_deref().unwrap_or("-"));
+    println!("Created:        {}", w.created_at);
     Ok(())
 }
 
@@ -1016,7 +1023,8 @@ async fn run_workers_metrics(api: &ApiClient, worker_id: &str, json: bool) -> Re
 }
 
 async fn run_worktrees_list(api: &ApiClient, json: bool) -> Result<()> {
-    let worktrees: Vec<WorktreeResponse> = api.get("/v1/agent/worktrees").await?;
+    let response: WorktreeListResponse = api.get("/v1/agent/worktrees").await?;
+    let WorktreeListResponse { worktrees, total } = response;
     if json {
         return print_json(&worktrees);
     }
@@ -1025,19 +1033,20 @@ async fn run_worktrees_list(api: &ApiClient, json: bool) -> Result<()> {
         return Ok(());
     }
     println!(
-        "{:<28}  {:<12}  {:<24}  REPOSITORY",
+        "{:<28}  {:<12}  {:<24}  PATH",
         "TASK ID", "STATUS", "BRANCH"
     );
     println!("{:-<28}  {:-<12}  {:-<24}  {:-<40}", "", "", "", "");
     for w in &worktrees {
         println!(
             "{:<28}  {:<12}  {:<24}  {}",
-            w.task_id.as_deref().unwrap_or("-"),
-            w.status.as_deref().unwrap_or("-"),
-            truncate(w.branch.as_deref().unwrap_or("-"), 24),
-            truncate(w.repository_url.as_deref().unwrap_or("-"), 40),
+            w.task_id,
+            w.status,
+            truncate(&w.branch_name, 24),
+            truncate(&w.path, 40),
         );
     }
+    println!("Total: {total}");
     Ok(())
 }
 
@@ -1046,16 +1055,16 @@ async fn run_worktrees_get(api: &ApiClient, task_id: &str, json: bool) -> Result
     if json {
         return print_json(&w);
     }
-    println!("Task ID:    {}", w.task_id.as_deref().unwrap_or("-"));
-    println!("Status:     {}", w.status.as_deref().unwrap_or("-"));
-    println!("Branch:     {}", w.branch.as_deref().unwrap_or("-"));
-    println!("Repository: {}", w.repository_url.as_deref().unwrap_or("-"));
-    println!("Created:    {}", w.created_at.as_deref().unwrap_or("-"));
+    println!("Task ID: {}", w.task_id);
+    println!("Status:  {}", w.status);
+    println!("Branch:  {}", w.branch_name);
+    println!("Path:    {}", w.path);
     Ok(())
 }
 
 async fn run_memory_list(api: &ApiClient, json: bool) -> Result<()> {
-    let memories: Vec<MemoryResponse> = api.get("/v1/agent/memory").await?;
+    let response: MemoryListResponse = api.get("/v1/agent/memory").await?;
+    let memories = response.memories;
     if json {
         return print_json(&memories);
     }
@@ -1065,16 +1074,16 @@ async fn run_memory_list(api: &ApiClient, json: bool) -> Result<()> {
     }
     println!(
         "{:<28}  {:<12}  {:<50}  CREATED AT",
-        "ID", "STATUS", "CONTENT"
+        "ID", "STATUS", "CLAUSE"
     );
     println!("{:-<28}  {:-<12}  {:-<50}  {:-<19}", "", "", "", "");
     for m in &memories {
         println!(
             "{:<28}  {:<12}  {:<50}  {}",
             m.id,
-            m.status.as_deref().unwrap_or("-"),
-            truncate(m.content.as_deref().unwrap_or("-"), 50),
-            m.created_at.as_deref().unwrap_or("-"),
+            m.status,
+            truncate(&m.clause, 50),
+            m.created_at,
         );
     }
     Ok(())
@@ -1096,11 +1105,9 @@ async fn run_agent_status(
     if json {
         return print_json(&status);
     }
-    println!("Status:     {}", status.status.as_deref().unwrap_or("-"));
-    println!("Agent ID:   {}", status.agent_id.as_deref().unwrap_or("-"));
-    if let Some(sid) = &status.session_id {
-        println!("Session ID: {sid}");
-    }
+    println!("Running:  {}", status.is_running);
+    println!("Progress: {}%", status.progress);
+    println!("State:    {}", status.state);
     Ok(())
 }
 
@@ -1151,18 +1158,18 @@ async fn run_models_list(api: &ApiClient, json: bool) -> Result<()> {
     Ok(())
 }
 
-fn run_tool_job_container(
-    args: &ToolJobRunArgs,
+fn run_coding_job_container(
+    args: &CodingJobRunArgs,
     config: &Configuration,
     tenant_id: &str,
 ) -> Result<()> {
-    let docker_config = ToolJobDockerConfig::from_runtime(args, config, tenant_id)?;
-    run_tool_job_container_with_docker(&args.docker_bin, &docker_config)
+    let docker_config = CodingJobDockerConfig::from_runtime(args, config, tenant_id)?;
+    run_coding_job_container_with_docker(&args.docker_bin, &docker_config)
 }
 
-fn run_tool_job_container_with_docker(
+fn run_coding_job_container_with_docker(
     docker_bin: &str,
-    config: &ToolJobDockerConfig,
+    config: &CodingJobDockerConfig,
 ) -> Result<()> {
     config.print_startup_summary();
     let status = Command::new(docker_bin)
@@ -1174,7 +1181,7 @@ fn run_tool_job_container_with_docker(
         .map_err(|err| {
             if err.kind() == std::io::ErrorKind::NotFound {
                 anyhow!(
-                    "Docker is not installed or `{docker_bin}` is not on PATH. Install Docker and retry `tachyon agent tool-job run`."
+                    "Docker is not installed or `{docker_bin}` is not on PATH. Install Docker and retry `tachyon agent coding-job run`."
                 )
             } else {
                 anyhow!(err).context(format!("failed to start Docker via `{docker_bin}`"))
@@ -1187,11 +1194,11 @@ fn run_tool_job_container_with_docker(
     Ok(())
 }
 
-fn stop_tool_job_container(args: &ToolJobStopArgs) -> Result<()> {
-    stop_tool_job_container_with_docker(&args.docker_bin, &args.name, &args.image, args.timeout)
+fn stop_coding_job_container(args: &CodingJobStopArgs) -> Result<()> {
+    stop_coding_job_container_with_docker(&args.docker_bin, &args.name, &args.image, args.timeout)
 }
 
-fn stop_tool_job_container_with_docker(
+fn stop_coding_job_container_with_docker(
     docker_bin: &str,
     name: &str,
     image: &str,
@@ -1232,7 +1239,7 @@ fn stop_tool_job_container_with_docker(
     }
 
     if container_ids.is_empty() {
-        println!("No running tachyond tool job worker container found.");
+        println!("No running tachyond coding job worker container found.");
         return Ok(());
     }
 
@@ -1250,7 +1257,7 @@ fn stop_tool_job_container_with_docker(
         .map_err(|err| {
             if err.kind() == std::io::ErrorKind::NotFound {
                 anyhow!(
-                    "Docker is not installed or `{docker_bin}` is not on PATH. Install Docker and retry `tachyon agent tool-job stop`."
+                    "Docker is not installed or `{docker_bin}` is not on PATH. Install Docker and retry `tachyon agent coding-job stop`."
                 )
             } else {
                 anyhow!(err).context(format!("failed to stop Docker container via `{docker_bin}`"))
@@ -1272,7 +1279,7 @@ fn docker_container_ids(docker_bin: &str, filters: &[&str]) -> Result<Vec<String
         .map_err(|err| {
             if err.kind() == std::io::ErrorKind::NotFound {
                 anyhow!(
-                    "Docker is not installed or `{docker_bin}` is not on PATH. Install Docker and retry `tachyon agent tool-job stop`."
+                    "Docker is not installed or `{docker_bin}` is not on PATH. Install Docker and retry `tachyon agent coding-job stop`."
                 )
             } else {
                 anyhow!(err).context(format!("failed to inspect Docker containers via `{docker_bin}`"))
@@ -1356,15 +1363,17 @@ pub async fn run(args: &AgentArgs, config: &Configuration, tenant_id: &str) -> R
             json,
         } => run_agent_messages(&api, agent_id, session_id.as_deref(), *json).await,
         AgentCommand::Models { json } => run_models_list(&api, *json).await,
-        AgentCommand::ToolJob { command } => match command {
-            ToolJobCommand::Run(run_args) => run_tool_job_container(run_args, config, tenant_id),
-            ToolJobCommand::Stop(stop_args) => stop_tool_job_container(stop_args),
+        AgentCommand::CodingJob { command } => match command {
+            CodingJobCommand::Run(run_args) => {
+                run_coding_job_container(run_args, config, tenant_id)
+            }
+            CodingJobCommand::Stop(stop_args) => stop_coding_job_container(stop_args),
         },
     }
 }
 
 #[cfg(test)]
-mod tool_job_tests {
+mod coding_job_tests {
     use super::*;
 
     fn test_config() -> Configuration {
@@ -1374,8 +1383,8 @@ mod tool_job_tests {
         config
     }
 
-    fn run_args() -> ToolJobRunArgs {
-        ToolJobRunArgs {
+    fn run_args() -> CodingJobRunArgs {
+        CodingJobRunArgs {
             image: "ghcr.io/quantum-box/tachyond:latest".to_string(),
             quic_gateway_url: "quic.n1.tachy.one:4433".to_string(),
             docker_bin: "docker".to_string(),
@@ -1394,7 +1403,7 @@ mod tool_job_tests {
     #[test]
     fn docker_command_builder_injects_required_env() {
         let config =
-            ToolJobDockerConfig::from_runtime(&run_args(), &test_config(), "op_test").unwrap();
+            CodingJobDockerConfig::from_runtime(&run_args(), &test_config(), "op_test").unwrap();
 
         assert_eq!(config.image, DEFAULT_TACHYOND_IMAGE);
         let args = config.docker_args();
@@ -1410,7 +1419,7 @@ mod tool_job_tests {
         assert!(args.contains(&"TACHYON_OPERATOR_ID=op_test".to_string()));
         assert!(args.contains(&"TACHYON_QUIC_GATEWAY_URL=quic.n1.tachy.one:4433".to_string()));
         assert!(args.contains(&"TACHYON_AUTH_TOKEN=test-token".to_string()));
-        assert!(args.contains(&"TOOL_JOB_OPERATOR_ID=op_test".to_string()));
+        assert!(args.contains(&"CODING_JOB_OPERATOR_ID=op_test".to_string()));
         assert!(args.contains(&"QUIC_GATEWAY_ADDR=quic.n1.tachy.one:4433".to_string()));
         assert!(
             args.contains(&"RUST_LOG=warn,streaming=info,llms=info,tachyon_code=info".to_string())
@@ -1435,7 +1444,7 @@ mod tool_job_tests {
         run_args.opencode_restart_limit = 2;
         run_args.opencode_health_interval_secs = 10;
         let config =
-            ToolJobDockerConfig::from_runtime(&run_args, &test_config(), "op_test").unwrap();
+            CodingJobDockerConfig::from_runtime(&run_args, &test_config(), "op_test").unwrap();
 
         let args = config.docker_args();
         assert!(args.contains(&"TACHYOND_ENABLE_OPENCODE=true".to_string()));
@@ -1450,7 +1459,7 @@ mod tool_job_tests {
         let mut run_args = run_args();
         run_args.detach = true;
         let config =
-            ToolJobDockerConfig::from_runtime(&run_args, &test_config(), "op_test").unwrap();
+            CodingJobDockerConfig::from_runtime(&run_args, &test_config(), "op_test").unwrap();
 
         let args = config.docker_args();
         assert!(args.contains(&"--detach".to_string()));
@@ -1460,14 +1469,14 @@ mod tool_job_tests {
     fn config_resolution_requires_api_key() {
         let mut config = test_config();
         config.bearer_access_token = None;
-        let err = ToolJobDockerConfig::from_runtime(&run_args(), &config, "op_test")
+        let err = CodingJobDockerConfig::from_runtime(&run_args(), &config, "op_test")
             .expect_err("missing token should fail");
         assert!(err.to_string().contains("no Tachyon API key"));
     }
 
     #[test]
     fn config_resolution_requires_operator_id() {
-        let err = ToolJobDockerConfig::from_runtime(&run_args(), &test_config(), "")
+        let err = CodingJobDockerConfig::from_runtime(&run_args(), &test_config(), "")
             .expect_err("missing operator should fail");
         assert!(err.to_string().contains("no Tachyon operator id"));
     }
@@ -1475,8 +1484,8 @@ mod tool_job_tests {
     #[test]
     fn missing_docker_error_is_clear() {
         let docker_config =
-            ToolJobDockerConfig::from_runtime(&run_args(), &test_config(), "op_test").unwrap();
-        let err = run_tool_job_container_with_docker(
+            CodingJobDockerConfig::from_runtime(&run_args(), &test_config(), "op_test").unwrap();
+        let err = run_coding_job_container_with_docker(
             "definitely-missing-docker-for-plt-1163",
             &docker_config,
         )

@@ -167,7 +167,7 @@ export interface AgentChunk {
      * @type {string}
      * @memberof AgentChunk
      */
-    jobId: string;
+    codingJobId: string;
     /**
      * 
      * @type {string}
@@ -187,7 +187,7 @@ export interface AgentChunk {
  * @export
  */
 export const AgentChunkTypeEnum = {
-    ToolJobStarted: 'tool_job_started'
+    CodingJobStarted: 'coding_job_started'
 } as const;
 export type AgentChunkTypeEnum = typeof AgentChunkTypeEnum[keyof typeof AgentChunkTypeEnum];
 
@@ -211,7 +211,7 @@ export function instanceOfAgentChunk(value: object): value is AgentChunk {
     if (!('completionTokens' in value) || value['completionTokens'] === undefined) return false;
     if (!('promptTokens' in value) || value['promptTokens'] === undefined) return false;
     if (!('totalTokens' in value) || value['totalTokens'] === undefined) return false;
-    if (!('jobId' in value) || value['jobId'] === undefined) return false;
+    if (!('codingJobId' in value) || value['codingJobId'] === undefined) return false;
     if (!('provider' in value) || value['provider'] === undefined) return false;
     return true;
 }
@@ -247,7 +247,7 @@ export function AgentChunkFromJSONTyped(json: any, ignoreDiscriminator: boolean)
         'promptTokens': json['prompt_tokens'],
         'totalCost': json['total_cost'] == null ? undefined : json['total_cost'],
         'totalTokens': json['total_tokens'],
-        'jobId': json['job_id'],
+        'codingJobId': json['coding_job_id'],
         'provider': json['provider'],
         'agent': json['agent'] == null ? undefined : AgentSourceFromJSON(json['agent']),
     };
@@ -285,9 +285,8 @@ export function AgentChunkToJSONTyped(value?: AgentChunk | null, ignoreDiscrimin
         'prompt_tokens': value['promptTokens'],
         'total_cost': value['totalCost'],
         'total_tokens': value['totalTokens'],
-        'job_id': value['jobId'],
+        'coding_job_id': value['codingJobId'],
         'provider': value['provider'],
         'agent': AgentSourceToJSON(value['agent']),
     };
 }
-

@@ -14,8 +14,8 @@
 
 import { mapValues } from '../runtime';
 /**
- * Emitted when a tool job is created, before sync polling begins.
- * Frontend can use the job_id to subscribe to the tool job's
+ * Emitted when a coding job is created, before sync polling begins.
+ * Frontend can use the coding_job_id to subscribe to the coding job's
  * own SSE stream for real-time progress.
  * @export
  * @interface AgentChunkEventOneOf10
@@ -26,7 +26,7 @@ export interface AgentChunkEventOneOf10 {
      * @type {string}
      * @memberof AgentChunkEventOneOf10
      */
-    jobId: string;
+    codingJobId: string;
     /**
      * 
      * @type {string}
@@ -52,7 +52,7 @@ export interface AgentChunkEventOneOf10 {
  * @export
  */
 export const AgentChunkEventOneOf10TypeEnum = {
-    ToolJobStarted: 'tool_job_started'
+    CodingJobStarted: 'coding_job_started'
 } as const;
 export type AgentChunkEventOneOf10TypeEnum = typeof AgentChunkEventOneOf10TypeEnum[keyof typeof AgentChunkEventOneOf10TypeEnum];
 
@@ -61,7 +61,7 @@ export type AgentChunkEventOneOf10TypeEnum = typeof AgentChunkEventOneOf10TypeEn
  * Check if a given object implements the AgentChunkEventOneOf10 interface.
  */
 export function instanceOfAgentChunkEventOneOf10(value: object): value is AgentChunkEventOneOf10 {
-    if (!('jobId' in value) || value['jobId'] === undefined) return false;
+    if (!('codingJobId' in value) || value['codingJobId'] === undefined) return false;
     if (!('provider' in value) || value['provider'] === undefined) return false;
     if (!('toolId' in value) || value['toolId'] === undefined) return false;
     if (!('type' in value) || value['type'] === undefined) return false;
@@ -78,7 +78,7 @@ export function AgentChunkEventOneOf10FromJSONTyped(json: any, ignoreDiscriminat
     }
     return {
         
-        'jobId': json['job_id'],
+        'codingJobId': json['coding_job_id'],
         'provider': json['provider'],
         'toolId': json['tool_id'],
         'type': json['type'],
@@ -96,10 +96,9 @@ export function AgentChunkEventOneOf10ToJSONTyped(value?: AgentChunkEventOneOf10
 
     return {
         
-        'job_id': value['jobId'],
+        'coding_job_id': value['codingJobId'],
         'provider': value['provider'],
         'tool_id': value['toolId'],
         'type': value['type'],
     };
 }
-

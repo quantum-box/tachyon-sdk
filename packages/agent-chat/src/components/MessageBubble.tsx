@@ -51,12 +51,12 @@ export function MessageBubble({ chunk }: MessageBubbleProps) {
 			return <ToolResultDisplay chunk={chunk} />
 		case 'usage':
 			return <UsageSummary chunk={chunk} />
-		case 'tool_job_started':
+		case 'coding_job_started':
 			return (
 				<div className='flex justify-start mb-2'>
 					<div className='text-xs px-3 py-1.5 rounded-full bg-amber-50 dark:bg-amber-900/20 text-amber-700 dark:text-amber-300 border border-amber-200 dark:border-amber-800'>
-						Tool Job started: {chunk.provider || 'unknown'} (
-						{chunk.job_id?.slice(0, 8)}...)
+						Coding Job started: {chunk.provider || 'unknown'} (
+						{chunk.coding_job_id?.slice(0, 8)}...)
 					</div>
 				</div>
 			)

@@ -50,16 +50,16 @@ class AgentChunk(BaseModel):
     prompt_tokens: Annotated[int, Field(strict=True, ge=0)]
     total_cost: Optional[Union[StrictFloat, StrictInt]] = None
     total_tokens: Annotated[int, Field(strict=True, ge=0)]
-    job_id: StrictStr
+    coding_job_id: StrictStr
     provider: StrictStr
     agent: Optional[AgentSource] = None
-    __properties: ClassVar[List[str]] = ["is_client_tool", "tool_id", "tool_name", "type", "args", "is_finished", "result", "fire_and_forget", "index", "text", "created_at", "id", "user_id", "options", "command", "cache_creation_input_tokens", "cache_read_input_tokens", "completion_tokens", "prompt_tokens", "total_cost", "total_tokens", "job_id", "provider", "agent"]
+    __properties: ClassVar[List[str]] = ["is_client_tool", "tool_id", "tool_name", "type", "args", "is_finished", "result", "fire_and_forget", "index", "text", "created_at", "id", "user_id", "options", "command", "cache_creation_input_tokens", "cache_read_input_tokens", "completion_tokens", "prompt_tokens", "total_cost", "total_tokens", "coding_job_id", "provider", "agent"]
 
     @field_validator('type')
     def type_validate_enum(cls, value):
         """Validates the enum"""
-        if value not in set(['tool_job_started']):
-            raise ValueError("must be one of enum values ('tool_job_started')")
+        if value not in set(['coding_job_started']):
+            raise ValueError("must be one of enum values ('coding_job_started')")
         return value
 
     model_config = ConfigDict(
@@ -147,10 +147,9 @@ class AgentChunk(BaseModel):
             "prompt_tokens": obj.get("prompt_tokens"),
             "total_cost": obj.get("total_cost"),
             "total_tokens": obj.get("total_tokens"),
-            "job_id": obj.get("job_id"),
+            "coding_job_id": obj.get("coding_job_id"),
             "provider": obj.get("provider"),
             "agent": AgentSource.from_dict(obj["agent"]) if obj.get("agent") is not None else None
         })
         return _obj
-
 
