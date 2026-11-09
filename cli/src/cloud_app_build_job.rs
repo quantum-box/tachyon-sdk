@@ -36,6 +36,8 @@ pub struct BuildWorkloadSpec {
     env: Vec<BuildWorkloadEnvVar>,
     #[serde(default)]
     workers_secret_binding_keys: Vec<String>,
+    #[serde(default)]
+    workers_dispatch_namespace: Option<String>,
     artifact: BuildWorkloadArtifact,
     callback: Option<BuildWorkloadCallback>,
     deployment_target: Option<String>,
@@ -1048,7 +1050,10 @@ async fn run_cloudflare_workers_deploy(
     command
         .arg("--yes")
         .arg(WRANGLER_NPM_SPEC)
-        .args(workers_deploy_args(env_value(env, "WORKERS_SCRIPT_NAME")));
+        .args(workers_deploy_args(
+            env_value(env, "WORKERS_SCRIPT_NAME"),
+            workload.workers_dispatch_namespace.as_deref(),
+        )?);
     let _secret_file = add_workers_runtime_bindings(&mut command, workload, env)?;
     command
         .current_dir(app_dir)
@@ -1059,12 +1064,29 @@ async fn run_cloudflare_workers_deploy(
     run_command("wrangler deploy", command).await
 }
 
-fn workers_deploy_args(script_name: Option<&str>) -> Vec<OsString> {
+fn workers_deploy_args(
+    script_name: Option<&str>,
+    dispatch_namespace: Option<&str>,
+) -> Result<Vec<OsString>> {
     let mut args = vec!["deploy".into()];
     if let Some(name) = script_name {
         args.push(wrangler_string_option("name", name));
     }
-    args
+    if let Some(namespace) = dispatch_namespace {
+        if namespace.is_empty()
+            || namespace.len() > 63
+            || !namespace
+                .bytes()
+                .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+            || !namespace.as_bytes()[0].is_ascii_alphanumeric()
+            || !namespace.as_bytes()[namespace.len() - 1].is_ascii_alphanumeric()
+            || script_name.is_none_or(str::is_empty)
+        {
+            return Err(anyhow!("invalid Workers dispatch destination"));
+        }
+        args.push(wrangler_string_option("dispatch-namespace", namespace));
+    }
+    Ok(args)
 }
 
 /// Deploy redirect written by framework builds that generate their own
@@ -2811,6 +2833,7 @@ mod tests {
             iac: None,
             wrangler_config: None,
             workers_secret_binding_keys: Vec::new(),
+            workers_dispatch_namespace: None,
         }
     }
 
@@ -2838,7 +2861,7 @@ mod tests {
 
     #[test]
     fn workers_deploy_name_is_attached_to_its_option() {
-        let args = workers_deploy_args(Some("--synthetic-worker"));
+        let args = workers_deploy_args(Some("--synthetic-worker"), None).unwrap();
         assert_eq!(
             args,
             vec![
@@ -2850,6 +2873,20 @@ mod tests {
             model_pinned_yargs_parser_21_1_1_attached_value(&args[1]),
             Some(("name".to_string(), "--synthetic-worker".to_string()))
         );
+    }
+
+    #[test]
+    fn workers_dispatch_uses_only_the_selected_namespace() {
+        assert_eq!(
+            workers_deploy_args(Some("order-sync"), Some("txcloud-apps")).unwrap(),
+            vec![
+                OsString::from("deploy"),
+                OsString::from("--name=order-sync"),
+                OsString::from("--dispatch-namespace=txcloud-apps"),
+            ],
+        );
+        assert!(workers_deploy_args(None, Some("txcloud-apps")).is_err());
+        assert!(workers_deploy_args(Some("order-sync"), Some("--invalid")).is_err());
     }
 
     /// A generated wrangler configuration must land before the app's own
@@ -3635,7 +3672,7 @@ mod tests {
             .any(|arg| arg.as_os_str() == OsStr::new(expected)));
         assert_eq!(parsed_attached_option(&args, "commit-message"), expected);
 
-        let worker_args = workers_deploy_args(Some(expected));
+        let worker_args = workers_deploy_args(Some(expected), None).unwrap();
         assert_eq!(
             parsed_attached_option(&worker_args, "name"),
             expected,
@@ -4572,6 +4609,7 @@ mod tests {
             iac: None,
             wrangler_config: None,
             workers_secret_binding_keys: Vec::new(),
+            workers_dispatch_namespace: None,
         };
 
         assert_eq!(
@@ -4615,6 +4653,7 @@ mod tests {
             iac: None,
             wrangler_config: None,
             workers_secret_binding_keys: Vec::new(),
+            workers_dispatch_namespace: None,
         };
 
         assert_eq!(
@@ -4902,6 +4941,7 @@ mod tests {
             iac: None,
             wrangler_config: None,
             workers_secret_binding_keys: Vec::new(),
+            workers_dispatch_namespace: None,
         };
 
         assert_eq!(
@@ -4946,6 +4986,7 @@ mod tests {
             iac: None,
             wrangler_config: None,
             workers_secret_binding_keys: Vec::new(),
+            workers_dispatch_namespace: None,
         };
 
         assert_eq!(docker_context_path(&workload, &checkout, &app), app);
@@ -4987,6 +5028,7 @@ mod tests {
             iac: None,
             wrangler_config: None,
             workers_secret_binding_keys: Vec::new(),
+            workers_dispatch_namespace: None,
         };
         let context = docker_context_path(&workload, &checkout, &app);
 
@@ -5032,6 +5074,7 @@ mod tests {
             iac: None,
             wrangler_config: None,
             workers_secret_binding_keys: Vec::new(),
+            workers_dispatch_namespace: None,
         };
 
         assert_eq!(docker_context_path(&workload, &checkout, &app), checkout);
@@ -5074,6 +5117,7 @@ mod tests {
             iac: None,
             wrangler_config: None,
             workers_secret_binding_keys: Vec::new(),
+            workers_dispatch_namespace: None,
         };
 
         assert_eq!(docker_context_path(&workload, &checkout, &app), context);

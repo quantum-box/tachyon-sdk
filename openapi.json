@@ -2259,6 +2259,88 @@
                 }
             }
         },
+        "/v1/integrations/github/billing-usage": {
+            "get": {
+                "tags": [
+                    "Integrations"
+                ],
+                "summary": "Billing usage of a GitHub organization for one month.",
+                "description": "The body is GitHub's `GET /organizations/{org}/settings/billing/usage` response, unchanged. The installation token is never returned.",
+                "operationId": "get_github_billing_usage",
+                "parameters": [
+                    {
+                        "name": "org",
+                        "in": "query",
+                        "description": "GitHub organization login. It must be the account of a GitHub App installation connected to the requesting tenant.",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "name": "year",
+                        "in": "query",
+                        "required": true,
+                        "schema": {
+                            "type": "integer",
+                            "format": "int32",
+                            "minimum": 0
+                        }
+                    },
+                    {
+                        "name": "month",
+                        "in": "query",
+                        "description": "1-12.",
+                        "required": true,
+                        "schema": {
+                            "type": "integer",
+                            "format": "int32",
+                            "minimum": 0
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "GitHub billing usage report",
+                        "content": {
+                            "application/json": {
+                                "schema": {}
+                            }
+                        }
+                    },
+                    "400": {
+                        "description": "Invalid org or month",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/ErrorResponse"
+                                }
+                            }
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden, or the organization is not connected to the tenant",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/ErrorResponse"
+                                }
+                            }
+                        }
+                    },
+                    "503": {
+                        "description": "GitHub refused or failed the request",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/ErrorResponse"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
         "/v1/integrations/{id}": {
             "get": {
                 "tags": [
@@ -5697,45 +5779,6 @@
                     }
                 }
             }
-        },
-        "/v1/auth/contract-authority/resolve": {
-            "post": {
-                "tags": [
-                    "Auth - Contract Authority"
-                ],
-                "operationId": "resolve",
-                "requestBody": {
-                    "content": {
-                        "application/json": {
-                            "schema": {
-                                "$ref": "#/components/schemas/ContractAuthorityResolveRequest"
-                            }
-                        }
-                    },
-                    "required": true
-                },
-                "responses": {
-                    "200": {
-                        "description": "Current verified authority for the exact binding slot",
-                        "content": {
-                            "application/json": {
-                                "schema": {
-                                    "$ref": "#/components/schemas/ContractAuthorityResolveResponse"
-                                }
-                            }
-                        }
-                    },
-                    "400": {
-                        "description": "Invalid request scope or shape"
-                    },
-                    "403": {
-                        "description": "Caller denied or current proof unavailable"
-                    },
-                    "503": {
-                        "description": "Authority source unavailable"
-                    }
-                }
-            }
         }
     },
     "components": {
@@ -6295,6 +6338,13 @@
                             "null"
                         ],
                         "description": "Model identifier. Accepts `provider/model` or just `model` (provider auto-detected).\n\nExamples:\n- `anthropic/claude-3-sonnet-20241022`\n- `openai/gpt-4`\n- `google_ai/gemini-pro`\n\nAuto-detection shortcuts:\n- `gpt-*` → OpenAI\n- `claude-*` → Anthropic\n- `gemini*` → Google AI"
+                    },
+                    "reasoning_effort": {
+                        "type": [
+                            "string",
+                            "null"
+                        ],
+                        "description": "Optional reasoning effort for reasoning-capable models\n(e.g. `low`, `medium`, `high`).\n\nSent to OpenAI models that use the Responses API\n(`gpt-5*`, `gpt-6*`) as `reasoning.effort`. Other\nproviders and models ignore it."
                     },
                     "task": {
                         "type": "string",
@@ -11813,226 +11863,6 @@
                         "format": "date-time"
                     }
                 }
-            },
-            "AuthorityActor": {
-                "type": "object",
-                "description": "Actor identity and its source-owned representation.",
-                "required": [
-                    "actorId",
-                    "representation"
-                ],
-                "properties": {
-                    "actorId": {
-                        "type": "string"
-                    },
-                    "representation": {
-                        "type": "string"
-                    }
-                },
-                "additionalProperties": false
-            },
-            "AuthorityIssuer": {
-                "type": "object",
-                "description": "Issuer and signing-key identity returned by the trusted source.",
-                "required": [
-                    "issuerId",
-                    "keyId"
-                ],
-                "properties": {
-                    "issuerId": {
-                        "type": "string"
-                    },
-                    "keyId": {
-                        "type": "string"
-                    }
-                },
-                "additionalProperties": false
-            },
-            "AuthorityPartyRef": {
-                "type": "object",
-                "description": "A legal-party reference from the stored Field contract.",
-                "required": [
-                    "recordOwnerTenantId",
-                    "partyId"
-                ],
-                "properties": {
-                    "partyId": {
-                        "type": "string"
-                    },
-                    "recordOwnerTenantId": {
-                        "type": "string"
-                    }
-                },
-                "additionalProperties": false
-            },
-            "BindingReference": {
-                "type": "object",
-                "description": "Exact Field contract identity and binding version/digest.",
-                "required": [
-                    "recordOwnerTenantId",
-                    "contractId",
-                    "bindingRevision",
-                    "bindingDigest"
-                ],
-                "properties": {
-                    "bindingDigest": {
-                        "type": "string"
-                    },
-                    "bindingRevision": {
-                        "type": "string"
-                    },
-                    "contractId": {
-                        "type": "string"
-                    },
-                    "recordOwnerTenantId": {
-                        "type": "string"
-                    }
-                },
-                "additionalProperties": false
-            },
-            "BindingSlot": {
-                "type": "object",
-                "description": "A server-derived slot.  `partyRef` is deliberately role-bound.",
-                "required": [
-                    "role",
-                    "tenantId"
-                ],
-                "properties": {
-                    "partyRef": {
-                        "oneOf": [
-                            {
-                                "type": "null"
-                            },
-                            {
-                                "$ref": "#/components/schemas/AuthorityPartyRef"
-                            }
-                        ]
-                    },
-                    "role": {
-                        "$ref": "#/components/schemas/BindingSlotRole"
-                    },
-                    "tenantId": {
-                        "type": "string"
-                    }
-                },
-                "additionalProperties": false
-            },
-            "BindingSlotRole": {
-                "type": "string",
-                "description": "The seven server-derived slot roles in Field's binding contract.",
-                "enum": [
-                    "recordOwner",
-                    "provider",
-                    "contractee",
-                    "usageTenant",
-                    "contractingParty",
-                    "billingParty",
-                    "rightsOwner"
-                ]
-            },
-            "ContractAuthorityEvidence": {
-                "type": "object",
-                "description": "Opaque proof metadata returned for a current exact resolution.\n\nThe issuer and key identify the server-trusted verification record.  They\ndo not expose private key material, party graphs or the signed token.",
-                "required": [
-                    "issuer",
-                    "evidenceId",
-                    "evidenceRevision",
-                    "evidenceDigest",
-                    "validFrom",
-                    "validUntil"
-                ],
-                "properties": {
-                    "evidenceDigest": {
-                        "type": "string"
-                    },
-                    "evidenceId": {
-                        "type": "string"
-                    },
-                    "evidenceRevision": {
-                        "type": "string"
-                    },
-                    "issuer": {
-                        "$ref": "#/components/schemas/AuthorityIssuer"
-                    },
-                    "revokedAt": {
-                        "type": [
-                            "string",
-                            "null"
-                        ],
-                        "format": "date-time"
-                    },
-                    "validFrom": {
-                        "type": "string",
-                        "format": "date-time"
-                    },
-                    "validUntil": {
-                        "type": "string",
-                        "format": "date-time"
-                    }
-                },
-                "additionalProperties": false
-            },
-            "ContractAuthorityResolveRequest": {
-                "type": "object",
-                "description": "The current authority request sent by Field.",
-                "required": [
-                    "schemaVersion",
-                    "slot",
-                    "binding",
-                    "actor",
-                    "action",
-                    "resource",
-                    "environment",
-                    "audience"
-                ],
-                "properties": {
-                    "action": {
-                        "type": "string"
-                    },
-                    "actor": {
-                        "$ref": "#/components/schemas/AuthorityActor"
-                    },
-                    "audience": {
-                        "type": "string"
-                    },
-                    "binding": {
-                        "$ref": "#/components/schemas/BindingReference"
-                    },
-                    "environment": {
-                        "type": "string"
-                    },
-                    "resource": {
-                        "type": "string"
-                    },
-                    "schemaVersion": {
-                        "type": "string"
-                    },
-                    "slot": {
-                        "$ref": "#/components/schemas/BindingSlot"
-                    }
-                },
-                "additionalProperties": false
-            },
-            "ContractAuthorityResolveResponse": {
-                "type": "object",
-                "description": "Current proof returned for the exact request.  The request is echoed so a\nconsumer can compare every scope field before converting to an internal\nField proof.",
-                "required": [
-                    "schemaVersion",
-                    "request",
-                    "evidence"
-                ],
-                "properties": {
-                    "evidence": {
-                        "$ref": "#/components/schemas/ContractAuthorityEvidence"
-                    },
-                    "request": {
-                        "$ref": "#/components/schemas/ContractAuthorityResolveRequest"
-                    },
-                    "schemaVersion": {
-                        "type": "string"
-                    }
-                },
-                "additionalProperties": false
             }
         }
     },
@@ -12156,10 +11986,6 @@
         {
             "name": "Notifications",
             "description": "Notification delivery APIs"
-        },
-        {
-            "name": "Auth - Contract Authority",
-            "description": "Trusted contract authority resolution"
         }
     ]
 }

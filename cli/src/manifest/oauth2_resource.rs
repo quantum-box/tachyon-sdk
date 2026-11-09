@@ -71,6 +71,30 @@ pub struct OAuth2ResourceSpec {
     /// Which OAuth2 clients may request tokens for this resource.
     #[serde(default)]
     pub clients: OAuth2ResourceClientsSpec,
+    /// What a token addressed to this resource may be exchanged for
+    /// (ADR-0166). Omit to refuse every exchange.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exchange: Option<OAuth2ResourceExchangeSpec>,
+}
+
+/// Token exchange declaration: the per-call token the exchange issues and
+/// the only workload allowed to ask for it.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct OAuth2ResourceExchangeSpec {
+    /// Resource URI of the issued token. Must be another resource.
+    pub target: String,
+    pub actor: OAuth2ResourceExchangeActorSpec,
+}
+
+/// Workload identity binding allowed to ask for an exchange.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct OAuth2ResourceExchangeActorSpec {
+    /// Cloud App ID of the workload, e.g. `tachyon-field-api`.
+    pub app_id: String,
+    /// Deployment environment of the workload, e.g. `production`.
+    pub environment: String,
 }
 
 /// Client admission rules.
@@ -112,6 +136,31 @@ pub(crate) fn validate(manifest: &OAuth2ResourceManifest) -> Result<()> {
     }
     validate_unique_tokens(&manifest.spec.scopes, "spec.scopes")?;
     validate_unique_tokens(&manifest.spec.clients.names, "spec.clients.names")?;
+    if let Some(exchange) = &manifest.spec.exchange {
+        validate_exchange(exchange, &manifest.spec.resource)?;
+    }
+    Ok(())
+}
+
+fn validate_exchange(exchange: &OAuth2ResourceExchangeSpec, resource: &str) -> Result<()> {
+    validate_resource_uri(&exchange.target)
+        .map_err(|error| anyhow!("OAuth2Resource spec.exchange.target: {error}"))?;
+    if exchange.target == resource {
+        return Err(anyhow!(
+            "OAuth2Resource spec.exchange.target must be another resource"
+        ));
+    }
+    let app_id = &exchange.actor.app_id;
+    if app_id.is_empty() || app_id.chars().any(char::is_whitespace) {
+        return Err(anyhow!(
+            "OAuth2Resource spec.exchange.actor.appId must be non-empty with no whitespace"
+        ));
+    }
+    if exchange.actor.environment.trim().is_empty() {
+        return Err(anyhow!(
+            "OAuth2Resource spec.exchange.actor.environment must not be empty"
+        ));
+    }
     Ok(())
 }
 
@@ -174,6 +223,9 @@ pub(crate) struct ResourceResponse {
     pub allow_dynamic_clients: bool,
     #[serde(default)]
     pub allowed_client_names: Vec<String>,
+    /// Absent on servers that predate token exchange (ADR-0166).
+    #[serde(default)]
+    pub exchange: Option<OAuth2ResourceExchangeSpec>,
     #[serde(default)]
     pub status: String,
 }
@@ -194,6 +246,8 @@ struct ResourceBody<'a> {
     scopes: &'a [String],
     allow_dynamic_clients: bool,
     allowed_client_names: &'a [String],
+    /// Always sent: `null` clears a live exchange, as PUT replaces the spec.
+    exchange: Option<&'a OAuth2ResourceExchangeSpec>,
 }
 
 impl<'a> ResourceBody<'a> {
@@ -205,6 +259,7 @@ impl<'a> ResourceBody<'a> {
             scopes: &spec.scopes,
             allow_dynamic_clients: spec.clients.allow_dynamic_registration,
             allowed_client_names: &spec.clients.names,
+            exchange: spec.exchange.as_ref(),
         }
     }
 }
@@ -271,10 +326,27 @@ pub(crate) fn classify(
             live.allowed_client_names, spec.clients.names
         ));
     }
+    if live.exchange != spec.exchange {
+        diff.push(format!(
+            "exchange: {} -> {}",
+            describe_exchange(live.exchange.as_ref()),
+            describe_exchange(spec.exchange.as_ref())
+        ));
+    }
     if diff.is_empty() {
         (ChangeKind::Unchanged, diff)
     } else {
         (ChangeKind::Update, diff)
+    }
+}
+
+fn describe_exchange(exchange: Option<&OAuth2ResourceExchangeSpec>) -> String {
+    match exchange {
+        Some(exchange) => format!(
+            "{} (actor {}/{})",
+            exchange.target, exchange.actor.app_id, exchange.actor.environment
+        ),
+        None => "<none>".to_string(),
     }
 }
 
@@ -391,6 +463,7 @@ mod tests {
             scopes: vec!["mcp:read".into(), "mcp:write".into()],
             allow_dynamic_clients: true,
             allowed_client_names: vec![],
+            exchange: None,
             status: "active".into(),
         }
     }
@@ -440,6 +513,75 @@ mod tests {
         let (change, diff) = classify(Some(&live(Some("Library MCP"))), &spec);
         assert_eq!(change, ChangeKind::Update);
         assert_eq!(diff, vec!["displayName: Library MCP -> <none>".to_string()]);
+    }
+
+    fn exchange_json() -> Value {
+        serde_json::json!({
+            "target": "https://library.example",
+            "actor": { "appId": "library-api", "environment": "production" }
+        })
+    }
+
+    #[test]
+    fn classify_reports_exchange_drift() {
+        let spec: OAuth2ResourceSpec = serde_json::from_value(serde_json::json!({
+            "resource": "https://library.example/mcp",
+            "scopes": ["mcp:read", "mcp:write"],
+            "clients": { "allowDynamicRegistration": true },
+            "exchange": exchange_json()
+        }))
+        .unwrap();
+        let (change, diff) = classify(Some(&live(None)), &spec);
+        assert_eq!(change, ChangeKind::Update);
+        assert_eq!(
+            diff,
+            vec![
+                "exchange: <none> -> https://library.example (actor library-api/production)"
+                    .to_string()
+            ]
+        );
+
+        let mut stored = live(None);
+        stored.exchange = spec.exchange.clone();
+        assert_eq!(classify(Some(&stored), &spec).0, ChangeKind::Unchanged);
+    }
+
+    #[test]
+    fn body_always_carries_exchange() {
+        let mut spec: OAuth2ResourceSpec = serde_json::from_value(serde_json::json!({
+            "resource": "https://library.example/mcp",
+            "exchange": exchange_json()
+        }))
+        .unwrap();
+        let body = serde_json::to_value(ResourceBody::from_spec(None, &spec)).unwrap();
+        assert_eq!(body["exchange"], exchange_json());
+
+        spec.exchange = None;
+        let body = serde_json::to_value(ResourceBody::from_spec(None, &spec)).unwrap();
+        assert!(body["exchange"].is_null());
+        assert!(body.as_object().unwrap().contains_key("exchange"));
+    }
+
+    #[test]
+    fn rejects_invalid_exchange() {
+        let mut self_target = exchange_json();
+        self_target["target"] = "https://library.example/mcp".into();
+        let mut blank_app = exchange_json();
+        blank_app["actor"]["appId"] = "".into();
+        let mut bad_target = exchange_json();
+        bad_target["target"] = "library.example".into();
+        for exchange in [self_target, blank_app, bad_target] {
+            assert!(parse(&manifest(serde_json::json!({
+                "resource": "https://library.example/mcp",
+                "exchange": exchange
+            })))
+            .is_err());
+        }
+        assert!(parse(&manifest(serde_json::json!({
+            "resource": "https://library.example/mcp",
+            "exchange": exchange_json()
+        })))
+        .is_ok());
     }
 
     #[test]

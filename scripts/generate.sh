@@ -37,6 +37,15 @@ $GENERATOR generate \
   --additional-properties=packageName=tachyon-sdk,packageVersion=0.1.0,library=reqwest \
   --skip-validate-spec
 
+# openapi-generator's rust generator emits code that does not parse for some
+# oneOf schemas; patch them before rustfmt, which fails on unparsable files.
+#   oneOf [string, array<T>]  -> variant `ArrayVecmodels::T(Vec<models::T>)`
+#   oneOf [<inline>, null]    -> type `models::OneOfLessThanGreaterThan`
+perl -pi -e '
+  s/\bArrayVecmodels::(\w+)\(Vec<models::\1>\)/Array(Vec<models::$1>)/g;
+  s/\bmodels::OneOfLessThanGreaterThan\b/serde_json::Value/g;
+' "$ROOT_DIR"/rust/src/models/*.rs
+
 # openapi-generator does not run rustfmt; keep the generated crate formatted.
 cargo fmt --manifest-path "$ROOT_DIR/rust/Cargo.toml"
 

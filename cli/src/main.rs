@@ -9,6 +9,7 @@ mod compute_cli;
 mod config;
 mod data_cli;
 mod erp_replay_cli;
+mod feature_flag_cli;
 mod iac_cli;
 mod image_cli;
 mod install_cli;
@@ -696,6 +697,9 @@ enum Commands {
     Env(compute_cli::EnvArgs),
     /// Manage Tachyon Data datasets and queries
     Data(data_cli::DataArgs),
+    /// Inspect and set tenant feature flags
+    #[command(name = "feature-flag", visible_alias = "feature-flags")]
+    FeatureFlag(feature_flag_cli::FeatureFlagArgs),
     /// Generate a tachyon.yml project config
     Init(commands::init::InitArgs),
     /// Manage organizations, users, service accounts, and policies
@@ -777,6 +781,24 @@ struct LoginArgs {
     /// On `auth login`, this overrides the global `--profile`.
     #[arg(long)]
     profile: Option<String>,
+
+    /// Log in without a local callback server, for when the browser runs on
+    /// another machine (SSH, containers). The CLI prints the login URL and a
+    /// code; after signing in, enter that code in the browser. By default the
+    /// CLI listens on 127.0.0.1 (port 42813, 42814 or 42815) and the browser
+    /// returns there.
+    #[arg(long)]
+    no_browser: bool,
+}
+
+impl LoginArgs {
+    fn method(&self) -> auth::LoginMethod {
+        if self.no_browser {
+            auth::LoginMethod::Relay
+        } else {
+            auth::LoginMethod::Loopback
+        }
+    }
 }
 
 #[derive(Args)]
@@ -846,12 +868,10 @@ async fn resolve_token(cli: &Cli, profile: &str) -> Option<auth::ApiBearerToken>
 
 /// Build an OAuthConfig from CLI args.
 fn build_oauth_config(cli: &Cli) -> auth::OAuthConfig {
-    let redirect_uri = format!("{}/v1/auth/cli/callback", cli.api_url.trim_end_matches('/'));
     auth::OAuthConfig {
         cognito_domain: cli.cognito_domain.clone(),
         client_id: cli.cognito_client_id.clone(),
         client_secret: cli.cognito_client_secret.clone().unwrap_or_default(),
-        redirect_uri,
         scopes: auth::DEFAULT_OAUTH_SCOPES
             .iter()
             .map(|scope| (*scope).to_string())
@@ -969,7 +989,7 @@ async fn run() -> Result<()> {
                     .clone()
                     .or_else(|| cli.profile.clone())
                     .unwrap_or_else(|| auth::DEFAULT_PROFILE.to_string());
-                auth::login(&oauth_config, &cli.api_url, &target).await
+                auth::login(&oauth_config, &cli.api_url, &target, login_args.method()).await
             }
             AuthCommand::Init(init_args) => {
                 commands::auth::init::run(init_args, cli.config.as_deref())
@@ -1033,7 +1053,7 @@ async fn run() -> Result<()> {
                 .clone()
                 .or_else(|| cli.profile.clone())
                 .unwrap_or_else(|| auth::DEFAULT_PROFILE.to_string());
-            auth::login(&oauth_config, &cli.api_url, &target).await
+            auth::login(&oauth_config, &cli.api_url, &target, login_args.method()).await
         }
         Commands::Logout(logout_args) => {
             let target = logout_args
@@ -1076,6 +1096,13 @@ async fn run() -> Result<()> {
             let config = build_config(&cli, &active).await;
             let tenant_id = resolve::resolve_tenant_id(&config, tenant_arg, &active).await?;
             data_cli::run(args, &config, &tenant_id).await
+        }
+        Commands::FeatureFlag(args) => {
+            let project_config = config::loader::load(cli.config.as_deref())?;
+            let tenant_arg = tenant_arg(&cli, project_config.as_ref());
+            let config = build_config(&cli, &active).await;
+            let tenant_id = resolve::resolve_tenant_id(&config, tenant_arg, &active).await?;
+            feature_flag_cli::run(args, &config, &tenant_id).await
         }
         Commands::Org(args) => {
             let project_config = config::loader::load(cli.config.as_deref())?;

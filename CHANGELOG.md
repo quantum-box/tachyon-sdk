@@ -4,6 +4,27 @@
 
 ### Added
 
+- Rust SDK: `agent_session` (feature `agent-session`) calls the agent session
+  API as one caller: `create_session`, `execute` returning the open event
+  stream, and `submit_tool_result`, which resends a result a few times while
+  Tachyon briefly reports the pending call as missing. Request bodies pass
+  through unchanged (the generated `agent_api` reads `execute` as one JSON
+  body and its request model drops `attachments`). `parse_sse_record` and
+  `tool_result_text` read events and bound tool results.
+- `@tachyon-sdk/agent` 0.4.0: `TachyonAgentSessionClient` for the agent
+  session API (create a session, stream `execute` events, submit client-side
+  tool results), with a pluggable transport and paths so apps can go through
+  their own server. `readAgentEvents` reads a session event stream and fails
+  when it ends before `done`; `toolResultText` bounds a tool result's size.
+- Rust SDK: `AgentExecuteRequest.reasoning_effort` (e.g. `"low"`) asks the
+  agent's model for a reasoning effort. OpenAI models that use the Responses
+  API (`gpt-5*`, `gpt-6*`) receive it as `reasoning.effort`; other providers
+  and models ignore it.
+- Rust SDK: `integrations_api::get_github_billing_usage` reads a GitHub
+  organization's billing usage (`GET /v1/integrations/github/billing-usage`)
+  through the tenant's Tachyon GitHub App installation. Tachyon checks that the
+  installation is granted to the calling tenant and never returns the
+  installation token. (PLT-6105)
 - `tachyon auth token` prints the logged-in user's API token to a pipe, so a
   script can read it with `--token-stdin` without the user handling the token.
   It refreshes the token first when it expires within `--min-validity` seconds
@@ -21,16 +42,45 @@
 
 ### Changed
 
+- CLI 0.6.90: `tachyon auth login` no longer hands the authorization code to
+  the Tachyon API to relay. It listens on `127.0.0.1` (port 42813, then 42814,
+  then 42815) and the browser returns to `http://localhost:{port}/callback`
+  (RFC 8252). A callback whose `state` does not match is rejected. On a machine
+  without a local browser, `tachyon auth login --no-browser` still relays
+  through the API, but prints a code (`XXXX-XXXX`) that you enter in the
+  browser after signing in; the API releases the code only after that. Before
+  this, anyone who got a user to open a login URL they had built could collect
+  that user's authorization code from the poll endpoint. CLI 0.6.89 and
+  earlier can no longer log in once the API requires the confirmation code.
 - When a service account name matches more than one service account, the error
   now tells you to pass one of the listed IDs.
+- Rust SDK: removed `auth_contract_authority_api::resolve`
+  (`POST /v1/auth/contract-authority/resolve`) and its models, because core no
+  longer serves it. (PLT-6031)
 
 ### Fixed
-
 - The CLI now uses `rustls-webpki` 0.103.16 and `webpki-roots` /
   `webpki-root-certs` 1.0.10. These reject certificate paths that go through
   the eMudhra intermediate CAs whose private keys were disclosed, and no longer
   trust emSign ECC Root CA - G3. The `aws-lc-rs` / `aws-lc-sys` versions that
   `rustls-webpki` 0.103.16 requires are updated along with them.
+
+- CLI 0.6.89: `kind: OAuth2Resource` manifests carry `spec.exchange`
+  (ADR-0166 token exchange). `manifest plan` diffs it and `manifest apply`
+  sends it; 0.6.88 and earlier dropped it and reported a live resource
+  without an exchange as Unchanged.
+
+- `tachyon env set <app> --secret KEY` only writes `valueFrom.secret` into the
+  local `tachyon.yml` when that manifest declares `<app>`. Setting another
+  app's secret leaves the file untouched and prints the reference to add
+  instead; before, it wrote into the first app of an unrelated `CloudApps`
+  manifest. A newly appended `envVars` entry now keeps its block indentation
+  instead of emitting `type:` / `target:` / `valueFrom:` at column zero.
+
+- `scripts/generate.sh` patches the Rust code openapi-generator emits for a
+  `oneOf` of string and array (`ArrayVecmodels::T(...)`) and for a nullable
+  inline `oneOf` (`OneOfLessThanGreaterThan`) before `cargo fmt`, so the
+  Generate SDKs workflow no longer fails parsing `message_content.rs`.
 - The Cloud App build job (Kata runner) now finds a `cargo_lambda` bootstrap
   from the manifest's `build.binary` first (`<target>/lambda/<binary>/bootstrap`)
   and only falls back to parsing `--bin` / `--flatten` from the build command,
