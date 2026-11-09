@@ -59,6 +59,11 @@
   longer serves it. (PLT-6031)
 
 ### Fixed
+- The CLI now uses `rustls-webpki` 0.103.16 and `webpki-roots` /
+  `webpki-root-certs` 1.0.10. These reject certificate paths that go through
+  the eMudhra intermediate CAs whose private keys were disclosed, and no longer
+  trust emSign ECC Root CA - G3. The `aws-lc-rs` / `aws-lc-sys` versions that
+  `rustls-webpki` 0.103.16 requires are updated along with them.
 
 - CLI 0.6.89: `kind: OAuth2Resource` manifests carry `spec.exchange`
   (ADR-0166 token exchange). `manifest plan` diffs it and `manifest apply`
