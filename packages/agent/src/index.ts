@@ -5,12 +5,16 @@ export { readAgentEvents } from './events'
 export type { AgentSessionEvent, ReadAgentEventsOptions } from './events'
 export {
   TACHYON_AGENT_SESSION_PATHS,
+  FIELD_AGENT_SESSION_PATHS,
+  fieldAgentHeaders,
   TachyonAgentSessionClient,
   fetchAgentTransport,
   toolResultText,
 } from './session'
 export type {
   AgentSessionAttachment,
+  FieldAgentContext,
+  AgentStructuredResult,
   AgentSessionExecuteRequest,
   AgentSessionPaths,
   AgentSessionTransport,

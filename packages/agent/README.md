@@ -147,3 +147,18 @@ type TachyonAgentClientConfig = {
 
 - [`examples/node-cli`](../../examples/node-cli) — Node.js streaming CLI
 - [`examples/react-agent-chat`](../../examples/react-agent-chat) — React chat UI with SSE streaming
+
+
+## Field application sessions
+
+Use `FIELD_AGENT_SESSION_PATHS` with the same transport interface. Add
+`fieldAgentHeaders({ appId: 'courseboard', capabilities: ['reservation_status',
+'reservation_status_view'] })` to every JSON, stream and tool-call request.
+For direct fetch use `fetchAgentTransport({ apiBaseUrl, streamBaseUrl,
+accessToken, tenantId, platformId, application })`. Both hosts receive the same
+caller context. Keep structured results in host state as `AgentStructuredResult`
+and send only the intended model summary through `submitToolResult`.
+
+Field clients use `appId: 'tachyonfield'` or retain their existing configuration.
+No context or path defaults change for existing SDK consumers. Courseboard must
+start a new scoped session when migrating an old Field-labelled conversation.
