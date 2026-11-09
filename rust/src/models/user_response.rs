@@ -38,11 +38,7 @@ pub struct UserResponse {
 
 impl UserResponse {
     /// Response DTO for a user
-    pub fn new(
-        id: String,
-        role: String,
-        tenants: Vec<String>,
-    ) -> UserResponse {
+    pub fn new(id: String, role: String, tenants: Vec<String>) -> UserResponse {
         UserResponse {
             email: None,
             id,

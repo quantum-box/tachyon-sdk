@@ -20,10 +20,7 @@ pub struct AgentBuiltinToolRequest {
 }
 
 impl AgentBuiltinToolRequest {
-    pub fn new(
-        name: String,
-        r#type: models::AgentBuiltinToolType,
-    ) -> AgentBuiltinToolRequest {
+    pub fn new(name: String, r#type: models::AgentBuiltinToolType) -> AgentBuiltinToolRequest {
         AgentBuiltinToolRequest { name, r#type }
     }
 }

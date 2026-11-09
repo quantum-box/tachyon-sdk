@@ -1,9 +1,10 @@
 mod apply;
 mod discovery;
+mod oauth2_resource;
 mod plan;
 mod reconcile;
 mod schema;
-mod validate;
+pub(crate) mod validate;
 
 use anyhow::{anyhow, Result};
 use clap::{Args, Subcommand};

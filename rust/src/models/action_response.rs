@@ -40,12 +40,7 @@ pub struct ActionResponse {
 
 impl ActionResponse {
     /// Response for an action
-    pub fn new(
-        context: String,
-        full_name: String,
-        id: String,
-        name: String,
-    ) -> ActionResponse {
+    pub fn new(context: String, full_name: String, id: String, name: String) -> ActionResponse {
         ActionResponse {
             context,
             description: None,

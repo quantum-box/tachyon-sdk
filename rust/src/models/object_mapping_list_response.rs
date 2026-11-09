@@ -20,9 +20,7 @@ pub struct ObjectMappingListResponse {
 
 impl ObjectMappingListResponse {
     /// Response for object mapping list
-    pub fn new(
-        items: Vec<models::ObjectMappingItemResponse>,
-    ) -> ObjectMappingListResponse {
+    pub fn new(items: Vec<models::ObjectMappingItemResponse>) -> ObjectMappingListResponse {
         ObjectMappingListResponse { items }
     }
 }

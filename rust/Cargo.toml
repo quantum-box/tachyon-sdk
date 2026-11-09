@@ -20,6 +20,9 @@ async-trait = { version = "0.1", optional = true }
 chrono = { version = "0.4", features = ["serde"], optional = true }
 mockall = { version = "0.13", optional = true }
 
+# agent-session feature dependencies
+tokio = { version = "1", features = ["time"], optional = true }
+
 [features]
 default = ["rustls"]
 native-tls = ["reqwest/native-tls"]
@@ -27,7 +30,9 @@ rustls = ["reqwest/rustls-tls"]
 auth = ["async-trait", "chrono"]
 platform-traits = ["auth", "async-trait", "chrono"]
 worker-runtime = ["async-trait", "chrono"]
+agent-session = ["dep:tokio"]
 test = ["auth", "mockall"]
 
 [dev-dependencies]
-tokio = { version = "1", features = ["macros", "rt"] }
+tokio = { version = "1", features = ["macros", "rt", "time"] }
+wiremock = "0.6"

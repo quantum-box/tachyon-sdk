@@ -20,9 +20,7 @@ pub struct UserPolicyMappingListResponse {
 
 impl UserPolicyMappingListResponse {
     /// Response for user policy mappings list
-    pub fn new(
-        mappings: Vec<models::UserPolicyMappingResponse>,
-    ) -> UserPolicyMappingListResponse {
+    pub fn new(mappings: Vec<models::UserPolicyMappingResponse>) -> UserPolicyMappingListResponse {
         UserPolicyMappingListResponse { mappings }
     }
 }

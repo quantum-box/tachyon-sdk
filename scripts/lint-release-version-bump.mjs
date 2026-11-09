@@ -2,6 +2,7 @@
 import path from "node:path";
 import process from "node:process";
 import { spawnSync } from "node:child_process";
+import { releasePackages, readVersion } from "./release-packages.mjs";
 
 const args = process.argv.slice(2);
 
@@ -14,52 +15,6 @@ function valueAfter(flag) {
 const root = path.resolve(valueAfter("--root") ?? process.cwd());
 const baseRef = valueAfter("--base") ?? "origin/main";
 const headRef = valueAfter("--head") ?? "HEAD";
-
-// These roots and version files come from the release workflows named here.
-const releasePackages = [
-  {
-    name: "tachyon-cli",
-    root: "cli",
-    versionFile: "cli/Cargo.toml",
-    versionFormat: "cargo",
-    workflow: ".github/workflows/auto-release-cli.yml",
-  },
-  {
-    name: "@tachyon-sdk/cli",
-    root: "packages/cli",
-    versionFile: "packages/cli/package.json",
-    versionFormat: "npm",
-    workflow: ".github/workflows/publish-cli-npm.yml",
-  },
-  {
-    name: "@tachyon-sdk/agent",
-    root: "packages/agent",
-    versionFile: "packages/agent/package.json",
-    versionFormat: "npm",
-    workflow: ".github/workflows/publish-agent.yml",
-  },
-  {
-    name: "@tachyon-sdk/agent-chat",
-    root: "packages/agent-chat",
-    versionFile: "packages/agent-chat/package.json",
-    versionFormat: "npm",
-    workflow: ".github/workflows/publish-agent-chat.yml",
-  },
-  {
-    name: "@tachyon-sdk/storage",
-    root: "packages/storage",
-    versionFile: "packages/storage/package.json",
-    versionFormat: "npm",
-    workflow: ".github/workflows/publish-storage.yml",
-  },
-  {
-    name: "@tachyon-sdk/storekit",
-    root: "packages/storekit",
-    versionFile: "packages/storekit/package.json",
-    versionFormat: "npm",
-    workflow: ".github/workflows/publish-storekit.yml",
-  },
-];
 
 function git(...gitArgs) {
   const result = spawnSync("git", ["-C", root, ...gitArgs], {
@@ -74,20 +29,6 @@ function git(...gitArgs) {
 
 function readAt(ref, relativePath) {
   return git("show", `${ref}:${relativePath}`);
-}
-
-function readVersion(body, format, versionFile) {
-  if (format === "npm") {
-    const version = JSON.parse(body).version;
-    if (typeof version !== "string" || version.length === 0) {
-      throw new Error(`${versionFile} does not define a string version`);
-    }
-    return version;
-  }
-
-  const match = body.match(/^\s*version\s*=\s*"([^"]+)"/m);
-  if (!match) throw new Error(`${versionFile} does not define a Cargo version`);
-  return match[1];
 }
 
 function withoutVersion(body, format) {

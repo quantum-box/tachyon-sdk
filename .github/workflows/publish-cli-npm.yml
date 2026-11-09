@@ -20,6 +20,11 @@ jobs:
       (github.event_name == 'release' && startsWith(github.event.release.tag_name, 'tachyon-cli-v')) ||
       (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success')
     runs-on: ubuntu-latest
+    # npm trusted publishing: the job proves it is this workflow with an
+    # OIDC token instead of an npm token.
+    permissions:
+      contents: read
+      id-token: write
     defaults:
       run:
         working-directory: packages/cli
@@ -31,8 +36,11 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "24"
           registry-url: "https://registry.npmjs.org"
+
+      - name: Use an npm that supports trusted publishing
+        run: npm install -g npm@^11.5.1
 
       - name: Check package
         run: npm run check
@@ -71,8 +79,6 @@ jobs:
           else
             echo "already_published=false" >> "$GITHUB_OUTPUT"
           fi
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       - name: Summarize skipped publish
         if: steps.check.outputs.already_published == 'true'
@@ -89,5 +95,3 @@ jobs:
       - name: Publish
         if: steps.check.outputs.already_published == 'false'
         run: npm publish --access public
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

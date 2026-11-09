@@ -26,28 +26,19 @@ pub enum RegisterShippingDestinationError {
 pub async fn register_shipping_destination(
     configuration: &configuration::Configuration,
     register_shipping_destination_request: models::RegisterShippingDestinationRequest,
-) -> Result<
-    models::ShippingDestinationResponse,
-    Error<RegisterShippingDestinationError>,
-> {
+) -> Result<models::ShippingDestinationResponse, Error<RegisterShippingDestinationError>> {
     // add a prefix to parameters to efficiently prevent name collisions
-    let p_body_register_shipping_destination_request =
-        register_shipping_destination_request;
+    let p_body_register_shipping_destination_request = register_shipping_destination_request;
 
-    let uri_str = format!(
-        "{}/v1/order/shipping-destinations",
-        configuration.base_path
-    );
+    let uri_str = format!("{}/v1/order/shipping-destinations", configuration.base_path);
     let mut req_builder = configuration
         .client
         .request(reqwest::Method::POST, &uri_str);
 
     if let Some(ref user_agent) = configuration.user_agent {
-        req_builder = req_builder
-            .header(reqwest::header::USER_AGENT, user_agent.clone());
+        req_builder = req_builder.header(reqwest::header::USER_AGENT, user_agent.clone());
     }
-    req_builder =
-        req_builder.json(&p_body_register_shipping_destination_request);
+    req_builder = req_builder.json(&p_body_register_shipping_destination_request);
 
     let req = req_builder.build()?;
     let resp = configuration.client.execute(req).await?;
@@ -69,8 +60,7 @@ pub async fn register_shipping_destination(
         }
     } else {
         let content = resp.text().await?;
-        let entity: Option<RegisterShippingDestinationError> =
-            serde_json::from_str(&content).ok();
+        let entity: Option<RegisterShippingDestinationError> = serde_json::from_str(&content).ok();
         Err(Error::ResponseError(ResponseContent {
             status,
             content,

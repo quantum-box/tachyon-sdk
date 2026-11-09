@@ -94,10 +94,7 @@ pub async fn create_agent_session(
     x_operator_id: &str,
     authorization: &str,
     create_agent_session_request: models::CreateAgentSessionRequest,
-) -> Result<
-    models::CreateAgentSessionOutputData,
-    Error<CreateAgentSessionError>,
-> {
+) -> Result<models::CreateAgentSessionOutputData, Error<CreateAgentSessionError>> {
     // add a prefix to parameters to efficiently prevent name collisions
     let p_header_x_operator_id = x_operator_id;
     let p_header_authorization = authorization;
@@ -109,13 +106,10 @@ pub async fn create_agent_session(
         .request(reqwest::Method::POST, &uri_str);
 
     if let Some(ref user_agent) = configuration.user_agent {
-        req_builder = req_builder
-            .header(reqwest::header::USER_AGENT, user_agent.clone());
+        req_builder = req_builder.header(reqwest::header::USER_AGENT, user_agent.clone());
     }
-    req_builder = req_builder
-        .header("x-operator-id", p_header_x_operator_id.to_string());
-    req_builder = req_builder
-        .header("Authorization", p_header_authorization.to_string());
+    req_builder = req_builder.header("x-operator-id", p_header_x_operator_id.to_string());
+    req_builder = req_builder.header("Authorization", p_header_authorization.to_string());
     req_builder = req_builder.json(&p_body_create_agent_session_request);
 
     let req = req_builder.build()?;
@@ -138,8 +132,7 @@ pub async fn create_agent_session(
         }
     } else {
         let content = resp.text().await?;
-        let entity: Option<CreateAgentSessionError> =
-            serde_json::from_str(&content).ok();
+        let entity: Option<CreateAgentSessionError> = serde_json::from_str(&content).ok();
         Err(Error::ResponseError(ResponseContent {
             status,
             content,
@@ -172,13 +165,10 @@ pub async fn execute_agent(
         .request(reqwest::Method::POST, &uri_str);
 
     if let Some(ref user_agent) = configuration.user_agent {
-        req_builder = req_builder
-            .header(reqwest::header::USER_AGENT, user_agent.clone());
+        req_builder = req_builder.header(reqwest::header::USER_AGENT, user_agent.clone());
     }
-    req_builder = req_builder
-        .header("x-operator-id", p_header_x_operator_id.to_string());
-    req_builder = req_builder
-        .header("Authorization", p_header_authorization.to_string());
+    req_builder = req_builder.header("x-operator-id", p_header_x_operator_id.to_string());
+    req_builder = req_builder.header("Authorization", p_header_authorization.to_string());
     req_builder = req_builder.json(&p_body_agent_execute_request);
 
     let req = req_builder.build()?;
@@ -201,8 +191,7 @@ pub async fn execute_agent(
         }
     } else {
         let content = resp.text().await?;
-        let entity: Option<ExecuteAgentError> =
-            serde_json::from_str(&content).ok();
+        let entity: Option<ExecuteAgentError> = serde_json::from_str(&content).ok();
         Err(Error::ResponseError(ResponseContent {
             status,
             content,
@@ -235,13 +224,10 @@ pub async fn execute_agent_session(
         .request(reqwest::Method::POST, &uri_str);
 
     if let Some(ref user_agent) = configuration.user_agent {
-        req_builder = req_builder
-            .header(reqwest::header::USER_AGENT, user_agent.clone());
+        req_builder = req_builder.header(reqwest::header::USER_AGENT, user_agent.clone());
     }
-    req_builder = req_builder
-        .header("x-operator-id", p_header_x_operator_id.to_string());
-    req_builder = req_builder
-        .header("Authorization", p_header_authorization.to_string());
+    req_builder = req_builder.header("x-operator-id", p_header_x_operator_id.to_string());
+    req_builder = req_builder.header("Authorization", p_header_authorization.to_string());
     req_builder = req_builder.json(&p_body_agent_execute_request);
 
     let req = req_builder.build()?;
@@ -264,8 +250,7 @@ pub async fn execute_agent_session(
         }
     } else {
         let content = resp.text().await?;
-        let entity: Option<ExecuteAgentSessionError> =
-            serde_json::from_str(&content).ok();
+        let entity: Option<ExecuteAgentSessionError> = serde_json::from_str(&content).ok();
         Err(Error::ResponseError(ResponseContent {
             status,
             content,
@@ -295,25 +280,19 @@ pub async fn get_agent_messages(
         configuration.base_path,
         chatroom_id = crate::apis::urlencode(p_path_chatroom_id)
     );
-    let mut req_builder =
-        configuration.client.request(reqwest::Method::GET, &uri_str);
+    let mut req_builder = configuration.client.request(reqwest::Method::GET, &uri_str);
 
     if let Some(ref param_value) = p_query_limit {
-        req_builder =
-            req_builder.query(&[("limit", &param_value.to_string())]);
+        req_builder = req_builder.query(&[("limit", &param_value.to_string())]);
     }
     if let Some(ref param_value) = p_query_offset {
-        req_builder =
-            req_builder.query(&[("offset", &param_value.to_string())]);
+        req_builder = req_builder.query(&[("offset", &param_value.to_string())]);
     }
     if let Some(ref user_agent) = configuration.user_agent {
-        req_builder = req_builder
-            .header(reqwest::header::USER_AGENT, user_agent.clone());
+        req_builder = req_builder.header(reqwest::header::USER_AGENT, user_agent.clone());
     }
-    req_builder = req_builder
-        .header("x-operator-id", p_header_x_operator_id.to_string());
-    req_builder = req_builder
-        .header("Authorization", p_header_authorization.to_string());
+    req_builder = req_builder.header("x-operator-id", p_header_x_operator_id.to_string());
+    req_builder = req_builder.header("Authorization", p_header_authorization.to_string());
 
     let req = req_builder.build()?;
     let resp = configuration.client.execute(req).await?;
@@ -335,8 +314,7 @@ pub async fn get_agent_messages(
         }
     } else {
         let content = resp.text().await?;
-        let entity: Option<GetAgentMessagesError> =
-            serde_json::from_str(&content).ok();
+        let entity: Option<GetAgentMessagesError> = serde_json::from_str(&content).ok();
         Err(Error::ResponseError(ResponseContent {
             status,
             content,
@@ -353,10 +331,7 @@ pub async fn get_agent_messages_session(
     authorization: &str,
     limit: Option<i32>,
     offset: Option<i32>,
-) -> Result<
-    models::AgentMessagesResponse,
-    Error<GetAgentMessagesSessionError>,
-> {
+) -> Result<models::AgentMessagesResponse, Error<GetAgentMessagesSessionError>> {
     // add a prefix to parameters to efficiently prevent name collisions
     let p_path_session_id = session_id;
     let p_header_x_operator_id = x_operator_id;
@@ -369,25 +344,19 @@ pub async fn get_agent_messages_session(
         configuration.base_path,
         session_id = crate::apis::urlencode(p_path_session_id)
     );
-    let mut req_builder =
-        configuration.client.request(reqwest::Method::GET, &uri_str);
+    let mut req_builder = configuration.client.request(reqwest::Method::GET, &uri_str);
 
     if let Some(ref param_value) = p_query_limit {
-        req_builder =
-            req_builder.query(&[("limit", &param_value.to_string())]);
+        req_builder = req_builder.query(&[("limit", &param_value.to_string())]);
     }
     if let Some(ref param_value) = p_query_offset {
-        req_builder =
-            req_builder.query(&[("offset", &param_value.to_string())]);
+        req_builder = req_builder.query(&[("offset", &param_value.to_string())]);
     }
     if let Some(ref user_agent) = configuration.user_agent {
-        req_builder = req_builder
-            .header(reqwest::header::USER_AGENT, user_agent.clone());
+        req_builder = req_builder.header(reqwest::header::USER_AGENT, user_agent.clone());
     }
-    req_builder = req_builder
-        .header("x-operator-id", p_header_x_operator_id.to_string());
-    req_builder = req_builder
-        .header("Authorization", p_header_authorization.to_string());
+    req_builder = req_builder.header("x-operator-id", p_header_x_operator_id.to_string());
+    req_builder = req_builder.header("Authorization", p_header_authorization.to_string());
 
     let req = req_builder.build()?;
     let resp = configuration.client.execute(req).await?;
@@ -409,8 +378,7 @@ pub async fn get_agent_messages_session(
         }
     } else {
         let content = resp.text().await?;
-        let entity: Option<GetAgentMessagesSessionError> =
-            serde_json::from_str(&content).ok();
+        let entity: Option<GetAgentMessagesSessionError> = serde_json::from_str(&content).ok();
         Err(Error::ResponseError(ResponseContent {
             status,
             content,
@@ -436,17 +404,13 @@ pub async fn get_agent_status(
         configuration.base_path,
         chatroom_id = crate::apis::urlencode(p_path_chatroom_id)
     );
-    let mut req_builder =
-        configuration.client.request(reqwest::Method::GET, &uri_str);
+    let mut req_builder = configuration.client.request(reqwest::Method::GET, &uri_str);
 
     if let Some(ref user_agent) = configuration.user_agent {
-        req_builder = req_builder
-            .header(reqwest::header::USER_AGENT, user_agent.clone());
+        req_builder = req_builder.header(reqwest::header::USER_AGENT, user_agent.clone());
     }
-    req_builder = req_builder
-        .header("x-operator-id", p_header_x_operator_id.to_string());
-    req_builder = req_builder
-        .header("Authorization", p_header_authorization.to_string());
+    req_builder = req_builder.header("x-operator-id", p_header_x_operator_id.to_string());
+    req_builder = req_builder.header("Authorization", p_header_authorization.to_string());
 
     let req = req_builder.build()?;
     let resp = configuration.client.execute(req).await?;
@@ -468,8 +432,7 @@ pub async fn get_agent_status(
         }
     } else {
         let content = resp.text().await?;
-        let entity: Option<GetAgentStatusError> =
-            serde_json::from_str(&content).ok();
+        let entity: Option<GetAgentStatusError> = serde_json::from_str(&content).ok();
         Err(Error::ResponseError(ResponseContent {
             status,
             content,
@@ -484,8 +447,7 @@ pub async fn get_agent_status_session(
     session_id: &str,
     x_operator_id: &str,
     authorization: &str,
-) -> Result<models::AgentStatusResponse, Error<GetAgentStatusSessionError>>
-{
+) -> Result<models::AgentStatusResponse, Error<GetAgentStatusSessionError>> {
     // add a prefix to parameters to efficiently prevent name collisions
     let p_path_session_id = session_id;
     let p_header_x_operator_id = x_operator_id;
@@ -496,17 +458,13 @@ pub async fn get_agent_status_session(
         configuration.base_path,
         session_id = crate::apis::urlencode(p_path_session_id)
     );
-    let mut req_builder =
-        configuration.client.request(reqwest::Method::GET, &uri_str);
+    let mut req_builder = configuration.client.request(reqwest::Method::GET, &uri_str);
 
     if let Some(ref user_agent) = configuration.user_agent {
-        req_builder = req_builder
-            .header(reqwest::header::USER_AGENT, user_agent.clone());
+        req_builder = req_builder.header(reqwest::header::USER_AGENT, user_agent.clone());
     }
-    req_builder = req_builder
-        .header("x-operator-id", p_header_x_operator_id.to_string());
-    req_builder = req_builder
-        .header("Authorization", p_header_authorization.to_string());
+    req_builder = req_builder.header("x-operator-id", p_header_x_operator_id.to_string());
+    req_builder = req_builder.header("Authorization", p_header_authorization.to_string());
 
     let req = req_builder.build()?;
     let resp = configuration.client.execute(req).await?;
@@ -528,8 +486,7 @@ pub async fn get_agent_status_session(
         }
     } else {
         let content = resp.text().await?;
-        let entity: Option<GetAgentStatusSessionError> =
-            serde_json::from_str(&content).ok();
+        let entity: Option<GetAgentStatusSessionError> = serde_json::from_str(&content).ok();
         Err(Error::ResponseError(ResponseContent {
             status,
             content,
@@ -544,10 +501,7 @@ pub async fn list_agent_sessions(
     authorization: &str,
     limit: Option<i32>,
     offset: Option<i32>,
-) -> Result<
-    models::ListAgentSessionsOutputData,
-    Error<ListAgentSessionsError>,
-> {
+) -> Result<models::ListAgentSessionsOutputData, Error<ListAgentSessionsError>> {
     // add a prefix to parameters to efficiently prevent name collisions
     let p_header_x_operator_id = x_operator_id;
     let p_header_authorization = authorization;
@@ -555,25 +509,19 @@ pub async fn list_agent_sessions(
     let p_query_offset = offset;
 
     let uri_str = format!("{}/v1/llms/sessions", configuration.base_path);
-    let mut req_builder =
-        configuration.client.request(reqwest::Method::GET, &uri_str);
+    let mut req_builder = configuration.client.request(reqwest::Method::GET, &uri_str);
 
     if let Some(ref param_value) = p_query_limit {
-        req_builder =
-            req_builder.query(&[("limit", &param_value.to_string())]);
+        req_builder = req_builder.query(&[("limit", &param_value.to_string())]);
     }
     if let Some(ref param_value) = p_query_offset {
-        req_builder =
-            req_builder.query(&[("offset", &param_value.to_string())]);
+        req_builder = req_builder.query(&[("offset", &param_value.to_string())]);
     }
     if let Some(ref user_agent) = configuration.user_agent {
-        req_builder = req_builder
-            .header(reqwest::header::USER_AGENT, user_agent.clone());
+        req_builder = req_builder.header(reqwest::header::USER_AGENT, user_agent.clone());
     }
-    req_builder = req_builder
-        .header("x-operator-id", p_header_x_operator_id.to_string());
-    req_builder = req_builder
-        .header("Authorization", p_header_authorization.to_string());
+    req_builder = req_builder.header("x-operator-id", p_header_x_operator_id.to_string());
+    req_builder = req_builder.header("Authorization", p_header_authorization.to_string());
 
     let req = req_builder.build()?;
     let resp = configuration.client.execute(req).await?;
@@ -595,8 +543,7 @@ pub async fn list_agent_sessions(
         }
     } else {
         let content = resp.text().await?;
-        let entity: Option<ListAgentSessionsError> =
-            serde_json::from_str(&content).ok();
+        let entity: Option<ListAgentSessionsError> = serde_json::from_str(&content).ok();
         Err(Error::ResponseError(ResponseContent {
             status,
             content,
@@ -629,13 +576,10 @@ pub async fn submit_tool_result(
         .request(reqwest::Method::POST, &uri_str);
 
     if let Some(ref user_agent) = configuration.user_agent {
-        req_builder = req_builder
-            .header(reqwest::header::USER_AGENT, user_agent.clone());
+        req_builder = req_builder.header(reqwest::header::USER_AGENT, user_agent.clone());
     }
-    req_builder = req_builder
-        .header("x-operator-id", p_header_x_operator_id.to_string());
-    req_builder = req_builder
-        .header("Authorization", p_header_authorization.to_string());
+    req_builder = req_builder.header("x-operator-id", p_header_x_operator_id.to_string());
+    req_builder = req_builder.header("Authorization", p_header_authorization.to_string());
     req_builder = req_builder.json(&p_body_tool_result_submission);
 
     let req = req_builder.build()?;
@@ -658,8 +602,7 @@ pub async fn submit_tool_result(
         }
     } else {
         let content = resp.text().await?;
-        let entity: Option<SubmitToolResultError> =
-            serde_json::from_str(&content).ok();
+        let entity: Option<SubmitToolResultError> = serde_json::from_str(&content).ok();
         Err(Error::ResponseError(ResponseContent {
             status,
             content,
@@ -692,13 +635,10 @@ pub async fn submit_tool_result_session(
         .request(reqwest::Method::POST, &uri_str);
 
     if let Some(ref user_agent) = configuration.user_agent {
-        req_builder = req_builder
-            .header(reqwest::header::USER_AGENT, user_agent.clone());
+        req_builder = req_builder.header(reqwest::header::USER_AGENT, user_agent.clone());
     }
-    req_builder = req_builder
-        .header("x-operator-id", p_header_x_operator_id.to_string());
-    req_builder = req_builder
-        .header("Authorization", p_header_authorization.to_string());
+    req_builder = req_builder.header("x-operator-id", p_header_x_operator_id.to_string());
+    req_builder = req_builder.header("Authorization", p_header_authorization.to_string());
     req_builder = req_builder.json(&p_body_tool_result_submission);
 
     let req = req_builder.build()?;
@@ -721,8 +661,7 @@ pub async fn submit_tool_result_session(
         }
     } else {
         let content = resp.text().await?;
-        let entity: Option<SubmitToolResultSessionError> =
-            serde_json::from_str(&content).ok();
+        let entity: Option<SubmitToolResultSessionError> = serde_json::from_str(&content).ok();
         Err(Error::ResponseError(ResponseContent {
             status,
             content,

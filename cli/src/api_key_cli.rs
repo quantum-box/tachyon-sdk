@@ -21,6 +21,9 @@ pub enum ApiKeyCommand {
         /// Display name for the API key
         #[arg(long)]
         name: String,
+        /// Expire the key after this many seconds. Omit for a non-expiring key.
+        #[arg(long, value_parser = clap::value_parser!(i64).range(1..))]
+        ttl_seconds: Option<i64>,
         #[arg(long)]
         json: bool,
     },
@@ -47,6 +50,8 @@ pub enum ApiKeyCommand {
 struct CreateApiKeyRequest {
     name: String,
     operator_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    ttl_seconds: Option<i64>,
 }
 
 #[derive(Debug, Serialize)]
@@ -59,34 +64,17 @@ struct RevokeApiKeyRequest {
 #[serde(rename_all = "camelCase")]
 pub struct ApiKeyResponse {
     id: String,
-    #[serde(default)]
-    service_account_id: Option<String>,
+    service_account_id: String,
     name: String,
-    #[serde(default)]
-    value: Option<String>,
-    #[serde(default, alias = "created_at")]
-    created_at: Option<String>,
-    #[serde(default, alias = "revoked_at")]
-    revoked_at: Option<String>,
+    value: String,
+    created_at: String,
+    expires_at: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
-#[serde(untagged)]
-enum ApiKeyListResponse {
-    Envelope {
-        #[serde(rename = "apiKeys")]
-        api_keys: Vec<ApiKeyResponse>,
-    },
-    Array(Vec<ApiKeyResponse>),
-}
-
-impl ApiKeyListResponse {
-    fn into_vec(self) -> Vec<ApiKeyResponse> {
-        match self {
-            ApiKeyListResponse::Envelope { api_keys } => api_keys,
-            ApiKeyListResponse::Array(api_keys) => api_keys,
-        }
-    }
+#[serde(rename_all = "camelCase")]
+struct ApiKeyListResponse {
+    api_keys: Vec<ApiKeyResponse>,
 }
 
 #[derive(Debug, Serialize)]
@@ -102,11 +90,13 @@ async fn run_create(
     tenant_id: &str,
     service_account_id: &str,
     name: &str,
+    ttl_seconds: Option<i64>,
     json: bool,
 ) -> Result<()> {
     let request = CreateApiKeyRequest {
         name: name.to_string(),
         operator_id: tenant_id.to_string(),
+        ttl_seconds,
     };
     let key: ApiKeyResponse = api
         .post(
@@ -120,21 +110,15 @@ async fn run_create(
 
     println!("API key created.");
     println!("ID:                {}", key.id);
-    println!(
-        "Service Account:   {}",
-        key.service_account_id
-            .as_deref()
-            .unwrap_or(service_account_id)
-    );
+    println!("Service Account:   {}", key.service_account_id);
     println!("Name:              {}", key.name);
+    println!("Created:           {}", key.created_at);
     println!(
-        "Created:           {}",
-        key.created_at.as_deref().unwrap_or("-")
+        "Expires:           {}",
+        key.expires_at.as_deref().unwrap_or("never")
     );
-    if let Some(value) = key.value.as_deref() {
-        println!("Value:             {value}");
-        println!("Store this value now. It may not be shown again.");
-    }
+    println!("Value:             {}", key.value);
+    println!("Store this value now. It may not be shown again.");
     Ok(())
 }
 
@@ -150,7 +134,7 @@ async fn run_list(
             &[("operator_id", tenant_id)],
         )
         .await?;
-    let keys = response.into_vec();
+    let keys = response.api_keys;
     if json {
         return print_json(&keys);
     }
@@ -160,7 +144,7 @@ async fn run_list(
     }
 
     println!(
-        "{:<28}  {:<24}  {:<16}  {:<19}  REVOKED AT",
+        "{:<28}  {:<24}  {:<16}  {:<19}  EXPIRES AT",
         "ID", "NAME", "PREFIX", "CREATED AT"
     );
     println!(
@@ -168,14 +152,14 @@ async fn run_list(
         "", "", "", "", ""
     );
     for key in &keys {
-        let prefix = key.value.as_deref().map(api_key_prefix).unwrap_or("-");
+        let prefix = api_key_prefix(&key.value);
         println!(
             "{:<28}  {:<24}  {:<16}  {:<19}  {}",
             key.id,
             truncate(&key.name, 24),
             prefix,
-            key.created_at.as_deref().unwrap_or("-"),
-            key.revoked_at.as_deref().unwrap_or("-"),
+            key.created_at,
+            key.expires_at.as_deref().unwrap_or("-"),
         );
     }
     Ok(())
@@ -219,10 +203,11 @@ pub async fn run(args: &ApiKeyArgs, config: &Configuration, tenant_id: &str) -> 
         ApiKeyCommand::Create {
             service_account,
             name,
+            ttl_seconds,
             json,
         } => {
             let id = resolve::resolve_service_account_id(&api, tenant_id, service_account).await?;
-            run_create(&api, tenant_id, &id, name, *json).await
+            run_create(&api, tenant_id, &id, name, *ttl_seconds, *json).await
         }
         ApiKeyCommand::List {
             service_account,

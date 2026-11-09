@@ -215,6 +215,20 @@ pub(super) struct AppResponse {
     #[serde(default)]
     pub(super) buildspec_strategy: Option<String>,
     #[serde(default)]
+    pub(super) tier: Option<String>,
+    #[serde(default)]
+    pub(super) subnet: Option<String>,
+    /// Lambda memory in MiB the app has. `None` means the per-framework
+    /// default. Read back so `plan` can tell a declaration that took from one
+    /// that did not: a field missing here never equals what the manifest
+    /// says, so every apply would report it as changed forever.
+    #[serde(default)]
+    pub(super) lambda_memory_size: Option<i64>,
+    /// Lambda invocation timeout in seconds the app has. `None` means the
+    /// per-framework default.
+    #[serde(default)]
+    pub(super) lambda_timeout: Option<i64>,
+    #[serde(default)]
     pub(super) watch_paths: Option<Vec<String>>,
     #[serde(default)]
     pub(super) paths_ignore: Option<Vec<String>>,
@@ -821,7 +835,7 @@ async fn run_release_checks_only(
     change_control_token: Option<&str>,
     dry_run: bool,
 ) -> Result<()> {
-    let entry = select_exactly_one_app_entry(manifest, selected_app, "release-checks-only apply")?;
+    let entry = select_release_checks_entry(manifest, selected_app)?;
     let app_name = entry
         .get("name")
         .and_then(Value::as_str)
@@ -856,6 +870,12 @@ async fn run_release_checks_only(
     apply_compute_cloud_app_manifest(api, &iac_manifest, true, change_control_token).await?;
     println!("Release-check contract reconciled for {app_name}.");
     Ok(())
+}
+
+fn select_release_checks_entry(manifest: &Value, selected_app: Option<&str>) -> Result<Value> {
+    let entry = select_exactly_one_app_entry(manifest, selected_app, "release-checks-only apply")?;
+    crate::manifest::validate::validate_cloud_app_cache_declarations(&entry)?;
+    Ok(entry)
 }
 
 /// Fail-fast verification of an optional change-control approval token
@@ -947,6 +967,7 @@ fn build_app_apply_plans(
     entries
         .into_iter()
         .map(|entry| {
+            crate::manifest::validate::validate_cloud_app_cache_declarations(&entry)?;
             let entry = resolve_app_entry_for_environment(&entry, environment)?;
             let name = entry
                 .get("name")
@@ -956,22 +977,21 @@ fn build_app_apply_plans(
             let body = app_entry_to_api_body(&entry)?;
             let env_plan = plan_env_vars(&entry, environment)?;
             let sentry_plan = plan_sentry_integration(&entry)?;
-            let has_auth_config = entry.get("auth").is_some();
             let has_resource_declarations = has_declarative_resource_declarations(&entry);
+            let has_database_declarations = has_manifest_database_declarations(&entry);
             let iac_manifest = if env_plan.secret_refs.is_empty()
                 && env_plan.server_managed_credentials.is_empty()
                 && env_plan.internal_service_refs.is_empty()
                 && sentry_plan.is_none()
-                && !has_auth_config
                 && !has_resource_declarations
+                && !has_database_declarations
             {
                 None
             } else {
                 let mut manifest = cloud_app_manifest_for_iac(&entry, tenant_id)?;
-                let requires_apply_target = has_auth_config
-                    || sentry_plan
-                        .as_ref()
-                        .is_some_and(|plan| !plan.env_vars.is_empty());
+                let requires_apply_target = sentry_plan
+                    .as_ref()
+                    .is_some_and(|plan| !plan.env_vars.is_empty());
                 if requires_apply_target {
                     let target = apply_target_for_generated_env(environment)?;
                     manifest["spec"]["applyTarget"] = Value::String(target.to_string());
@@ -1102,6 +1122,7 @@ const ENVIRONMENT_MATERIALIZATION_KEYS: &[&str] = &[
     "framework",
     "deploymentTarget",
     "versionRetention",
+    "scaling",
     "tier",
     "subnet",
     "build",
@@ -1113,7 +1134,7 @@ const ENVIRONMENT_MATERIALIZATION_KEYS: &[&str] = &[
     "speedInsights",
     "rum",
     "middleware",
-    "auth",
+    "cache",
     "livenessProof",
     "readinessProof",
     "hooks",
@@ -1122,6 +1143,8 @@ const ENVIRONMENT_MATERIALIZATION_KEYS: &[&str] = &[
 /// Declarative resources whose lifecycle may span multiple environments.
 /// They must retain their original environment scope for server reconciliation.
 const ENVIRONMENT_RESOURCE_DECLARATION_KEYS: &[&str] = &[
+    "worker",
+    "kvNamespaces",
     "resources",
     "d1Databases",
     "provisionedDatabase",
@@ -1131,6 +1154,19 @@ const ENVIRONMENT_RESOURCE_DECLARATION_KEYS: &[&str] = &[
 
 fn is_environment_resource_declaration(key: &str) -> bool {
     ENVIRONMENT_RESOURCE_DECLARATION_KEYS.contains(&key)
+}
+
+/// Named-cluster managed databases (`databases`, PLT-3819) are a
+/// tenant-scoped, base-level declaration reconciled by the server-side
+/// ApplyManifest. They deliberately stay out of
+/// `ENVIRONMENT_RESOURCE_DECLARATION_KEYS`: an overlay-level
+/// `databases` must keep failing overlay validation instead of being
+/// silently ignored by the server.
+fn has_manifest_database_declarations(entry: &Value) -> bool {
+    entry
+        .get("databases")
+        .and_then(Value::as_array)
+        .is_some_and(|databases| !databases.is_empty())
 }
 
 fn has_declarative_resource_declarations(entry: &Value) -> bool {
@@ -1415,6 +1451,7 @@ fn validate_build_runner_backend_at(build: Option<&Value>, path: &str) -> Result
 fn parse_build_runner_backend(value: &str) -> Result<&'static str> {
     match value.trim().to_ascii_lowercase().as_str() {
         "codebuild" | "aws_codebuild" | "aws-codebuild" => Ok("codebuild"),
+        "github_actions" | "github-actions" => Ok("github_actions"),
         "kubernetes_kata" | "kubernetes-kata" | "k8s_kata" | "k8s-kata" | "hetzner_k3s_kata"
         | "hetzner-k3s-kata" => Ok("kubernetes_kata"),
         other => Err(anyhow!("unsupported build runner backend: {other}")),
@@ -1696,6 +1733,21 @@ pub(crate) fn app_entry_to_api_body(entry: &Value) -> Result<Value> {
     copy_string_field(entry, obj, "rootDirectory", "root_directory");
     copy_string_field(entry, obj, "dockerContext", "docker_context");
     copy_string_field(entry, obj, "buildspecStrategy", "buildspec_strategy");
+    // `tier: enterprise` and its `subnet` choose the app's network profile,
+    // which is what gives a Lambda app a route to PrivateLink-only resources.
+    // The manifest schema has always parsed them, but they never reached the
+    // API, so an enterprise app created from a manifest came back standard
+    // and off-network.
+    copy_string_field(entry, obj, "tier", "tier");
+    copy_string_field(entry, obj, "subnet", "subnet");
+    // Same shape of gap as tier/subnet above: `spec.scaling` was parsed and
+    // then went nowhere, so an app declaring 2048 MiB kept being deployed at
+    // the framework default. The app is the only durable home for these -- a
+    // deployment's own scaling config is rebuilt empty on every deploy.
+    if let Some(scaling) = entry.get("scaling").and_then(Value::as_object) {
+        copy_i64_field_from_map(scaling, obj, "lambdaMemorySize", "lambda_memory_size");
+        copy_i64_field_from_map(scaling, obj, "lambdaTimeout", "lambda_timeout");
+    }
     if let Some(command) = build_command {
         obj.insert("build_command".to_string(), Value::String(command));
     }
@@ -1740,6 +1792,19 @@ fn copy_string_field_from_map(
 ) {
     if let Some(value) = source.get(from).and_then(Value::as_str) {
         target.insert(to.to_string(), Value::String(value.to_string()));
+    }
+}
+
+/// Copies an integer field, which the sizing knobs need and the string
+/// helpers above cannot carry.
+fn copy_i64_field_from_map(
+    source: &serde_json::Map<String, Value>,
+    target: &mut serde_json::Map<String, Value>,
+    from: &str,
+    to: &str,
+) {
+    if let Some(value) = source.get(from).and_then(Value::as_i64) {
+        target.insert(to.to_string(), Value::from(value));
     }
 }
 
@@ -1846,6 +1911,13 @@ fn app_field_value(app: &AppResponse, field: &str) -> Value {
         "buildspec_strategy" => {
             opt_string_value(app.buildspec_strategy.as_deref().or(Some("inline")))
         }
+        // The API defaults an unset tier to `standard`, so compare against
+        // that rather than null; otherwise a manifest that says `standard`
+        // would show up as a change on every apply.
+        "tier" => opt_string_value(app.tier.as_deref().or(Some("standard"))),
+        "subnet" => opt_string_value(app.subnet.as_deref()),
+        "lambda_memory_size" => opt_i64_value(app.lambda_memory_size),
+        "lambda_timeout" => opt_i64_value(app.lambda_timeout),
         "watch_paths" => match &app.watch_paths {
             Some(paths) if !paths.is_empty() => {
                 Value::Array(paths.iter().map(|p| Value::String(p.clone())).collect())
@@ -1859,6 +1931,13 @@ fn app_field_value(app: &AppResponse, field: &str) -> Value {
             _ => Value::Null,
         },
         _ => Value::Null,
+    }
+}
+
+fn opt_i64_value(value: Option<i64>) -> Value {
+    match value {
+        Some(value) => Value::from(value),
+        None => Value::Null,
     }
 }
 
@@ -2090,6 +2169,220 @@ spec:
         assert_eq!(body["name"], "field");
     }
 
+    /// The incident: a manifest declared 2048 MiB, `plan` said "changed:
+    /// <none>", and the app kept deploying at the framework default because
+    /// the value never made it into the REST body.
+    #[test]
+    fn api_body_carries_declared_lambda_sizing() {
+        let (_tmp, path) = write_manifest(
+            r#"
+apiVersion: apps.tachy.one/v1alpha
+kind: CloudApps
+spec:
+  apps:
+    - name: field
+      repository:
+        url: https://github.com/quantum-box/tachyonfield
+        owner: quantum-box
+        name: tachyonfield
+      deploymentTarget: lambda
+      scaling:
+        lambdaMemorySize: 2048
+        lambdaTimeout: 60
+"#,
+        );
+
+        let manifest = load_cloud_apps_manifest(&path).unwrap();
+        let entries = select_app_entries(&manifest, Some("field")).unwrap();
+        let body = app_entry_to_api_body(&entries[0]).unwrap();
+
+        assert_eq!(body["lambda_memory_size"], 2048);
+        assert_eq!(body["lambda_timeout"], 60);
+    }
+
+    /// A manifest that says nothing about sizing must not send anything:
+    /// omitting the field is how a caller says "leave it alone", and sending
+    /// a default here would overwrite whatever the app already had.
+    #[test]
+    fn api_body_omits_lambda_sizing_when_not_declared() {
+        let (_tmp, path) = write_manifest(
+            r#"
+apiVersion: apps.tachy.one/v1alpha
+kind: CloudApps
+spec:
+  apps:
+    - name: field
+      repository:
+        url: https://github.com/quantum-box/tachyonfield
+        owner: quantum-box
+        name: tachyonfield
+"#,
+        );
+
+        let manifest = load_cloud_apps_manifest(&path).unwrap();
+        let entries = select_app_entries(&manifest, Some("field")).unwrap();
+        let body = app_entry_to_api_body(&entries[0]).unwrap();
+
+        assert!(body.get("lambda_memory_size").is_none());
+        assert!(body.get("lambda_timeout").is_none());
+    }
+
+    fn app_with_sizing(memory: Option<i64>, timeout: Option<i64>) -> AppResponse {
+        serde_json::from_value(json!({
+            "id": "app_1",
+            "name": "field",
+            "lambda_memory_size": memory,
+            "lambda_timeout": timeout,
+        }))
+        .unwrap()
+    }
+
+    /// Without reading the value back, a declaration never equals what the
+    /// app has, so `plan` reports it as changed on every run and an apply is
+    /// sent forever. It also means an operator cannot tell a declaration that
+    /// took from one that was dropped -- which is how a 2048 MiB manifest sat
+    /// next to a 512 MiB deployment unnoticed.
+    #[test]
+    fn declared_sizing_matching_the_app_is_not_a_change() {
+        let app = app_with_sizing(Some(2048), Some(60));
+        let body = json!({
+            "name": "field",
+            "lambda_memory_size": 2048,
+            "lambda_timeout": 60,
+        });
+
+        let (action, changed) = classify_app_action(Some(&app), &body);
+
+        assert!(matches!(action, ApplyAction::NoChange), "{changed:?}");
+        assert!(changed.is_empty(), "{changed:?}");
+    }
+
+    #[test]
+    fn a_different_declared_size_is_still_a_change() {
+        let app = app_with_sizing(Some(512), None);
+        let body = json!({"name": "field", "lambda_memory_size": 2048});
+
+        let (action, changed) = classify_app_action(Some(&app), &body);
+
+        assert!(matches!(action, ApplyAction::Update));
+        assert_eq!(changed, vec!["lambda_memory_size".to_string()]);
+    }
+
+    #[test]
+    fn api_body_carries_enterprise_network_profile() {
+        let (_tmp, path) = write_manifest(
+            r#"
+apiVersion: apps.tachy.one/v1alpha
+kind: CloudApps
+spec:
+  apps:
+    - name: field
+      repository:
+        url: https://github.com/quantum-box/tachyonfield
+        owner: quantum-box
+        name: tachyonfield
+      framework: cargo_lambda
+      deploymentTarget: lambda
+      tier: enterprise
+      subnet: enterprise-field
+"#,
+        );
+
+        let manifest = load_cloud_apps_manifest(&path).unwrap();
+        let entries = select_app_entries(&manifest, Some("field")).unwrap();
+        let body = app_entry_to_api_body(&entries[0]).unwrap();
+
+        // Without these the app is created on the standard tier with no
+        // subnet, so a Lambda that needs PrivateLink egress silently lands
+        // off-network.
+        assert_eq!(body["tier"], "enterprise");
+        assert_eq!(body["subnet"], "enterprise-field");
+    }
+
+    #[test]
+    fn api_body_omits_network_profile_when_manifest_does() {
+        let (_tmp, path) = write_manifest(
+            r#"
+apiVersion: apps.tachy.one/v1alpha
+kind: CloudApps
+spec:
+  apps:
+    - name: field
+      repository:
+        url: https://github.com/quantum-box/tachyonfield
+        owner: quantum-box
+        name: tachyonfield
+"#,
+        );
+
+        let manifest = load_cloud_apps_manifest(&path).unwrap();
+        let entries = select_app_entries(&manifest, Some("field")).unwrap();
+        let body = app_entry_to_api_body(&entries[0]).unwrap();
+
+        assert!(body.get("tier").is_none());
+        assert!(body.get("subnet").is_none());
+    }
+
+    /// A cargo_lambda app built on GitHub Actions can omit `build.command`;
+    /// apply must accept the backend and derive the command from
+    /// package/binary/release/arch, matching the server-side fallback.
+    #[test]
+    fn apply_plan_accepts_github_actions_cargo_lambda_without_command() {
+        let (_tmp, path) = write_manifest(
+            r#"
+apiVersion: apps.tachy.one/v1alpha
+kind: CloudApps
+spec:
+  apps:
+    - name: library-api
+      repository:
+        url: https://github.com/quantum-box/library
+        owner: quantum-box
+        name: library
+      framework: cargo_lambda
+      deploymentTarget: lambda
+      build:
+        runnerBackend: github_actions
+        package: library-api
+        binary: lambda-library-api
+"#,
+        );
+
+        let manifest = load_cloud_apps_manifest(&path).unwrap();
+        let entries = select_app_entries(&manifest, Some("library-api")).unwrap();
+        let plans =
+            build_app_apply_plans(entries, "tn_01ks18jhh1xvggktfzjx5jqsen", "prod").unwrap();
+        let plan = &plans[0];
+
+        assert_eq!(plan.runner_backend.as_deref(), Some("github_actions"));
+        assert_eq!(
+            plan.body["build_command"],
+            "cargo lambda build --package library-api --bin lambda-library-api --release --arm64"
+        );
+        assert!(plan.body.get("install_command").is_none());
+
+        let availability = BuildRunnerBackendAvailabilityResponse {
+            default_backend: Some("codebuild".to_string()),
+            backends: vec![BuildRunnerBackendStatusResponse {
+                backend: "github_actions".to_string(),
+                available: true,
+            }],
+        };
+        validate_build_runner_backend_availability(&plans, &availability).unwrap();
+    }
+
+    #[test]
+    fn parse_build_runner_backend_matches_server_aliases() {
+        for (input, expected) in [
+            ("github_actions", "github_actions"),
+            ("GitHub-Actions", "github_actions"),
+            ("aws-codebuild", "codebuild"),
+            ("hetzner_k3s_kata", "kubernetes_kata"),
+        ] {
+            assert_eq!(parse_build_runner_backend(input).unwrap(), expected);
+        }
+    }
+
     #[test]
     fn load_cloud_apps_manifest_rejects_unknown_runner_backend() {
         let (_tmp, path) = write_manifest(
@@ -2235,6 +2528,14 @@ spec:
                 },
                 "preview": {
                     "rootDirectory": "apps/preview",
+                    "kvNamespaces": [{"binding": "SESSIONS"}],
+                    "worker": {
+                        "generateConfig": true,
+                        "main": "src/index.ts",
+                        "compatibilityDate": "2026-06-18",
+                        "durableObjects": [{ "binding": "ROOMS", "className": "Room" }],
+                        "migrations": [{ "tag": "v1", "newSqliteClasses": ["Room"] }]
+                    },
                     "resources": [{
                         "type": "sentry",
                         "name": "courseboard-preview",
@@ -2286,8 +2587,42 @@ spec:
     }
 
     #[test]
+    fn worker_declaration_alone_triggers_iac_save_and_preserves_migrations() {
+        let worker = json!({
+            "generateConfig": true,
+            "main": "src/index.ts",
+            "compatibilityDate": "2026-06-18",
+            "durableObjects": [{ "binding": "ROOMS", "className": "Room" }],
+            "migrations": [{ "tag": "v1", "newSqliteClasses": ["Room"] }]
+        });
+        let entry = json!({
+            "name": "order-sync",
+            "repository": {
+                "url": "https://github.com/quantum-box/example",
+                "owner": "quantum-box", "name": "example"
+            },
+            "framework": "worker", "deploymentTarget": "cloudflare_workers",
+            "worker": worker.clone()
+        });
+        for environment in ["production", "preview"] {
+            let plans = build_app_apply_plans(
+                vec![entry.clone()],
+                "tn_01hjryxysgey07h5jz5wagqj0m",
+                environment,
+            )
+            .unwrap();
+            assert_eq!(
+                plans[0].iac_manifest.as_ref().unwrap()["spec"]["worker"],
+                worker
+            );
+        }
+    }
+
+    #[test]
     fn resource_declaration_keys_each_trigger_iac_manifest() {
         for (key, value) in [
+            ("kvNamespaces", json!([{ "binding": "SESSIONS" }])),
+            ("worker", json!({ "generateConfig": true })),
             ("resources", json!([])),
             ("d1Databases", json!([])),
             (
@@ -2321,6 +2656,137 @@ spec:
                 "resource declaration {key} did not trigger an IaC manifest"
             );
         }
+    }
+
+    #[test]
+    fn databases_declaration_triggers_iac_manifest_and_passes_through() {
+        // PLT-3819: a base-level `databases` declaration must reach the
+        // server-side ApplyManifest even when the app has no other IaC
+        // trigger (no secret refs, auth, sentry, or resources).
+        let entry = json!({
+            "name": "courseboard-api",
+            "repository": {
+                "url": "https://github.com/quantum-box/courseboard",
+                "owner": "quantum-box",
+                "name": "courseboard"
+            },
+            "databases": [{
+                "name": "tidb_courseboard_prod",
+                "cluster": "txcloud",
+                "provider": "tidb",
+                "user": "courseboard_api"
+            }]
+        });
+
+        let plans =
+            build_app_apply_plans(vec![entry], "tn_01ks18jhh1xvggktfzjx5jqsen", "production")
+                .unwrap();
+        let manifest = plans[0]
+            .iac_manifest
+            .as_ref()
+            .expect("databases declaration did not trigger an IaC manifest");
+
+        assert_eq!(
+            manifest["spec"]["databases"],
+            json!([{
+                "name": "tidb_courseboard_prod",
+                "cluster": "txcloud",
+                "provider": "tidb",
+                "user": "courseboard_api"
+            }])
+        );
+    }
+
+    #[test]
+    fn empty_databases_declaration_does_not_trigger_iac_manifest() {
+        let entry = json!({
+            "name": "plain-app",
+            "repository": {
+                "url": "https://github.com/quantum-box/plain-app",
+                "owner": "quantum-box",
+                "name": "plain-app"
+            },
+            "databases": []
+        });
+
+        let plans =
+            build_app_apply_plans(vec![entry], "tn_01ks18jhh1xvggktfzjx5jqsen", "production")
+                .unwrap();
+
+        assert!(plans[0].iac_manifest.is_none());
+    }
+
+    #[test]
+    fn direct_compute_apply_plan_rejects_invalid_cache_contract() {
+        let entry = json!({
+            "name": "plain-app",
+            "cache": {"rules": [{
+                "name": "public-docs",
+                "paths": ["/docs/*"],
+                "methods": ["POST"],
+                "edgeTtl": "respect-origin"
+            }]}
+        });
+
+        let error =
+            match build_app_apply_plans(vec![entry], "tn_01ks18jhh1xvggktfzjx5jqsen", "production")
+            {
+                Ok(_) => panic!("direct compute apply must validate cache declarations"),
+                Err(error) => error.to_string(),
+            };
+
+        assert!(error.contains("only GET and HEAD"), "{error}");
+    }
+
+    #[test]
+    fn release_checks_only_rejects_invalid_cache_contract_before_api_request() {
+        let manifest = json!({
+            "spec": {
+                "apps": [{
+                    "name": "plain-app",
+                    "cache": {"rules": [{
+                        "name": "public-docs",
+                        "paths": ["/docs/*"],
+                        "methods": ["POST"],
+                        "edgeTtl": "respect-origin"
+                    }]}
+                }]
+            }
+        });
+
+        let error = select_release_checks_entry(&manifest, Some("plain-app"))
+            .expect_err("release-checks-only must validate cache declarations")
+            .to_string();
+
+        assert!(error.contains("only GET and HEAD"), "{error}");
+    }
+
+    #[test]
+    fn databases_in_environment_overlay_is_rejected() {
+        // `databases` is a base-level, tenant-scoped declaration. An
+        // overlay-level declaration would be silently ignored by the
+        // server, so the resolver must fail loud instead.
+        let entry = json!({
+            "name": "courseboard-api",
+            "environments": {
+                "production": {
+                    "databases": [{
+                        "name": "tidb_courseboard_prod",
+                        "cluster": "txcloud",
+                        "provider": "tidb",
+                        "user": "courseboard_api"
+                    }]
+                }
+            }
+        });
+
+        let error =
+            match build_app_apply_plans(vec![entry], "tn_01ks18jhh1xvggktfzjx5jqsen", "production")
+            {
+                Ok(_) => panic!("expected overlay validation to fail"),
+                Err(error) => error,
+            };
+        assert!(error.to_string().contains("unsupported field databases"));
     }
 
     #[test]
@@ -2551,8 +3017,10 @@ spec:
         );
     }
 
+    /// The generated-env target guard survives the removal of `auth`
+    /// (ADR-0105); Sentry is now its only trigger.
     #[test]
-    fn auth_only_preview_plan_carries_apply_target() {
+    fn staging_sentry_integration_is_rejected_without_safe_target() {
         let entry = json!({
             "name": "fieldadmin",
             "repository": {
@@ -2561,74 +3029,21 @@ spec:
                 "name": "tachyonfield"
             },
             "environments": {
-                "preview": {
-                    "auth": { "enabled": true }
-                }
-            }
-        });
-
-        let plans =
-            build_app_apply_plans(vec![entry], "tn_01ks18jhh1xvggktfzjx5jqsen", "preview").unwrap();
-
-        assert_eq!(
-            plans[0].iac_manifest.as_ref().unwrap()["spec"]["applyTarget"],
-            "preview"
-        );
-    }
-
-    #[test]
-    fn auth_disabled_still_builds_iac_plan() {
-        let entry = json!({
-            "name": "fieldadmin",
-            "repository": {
-                "url": "https://github.com/quantum-box/tachyonfield",
-                "owner": "quantum-box",
-                "name": "tachyonfield"
-            },
-            "environments": {
-                "preview": {
-                    "auth": { "enabled": false }
-                }
-            }
-        });
-
-        let plans =
-            build_app_apply_plans(vec![entry], "tn_01ks18jhh1xvggktfzjx5jqsen", "preview").unwrap();
-
-        assert_eq!(
-            plans[0].iac_manifest.as_ref().unwrap()["spec"]["auth"]["enabled"],
-            false
-        );
-    }
-
-    #[test]
-    fn staging_auth_config_is_rejected_without_safe_target() {
-        for enabled in [true, false] {
-            let entry = json!({
-                "name": "fieldadmin",
-                "repository": {
-                    "url": "https://github.com/quantum-box/tachyonfield",
-                    "owner": "quantum-box",
-                    "name": "tachyonfield"
-                },
-                "environments": {
-                    "staging": {
-                        "auth": { "enabled": enabled }
+                "staging": {
+                    "integrations": {
+                        "sentry": { "project": "fieldadmin-staging" }
                     }
                 }
-            });
+            }
+        });
 
-            let error = match build_app_apply_plans(
-                vec![entry],
-                "tn_01ks18jhh1xvggktfzjx5jqsen",
-                "staging",
-            ) {
-                Ok(_) => panic!("staging auth config must fail closed"),
+        let error =
+            match build_app_apply_plans(vec![entry], "tn_01ks18jhh1xvggktfzjx5jqsen", "staging") {
+                Ok(_) => panic!("staging generated env vars must fail closed"),
                 Err(error) => error.to_string(),
             };
 
-            assert!(error.contains("no safe target for generated auth or Sentry env vars"));
-        }
+        assert!(error.contains("no safe target for generated Sentry env vars"));
     }
 
     #[test]
@@ -3081,17 +3496,14 @@ fn apply_target_for_environment(environment: &str) -> Option<&'static str> {
 
 fn apply_target_for_generated_env(environment: &str) -> Result<&'static str> {
     apply_target_for_environment(environment).ok_or_else(|| {
-        anyhow!(
-            "environment {environment} has no safe target for generated auth or Sentry env vars"
-        )
+        anyhow!("environment {environment} has no safe target for generated Sentry env vars")
     })
 }
 
 pub(crate) fn validate_generated_env_target(entry: &Value, environment: &str) -> Result<()> {
-    let has_auth_config = entry.get("auth").is_some();
     let generates_sentry_env =
         plan_sentry_integration(entry)?.is_some_and(|plan| !plan.env_vars.is_empty());
-    if has_auth_config || generates_sentry_env {
+    if generates_sentry_env {
         let _ = apply_target_for_generated_env(environment)?;
     }
     Ok(())
@@ -3267,7 +3679,9 @@ async fn apply_compute_cloud_app_manifest(
     release_checks_only: bool,
     change_control_token: Option<&str>,
 ) -> Result<()> {
-    save_compute_cloud_app_manifest(api, manifest, change_control_token).await?;
+    if !release_checks_only {
+        save_compute_cloud_app_manifest(api, manifest, change_control_token).await?;
+    }
     let name = manifest
         .get("metadata")
         .and_then(|metadata| metadata.get("name"))
@@ -3280,6 +3694,7 @@ async fn apply_compute_cloud_app_manifest(
     });
     if release_checks_only {
         apply_input["releaseChecksOnly"] = Value::Bool(true);
+        apply_input["releaseChecksManifest"] = Value::String(serde_json::to_string(manifest)?);
     }
     let body = json!({
         "query": r#"

@@ -316,6 +316,11 @@ pub async fn run(
             Some(PreviewCommand::Create { app, branch }) => {
                 run_preview_create(&api, app, branch).await
             }
+            Some(PreviewCommand::Database { command }) => match command {
+                PreviewDatabaseCommand::Delete { app, pr, yes, json } => {
+                    run_preview_database_delete(&api, app, *pr, *yes, *json).await
+                }
+            },
             None => {
                 run_preview(
                     &api,
@@ -451,10 +456,20 @@ pub async fn run(
             DeploymentsCommand::Rollback {
                 app_id,
                 deployment_id,
+                to_previous,
             } => {
                 let app_id = app_id_or_default(app_id, project_config)?;
                 let id = resolve::resolve_app_id(&api, app_id).await?;
-                run_deployments_rollback(&api, &id, deployment_id).await
+                run_deployments_rollback(&api, &id, deployment_id.as_deref(), *to_previous).await
+            }
+            DeploymentsCommand::RollbackCandidates {
+                app_id,
+                limit,
+                json,
+            } => {
+                let app_id = app_id_or_default(app_id, project_config)?;
+                let id = resolve::resolve_app_id(&api, app_id).await?;
+                run_deployments_rollback_candidates(&api, &id, *limit, *json).await
             }
         },
         ComputeCommand::Env { command } => match command {
@@ -559,10 +574,20 @@ pub async fn run(
                 app_id,
                 min_instances,
                 max_instances,
+                lambda_memory_size,
+                lambda_timeout,
             } => {
                 let app_id = app_id_or_default(app_id, project_config)?;
                 let id = resolve::resolve_app_id(&api, app_id).await?;
-                run_scaling_update(&api, &id, *min_instances, *max_instances).await
+                run_scaling_update(
+                    &api,
+                    &id,
+                    *min_instances,
+                    *max_instances,
+                    *lambda_memory_size,
+                    *lambda_timeout,
+                )
+                .await
             }
         },
         // Legacy shortcuts

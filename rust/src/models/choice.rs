@@ -24,11 +24,7 @@ pub struct Choice {
 
 impl Choice {
     /// Choice type for completion responses
-    pub fn new(
-        finish_reason: String,
-        index: i32,
-        message: models::Message,
-    ) -> Choice {
+    pub fn new(finish_reason: String, index: i32, message: models::Message) -> Choice {
         Choice {
             finish_reason,
             index,

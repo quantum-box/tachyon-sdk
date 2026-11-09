@@ -86,8 +86,7 @@ pub async fn create_product(
         .request(reqwest::Method::POST, &uri_str);
 
     if let Some(ref user_agent) = configuration.user_agent {
-        req_builder = req_builder
-            .header(reqwest::header::USER_AGENT, user_agent.clone());
+        req_builder = req_builder.header(reqwest::header::USER_AGENT, user_agent.clone());
     }
     req_builder = req_builder.json(&p_body_create_product_request);
 
@@ -111,8 +110,7 @@ pub async fn create_product(
         }
     } else {
         let content = resp.text().await?;
-        let entity: Option<CreateProductError> =
-            serde_json::from_str(&content).ok();
+        let entity: Option<CreateProductError> = serde_json::from_str(&content).ok();
         Err(Error::ResponseError(ResponseContent {
             status,
             content,
@@ -138,8 +136,7 @@ pub async fn delete_product(
         .request(reqwest::Method::DELETE, &uri_str);
 
     if let Some(ref user_agent) = configuration.user_agent {
-        req_builder = req_builder
-            .header(reqwest::header::USER_AGENT, user_agent.clone());
+        req_builder = req_builder.header(reqwest::header::USER_AGENT, user_agent.clone());
     }
 
     let req = req_builder.build()?;
@@ -162,8 +159,7 @@ pub async fn delete_product(
         }
     } else {
         let content = resp.text().await?;
-        let entity: Option<DeleteProductError> =
-            serde_json::from_str(&content).ok();
+        let entity: Option<DeleteProductError> = serde_json::from_str(&content).ok();
         Err(Error::ResponseError(ResponseContent {
             status,
             content,
@@ -184,12 +180,10 @@ pub async fn get_product(
         configuration.base_path,
         id = crate::apis::urlencode(p_path_id)
     );
-    let mut req_builder =
-        configuration.client.request(reqwest::Method::GET, &uri_str);
+    let mut req_builder = configuration.client.request(reqwest::Method::GET, &uri_str);
 
     if let Some(ref user_agent) = configuration.user_agent {
-        req_builder = req_builder
-            .header(reqwest::header::USER_AGENT, user_agent.clone());
+        req_builder = req_builder.header(reqwest::header::USER_AGENT, user_agent.clone());
     }
 
     let req = req_builder.build()?;
@@ -212,8 +206,7 @@ pub async fn get_product(
         }
     } else {
         let content = resp.text().await?;
-        let entity: Option<GetProductError> =
-            serde_json::from_str(&content).ok();
+        let entity: Option<GetProductError> = serde_json::from_str(&content).ok();
         Err(Error::ResponseError(ResponseContent {
             status,
             content,
@@ -225,10 +218,7 @@ pub async fn get_product(
 pub async fn list_product_variants(
     configuration: &configuration::Configuration,
     id: &str,
-) -> Result<
-    models::ProductVariantListResponse,
-    Error<ListProductVariantsError>,
-> {
+) -> Result<models::ProductVariantListResponse, Error<ListProductVariantsError>> {
     // add a prefix to parameters to efficiently prevent name collisions
     let p_path_id = id;
 
@@ -237,12 +227,10 @@ pub async fn list_product_variants(
         configuration.base_path,
         id = crate::apis::urlencode(p_path_id)
     );
-    let mut req_builder =
-        configuration.client.request(reqwest::Method::GET, &uri_str);
+    let mut req_builder = configuration.client.request(reqwest::Method::GET, &uri_str);
 
     if let Some(ref user_agent) = configuration.user_agent {
-        req_builder = req_builder
-            .header(reqwest::header::USER_AGENT, user_agent.clone());
+        req_builder = req_builder.header(reqwest::header::USER_AGENT, user_agent.clone());
     }
 
     let req = req_builder.build()?;
@@ -265,8 +253,7 @@ pub async fn list_product_variants(
         }
     } else {
         let content = resp.text().await?;
-        let entity: Option<ListProductVariantsError> =
-            serde_json::from_str(&content).ok();
+        let entity: Option<ListProductVariantsError> = serde_json::from_str(&content).ok();
         Err(Error::ResponseError(ResponseContent {
             status,
             content,
@@ -285,20 +272,16 @@ pub async fn list_products(
     let p_query_offset = offset;
 
     let uri_str = format!("{}/v1/order/products", configuration.base_path);
-    let mut req_builder =
-        configuration.client.request(reqwest::Method::GET, &uri_str);
+    let mut req_builder = configuration.client.request(reqwest::Method::GET, &uri_str);
 
     if let Some(ref param_value) = p_query_limit {
-        req_builder =
-            req_builder.query(&[("limit", &param_value.to_string())]);
+        req_builder = req_builder.query(&[("limit", &param_value.to_string())]);
     }
     if let Some(ref param_value) = p_query_offset {
-        req_builder =
-            req_builder.query(&[("offset", &param_value.to_string())]);
+        req_builder = req_builder.query(&[("offset", &param_value.to_string())]);
     }
     if let Some(ref user_agent) = configuration.user_agent {
-        req_builder = req_builder
-            .header(reqwest::header::USER_AGENT, user_agent.clone());
+        req_builder = req_builder.header(reqwest::header::USER_AGENT, user_agent.clone());
     }
 
     let req = req_builder.build()?;
@@ -321,8 +304,7 @@ pub async fn list_products(
         }
     } else {
         let content = resp.text().await?;
-        let entity: Option<ListProductsError> =
-            serde_json::from_str(&content).ok();
+        let entity: Option<ListProductsError> = serde_json::from_str(&content).ok();
         Err(Error::ResponseError(ResponseContent {
             status,
             content,
@@ -345,12 +327,10 @@ pub async fn update_product(
         configuration.base_path,
         id = crate::apis::urlencode(p_path_id)
     );
-    let mut req_builder =
-        configuration.client.request(reqwest::Method::PUT, &uri_str);
+    let mut req_builder = configuration.client.request(reqwest::Method::PUT, &uri_str);
 
     if let Some(ref user_agent) = configuration.user_agent {
-        req_builder = req_builder
-            .header(reqwest::header::USER_AGENT, user_agent.clone());
+        req_builder = req_builder.header(reqwest::header::USER_AGENT, user_agent.clone());
     }
     req_builder = req_builder.json(&p_body_update_product_request);
 
@@ -374,8 +354,7 @@ pub async fn update_product(
         }
     } else {
         let content = resp.text().await?;
-        let entity: Option<UpdateProductError> =
-            serde_json::from_str(&content).ok();
+        let entity: Option<UpdateProductError> = serde_json::from_str(&content).ok();
         Err(Error::ResponseError(ResponseContent {
             status,
             content,

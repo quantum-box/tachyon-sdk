@@ -13,18 +13,7 @@ use serde::{Deserialize, Serialize};
 
 /// ChatroomNameGeneration : Controls chatroom name auto-generation behavior.
 /// Controls chatroom name auto-generation behavior.
-#[derive(
-    Clone,
-    Copy,
-    Debug,
-    Eq,
-    PartialEq,
-    Ord,
-    PartialOrd,
-    Hash,
-    Serialize,
-    Deserialize,
-)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
 pub enum ChatroomNameGeneration {
     #[serde(rename = "always")]
     Always,

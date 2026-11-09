@@ -7,6 +7,9 @@ mod cloud_app_build_job;
 mod commands;
 mod compute_cli;
 mod config;
+mod data_cli;
+mod erp_replay_cli;
+mod feature_flag_cli;
 mod iac_cli;
 mod image_cli;
 mod install_cli;
@@ -17,9 +20,12 @@ mod mcp_cli;
 mod ops_cli;
 mod org_cli;
 mod pm_cli;
+mod pm_project_update_cli;
 mod pm_resource_cli;
+mod provider_cli;
 mod reconcile_cli;
 mod resolve;
+mod response_contract;
 mod secret_cli;
 mod settings;
 mod settings_cli;
@@ -62,6 +68,17 @@ struct Cli {
         global = true
     )]
     tenant_id: String,
+
+    /// Platform ID that scopes the request (x-platform-id header). Required
+    /// when the tenant is one you access through a parent platform rather
+    /// than direct membership, such as the system tenant for ops commands.
+    #[arg(
+        long,
+        visible_alias = "platform",
+        env = "TACHYON_PLATFORM_ID",
+        global = true
+    )]
+    platform_id: Option<String>,
 
     /// API key for authentication (overrides stored OAuth token)
     #[arg(long, env = "TACHYON_API_KEY")]
@@ -108,6 +125,150 @@ mod tests {
 
         assert_eq!(cli.cognito_client_id, "explicit-client-id");
         assert_ne!(cli.cognito_client_id, DEFAULT_COGNITO_CLIENT_ID);
+    }
+
+    #[test]
+    fn parses_tenant_grant_create_with_repository_scope() {
+        let cli = Cli::try_parse_from([
+            "tachyon",
+            "iac",
+            "grants",
+            "create",
+            "--provider",
+            "github",
+            "--installation-id",
+            "12345",
+            "--verification",
+            "gv1_test",
+            "--repo",
+            "quantum-box/tachyon-apps",
+            "--repo",
+            "quantum-box/bernard-square",
+            "--json",
+        ])
+        .unwrap();
+
+        match cli.command {
+            Commands::Iac(iac_cli::IacArgs {
+                command:
+                    iac_cli::IacCommand::Grants {
+                        command:
+                            iac_cli::GrantsCommand::Create {
+                                provider,
+                                installation_id,
+                                verification,
+                                all,
+                                repos,
+                                json,
+                            },
+                    },
+            }) => {
+                assert_eq!(provider, "github");
+                assert_eq!(installation_id, "12345");
+                assert_eq!(verification, "gv1_test");
+                assert!(!all);
+                assert_eq!(
+                    repos,
+                    vec![
+                        "quantum-box/tachyon-apps".to_string(),
+                        "quantum-box/bernard-square".to_string(),
+                    ]
+                );
+                assert!(json);
+            }
+            _ => panic!("unexpected command"),
+        }
+    }
+
+    #[test]
+    fn parses_ops_erp_replays_request_with_the_host_tenant_default() {
+        let cli = Cli::try_parse_from([
+            "tachyon",
+            "ops",
+            "erp-replays",
+            "request",
+            "--outbox",
+            "usage",
+            "--record-id",
+            "credit_consumption_attempts:cca_1:input-token",
+            "--reason",
+            "PLT-4603 canary duplicate drill",
+            "--change-reference",
+            "PLT-4603 A6b: link",
+            "--platform-id",
+            "tn_platform",
+        ])
+        .unwrap();
+
+        assert_eq!(cli.platform_id.as_deref(), Some("tn_platform"));
+        match cli.command {
+            Commands::Ops(ops_cli::OpsArgs {
+                command:
+                    ops_cli::OpsCommand::ErpReplays {
+                        command:
+                            erp_replay_cli::ErpReplaysCommand::Request {
+                                outbox,
+                                record_ids,
+                                target,
+                                ..
+                            },
+                    },
+            }) => {
+                assert_eq!(outbox, erp_replay_cli::ReplayOutbox::Usage);
+                assert_eq!(record_ids.len(), 1);
+                assert_eq!(
+                    target.host_tenant_id,
+                    erp_replay_cli::DEFAULT_HOST_TENANT_ID
+                );
+            }
+            _ => panic!("expected ops erp-replays request"),
+        }
+    }
+
+    #[test]
+    fn ops_erp_replays_execute_requires_the_digest() {
+        assert!(
+            Cli::try_parse_from(["tachyon", "ops", "erp-replays", "execute", "edr_01",]).is_err()
+        );
+    }
+
+    #[test]
+    fn parses_platform_id_after_nested_ops_command() {
+        let cli = Cli::try_parse_from([
+            "tachyon",
+            "ops",
+            "sentry",
+            "issues",
+            "resolve",
+            "12345",
+            "--tenant-id",
+            "tn_system",
+            "--platform-id",
+            "tn_platform",
+        ])
+        .unwrap();
+
+        assert_eq!(cli.tenant_id, "tn_system");
+        assert_eq!(cli.platform_id.as_deref(), Some("tn_platform"));
+    }
+
+    #[test]
+    fn platform_id_defaults_to_none_and_accepts_platform_alias() {
+        let cli = Cli::try_parse_from(["tachyon", "auth", "list"]).unwrap();
+        assert_eq!(cli.platform_id, None);
+
+        let cli = Cli::try_parse_from([
+            "tachyon",
+            "--platform",
+            "tn_platform",
+            "ops",
+            "sentry",
+            "issues",
+            "view",
+            "12345",
+        ])
+        .unwrap();
+        assert_eq!(cli.platform_id.as_deref(), Some("tn_platform"));
     }
 
     #[test]
@@ -421,11 +582,13 @@ mod tests {
                     api_key_cli::ApiKeyCommand::Create {
                         service_account,
                         name,
+                        ttl_seconds,
                         json,
                     },
             }) => {
                 assert_eq!(service_account, "sa_123456789012");
                 assert_eq!(name, "CEO key");
+                assert_eq!(ttl_seconds, None);
                 assert!(json);
             }
             _ => panic!("expected api-key create command"),
@@ -532,6 +695,11 @@ enum Commands {
     Compute(compute_cli::ComputeArgs),
     /// Manage Cloud App environment variables
     Env(compute_cli::EnvArgs),
+    /// Manage Tachyon Data datasets and queries
+    Data(data_cli::DataArgs),
+    /// Inspect and set tenant feature flags
+    #[command(name = "feature-flag", visible_alias = "feature-flags")]
+    FeatureFlag(feature_flag_cli::FeatureFlagArgs),
     /// Generate a tachyon.yml project config
     Init(commands::init::InitArgs),
     /// Manage organizations, users, service accounts, and policies
@@ -539,6 +707,8 @@ enum Commands {
     /// Manage service-account API keys
     #[command(name = "api-key")]
     ApiKey(api_key_cli::ApiKeyArgs),
+    /// Manage external provider configuration
+    Provider(provider_cli::ProviderArgs),
     /// Manage Cloudflare Pages secrets
     Secret(secret_cli::SecretArgs),
     /// Manage agent sessions, protocols, workers, and memory
@@ -592,6 +762,9 @@ enum AuthCommand {
     Init(commands::auth::init::InitAuthArgs),
     /// Issue credentials for a registered auth provider
     Issue(commands::auth::issue::IssueAuthArgs),
+    /// Print the logged-in user's API token to a pipe (refreshes it when it
+    /// is about to expire; refuses to print to a terminal)
+    Token(commands::auth::token::TokenAuthArgs),
     /// Remove a profile's stored credentials
     Logout(LogoutArgs),
     /// List registered profiles (active marked with *)
@@ -608,6 +781,24 @@ struct LoginArgs {
     /// On `auth login`, this overrides the global `--profile`.
     #[arg(long)]
     profile: Option<String>,
+
+    /// Log in without a local callback server, for when the browser runs on
+    /// another machine (SSH, containers). The CLI prints the login URL and a
+    /// code; after signing in, enter that code in the browser. By default the
+    /// CLI listens on 127.0.0.1 (port 42813, 42814 or 42815) and the browser
+    /// returns there.
+    #[arg(long)]
+    no_browser: bool,
+}
+
+impl LoginArgs {
+    fn method(&self) -> auth::LoginMethod {
+        if self.no_browser {
+            auth::LoginMethod::Relay
+        } else {
+            auth::LoginMethod::Loopback
+        }
+    }
 }
 
 #[derive(Args)]
@@ -677,12 +868,10 @@ async fn resolve_token(cli: &Cli, profile: &str) -> Option<auth::ApiBearerToken>
 
 /// Build an OAuthConfig from CLI args.
 fn build_oauth_config(cli: &Cli) -> auth::OAuthConfig {
-    let redirect_uri = format!("{}/v1/auth/cli/callback", cli.api_url.trim_end_matches('/'));
     auth::OAuthConfig {
         cognito_domain: cli.cognito_domain.clone(),
         client_id: cli.cognito_client_id.clone(),
         client_secret: cli.cognito_client_secret.clone().unwrap_or_default(),
-        redirect_uri,
         scopes: auth::DEFAULT_OAUTH_SCOPES
             .iter()
             .map(|scope| (*scope).to_string())
@@ -694,6 +883,7 @@ fn build_oauth_config(cli: &Cli) -> auth::OAuthConfig {
 async fn build_config(cli: &Cli, profile: &str) -> Configuration {
     let mut config = Configuration::new();
     config.base_path = cli.api_url.clone();
+    config.client = client::sdk_http_client();
     config.bearer_access_token = resolve_token(cli, profile).await.map(|token| token.value);
     config
 }
@@ -752,6 +942,7 @@ async fn build_config_with_auth(
 ) -> (Configuration, Option<AuthDiagnostics>) {
     let mut config = Configuration::new();
     config.base_path = cli.api_url.clone();
+    config.client = client::sdk_http_client();
     let resolved = resolve_token(cli, profile).await;
     let diagnostics = Some(AuthDiagnostics {
         profile: Some(profile.to_string()),
@@ -778,6 +969,7 @@ async fn main() {
 
 async fn run() -> Result<()> {
     let cli = Cli::parse();
+    client::set_platform_id(cli.platform_id.as_deref())?;
 
     // Resolve the profile to use for this invocation. For most commands this
     // is the active profile (or the value of --profile / TACHYON_PROFILE for a
@@ -797,7 +989,7 @@ async fn run() -> Result<()> {
                     .clone()
                     .or_else(|| cli.profile.clone())
                     .unwrap_or_else(|| auth::DEFAULT_PROFILE.to_string());
-                auth::login(&oauth_config, &cli.api_url, &target).await
+                auth::login(&oauth_config, &cli.api_url, &target, login_args.method()).await
             }
             AuthCommand::Init(init_args) => {
                 commands::auth::init::run(init_args, cli.config.as_deref())
@@ -812,6 +1004,15 @@ async fn run() -> Result<()> {
                     &cli.api_url,
                     token,
                     &tenant_arg,
+                )
+                .await
+            }
+            AuthCommand::Token(token_args) => {
+                commands::auth::token::run(
+                    token_args,
+                    &build_oauth_config(&cli),
+                    &active,
+                    cli.api_key.is_some(),
                 )
                 .await
             }
@@ -852,7 +1053,7 @@ async fn run() -> Result<()> {
                 .clone()
                 .or_else(|| cli.profile.clone())
                 .unwrap_or_else(|| auth::DEFAULT_PROFILE.to_string());
-            auth::login(&oauth_config, &cli.api_url, &target).await
+            auth::login(&oauth_config, &cli.api_url, &target, login_args.method()).await
         }
         Commands::Logout(logout_args) => {
             let target = logout_args
@@ -889,6 +1090,20 @@ async fn run() -> Result<()> {
             )
             .await
         }
+        Commands::Data(args) => {
+            let project_config = config::loader::load(cli.config.as_deref())?;
+            let tenant_arg = tenant_arg(&cli, project_config.as_ref());
+            let config = build_config(&cli, &active).await;
+            let tenant_id = resolve::resolve_tenant_id(&config, tenant_arg, &active).await?;
+            data_cli::run(args, &config, &tenant_id).await
+        }
+        Commands::FeatureFlag(args) => {
+            let project_config = config::loader::load(cli.config.as_deref())?;
+            let tenant_arg = tenant_arg(&cli, project_config.as_ref());
+            let config = build_config(&cli, &active).await;
+            let tenant_id = resolve::resolve_tenant_id(&config, tenant_arg, &active).await?;
+            feature_flag_cli::run(args, &config, &tenant_id).await
+        }
         Commands::Org(args) => {
             let project_config = config::loader::load(cli.config.as_deref())?;
             let tenant_arg = tenant_arg(&cli, project_config.as_ref());
@@ -902,6 +1117,17 @@ async fn run() -> Result<()> {
             let config = build_config(&cli, &active).await;
             let tenant_id = resolve::resolve_tenant_id(&config, tenant_arg, &active).await?;
             api_key_cli::run(args, &config, &tenant_id).await
+        }
+        Commands::Provider(args) => {
+            let (project_config, searched_paths) = load_project_config_for_context(&cli, None)?;
+            let tenant_arg = strict_tenant_arg(
+                &cli,
+                project_config.as_ref(),
+                &searched_paths,
+                "provider credentials",
+            )?;
+            let (config, tenant_id) = build_tenant_config(&cli, &active, tenant_arg).await?;
+            provider_cli::run(args, &config, &tenant_id).await
         }
         Commands::Secret(args) => {
             let project_config = config::loader::load(cli.config.as_deref())?;
@@ -921,11 +1147,15 @@ async fn run() -> Result<()> {
             worker_cli::run(args, &config, &tenant_id, &active).await
         }
         Commands::Iac(args) => {
-            let project_config = config::loader::load(cli.config.as_deref())?;
-            let tenant_arg = tenant_arg(&cli, project_config.as_ref());
             let config = build_config(&cli, &active).await;
-            let tenant_id = resolve::resolve_tenant_id(&config, tenant_arg, &active).await?;
-            iac_cli::run(args, &config, &tenant_id).await
+            if matches!(&args.command, iac_cli::IacCommand::HostConfig { .. }) {
+                iac_cli::run(args, &config, "").await
+            } else {
+                let project_config = config::loader::load(cli.config.as_deref())?;
+                let tenant_arg = tenant_arg(&cli, project_config.as_ref());
+                let tenant_id = resolve::resolve_tenant_id(&config, tenant_arg, &active).await?;
+                iac_cli::run(args, &config, &tenant_id).await
+            }
         }
         Commands::Manifest(args) => {
             if manifest::needs_tenant(args) {
@@ -940,12 +1170,27 @@ async fn run() -> Result<()> {
                 manifest::run(args, None, None).await
             }
         }
+        // ERP replays go to the Host tenant: skip the project config and
+        // the ordinary tenant resolution, which they do not use.
+        Commands::Ops(ops_cli::OpsArgs {
+            command: ops_cli::OpsCommand::ErpReplays { command },
+        }) => {
+            let config = build_config(&cli, &active).await;
+            erp_replay_cli::run(command, &config, cli.api_key.is_some()).await
+        }
         Commands::Ops(args) => {
             let project_config = config::loader::load(cli.config.as_deref())?;
             let tenant_arg = tenant_arg(&cli, project_config.as_ref());
             let config = build_config(&cli, &active).await;
             let tenant_id = resolve::resolve_tenant_id(&config, tenant_arg, &active).await?;
-            ops_cli::run(args, &config, &tenant_id, cli.config.as_deref()).await
+            ops_cli::run(
+                args,
+                &config,
+                &tenant_id,
+                cli.config.as_deref(),
+                cli.api_key.is_some(),
+            )
+            .await
         }
         Commands::Image(args) => {
             let project_config = config::loader::load(cli.config.as_deref())?;

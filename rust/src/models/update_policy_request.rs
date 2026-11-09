@@ -18,23 +18,15 @@ pub struct UpdatePolicyRequest {
         rename = "actionPatternsToAdd",
         skip_serializing_if = "Option::is_none"
     )]
-    pub action_patterns_to_add:
-        Option<Vec<models::PolicyActionPatternRequest>>,
+    pub action_patterns_to_add: Option<Vec<models::PolicyActionPatternRequest>>,
     #[serde(
         rename = "actionPatternsToRemove",
         skip_serializing_if = "Option::is_none"
     )]
-    pub action_patterns_to_remove:
-        Option<Vec<models::RemovePolicyActionPatternRequest>>,
-    #[serde(
-        rename = "actionsToAdd",
-        skip_serializing_if = "Option::is_none"
-    )]
+    pub action_patterns_to_remove: Option<Vec<models::RemovePolicyActionPatternRequest>>,
+    #[serde(rename = "actionsToAdd", skip_serializing_if = "Option::is_none")]
     pub actions_to_add: Option<Vec<models::PolicyActionRequest>>,
-    #[serde(
-        rename = "actionsToRemove",
-        skip_serializing_if = "Option::is_none"
-    )]
+    #[serde(rename = "actionsToRemove", skip_serializing_if = "Option::is_none")]
     pub actions_to_remove: Option<Vec<String>>,
     /// Policy description
     #[serde(

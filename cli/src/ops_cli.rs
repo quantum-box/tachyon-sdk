@@ -61,6 +61,13 @@ pub enum OpsCommand {
         #[command(subcommand)]
         command: SentryCommand,
     },
+    /// Audited replay of delivered Field usage / accounting records
+    /// (request, approve, execute, revoke, get). Host tenant only, human
+    /// login session only.
+    ErpReplays {
+        #[command(subcommand)]
+        command: crate::erp_replay_cli::ErpReplaysCommand,
+    },
 }
 
 #[derive(Debug, Clone, Subcommand)]
@@ -280,6 +287,7 @@ pub enum SentryIssuesCommand {
     },
     /// Get Sentry issue details
     View {
+        /// Numeric Sentry issue ID or short ID (for example TACHYON-API-1A2)
         issue_id: String,
         /// Print the API response as JSON
         #[arg(long)]
@@ -287,6 +295,25 @@ pub enum SentryIssuesCommand {
     },
     /// Mark a Sentry issue as resolved
     Resolve {
+        /// Numeric Sentry issue ID or short ID (for example TACHYON-API-1A2)
+        issue_id: String,
+        /// Print the API response as JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// Reopen a resolved or archived Sentry issue
+    #[command(visible_alias = "reopen")]
+    Unresolve {
+        /// Numeric Sentry issue ID or short ID (for example TACHYON-API-1A2)
+        issue_id: String,
+        /// Print the API response as JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// Archive a Sentry issue until it is manually reopened
+    #[command(visible_alias = "ignore")]
+    Archive {
+        /// Numeric Sentry issue ID or short ID (for example TACHYON-API-1A2)
         issue_id: String,
         /// Print the API response as JSON
         #[arg(long)]
@@ -294,9 +321,18 @@ pub enum SentryIssuesCommand {
     },
     /// Assign a Sentry issue to a user
     Assign {
+        /// Numeric Sentry issue ID or short ID (for example TACHYON-API-1A2)
         issue_id: String,
         /// Sentry user id, username, or email
         user: String,
+        /// Print the API response as JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// Clear the assignee of a Sentry issue
+    Unassign {
+        /// Numeric Sentry issue ID or short ID (for example TACHYON-API-1A2)
+        issue_id: String,
         /// Print the API response as JSON
         #[arg(long)]
         json: bool,
@@ -308,64 +344,91 @@ pub enum SentryIssuesCommand {
 #[derive(Debug, Deserialize, Serialize)]
 struct OpsDeploymentResponse {
     id: String,
-    #[serde(default)]
-    service: Option<String>,
-    #[serde(default)]
-    environment: Option<String>,
-    #[serde(default)]
-    status: Option<String>,
-    #[serde(default)]
-    version: Option<String>,
-    #[serde(default)]
-    created_at: Option<String>,
+    operator_id: String,
+    service_name: String,
+    version: String,
+    environment: String,
+    status: String,
+    ci_provider: Option<String>,
+    ci_run_url: Option<String>,
+    ci_repository: Option<String>,
+    ci_branch: Option<String>,
+    ci_commit_sha: Option<String>,
+    error_message: Option<String>,
+    started_at: String,
+    completed_at: Option<String>,
+    duration_ms: Option<i64>,
+    created_at: String,
+    updated_at: String,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct OpsDeploymentSummaryResponse {
+    id: String,
+    service_name: String,
+    version: String,
+    environment: String,
+    status: String,
+    ci_branch: Option<String>,
+    ci_commit_sha: Option<String>,
+    ci_run_url: Option<String>,
+    started_at: String,
+    completed_at: Option<String>,
+    duration_ms: Option<i64>,
 }
 
 #[derive(Debug, Deserialize)]
 struct OpsDeploymentListResponse {
-    deployments: Vec<OpsDeploymentResponse>,
+    deployments: Vec<OpsDeploymentSummaryResponse>,
+    total: i64,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
 struct ScenarioReportResponse {
-    #[serde(default)]
-    run_id: Option<String>,
-    #[serde(default)]
-    status: Option<String>,
-    #[serde(default)]
-    total: Option<i32>,
-    #[serde(default)]
-    passed: Option<i32>,
-    #[serde(default)]
-    failed: Option<i32>,
-    #[serde(default)]
-    created_at: Option<String>,
+    id: String,
+    status: String,
+    total_scenarios: i32,
+    passed_scenarios: i32,
+    failed_scenarios: i32,
+    total_duration_ms: i64,
+    ci_repository: Option<String>,
+    ci_branch: Option<String>,
+    ci_commit_sha: Option<String>,
+    ci_pull_request_number: Option<i64>,
+    created_at: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct ScenarioReportListResponse {
+    test_runs: Vec<ScenarioReportResponse>,
+    total: i64,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
 struct CodingJobResponse {
     coding_job_id: String,
-    #[serde(default)]
-    provider: Option<String>,
-    #[serde(default)]
-    status: Option<String>,
-    #[serde(default)]
-    prompt: Option<String>,
-    #[serde(default)]
+    provider: String,
+    status: String,
+    prompt: String,
     context_paths: Vec<String>,
-    #[serde(default)]
+    output_profile: Option<String>,
+    environment: HashMap<String, String>,
+    metadata: Value,
+    container_execution: Option<Value>,
+    executor: Value,
     normalized_output: Option<Value>,
-    #[serde(default)]
+    raw_events: Option<Vec<Value>>,
+    artifacts: Option<Vec<Value>>,
+    billing: Option<Value>,
     error_message: Option<String>,
-    #[serde(default)]
+    exit_code: Option<i32>,
     session_id: Option<String>,
-    #[serde(default)]
     resume_session_id: Option<String>,
-    #[serde(default)]
+    use_worktree: bool,
+    auto_merge: bool,
     assigned_worker_id: Option<String>,
-    #[serde(default)]
-    tool_name: Option<String>,
-    #[serde(default)]
-    created_at: Option<String>,
+    created_at: String,
+    updated_at: String,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -529,6 +592,12 @@ struct SentryIssueResponse {
     assigned_to: Option<SentryAssignedTo>,
     #[serde(default, alias = "latestEvent")]
     latest_event: Option<SentryEventResponse>,
+    #[serde(
+        default,
+        alias = "latestEventDetails",
+        skip_serializing_if = "Option::is_none"
+    )]
+    latest_event_details: Option<SentryEventDetails>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -561,6 +630,115 @@ struct SentryEventResponse {
     tags: BTreeMap<String, String>,
 }
 
+#[derive(Debug, Deserialize, Serialize)]
+struct SentryEventDetails {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    platform: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    environment: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    release: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    transaction: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    exceptions: Vec<SentryExceptionDetails>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    breadcrumbs: Vec<SentryBreadcrumbDetails>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    request: Option<SentryRequestDetails>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    contexts: Option<SentryEventContexts>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct SentryExceptionDetails {
+    #[serde(default, rename = "type", skip_serializing_if = "Option::is_none")]
+    exception_type: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    value: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    mechanism: Option<SentryExceptionMechanism>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    frames: Vec<SentryStackFrame>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct SentryExceptionMechanism {
+    #[serde(default, rename = "type", skip_serializing_if = "Option::is_none")]
+    mechanism_type: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    handled: Option<bool>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct SentryStackFrame {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    function: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    module: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    filename: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    line: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    column: Option<u64>,
+    #[serde(
+        default,
+        rename = "in_app",
+        alias = "inApp",
+        skip_serializing_if = "Option::is_none"
+    )]
+    in_app: Option<bool>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct SentryBreadcrumbDetails {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    timestamp: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    category: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    r#type: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    level: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    message: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct SentryRequestDetails {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    method: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    url: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct SentryEventContexts {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    browser: Option<SentryContextDetails>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    os: Option<SentryContextDetails>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    device: Option<SentryContextDetails>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    runtime: Option<SentryContextDetails>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct SentryContextDetails {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    version: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    family: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    brand: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    model: Option<String>,
+}
+
 fn deserialize_sentry_event_tags<'de, D>(
     deserializer: D,
 ) -> std::result::Result<BTreeMap<String, String>, D::Error>
@@ -579,11 +757,19 @@ struct SentryAssignRequest {
     user: String,
 }
 
+#[derive(Debug, Serialize)]
+struct SentryStatusRequest {
+    status: &'static str,
+}
+
 // ---- Handlers ----
 
 async fn run_deployments_list(api: &ApiClient, json: bool) -> Result<()> {
     let response: OpsDeploymentListResponse = api.get("/v1/ops/deployments").await?;
-    let deps = response.deployments;
+    let OpsDeploymentListResponse {
+        deployments: deps,
+        total,
+    } = response;
     if json {
         return print_json(&deps);
     }
@@ -592,7 +778,7 @@ async fn run_deployments_list(api: &ApiClient, json: bool) -> Result<()> {
         return Ok(());
     }
     println!(
-        "{:<28}  {:<20}  {:<12}  {:<12}  {:<16}  CREATED AT",
+        "{:<28}  {:<20}  {:<12}  {:<12}  {:<16}  STARTED AT",
         "ID", "SERVICE", "ENVIRONMENT", "STATUS", "VERSION"
     );
     println!(
@@ -603,13 +789,14 @@ async fn run_deployments_list(api: &ApiClient, json: bool) -> Result<()> {
         println!(
             "{:<28}  {:<20}  {:<12}  {:<12}  {:<16}  {}",
             d.id,
-            truncate(d.service.as_deref().unwrap_or("-"), 20),
-            d.environment.as_deref().unwrap_or("-"),
-            d.status.as_deref().unwrap_or("-"),
-            d.version.as_deref().unwrap_or("-"),
-            d.created_at.as_deref().unwrap_or("-"),
+            truncate(&d.service_name, 20),
+            d.environment,
+            d.status,
+            d.version,
+            d.started_at,
         );
     }
+    println!("Total: {total}");
     Ok(())
 }
 
@@ -619,16 +806,20 @@ async fn run_deployments_get(api: &ApiClient, id: &str, json: bool) -> Result<()
         return print_json(&d);
     }
     println!("ID:          {}", d.id);
-    println!("Service:     {}", d.service.as_deref().unwrap_or("-"));
-    println!("Environment: {}", d.environment.as_deref().unwrap_or("-"));
-    println!("Status:      {}", d.status.as_deref().unwrap_or("-"));
-    println!("Version:     {}", d.version.as_deref().unwrap_or("-"));
-    println!("Created:     {}", d.created_at.as_deref().unwrap_or("-"));
+    println!("Service:     {}", d.service_name);
+    println!("Environment: {}", d.environment);
+    println!("Status:      {}", d.status);
+    println!("Version:     {}", d.version);
+    println!("Created:     {}", d.created_at);
     Ok(())
 }
 
 async fn run_reports_list(api: &ApiClient, json: bool) -> Result<()> {
-    let reports: Vec<ScenarioReportResponse> = api.get("/v1/ops/scenario-reports").await?;
+    let response: ScenarioReportListResponse = api.get("/v1/ops/scenario-reports").await?;
+    let ScenarioReportListResponse {
+        test_runs: reports,
+        total,
+    } = response;
     if json {
         return print_json(&reports);
     }
@@ -647,20 +838,10 @@ async fn run_reports_list(api: &ApiClient, json: bool) -> Result<()> {
     for r in &reports {
         println!(
             "{:<28}  {:<10}  {:<8}  {:<8}  {:<8}  {}",
-            r.run_id.as_deref().unwrap_or("-"),
-            r.status.as_deref().unwrap_or("-"),
-            r.total
-                .map(|v| v.to_string())
-                .unwrap_or_else(|| "-".to_string()),
-            r.passed
-                .map(|v| v.to_string())
-                .unwrap_or_else(|| "-".to_string()),
-            r.failed
-                .map(|v| v.to_string())
-                .unwrap_or_else(|| "-".to_string()),
-            r.created_at.as_deref().unwrap_or("-"),
+            r.id, r.status, r.total_scenarios, r.passed_scenarios, r.failed_scenarios, r.created_at,
         );
     }
+    println!("Total: {total}");
     Ok(())
 }
 
@@ -964,15 +1145,15 @@ fn resolve_coding_job_cwd(
     }
 }
 
-fn is_terminal_coding_job_status(status: Option<&str>) -> bool {
-    matches!(status, Some("succeeded" | "failed" | "cancelled"))
+fn is_terminal_coding_job_status(status: &str) -> bool {
+    matches!(status, "succeeded" | "failed" | "cancelled")
 }
 
 fn print_coding_job_created(job: &CodingJobResponse) {
     println!("Coding job created.");
     println!("Job ID:   {}", job.coding_job_id);
-    println!("Provider: {}", job.provider.as_deref().unwrap_or("-"));
-    println!("Status:   {}", job.status.as_deref().unwrap_or("-"));
+    println!("Provider: {}", job.provider);
+    println!("Status:   {}", job.status);
     if let Some(worker_id) = &job.assigned_worker_id {
         println!("Worker:   {worker_id}");
     }
@@ -984,7 +1165,7 @@ fn print_coding_job_created(job: &CodingJobResponse) {
 }
 
 fn print_coding_job_final(job: &CodingJobResponse) -> Result<()> {
-    println!("Final status: {}", job.status.as_deref().unwrap_or("-"));
+    println!("Final status: {}", job.status);
     if let Some(output) = &job.normalized_output {
         if let Some(text) = output.pointer("/body/text").and_then(Value::as_str) {
             println!("{text}");
@@ -1013,7 +1194,7 @@ async fn wait_coding_job(
             .get(&format!("/v1/agent/coding-jobs/{coding_job_id}"))
             .await?;
         let job = response.job;
-        if is_terminal_coding_job_status(job.status.as_deref()) {
+        if is_terminal_coding_job_status(&job.status) {
             return Ok(job);
         }
         if started_at.elapsed() >= timeout {
@@ -1163,21 +1344,14 @@ async fn run_coding_jobs_list(api: &ApiClient, json: bool) -> Result<()> {
         return Ok(());
     }
     println!(
-        "{:<28}  {:<16}  {:<12}  {:<20}  CREATED AT",
-        "JOB ID", "PROVIDER", "STATUS", "TOOL"
+        "{:<28}  {:<16}  {:<12}  CREATED AT",
+        "JOB ID", "PROVIDER", "STATUS"
     );
-    println!(
-        "{:-<28}  {:-<16}  {:-<12}  {:-<20}  {:-<19}",
-        "", "", "", "", ""
-    );
+    println!("{:-<28}  {:-<16}  {:-<12}  {:-<19}", "", "", "", "");
     for j in &jobs {
         println!(
-            "{:<28}  {:<16}  {:<12}  {:<20}  {}",
-            j.coding_job_id,
-            j.provider.as_deref().unwrap_or("-"),
-            j.status.as_deref().unwrap_or("-"),
-            truncate(j.tool_name.as_deref().unwrap_or("-"), 20),
-            j.created_at.as_deref().unwrap_or("-"),
+            "{:<28}  {:<16}  {:<12}  {}",
+            j.coding_job_id, j.provider, j.status, j.created_at,
         );
     }
     Ok(())
@@ -1338,17 +1512,18 @@ async fn run_sentry_issues_list(
     }
 
     println!(
-        "{:<14}  {:<10}  {:<10}  {:<8}  {:<18}  TITLE",
-        "ISSUE", "PROJECT", "STATUS", "COUNT", "LAST SEEN"
+        "{:<14}  {:<12}  {:<10}  {:<10}  {:<8}  {:<18}  TITLE",
+        "ISSUE", "ID", "PROJECT", "STATUS", "COUNT", "LAST SEEN"
     );
     println!(
-        "{:-<14}  {:-<10}  {:-<10}  {:-<8}  {:-<18}  {:-<60}",
-        "", "", "", "", "", ""
+        "{:-<14}  {:-<12}  {:-<10}  {:-<10}  {:-<8}  {:-<18}  {:-<60}",
+        "", "", "", "", "", "", ""
     );
     for issue in &issues {
         println!(
-            "{:<14}  {:<10}  {:<10}  {:<8}  {:<18}  {}",
+            "{:<14}  {:<12}  {:<10}  {:<10}  {:<8}  {:<18}  {}",
             sentry_issue_label(issue),
+            issue.id,
             truncate(issue.project.as_deref().unwrap_or("-"), 10),
             issue.status.as_deref().unwrap_or("-"),
             sentry_value_label(issue.count.as_ref()),
@@ -1381,6 +1556,40 @@ async fn run_sentry_issue_resolve(api: &ApiClient, issue_id: &str, json: bool) -
         return print_json(&issue);
     }
     println!("Sentry issue {} resolved.", sentry_issue_label(&issue));
+    Ok(())
+}
+
+async fn run_sentry_issue_set_status(
+    api: &ApiClient,
+    issue_id: &str,
+    status: &'static str,
+    done_label: &str,
+    json: bool,
+) -> Result<()> {
+    let issue: SentryIssueResponse = api
+        .post(
+            &format!("/v1/ops/sentry/issues/{issue_id}/status"),
+            &SentryStatusRequest { status },
+        )
+        .await?;
+    if json {
+        return print_json(&issue);
+    }
+    println!("Sentry issue {} {done_label}.", sentry_issue_label(&issue));
+    Ok(())
+}
+
+async fn run_sentry_issue_unassign(api: &ApiClient, issue_id: &str, json: bool) -> Result<()> {
+    let issue: SentryIssueResponse = api
+        .post(
+            &format!("/v1/ops/sentry/issues/{issue_id}/unassign"),
+            &json!({}),
+        )
+        .await?;
+    if json {
+        return print_json(&issue);
+    }
+    println!("Sentry issue {} unassigned.", sentry_issue_label(&issue));
     Ok(())
 }
 
@@ -1500,6 +1709,120 @@ fn print_sentry_issue(issue: &SentryIssueResponse) {
         "Permalink:    {}",
         issue.permalink.as_deref().unwrap_or("-")
     );
+    if let Some(details) = issue.latest_event_details.as_ref() {
+        print_sentry_event_details(details);
+    }
+}
+
+fn print_sentry_event_details(details: &SentryEventDetails) {
+    println!("Latest Event Details:");
+    for (label, value) in [
+        ("Platform", details.platform.as_deref()),
+        ("Environment", details.environment.as_deref()),
+        ("Release", details.release.as_deref()),
+        ("Transaction", details.transaction.as_deref()),
+    ] {
+        if let Some(value) = value {
+            println!("  {label}: {value}");
+        }
+    }
+
+    for (exception_index, exception) in details.exceptions.iter().enumerate() {
+        println!(
+            "  Exception {}: {}{}",
+            exception_index + 1,
+            exception.exception_type.as_deref().unwrap_or("Unknown"),
+            exception
+                .value
+                .as_deref()
+                .map(|value| format!(": {value}"))
+                .unwrap_or_default()
+        );
+        if let Some(mechanism) = exception.mechanism.as_ref() {
+            println!(
+                "    Mechanism: {}{}",
+                mechanism.mechanism_type.as_deref().unwrap_or("-"),
+                mechanism
+                    .handled
+                    .map(|handled| format!(" (handled: {handled})"))
+                    .unwrap_or_default()
+            );
+        }
+        for (frame_index, frame) in exception.frames.iter().enumerate() {
+            let location = match (frame.filename.as_deref(), frame.line, frame.column) {
+                (Some(filename), Some(line), Some(column)) => {
+                    format!("{filename}:{line}:{column}")
+                }
+                (Some(filename), Some(line), None) => format!("{filename}:{line}"),
+                (Some(filename), None, _) => filename.to_string(),
+                (None, Some(line), Some(column)) => format!("{line}:{column}"),
+                (None, Some(line), None) => line.to_string(),
+                (None, None, _) => "<unknown location>".to_string(),
+            };
+            let function = frame
+                .function
+                .as_deref()
+                .or(frame.module.as_deref())
+                .unwrap_or("<anonymous>");
+            let in_app = if frame.in_app == Some(true) {
+                " [in-app]"
+            } else {
+                ""
+            };
+            println!(
+                "    Frame {:>2}: {function} at {location}{in_app}",
+                frame_index + 1
+            );
+        }
+    }
+
+    if !details.breadcrumbs.is_empty() {
+        println!("  Breadcrumbs:");
+        for breadcrumb in &details.breadcrumbs {
+            let timestamp = breadcrumb.timestamp.as_deref().unwrap_or("-");
+            let category = breadcrumb.category.as_deref().unwrap_or("-");
+            let level = breadcrumb.level.as_deref().unwrap_or("-");
+            let breadcrumb_type = breadcrumb.r#type.as_deref().unwrap_or("-");
+            let message = breadcrumb.message.as_deref().unwrap_or("");
+            println!("    {timestamp}  {level}  {category} ({breadcrumb_type})  {message}");
+        }
+    }
+
+    if let Some(request) = details.request.as_ref() {
+        if request.method.is_some() || request.url.is_some() {
+            println!(
+                "  Request: {} {}",
+                request.method.as_deref().unwrap_or("-"),
+                request.url.as_deref().unwrap_or("-")
+            );
+        }
+    }
+
+    if let Some(contexts) = details.contexts.as_ref() {
+        for (label, context) in [
+            ("Browser", contexts.browser.as_ref()),
+            ("OS", contexts.os.as_ref()),
+            ("Device", contexts.device.as_ref()),
+            ("Runtime", contexts.runtime.as_ref()),
+        ] {
+            if let Some(context) = context {
+                let description = [
+                    context.name.as_deref(),
+                    context.version.as_deref(),
+                    context.family.as_deref(),
+                    context.brand.as_deref(),
+                    context.model.as_deref(),
+                ]
+                .into_iter()
+                .flatten()
+                .collect::<Vec<_>>()
+                .join(" ");
+                if !description.is_empty() {
+                    println!("  {label}: {description}");
+                }
+            }
+        }
+    }
 }
 
 fn normalize_mentions(mentions: &[String]) -> Result<Vec<String>> {
@@ -1868,6 +2191,7 @@ pub async fn run(
     config: &Configuration,
     tenant_id: &str,
     config_flag: Option<&Path>,
+    uses_api_key: bool,
 ) -> Result<()> {
     let api = ApiClient::new(config, tenant_id)?;
 
@@ -1985,6 +2309,11 @@ pub async fn run(
             } => run_notify_react(&api, thread_key, emoji, ts.as_deref(), *json).await,
             NotifyCommand::Users { bot_token: _, json } => run_notify_users(&api, *json).await,
         },
+        // `main` dispatches this before tenant resolution; kept so the
+        // match stays exhaustive. Sent to the Host tenant either way.
+        OpsCommand::ErpReplays { command } => {
+            crate::erp_replay_cli::run(command, config, uses_api_key).await
+        }
         OpsCommand::Sentry { command } => match command {
             SentryCommand::Issues { command } => match command {
                 SentryIssuesCommand::List {
@@ -2013,6 +2342,16 @@ pub async fn run(
                     user,
                     json,
                 } => run_sentry_issue_assign(&api, issue_id, user, *json).await,
+                SentryIssuesCommand::Unresolve { issue_id, json } => {
+                    run_sentry_issue_set_status(&api, issue_id, "unresolved", "reopened", *json)
+                        .await
+                }
+                SentryIssuesCommand::Archive { issue_id, json } => {
+                    run_sentry_issue_set_status(&api, issue_id, "ignored", "archived", *json).await
+                }
+                SentryIssuesCommand::Unassign { issue_id, json } => {
+                    run_sentry_issue_unassign(&api, issue_id, *json).await
+                }
             },
         },
     }

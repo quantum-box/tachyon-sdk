@@ -24,10 +24,7 @@ pub struct PolicyActionRequest {
 
 impl PolicyActionRequest {
     /// Policy action entry
-    pub fn new(
-        action_full_name: String,
-        effect: String,
-    ) -> PolicyActionRequest {
+    pub fn new(action_full_name: String, effect: String) -> PolicyActionRequest {
         PolicyActionRequest {
             action_full_name,
             effect,

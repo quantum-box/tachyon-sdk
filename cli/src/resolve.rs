@@ -15,6 +15,20 @@ fn looks_like_id(value: &str) -> bool {
     }
 }
 
+/// Returns true if `value` is `prefix` followed by a 26-character lowercase
+/// Crockford-base32 ULID, the shape of generated Tachyon IDs such as
+/// `sa_01m4wc9n8za0dwvgbkye2efpvm`. A name can have this shape too, so
+/// callers check names first and use this only as a last resort.
+pub(crate) fn is_canonical_id(value: &str, prefix: &str) -> bool {
+    value.strip_prefix(prefix).is_some_and(|ulid| {
+        ulid.len() == 26
+            && ulid.chars().all(|c| {
+                c.is_ascii_digit()
+                    || (c.is_ascii_lowercase() && !matches!(c, 'i' | 'l' | 'o' | 'u'))
+            })
+    })
+}
+
 // --- Minimal response types for resolution ---
 
 #[derive(Debug, Deserialize)]
@@ -29,12 +43,11 @@ struct AppEntry {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct OperatorEntry {
     id: String,
-    #[serde(default)]
-    name: Option<String>,
-    #[serde(default)]
-    alias: Option<String>,
+    name: String,
+    operator_name: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -45,10 +58,19 @@ struct WorkerEntry {
 }
 
 #[derive(Debug, Deserialize)]
+struct WorkerListResponse {
+    workers: Vec<WorkerEntry>,
+}
+
+#[derive(Debug, Deserialize)]
 struct ProtocolEntry {
     id: String,
-    #[serde(default)]
-    name: Option<String>,
+    protocol_name: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct ProtocolListResponse {
+    items: Vec<ProtocolEntry>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -56,6 +78,11 @@ struct IntegrationEntry {
     id: String,
     #[serde(default)]
     name: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct IntegrationListResponse {
+    integrations: Vec<IntegrationEntry>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -120,16 +147,16 @@ pub async fn resolve_tenant_id(
         return Ok(op.id);
     }
 
-    // Fall back to listing operators and matching by name or alias
+    // Fall back to listing operators and matching by display or operator name.
     let ops: Vec<OperatorEntry> = api.get("/v1/auth/operators/by-user").await?;
     let matches: Vec<_> = ops
         .iter()
-        .filter(|o| o.alias.as_deref() == Some(name_or_id) || o.name.as_deref() == Some(name_or_id))
+        .filter(|o| o.operator_name == name_or_id || o.name == name_or_id)
         .collect();
 
     match matches.len() {
         0 => Err(anyhow!(
-            "no operator found with name or alias '{name_or_id}'"
+            "no operator found with name or operator name '{name_or_id}'"
         )),
         1 => {
             eprintln!("Resolved tenant '{}' → {}", name_or_id, matches[0].id);
@@ -180,7 +207,8 @@ pub async fn resolve_worker_id(api: &ApiClient, name_or_id: &str) -> Result<Stri
         return Ok(name_or_id.to_string());
     }
 
-    let workers: Vec<WorkerEntry> = api.get("/v1/agent/workers").await?;
+    let response: WorkerListResponse = api.get("/v1/agent/workers").await?;
+    let workers = response.workers;
     let matches: Vec<_> = workers
         .iter()
         .filter(|w| w.name.as_deref() == Some(name_or_id))
@@ -210,10 +238,11 @@ pub async fn resolve_protocol_id(api: &ApiClient, name_or_id: &str) -> Result<St
         return Ok(name_or_id.to_string());
     }
 
-    let protocols: Vec<ProtocolEntry> = api.get("/v1/llms/agent-protocols").await?;
+    let response: ProtocolListResponse = api.get("/v1/llms/agent-protocols").await?;
+    let protocols = response.items;
     let matches: Vec<_> = protocols
         .iter()
-        .filter(|p| p.name.as_deref() == Some(name_or_id))
+        .filter(|p| p.protocol_name == name_or_id)
         .collect();
 
     match matches.len() {
@@ -240,7 +269,8 @@ pub async fn resolve_integration_id(api: &ApiClient, name_or_id: &str) -> Result
         return Ok(name_or_id.to_string());
     }
 
-    let integrations: Vec<IntegrationEntry> = api.get("/v1/integrations").await?;
+    let response: IntegrationListResponse = api.get("/v1/integrations").await?;
+    let integrations = response.integrations;
     let matches: Vec<_> = integrations
         .iter()
         .filter(|i| i.name.as_deref() == Some(name_or_id))
@@ -270,20 +300,23 @@ pub async fn resolve_service_account_id(
     tenant_id: &str,
     name_or_id: &str,
 ) -> Result<String> {
-    if looks_like_id(name_or_id) {
-        return Ok(name_or_id.to_string());
-    }
-
+    // Names are free-form and may look like IDs (`sa_marketingteam`), so
+    // always consult the list: exact ID first, then name.
     let response: ServiceAccountListResponse = api
         .get_query("/v1/auth/service-accounts", &[("operator_id", tenant_id)])
         .await?;
     let accounts = response.into_vec();
+    if let Some(account) = accounts.iter().find(|s| s.id == name_or_id) {
+        return Ok(account.id.clone());
+    }
     let matches: Vec<_> = accounts
         .iter()
         .filter(|s| s.name.as_deref() == Some(name_or_id))
         .collect();
 
     match matches.len() {
+        // An ID the list does not show is left for the server to judge.
+        0 if is_canonical_id(name_or_id, "sa_") => Ok(name_or_id.to_string()),
         0 => Err(anyhow!("no service account found with name '{name_or_id}'")),
         1 => {
             eprintln!(
@@ -295,9 +328,44 @@ pub async fn resolve_service_account_id(
         _ => {
             let ids: Vec<_> = matches.iter().map(|s| s.id.as_str()).collect();
             Err(anyhow!(
-                "multiple service accounts match name '{name_or_id}': {}",
+                "multiple service accounts match name '{name_or_id}': {}. \
+                 Pass one of these IDs instead of the name; \
+                 `tachyon org service-accounts list` shows when each was created",
                 ids.join(", ")
             ))
         }
+    }
+}
+
+#[cfg(test)]
+mod response_contract_tests {
+    use super::{is_canonical_id, OperatorEntry, ProtocolEntry};
+
+    #[test]
+    fn canonical_id_requires_prefix_and_26_char_ulid() {
+        assert!(is_canonical_id("sa_01m4wc9n8za0dwvgbkye2efpvm", "sa_"));
+        assert!(!is_canonical_id("sa_marketingteam", "sa_"));
+        assert!(!is_canonical_id("pol_01m4wc9n8za0dwvgbkye2efpvm", "sa_"));
+        assert!(!is_canonical_id("sa_01M4WC9N8ZA0DWVGBKYE2EFPVM", "sa_"));
+        assert!(!is_canonical_id("pol_financereader", "pol_"));
+        assert!(!is_canonical_id("sa_abcdefghijklmnopqrstuvwxyz", "sa_"));
+    }
+
+    #[test]
+    fn operator_entry_uses_api_field_names() {
+        let valid = r#"{"id":"tn_123","name":"Operator","operatorName":"operator-one"}"#;
+        let wrong = r#"{"id":"tn_123","name":"Operator","alias":"operator-one"}"#;
+
+        assert!(serde_json::from_str::<OperatorEntry>(valid).is_ok());
+        assert!(serde_json::from_str::<OperatorEntry>(wrong).is_err());
+    }
+
+    #[test]
+    fn protocol_entry_uses_api_field_names() {
+        let valid = r#"{"id":"ap_123","protocol_name":"protocol-one"}"#;
+        let wrong = r#"{"id":"ap_123","name":"protocol-one"}"#;
+
+        assert!(serde_json::from_str::<ProtocolEntry>(valid).is_ok());
+        assert!(serde_json::from_str::<ProtocolEntry>(wrong).is_err());
     }
 }

@@ -22,10 +22,7 @@ pub struct ToolCallArgs {
 
 impl ToolCallArgs {
     /// Represents tool call arguments
-    pub fn new(
-        args: Option<serde_json::Value>,
-        tool_id: String,
-    ) -> ToolCallArgs {
+    pub fn new(args: Option<serde_json::Value>, tool_id: String) -> ToolCallArgs {
         ToolCallArgs { args, tool_id }
     }
 }

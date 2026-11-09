@@ -20,6 +20,7 @@ fn isolated_command(home: &Path) -> Command {
         .env("XDG_CONFIG_HOME", home.join(".config"))
         .env("TACHYON_TENANT_ID", "tn_test1234567890")
         .env("TACHYON_API_KEY", "test-token")
+        .env_remove("TACHYON_IAC_APPLY_API_KEY")
         .env_remove("TACHYON_CONFIG")
         .env_remove("TACHYON_PROFILE")
         .env_remove("TACHYON_CHANGE_CONTROL_APPROVAL_TOKEN")
@@ -100,8 +101,192 @@ fn request_body(request: &str) -> &str {
         .unwrap()
 }
 
+fn has_bearer_token(request: &str, token: &str) -> bool {
+    let expected = format!("Bearer {token}");
+    request.lines().any(|line| {
+        line.split_once(':').is_some_and(|(name, value)| {
+            name.eq_ignore_ascii_case("authorization") && value.trim() == expected
+        })
+    })
+}
+
 fn request_json(request: &str) -> serde_json::Value {
     serde_json::from_str(request_body(request)).unwrap()
+}
+
+#[test]
+fn grants_list_reads_tenant_grants() {
+    let tmp = TempDir::new().unwrap();
+    let response = json!({
+        "grants": [{
+            "id": "igr_test",
+            "status": "active",
+            "resource_scope": {"kind": "list", "resources": ["quantum-box/tachyon-apps"]},
+            "managed_by_connection": false,
+            "installation": {
+                "id": "ins_test",
+                "provider": "github",
+                "kind": "organization",
+                "status": "active",
+                "external_installation_id": "12345",
+                "external_account_name": "quantum-box"
+            },
+            "created_at": "2026-09-22T00:00:00Z",
+            "updated_at": "2026-09-22T00:00:00Z",
+            "revoked_at": null
+        }]
+    })
+    .to_string();
+    let (api_url, rx, handle) = start_graphql_server(vec![response]);
+
+    let output = isolated_command(tmp.path())
+        .env("TACHYON_API_URL", api_url)
+        .args(["iac", "grants", "list", "--json"])
+        .output()
+        .expect("list tenant grants");
+
+    assert!(
+        output.status.success(),
+        "grant list failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let request = rx.recv_timeout(Duration::from_secs(1)).unwrap();
+    handle.join().unwrap();
+    assert!(request.starts_with("GET /v1/integrations/grants "));
+    let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(stdout[0]["id"], "igr_test");
+    assert_eq!(stdout[0]["resource_scope"]["kind"], "list");
+}
+
+#[test]
+fn grants_create_posts_tenant_grant_contract() {
+    let tmp = TempDir::new().unwrap();
+    let response = json!({
+        "id": "igr_test",
+        "status": "active",
+        "resource_scope": {"kind": "list", "resources": ["quantum-box/tachyon-apps"]},
+        "managed_by_connection": false,
+        "installation": {
+            "id": "ins_test",
+            "provider": "github",
+            "kind": "organization",
+            "status": "active",
+            "external_installation_id": "12345",
+            "external_account_name": "quantum-box"
+        },
+        "created_at": "2026-09-22T00:00:00Z",
+        "updated_at": "2026-09-22T00:00:00Z",
+        "revoked_at": null
+    })
+    .to_string();
+    let (api_url, rx, handle) = start_graphql_server(vec![response]);
+    let output = isolated_command(tmp.path())
+        .env("TACHYON_API_URL", api_url)
+        .args([
+            "iac",
+            "grants",
+            "create",
+            "--provider",
+            "github",
+            "--installation-id",
+            "12345",
+            "--verification",
+            "gv1_test",
+            "--repo",
+            "quantum-box/tachyon-apps",
+            "--json",
+        ])
+        .output()
+        .expect("create tenant grant");
+    assert!(output.status.success(), "grant create failed: {output:?}");
+    let request = rx.recv_timeout(Duration::from_secs(1)).unwrap();
+    handle.join().unwrap();
+    assert!(request.starts_with("POST /v1/integrations/grants "));
+    assert_eq!(
+        request_json(&request),
+        json!({
+            "provider": "github",
+            "installation_id": "12345",
+            "verification": "gv1_test",
+            "resource_scope": {
+                "kind": "list",
+                "resources": ["quantum-box/tachyon-apps"]
+            }
+        })
+    );
+}
+
+#[test]
+fn grants_set_scope_patches_scope_contract() {
+    let tmp = TempDir::new().unwrap();
+    let response = json!({
+        "id": "igr_test",
+        "status": "active",
+        "resource_scope": {"kind": "all"},
+        "managed_by_connection": false,
+        "installation": {
+            "id": "ins_test",
+            "provider": "github",
+            "kind": "organization",
+            "status": "active",
+            "external_installation_id": "12345",
+            "external_account_name": "quantum-box"
+        },
+        "created_at": "2026-09-22T00:00:00Z",
+        "updated_at": "2026-09-22T00:00:00Z",
+        "revoked_at": null
+    })
+    .to_string();
+    let (api_url, rx, handle) = start_graphql_server(vec![response]);
+    let output = isolated_command(tmp.path())
+        .env("TACHYON_API_URL", api_url)
+        .args(["iac", "grants", "set-scope", "igr_test", "--all", "--json"])
+        .output()
+        .expect("set tenant grant scope");
+    assert!(output.status.success(), "grant scope failed: {output:?}");
+    let request = rx.recv_timeout(Duration::from_secs(1)).unwrap();
+    handle.join().unwrap();
+    assert!(request.starts_with("PATCH /v1/integrations/grants/igr_test/scope "));
+    assert_eq!(
+        request_json(&request),
+        json!({"resource_scope": {"kind": "all"}})
+    );
+}
+
+#[test]
+fn grants_revoke_deletes_tenant_grant() {
+    let tmp = TempDir::new().unwrap();
+    let response = json!({
+        "id": "igr_test",
+        "status": "revoked",
+        "resource_scope": {"kind": "all"},
+        "managed_by_connection": false,
+        "installation": {
+            "id": "ins_test",
+            "provider": "github",
+            "kind": "organization",
+            "status": "active",
+            "external_installation_id": "12345",
+            "external_account_name": "quantum-box"
+        },
+        "created_at": "2026-09-22T00:00:00Z",
+        "updated_at": "2026-09-22T00:00:00Z",
+        "revoked_at": "2026-09-22T00:00:00Z"
+    })
+    .to_string();
+    let (api_url, rx, handle) = start_graphql_server(vec![response]);
+    let output = isolated_command(tmp.path())
+        .env("TACHYON_API_URL", api_url)
+        .args(["iac", "grants", "revoke", "igr_test", "--json"])
+        .output()
+        .expect("revoke tenant grant");
+    assert!(output.status.success(), "grant revoke failed: {output:?}");
+    let request = rx.recv_timeout(Duration::from_secs(1)).unwrap();
+    handle.join().unwrap();
+    assert!(request.starts_with("DELETE /v1/integrations/grants/igr_test "));
+    let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(stdout["status"], "revoked");
 }
 
 fn has_change_control_header(request: &str) -> bool {
@@ -217,7 +402,7 @@ fn iac_apply_reconciles_no_change_manifest() {
     assert!(stdout.contains("Reconciled: CloudApp / fieldadmin (no manifest changes)"));
 }
 
-fn run_iac_apply_contract(token: Option<&str>) {
+fn run_iac_apply_contract(token: Option<&str>, apply_api_key: Option<&str>) {
     let tmp = TempDir::new().unwrap();
     let manifest_path = tmp.path().join("tachyon.json");
     fs::write(
@@ -250,6 +435,9 @@ fn run_iac_apply_contract(token: Option<&str>) {
     if let Some(token) = token {
         command.env("TACHYON_CHANGE_CONTROL_APPROVAL_TOKEN", token);
     }
+    if let Some(apply_api_key) = apply_api_key {
+        command.env("TACHYON_IAC_APPLY_API_KEY", apply_api_key);
+    }
     let output = command.output().expect("run tachyon iac apply");
     assert!(
         output.status.success(),
@@ -263,7 +451,11 @@ fn run_iac_apply_contract(token: Option<&str>) {
     let apply = rx.recv_timeout(Duration::from_secs(1)).unwrap();
     handle.join().unwrap();
     assert!(request_body(&preflight).contains("manifestHistory"));
+    assert!(has_bearer_token(&preflight, "test-token"));
     assert!(!has_change_control_header(&preflight));
+    let expected_write_key = apply_api_key.unwrap_or("test-token");
+    assert!(has_bearer_token(&save, expected_write_key));
+    assert!(has_bearer_token(&apply, expected_write_key));
     assert_mutation_contract(&save, "saveManifest", Some(7), token);
     assert_mutation_contract(&apply, "applyManifest", None, token);
     if let Some(token) = token {
@@ -275,91 +467,17 @@ fn run_iac_apply_contract(token: Option<&str>) {
 #[test]
 fn iac_apply_forwards_token_and_expected_revision() {
     let token = production_change_control_token();
-    run_iac_apply_contract(Some(&token));
+    run_iac_apply_contract(Some(&token), None);
 }
 
 #[test]
 fn iac_apply_without_token_keeps_compatibility_and_sends_revision() {
-    run_iac_apply_contract(None);
-}
-
-fn run_iac_import_seed_contract(token: Option<&str>) {
-    let tmp = TempDir::new().unwrap();
-    let seed_path = tmp.path().join("003-iac-manifests.yaml");
-    fs::write(
-        &seed_path,
-        r#"
-tables:
-  - name: tachyon_apps_iac.manifests
-    rows:
-      - manifest:
-          apiVersion: apps.tachy.one/v1alpha
-          kind: CloudApp
-          metadata:
-            name: seeded-app
-          spec:
-            envVars: []
-      - manifest:
-          apiVersion: apps.tachy.one/v1alpha
-          kind: ProjectConfig
-          metadata:
-            name: seeded-project-config
-          spec:
-            providers: []
-"#,
-    )
-    .unwrap();
-    let (api_url, rx, handle) = start_graphql_server(vec![
-        history_response(Some(3)),
-        history_response(None),
-        r#"{"data":{"saveManifest":{"kind":"CloudApp"}}}"#.to_string(),
-        r#"{"data":{"saveManifest":{"kind":"ProjectConfig"}}}"#.to_string(),
-    ]);
-
-    let mut command = isolated_command(tmp.path());
-    command.env("TACHYON_API_URL", api_url).args([
-        "iac",
-        "import-seed",
-        "--file",
-        seed_path.to_str().unwrap(),
-    ]);
-    if let Some(token) = token {
-        command.env("TACHYON_CHANGE_CONTROL_APPROVAL_TOKEN", token);
-    }
-    let output = command.output().expect("run tachyon iac import-seed");
-    assert!(
-        output.status.success(),
-        "iac import-seed failed\nstdout:\n{}\nstderr:\n{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-
-    let preflight = rx.recv_timeout(Duration::from_secs(1)).unwrap();
-    let second_preflight = rx.recv_timeout(Duration::from_secs(1)).unwrap();
-    let save = rx.recv_timeout(Duration::from_secs(1)).unwrap();
-    let second_save = rx.recv_timeout(Duration::from_secs(1)).unwrap();
-    handle.join().unwrap();
-    assert!(request_body(&preflight).contains("manifestHistory"));
-    assert!(request_body(&second_preflight).contains("manifestHistory"));
-    assert!(!has_change_control_header(&preflight));
-    assert!(!has_change_control_header(&second_preflight));
-    assert_mutation_contract(&save, "saveManifest", Some(3), token);
-    assert_mutation_contract(&second_save, "saveManifest", Some(0), token);
-    if let Some(token) = token {
-        assert!(!String::from_utf8_lossy(&output.stdout).contains(token));
-        assert!(!String::from_utf8_lossy(&output.stderr).contains(token));
-    }
+    run_iac_apply_contract(None, None);
 }
 
 #[test]
-fn iac_import_seed_forwards_token_and_expected_revision() {
-    let token = production_change_control_token();
-    run_iac_import_seed_contract(Some(&token));
-}
-
-#[test]
-fn iac_import_seed_without_token_keeps_compatibility_and_sends_revision() {
-    run_iac_import_seed_contract(None);
+fn iac_apply_uses_separate_read_and_write_api_keys() {
+    run_iac_apply_contract(None, Some("apply-only-token"));
 }
 
 fn run_iac_rollback_contract(token: Option<&str>) {
@@ -417,7 +535,7 @@ fn iac_rollback_without_token_keeps_compatibility_and_sends_revision() {
 #[test]
 fn iac_mutation_help_documents_safe_token_input() {
     let tmp = TempDir::new().unwrap();
-    for command in ["apply", "import-seed", "rollback"] {
+    for command in ["apply", "rollback"] {
         let output = isolated_command(tmp.path())
             .env(
                 "TACHYON_CHANGE_CONTROL_APPROVAL_TOKEN",
@@ -433,6 +551,19 @@ fn iac_mutation_help_documents_safe_token_input() {
         assert!(stdout.contains("Optional during the compatibility rollout"));
         assert!(!stdout.contains("help-secret-marker"));
     }
+}
+
+#[test]
+fn iac_help_omits_retired_seed_commands() {
+    let tmp = TempDir::new().unwrap();
+    let output = isolated_command(tmp.path())
+        .args(["iac", "--help"])
+        .output()
+        .expect("show iac help");
+    assert!(output.status.success());
+    let help = String::from_utf8_lossy(&output.stdout);
+    assert!(!help.contains("import-seed"));
+    assert!(!help.contains("verify-seed"));
 }
 
 #[test]
@@ -498,4 +629,192 @@ fn iac_apply_cas_conflict_does_not_update_local_state() {
     assert_mutation_contract(&save, "saveManifest", Some(7), None);
     assert!(!state_path.exists());
     assert!(String::from_utf8_lossy(&output.stderr).contains("re-plan"));
+}
+
+fn write_feature_flags_manifest(dir: &Path) -> std::path::PathBuf {
+    let manifest_path = dir.join("tachyon.json");
+    fs::write(
+        &manifest_path,
+        serde_json::to_string_pretty(&json!({
+            "apiVersion": "apps.tachy.one/v1alpha",
+            "kind": "FeatureFlags",
+            "metadata": { "name": "field-flags" },
+            "spec": { "flags": [
+                { "key": "feature.field.smoke", "name": "Smoke", "enabled": true }
+            ] }
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    manifest_path
+}
+
+fn run_iac_apply_with(
+    manifest_path: &Path,
+    home: &Path,
+    responses: Vec<String>,
+) -> (std::process::Output, Vec<String>) {
+    let state_path = home.join("tachyon.tfstate");
+    let expected_requests = responses.len();
+    let (api_url, rx, handle) = start_graphql_server(responses);
+    let output = isolated_command(home)
+        .env("TACHYON_API_URL", api_url)
+        .args([
+            "iac",
+            "apply",
+            "--file",
+            manifest_path.to_str().unwrap(),
+            "--state",
+            state_path.to_str().unwrap(),
+        ])
+        .output()
+        .expect("run tachyon iac apply");
+    let requests = (0..expected_requests)
+        .map(|_| rx.recv_timeout(Duration::from_secs(1)).unwrap())
+        .collect();
+    handle.join().unwrap();
+    (output, requests)
+}
+
+// PLT-3399 (S3399-2): a FeatureFlags apply prints each entry, so a flag that
+// was created OFF or refused is visible next to "Applied".
+#[test]
+fn iac_apply_prints_feature_flag_entries() {
+    let tmp = TempDir::new().unwrap();
+    let manifest_path = write_feature_flags_manifest(tmp.path());
+    let (output, requests) = run_iac_apply_with(
+        &manifest_path,
+        tmp.path(),
+        vec![
+            history_response(None),
+            r#"{"data":{"saveManifest":{"kind":"FeatureFlags"}}}"#.to_string(),
+            json!({"data": {"applyManifest": {
+                "success": true,
+                "serviceAccountsCreated": 0,
+                "serviceAccountsModified": 0,
+                "providersApplied": [],
+                "seedDataTables": [],
+                "featureFlagEntries": [{
+                    "manifestName": "field-flags",
+                    "tenantId": "tn_test1234567890",
+                    "flagKey": "feature.field.smoke",
+                    "outcome": "CREATED",
+                    "enabled": false,
+                    "inactiveReason": "INSERTED_OFF",
+                    "reason": null,
+                    "fields": []
+                }]
+            }}})
+            .to_string(),
+        ],
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success(),
+        "iac apply failed\nstdout:\n{stdout}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(request_body(&requests[2]).contains("featureFlagEntries"));
+    assert!(stdout.contains("Applied: FeatureFlags / field-flags"));
+    assert!(stdout.contains("FeatureFlags entries (1):"), "{stdout}");
+    assert!(
+        stdout.contains("CREATED             feature.field.smoke OFF (INSERTED_OFF)"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("Note: 1 declared flag is OFF after this apply."),
+        "{stdout}"
+    );
+}
+
+// An older tachyon-api rejects the unknown field while validating the
+// document, before executing anything, so the CLI applies again without it
+// instead of failing the apply.
+#[test]
+fn iac_apply_falls_back_when_server_lacks_feature_flag_entries() {
+    let tmp = TempDir::new().unwrap();
+    let manifest_path = write_feature_flags_manifest(tmp.path());
+    let (output, requests) = run_iac_apply_with(
+        &manifest_path,
+        tmp.path(),
+        vec![
+            history_response(None),
+            r#"{"data":{"saveManifest":{"kind":"FeatureFlags"}}}"#.to_string(),
+            json!({"data": null, "errors": [{
+                "message": "Unknown field \"featureFlagEntries\" on type \"ApplyManifestResult\"."
+            }]})
+            .to_string(),
+            r#"{"data":{"applyManifest":{"success":true,"serviceAccountsCreated":0,"serviceAccountsModified":0,"providersApplied":[],"seedDataTables":[]}}}"#.to_string(),
+        ],
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success(),
+        "iac apply failed\nstdout:\n{stdout}\nstderr:\n{stderr}"
+    );
+    assert!(request_body(&requests[2]).contains("featureFlagEntries"));
+    assert!(!request_body(&requests[3]).contains("featureFlagEntries"));
+    assert!(
+        stderr.contains("does not report FeatureFlags entries"),
+        "{stderr}"
+    );
+    assert!(stdout.contains("Applied: FeatureFlags / field-flags"));
+    assert!(!stdout.contains("FeatureFlags entries"), "{stdout}");
+}
+
+// Any other apply error is not retried.
+#[test]
+fn iac_apply_does_not_retry_other_feature_flag_errors() {
+    let tmp = TempDir::new().unwrap();
+    let manifest_path = write_feature_flags_manifest(tmp.path());
+    let (output, _requests) = run_iac_apply_with(
+        &manifest_path,
+        tmp.path(),
+        vec![
+            history_response(None),
+            r#"{"data":{"saveManifest":{"kind":"FeatureFlags"}}}"#.to_string(),
+            json!({"data": null, "errors": [{
+                "message": "FeatureFlags manifest rejected 1 entry; the apply stopped before applying any resource:\n- field-flags/feature.field.smoke: UNSUPPORTED (UNSUPPORTED_STRATEGY_REJECTED): ..."
+            }]})
+            .to_string(),
+        ],
+    );
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!output.status.success());
+    assert!(stderr.contains("UNSUPPORTED_STRATEGY_REJECTED"), "{stderr}");
+    assert!(!String::from_utf8_lossy(&output.stdout).contains("Applied:"));
+}
+
+// Other kinds keep the query every server understands.
+#[test]
+fn iac_apply_other_kinds_do_not_select_feature_flag_entries() {
+    let tmp = TempDir::new().unwrap();
+    let manifest_path = tmp.path().join("tachyon.json");
+    fs::write(
+        &manifest_path,
+        serde_json::to_string_pretty(&json!({
+            "apiVersion": "apps.tachy.one/v1alpha",
+            "kind": "CloudApp",
+            "metadata": { "name": "fieldadmin" },
+            "spec": { "envVars": [] }
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    let (output, requests) = run_iac_apply_with(
+        &manifest_path,
+        tmp.path(),
+        vec![
+            history_response(Some(7)),
+            r#"{"data":{"saveManifest":{"kind":"CloudApp"}}}"#.to_string(),
+            r#"{"data":{"applyManifest":{"success":true,"serviceAccountsCreated":0,"serviceAccountsModified":0,"providersApplied":[],"seedDataTables":[]}}}"#.to_string(),
+        ],
+    );
+    assert!(output.status.success());
+    assert!(request_body(&requests[2]).contains("applyManifest"));
+    assert!(!request_body(&requests[2]).contains("featureFlagEntries"));
 }

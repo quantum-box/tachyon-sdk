@@ -853,6 +853,43 @@
                         "description": "Operator not found"
                     }
                 }
+            },
+            "delete": {
+                "tags": [
+                    "Auth - Operators"
+                ],
+                "summary": "Delete an operator",
+                "description": "The acting tenant scope (`x-operator-id`, falling back to\n`x-platform-id`) must be the target operator itself or its parent\nplatform. The parent platform is resolved from the target record,\nso callers do not need to supply `x-platform-id`.",
+                "operationId": "delete_operator",
+                "parameters": [
+                    {
+                        "name": "id",
+                        "in": "path",
+                        "description": "Operator ID",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Operator deleted",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/DeleteOperatorResponse"
+                                }
+                            }
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden"
+                    },
+                    "404": {
+                        "description": "Operator not found"
+                    }
+                }
             }
         },
         "/v1/auth/policies/check": {
@@ -2222,6 +2259,88 @@
                 }
             }
         },
+        "/v1/integrations/github/billing-usage": {
+            "get": {
+                "tags": [
+                    "Integrations"
+                ],
+                "summary": "Billing usage of a GitHub organization for one month.",
+                "description": "The body is GitHub's `GET /organizations/{org}/settings/billing/usage` response, unchanged. The installation token is never returned.",
+                "operationId": "get_github_billing_usage",
+                "parameters": [
+                    {
+                        "name": "org",
+                        "in": "query",
+                        "description": "GitHub organization login. It must be the account of a GitHub App installation connected to the requesting tenant.",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "name": "year",
+                        "in": "query",
+                        "required": true,
+                        "schema": {
+                            "type": "integer",
+                            "format": "int32",
+                            "minimum": 0
+                        }
+                    },
+                    {
+                        "name": "month",
+                        "in": "query",
+                        "description": "1-12.",
+                        "required": true,
+                        "schema": {
+                            "type": "integer",
+                            "format": "int32",
+                            "minimum": 0
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "GitHub billing usage report",
+                        "content": {
+                            "application/json": {
+                                "schema": {}
+                            }
+                        }
+                    },
+                    "400": {
+                        "description": "Invalid org or month",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/ErrorResponse"
+                                }
+                            }
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden, or the organization is not connected to the tenant",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/ErrorResponse"
+                                }
+                            }
+                        }
+                    },
+                    "503": {
+                        "description": "GitHub refused or failed the request",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/ErrorResponse"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
         "/v1/integrations/{id}": {
             "get": {
                 "tags": [
@@ -3431,7 +3550,7 @@
                     {
                         "name": "limit",
                         "in": "query",
-                        "description": "Maximum number of sessions",
+                        "description": "Maximum number of sessions to return.",
                         "required": false,
                         "schema": {
                             "type": [
@@ -3445,7 +3564,7 @@
                     {
                         "name": "offset",
                         "in": "query",
-                        "description": "Offset",
+                        "description": "Offset for pagination.",
                         "required": false,
                         "schema": {
                             "type": [
@@ -3457,24 +3576,16 @@
                         }
                     },
                     {
-                        "name": "x-operator-id",
-                        "in": "header",
-                        "description": "Operator ID",
-                        "required": true,
+                        "name": "metadata_user_id",
+                        "in": "query",
+                        "description": "Filter sessions by `user_id` stored in metadata JSON.",
+                        "required": false,
                         "schema": {
-                            "type": "string"
-                        },
-                        "example": "tn_xxxxxx"
-                    },
-                    {
-                        "name": "Authorization",
-                        "in": "header",
-                        "description": "Authorization",
-                        "required": true,
-                        "schema": {
-                            "type": "string"
-                        },
-                        "example": "Bearer xxxxx"
+                            "type": [
+                                "string",
+                                "null"
+                            ]
+                        }
                     }
                 ],
                 "responses": {
@@ -3497,28 +3608,6 @@
                 "summary": "Create a new independent agent session.",
                 "description": "Returns a session with an `as_`-prefixed ID that can be\nused with the session agent endpoints.",
                 "operationId": "create_agent_session",
-                "parameters": [
-                    {
-                        "name": "x-operator-id",
-                        "in": "header",
-                        "description": "Operator ID",
-                        "required": true,
-                        "schema": {
-                            "type": "string"
-                        },
-                        "example": "tn_xxxxxx"
-                    },
-                    {
-                        "name": "Authorization",
-                        "in": "header",
-                        "description": "Authorization",
-                        "required": true,
-                        "schema": {
-                            "type": "string"
-                        },
-                        "example": "Bearer xxxxx"
-                    }
-                ],
                 "requestBody": {
                     "content": {
                         "application/json": {
@@ -5610,6 +5699,86 @@
                     }
                 }
             }
+        },
+        "/v1/llms/sessions/{session_id}": {
+            "get": {
+                "tags": [
+                    "agent"
+                ],
+                "summary": "Get an agent session by ID.",
+                "operationId": "get_agent_session",
+                "parameters": [
+                    {
+                        "name": "session_id",
+                        "in": "path",
+                        "description": "Session ID",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Session detail",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/GetAgentSessionOutputData"
+                                }
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Session not found"
+                    }
+                }
+            },
+            "delete": {
+                "tags": [
+                    "agent"
+                ],
+                "operationId": "delete_agent_session",
+                "parameters": [
+                    {
+                        "name": "session_id",
+                        "in": "path",
+                        "description": "Session ID",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "name": "x-operator-id",
+                        "in": "header",
+                        "description": "Operator ID",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        },
+                        "example": "tn_xxxxxx"
+                    },
+                    {
+                        "name": "Authorization",
+                        "in": "header",
+                        "description": "Authorization",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        },
+                        "example": "Bearer xxxxx"
+                    }
+                ],
+                "responses": {
+                    "204": {
+                        "description": "Session deleted"
+                    },
+                    "404": {
+                        "description": "Session not found"
+                    }
+                }
+            }
         }
     },
     "components": {
@@ -6170,6 +6339,13 @@
                         ],
                         "description": "Model identifier. Accepts `provider/model` or just `model` (provider auto-detected).\n\nExamples:\n- `anthropic/claude-3-sonnet-20241022`\n- `openai/gpt-4`\n- `google_ai/gemini-pro`\n\nAuto-detection shortcuts:\n- `gpt-*` → OpenAI\n- `claude-*` → Anthropic\n- `gemini*` → Google AI"
                     },
+                    "reasoning_effort": {
+                        "type": [
+                            "string",
+                            "null"
+                        ],
+                        "description": "Optional reasoning effort for reasoning-capable models\n(e.g. `low`, `medium`, `high`).\n\nSent to OpenAI models that use the Responses API\n(`gpt-5*`, `gpt-6*`) as `reasoning.effort`. Other\nproviders and models ignore it."
+                    },
                     "task": {
                         "type": "string",
                         "description": "The task or prompt for the agent to execute."
@@ -6298,7 +6474,15 @@
                 ],
                 "properties": {
                     "chatroom_id": {
-                        "type": "string"
+                        "type": "string",
+                        "description": "Compatibility key for clients that predate Session objects."
+                    },
+                    "session_id": {
+                        "type": [
+                            "string",
+                            "null"
+                        ],
+                        "description": "Canonical conversation ID for new Session-based agents."
                     }
                 }
             },
@@ -7930,6 +8114,18 @@
                 "properties": {
                     "user": {
                         "$ref": "#/components/schemas/User"
+                    }
+                }
+            },
+            "DeleteOperatorResponse": {
+                "type": "object",
+                "description": "Response for deleting an operator",
+                "required": [
+                    "success"
+                ],
+                "properties": {
+                    "success": {
+                        "type": "boolean"
                     }
                 }
             },
@@ -11636,6 +11832,35 @@
                         "items": {
                             "$ref": "#/components/schemas/AllowedTenantResponse"
                         }
+                    }
+                }
+            },
+            "GetAgentSessionOutputData": {
+                "type": "object",
+                "description": "Output containing the session detail.",
+                "required": [
+                    "id",
+                    "created_at",
+                    "updated_at"
+                ],
+                "properties": {
+                    "created_at": {
+                        "type": "string",
+                        "format": "date-time"
+                    },
+                    "id": {
+                        "type": "string"
+                    },
+                    "metadata": {},
+                    "name": {
+                        "type": [
+                            "string",
+                            "null"
+                        ]
+                    },
+                    "updated_at": {
+                        "type": "string",
+                        "format": "date-time"
                     }
                 }
             }

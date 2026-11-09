@@ -27,11 +27,7 @@ pub struct AttachUserPolicyRequest {
 
 impl AttachUserPolicyRequest {
     /// Request to attach a policy to a user
-    pub fn new(
-        policy_id: String,
-        tenant_id: String,
-        user_id: String,
-    ) -> AttachUserPolicyRequest {
+    pub fn new(policy_id: String, tenant_id: String, user_id: String) -> AttachUserPolicyRequest {
         AttachUserPolicyRequest {
             policy_id,
             tenant_id,
