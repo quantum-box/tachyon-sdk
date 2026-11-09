@@ -4,6 +4,7 @@
 
 ### Added
 
+- `tachyon compute preview create --wait` waits for the build and displays its preview URL when available.
 - Add `tachyon org users attach-policy` and `tachyon org users detach-policy`,
   so a user's policies can be granted and revoked from the CLI instead of the
   IAM screen of the web console. `quantum-box/tachyonfield`'s

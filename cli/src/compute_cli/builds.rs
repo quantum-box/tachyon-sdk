@@ -27,6 +27,9 @@ pub enum PreviewCommand {
         /// Branch to build
         #[arg(long)]
         branch: String,
+        /// Wait for the build to finish and print its preview URL
+        #[arg(long)]
+        wait: bool,
     },
     /// Manage a pull request's managed preview database
     Database {
@@ -732,12 +735,17 @@ pub(super) async fn run_preview(
     Ok(())
 }
 
-pub(super) async fn run_preview_create(api: &ApiClient, app: &str, branch: &str) -> Result<()> {
+pub(super) async fn run_preview_create(
+    api: &ApiClient,
+    app: &str,
+    branch: &str,
+    wait: bool,
+) -> Result<()> {
     let app_id = resolve::resolve_app_id(api, app).await?;
     let req = CreatePreviewBuildRequest {
         source_branch: branch.to_string(),
     };
-    let build: BuildResponse = api.post(&format!("/v1/apps/{app_id}/builds"), &req).await?;
+    let mut build: BuildResponse = api.post(&format!("/v1/apps/{app_id}/builds"), &req).await?;
 
     println!("Preview build created: {}", build.id);
     println!("Status: {}", build.status);
@@ -746,6 +754,42 @@ pub(super) async fn run_preview_create(api: &ApiClient, app: &str, branch: &str)
     }
     if let Some(pr_number) = build.pr_number {
         println!("PR: #{pr_number}");
+    }
+    if !wait {
+        return Ok(());
+    }
+
+    let build_id = build.id.clone();
+    while !is_terminal_build_status(&build.status) {
+        build = api.get(&format!("/v1/compute/builds/{build_id}")).await?;
+        if !is_terminal_build_status(&build.status) {
+            sleep(Duration::from_secs(5)).await;
+        }
+    }
+    if !is_success_build_status(&build.status) {
+        let error = build.error_message.as_deref().unwrap_or("no error details");
+        return Err(anyhow!(
+            "preview build {build_id} finished with status {}: {error}",
+            build.status
+        ));
+    }
+
+    println!("Build {build_id} completed successfully.");
+    let deployments: ListDeploymentsResponse = api
+        .get_query(
+            &format!("/v1/compute/apps/{app_id}/deployments"),
+            &[("environment", "preview")],
+        )
+        .await?;
+    if let Some(deployment) = deployments
+        .deployments
+        .iter()
+        .find(|deployment| deployment.build_id.as_deref() == Some(build_id.as_str()))
+    {
+        let pr_number = deployment.pr_number.or(build.pr_number);
+        println!("Preview URL: {}", deployment.display_url_with_pr(pr_number));
+    } else {
+        eprintln!("No preview deployment found for build {build_id}");
     }
     Ok(())
 }
