@@ -20,9 +20,7 @@ pub struct CheckTenantsPolicyResponse {
 
 impl CheckTenantsPolicyResponse {
     /// Response for tenant-bulk policy evaluation.
-    pub fn new(
-        allowed_tenants: Vec<models::AllowedTenantResponse>,
-    ) -> CheckTenantsPolicyResponse {
+    pub fn new(allowed_tenants: Vec<models::AllowedTenantResponse>) -> CheckTenantsPolicyResponse {
         CheckTenantsPolicyResponse { allowed_tenants }
     }
 }

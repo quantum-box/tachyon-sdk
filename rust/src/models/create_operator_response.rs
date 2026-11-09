@@ -22,10 +22,7 @@ pub struct CreateOperatorResponse {
 
 impl CreateOperatorResponse {
     /// Response for creating an operator
-    pub fn new(
-        operator: models::OperatorResponse,
-        owner_id: String,
-    ) -> CreateOperatorResponse {
+    pub fn new(operator: models::OperatorResponse, owner_id: String) -> CreateOperatorResponse {
         CreateOperatorResponse {
             operator: Box::new(operator),
             owner_id,

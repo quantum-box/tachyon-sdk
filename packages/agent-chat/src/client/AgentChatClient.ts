@@ -3,23 +3,26 @@ import type {
 	AgentExecuteRequest,
 	AgentMessagesResponse,
 	AgentProtocol,
+	AgentSession,
 	AgentStatusResponse,
 	ChatMessage,
 	ChatRoom,
+	CodingJob,
 	CreateAgentProtocolRequest,
+	CreateAgentSessionResponse,
 	CreateChatRoomResponse,
-	CreateMemoryRequest,
 	CreateCodingJobRequest,
 	CreateCodingJobResponse,
+	CreateMemoryRequest,
 	DeleteMessagesResponse,
 	GetAgentProtocolsOptions,
 	GetAgentProtocolsResponse,
 	GetChatroomsResponse,
+	GetCodingJobResponse,
+	GetCodingJobsResponse,
 	GetInsightsResponse,
 	GetMemoriesResponse,
 	GetModelsOptions,
-	GetCodingJobResponse,
-	GetCodingJobsResponse,
 	ModelInfo,
 	RegenerateInsightsRequest,
 	RestoreMessagesResponse,
@@ -30,7 +33,6 @@ import type {
 	SearchToolsResponse,
 	SubmitToolResultRequest,
 	SubmitToolResultResponse,
-	CodingJob,
 	UpdateAgentProtocolRequest,
 	UserInsight,
 } from './types'
@@ -90,8 +92,48 @@ export class AgentChatClient {
 		return (await response.json()) as T
 	}
 
-	// ── Chatroom API ──────────────────────────────────────────────────
+	// ── Session API ───────────────────────────────────────────────────
 
+	async createSession(name?: string): Promise<CreateAgentSessionResponse> {
+		return this.request<CreateAgentSessionResponse>('/v1/llms/sessions', {
+			method: 'POST',
+			body: JSON.stringify(name === undefined ? {} : { name }),
+		})
+	}
+
+	async getSessions(limit = 20, offset = 0): Promise<AgentSession[]> {
+		const query = new URLSearchParams({
+			limit: String(limit),
+			offset: String(offset),
+		})
+		const data = await this.request<{ sessions: AgentSession[] }>(
+			`/v1/llms/sessions?${query}`,
+		)
+		return data.sessions
+	}
+
+	async getSession(sessionId: string): Promise<AgentSession> {
+		return this.request<AgentSession>(
+			`/v1/llms/sessions/${encodeURIComponent(sessionId)}`,
+		)
+	}
+
+	async deleteSession(sessionId: string): Promise<void> {
+		const response = await fetch(
+			this.buildUrl(`/v1/llms/sessions/${encodeURIComponent(sessionId)}`),
+			{ method: 'DELETE', headers: this.getHeaders() },
+		)
+		if (!response.ok) {
+			const body = await response.text().catch(() => '')
+			throw new Error(
+				`Failed to delete session: ${response.status}${body ? ` - ${body}` : ''}`,
+			)
+		}
+	}
+
+	// Legacy compatibility API. New conversations use Session objects.
+
+	/** @deprecated Use createSession for new conversations. */
 	async createChatRoom(title?: string): Promise<CreateChatRoomResponse> {
 		return this.request<CreateChatRoomResponse>('/v1/llms/chatrooms', {
 			method: 'POST',

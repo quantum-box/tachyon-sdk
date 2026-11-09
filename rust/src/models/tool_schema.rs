@@ -14,10 +14,7 @@ use serde::{Deserialize, Serialize};
 /// ToolSchema : Schema type for tool parameters
 #[derive(Clone, Default, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ToolSchema {
-    #[serde(
-        rename = "properties",
-        deserialize_with = "Option::deserialize"
-    )]
+    #[serde(rename = "properties", deserialize_with = "Option::deserialize")]
     pub properties: Option<serde_json::Value>,
     #[serde(rename = "required")]
     pub required: Vec<String>,

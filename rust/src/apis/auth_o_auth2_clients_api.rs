@@ -65,23 +65,17 @@ pub enum UpdateOauth2ClientError {
 pub async fn create_oauth2_client(
     configuration: &configuration::Configuration,
     o_auth2_create_client_request: models::OAuth2CreateClientRequest,
-) -> Result<
-    models::OAuth2CreateClientResponse,
-    Error<CreateOauth2ClientError>,
-> {
+) -> Result<models::OAuth2CreateClientResponse, Error<CreateOauth2ClientError>> {
     // add a prefix to parameters to efficiently prevent name collisions
-    let p_body_o_auth2_create_client_request =
-        o_auth2_create_client_request;
+    let p_body_o_auth2_create_client_request = o_auth2_create_client_request;
 
-    let uri_str =
-        format!("{}/v1/auth/oauth2-clients", configuration.base_path);
+    let uri_str = format!("{}/v1/auth/oauth2-clients", configuration.base_path);
     let mut req_builder = configuration
         .client
         .request(reqwest::Method::POST, &uri_str);
 
     if let Some(ref user_agent) = configuration.user_agent {
-        req_builder = req_builder
-            .header(reqwest::header::USER_AGENT, user_agent.clone());
+        req_builder = req_builder.header(reqwest::header::USER_AGENT, user_agent.clone());
     }
     req_builder = req_builder.json(&p_body_o_auth2_create_client_request);
 
@@ -105,8 +99,7 @@ pub async fn create_oauth2_client(
         }
     } else {
         let content = resp.text().await?;
-        let entity: Option<CreateOauth2ClientError> =
-            serde_json::from_str(&content).ok();
+        let entity: Option<CreateOauth2ClientError> = serde_json::from_str(&content).ok();
         Err(Error::ResponseError(ResponseContent {
             status,
             content,
@@ -127,12 +120,10 @@ pub async fn get_oauth2_client(
         configuration.base_path,
         id = crate::apis::urlencode(p_path_id)
     );
-    let mut req_builder =
-        configuration.client.request(reqwest::Method::GET, &uri_str);
+    let mut req_builder = configuration.client.request(reqwest::Method::GET, &uri_str);
 
     if let Some(ref user_agent) = configuration.user_agent {
-        req_builder = req_builder
-            .header(reqwest::header::USER_AGENT, user_agent.clone());
+        req_builder = req_builder.header(reqwest::header::USER_AGENT, user_agent.clone());
     }
 
     let req = req_builder.build()?;
@@ -155,8 +146,7 @@ pub async fn get_oauth2_client(
         }
     } else {
         let content = resp.text().await?;
-        let entity: Option<GetOauth2ClientError> =
-            serde_json::from_str(&content).ok();
+        let entity: Option<GetOauth2ClientError> = serde_json::from_str(&content).ok();
         Err(Error::ResponseError(ResponseContent {
             status,
             content,
@@ -167,16 +157,12 @@ pub async fn get_oauth2_client(
 
 pub async fn list_oauth2_clients(
     configuration: &configuration::Configuration,
-) -> Result<models::OAuth2ClientListResponse, Error<ListOauth2ClientsError>>
-{
-    let uri_str =
-        format!("{}/v1/auth/oauth2-clients", configuration.base_path);
-    let mut req_builder =
-        configuration.client.request(reqwest::Method::GET, &uri_str);
+) -> Result<models::OAuth2ClientListResponse, Error<ListOauth2ClientsError>> {
+    let uri_str = format!("{}/v1/auth/oauth2-clients", configuration.base_path);
+    let mut req_builder = configuration.client.request(reqwest::Method::GET, &uri_str);
 
     if let Some(ref user_agent) = configuration.user_agent {
-        req_builder = req_builder
-            .header(reqwest::header::USER_AGENT, user_agent.clone());
+        req_builder = req_builder.header(reqwest::header::USER_AGENT, user_agent.clone());
     }
 
     let req = req_builder.build()?;
@@ -199,8 +185,7 @@ pub async fn list_oauth2_clients(
         }
     } else {
         let content = resp.text().await?;
-        let entity: Option<ListOauth2ClientsError> =
-            serde_json::from_str(&content).ok();
+        let entity: Option<ListOauth2ClientsError> = serde_json::from_str(&content).ok();
         Err(Error::ResponseError(ResponseContent {
             status,
             content,
@@ -226,8 +211,7 @@ pub async fn revoke_oauth2_client(
         .request(reqwest::Method::POST, &uri_str);
 
     if let Some(ref user_agent) = configuration.user_agent {
-        req_builder = req_builder
-            .header(reqwest::header::USER_AGENT, user_agent.clone());
+        req_builder = req_builder.header(reqwest::header::USER_AGENT, user_agent.clone());
     }
 
     let req = req_builder.build()?;
@@ -239,8 +223,7 @@ pub async fn revoke_oauth2_client(
         Ok(())
     } else {
         let content = resp.text().await?;
-        let entity: Option<RevokeOauth2ClientError> =
-            serde_json::from_str(&content).ok();
+        let entity: Option<RevokeOauth2ClientError> = serde_json::from_str(&content).ok();
         Err(Error::ResponseError(ResponseContent {
             status,
             content,
@@ -252,10 +235,7 @@ pub async fn revoke_oauth2_client(
 pub async fn rotate_oauth2_client_secret(
     configuration: &configuration::Configuration,
     id: &str,
-) -> Result<
-    models::RotateSecretResponse,
-    Error<RotateOauth2ClientSecretError>,
-> {
+) -> Result<models::RotateSecretResponse, Error<RotateOauth2ClientSecretError>> {
     // add a prefix to parameters to efficiently prevent name collisions
     let p_path_id = id;
 
@@ -269,8 +249,7 @@ pub async fn rotate_oauth2_client_secret(
         .request(reqwest::Method::POST, &uri_str);
 
     if let Some(ref user_agent) = configuration.user_agent {
-        req_builder = req_builder
-            .header(reqwest::header::USER_AGENT, user_agent.clone());
+        req_builder = req_builder.header(reqwest::header::USER_AGENT, user_agent.clone());
     }
 
     let req = req_builder.build()?;
@@ -293,8 +272,7 @@ pub async fn rotate_oauth2_client_secret(
         }
     } else {
         let content = resp.text().await?;
-        let entity: Option<RotateOauth2ClientSecretError> =
-            serde_json::from_str(&content).ok();
+        let entity: Option<RotateOauth2ClientSecretError> = serde_json::from_str(&content).ok();
         Err(Error::ResponseError(ResponseContent {
             status,
             content,
@@ -310,20 +288,17 @@ pub async fn update_oauth2_client(
 ) -> Result<models::OAuth2ClientResponse, Error<UpdateOauth2ClientError>> {
     // add a prefix to parameters to efficiently prevent name collisions
     let p_path_id = id;
-    let p_body_o_auth2_update_client_request =
-        o_auth2_update_client_request;
+    let p_body_o_auth2_update_client_request = o_auth2_update_client_request;
 
     let uri_str = format!(
         "{}/v1/auth/oauth2-clients/{id}",
         configuration.base_path,
         id = crate::apis::urlencode(p_path_id)
     );
-    let mut req_builder =
-        configuration.client.request(reqwest::Method::PUT, &uri_str);
+    let mut req_builder = configuration.client.request(reqwest::Method::PUT, &uri_str);
 
     if let Some(ref user_agent) = configuration.user_agent {
-        req_builder = req_builder
-            .header(reqwest::header::USER_AGENT, user_agent.clone());
+        req_builder = req_builder.header(reqwest::header::USER_AGENT, user_agent.clone());
     }
     req_builder = req_builder.json(&p_body_o_auth2_update_client_request);
 
@@ -347,8 +322,7 @@ pub async fn update_oauth2_client(
         }
     } else {
         let content = resp.text().await?;
-        let entity: Option<UpdateOauth2ClientError> =
-            serde_json::from_str(&content).ok();
+        let entity: Option<UpdateOauth2ClientError> = serde_json::from_str(&content).ok();
         Err(Error::ResponseError(ResponseContent {
             status,
             content,

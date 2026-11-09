@@ -6,6 +6,7 @@ Method | HTTP request | Description
 ------------- | ------------- | -------------
 [**check_policies_for_tenants**](AuthPoliciesApi.md#check_policies_for_tenants) | **POST** /v1/auth/policies/check-tenants | Evaluate one policy action across the authenticated user's tenant scopes.
 [**check_policy_for_resource**](AuthPoliciesApi.md#check_policy_for_resource) | **POST** /v1/auth/policies/check-for-resource | Check permission for a specific resource
+[**delete_policy**](AuthPoliciesApi.md#delete_policy) | **DELETE** /v1/auth/policies/{id} | Delete an unreferenced custom policy.
 [**evaluate_policies_batch**](AuthPoliciesApi.md#evaluate_policies_batch) | **POST** /v1/auth/policies/check | Evaluate multiple policy actions in batch
 [**get_policy**](AuthPoliciesApi.md#get_policy) | **GET** /v1/auth/policies/{id} | Get a policy by ID
 [**list_actions**](AuthPoliciesApi.md#list_actions) | **GET** /v1/auth/actions | List all registered actions
@@ -66,6 +67,34 @@ No authorization required
 ### HTTP request headers
 
 - **Content-Type**: application/json
+- **Accept**: application/json
+
+[[Back to top]](#) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to Model list]](../README.md#documentation-for-models) [[Back to README]](../README.md)
+
+
+## delete_policy
+
+> delete_policy(id)
+Delete an unreferenced custom policy.
+
+### Parameters
+
+
+Name | Type | Description  | Required | Notes
+------------- | ------------- | ------------- | ------------- | -------------
+**id** | **String** | Policy ID | [required] |
+
+### Return type
+
+ (empty response body)
+
+### Authorization
+
+No authorization required
+
+### HTTP request headers
+
+- **Content-Type**: Not defined
 - **Accept**: application/json
 
 [[Back to top]](#) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to Model list]](../README.md#documentation-for-models) [[Back to README]](../README.md)

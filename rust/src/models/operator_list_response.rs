@@ -20,9 +20,7 @@ pub struct OperatorListResponse {
 
 impl OperatorListResponse {
     /// Response for list of operators
-    pub fn new(
-        operators: Vec<models::OperatorResponse>,
-    ) -> OperatorListResponse {
+    pub fn new(operators: Vec<models::OperatorResponse>) -> OperatorListResponse {
         OperatorListResponse { operators }
     }
 }

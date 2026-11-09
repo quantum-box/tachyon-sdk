@@ -4,13 +4,14 @@
 //! both `HOME` and `XDG_CONFIG_HOME` (covers Linux + macOS lookup paths).
 
 use std::fs;
-use std::io::{Read, Write};
-use std::net::TcpListener;
+use std::io::{BufRead, BufReader, Read, Write};
+use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 use std::sync::mpsc;
 use std::thread;
 
+use sha2::{Digest, Sha256};
 use tempfile::TempDir;
 
 fn bin() -> &'static str {
@@ -35,7 +36,9 @@ fn isolated_command(home: &Path) -> Command {
         .env("XDG_CONFIG_HOME", home.join(".config"))
         .env_remove("TACHYON_PROFILE")
         .env_remove("TACHYON_API_KEY")
-        .env_remove("TACHYON_TENANT_ID");
+        .env_remove("TACHYON_TENANT_ID")
+        // Never launch a real browser from tests.
+        .env("TACHYON_NO_BROWSER", "1");
     cmd
 }
 
@@ -81,16 +84,23 @@ fn assert_ok(output: &std::process::Output, label: &str) {
     );
 }
 
-fn start_login_server() -> (String, mpsc::Receiver<String>, thread::JoinHandle<()>) {
+/// Fake Cognito + Tachyon API that answers `requests` requests: the relay
+/// poll, the token exchange, and the operator lookup.
+fn start_login_server(requests: usize) -> (String, mpsc::Receiver<String>, thread::JoinHandle<()>) {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let url = format!("http://{}", listener.local_addr().unwrap());
     let (tx, rx) = mpsc::channel();
     let handle = thread::spawn(move || {
-        for _ in 0..3 {
+        for _ in 0..requests {
             let (mut stream, _) = listener.accept().unwrap();
             let mut buf = [0_u8; 8192];
             let n = stream.read(&mut buf).unwrap();
-            let req = String::from_utf8_lossy(&buf[..n]).to_string();
+            let mut req = String::from_utf8_lossy(&buf[..n]).to_string();
+            // The token request may arrive in two reads (headers, then form body).
+            if req.starts_with("POST") && req.ends_with("\r\n\r\n") {
+                let n = stream.read(&mut buf).unwrap();
+                req.push_str(&String::from_utf8_lossy(&buf[..n]));
+            }
             tx.send(req.clone()).unwrap();
 
             let body = if req.starts_with("GET /v1/auth/cli/poll") {
@@ -111,6 +121,40 @@ fn start_login_server() -> (String, mpsc::Receiver<String>, thread::JoinHandle<(
         }
     });
     (url, rx, handle)
+}
+
+/// Value of `name` in the authorize URL the CLI printed.
+fn authorize_param(stdout: &str, name: &str) -> String {
+    let url = stdout
+        .lines()
+        .map(str::trim)
+        .find(|line| line.contains("/oauth2/authorize?"))
+        .unwrap_or_else(|| panic!("authorize URL missing from output:\n{stdout}"));
+    let query = url.split_once('?').unwrap().1;
+    let raw = query
+        .split('&')
+        .find_map(|pair| pair.strip_prefix(&format!("{name}=")))
+        .unwrap_or_else(|| panic!("{name} missing from {url}"));
+    urlencoding::decode(raw).unwrap().into_owned()
+}
+
+/// Expected `--no-browser` confirmation code, derived independently of the CLI.
+fn expected_user_code(state: &str) -> String {
+    const ALPHABET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
+    let digest = Sha256::digest(format!("tachyon-cli-login:{state}").as_bytes());
+    let mut bits = String::new();
+    for byte in &digest[..5] {
+        bits.push_str(&format!("{byte:08b}"));
+    }
+    let chars: String = bits
+        .as_bytes()
+        .chunks(5)
+        .map(|chunk| {
+            let index = usize::from_str_radix(std::str::from_utf8(chunk).unwrap(), 2).unwrap();
+            char::from(ALPHABET[index])
+        })
+        .collect();
+    format!("{}-{}", &chars[..4], &chars[4..])
 }
 
 fn start_compute_env_server() -> (String, mpsc::Receiver<String>, thread::JoinHandle<()>) {
@@ -303,26 +347,44 @@ fn legacy_credentials_auto_migrate_to_default_profile() {
 }
 
 #[test]
-fn auth_login_writes_profile_and_legacy_credentials_json() {
+fn auth_login_no_browser_relays_through_the_api_with_a_terminal_code() {
     let tmp = TempDir::new().unwrap();
-    let (server_url, rx, handle) = start_login_server();
+    let (server_url, rx, handle) = start_login_server(3);
 
     let out = isolated_command(tmp.path())
         .env("TACHYON_API_URL", &server_url)
         .env("TACHYON_COGNITO_DOMAIN", &server_url)
         .env("TACHYON_COGNITO_CLIENT_ID", "client-id")
         .env("TACHYON_COGNITO_CLIENT_SECRET", "client-secret")
-        .args(["auth", "login", "--profile", "work"])
+        .args(["auth", "login", "--profile", "work", "--no-browser"])
         .output()
-        .expect("run tachyon auth login");
+        .expect("run tachyon auth login --no-browser");
 
-    assert_ok(&out, "auth login");
+    assert_ok(&out, "auth login --no-browser");
     handle.join().unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let state = authorize_param(&stdout, "state");
+    let relay_uri = format!("{server_url}/v1/auth/cli/callback");
+    assert_eq!(authorize_param(&stdout, "redirect_uri"), relay_uri);
+    assert!(
+        stdout.contains(&format!(
+            "enter this code in your browser: {}",
+            expected_user_code(&state)
+        )),
+        "{stdout}"
+    );
+
     let requests: Vec<String> = rx.try_iter().collect();
-    assert!(requests
+    assert!(requests.iter().any(|r| r.starts_with(&format!(
+        "GET /v1/auth/cli/poll?state={}",
+        urlencoding::encode(&state)
+    ))));
+    let token_request = requests
         .iter()
-        .any(|r| r.starts_with("GET /v1/auth/cli/poll")));
-    assert!(requests.iter().any(|r| r.starts_with("POST /oauth2/token")));
+        .find(|r| r.starts_with("POST /oauth2/token"))
+        .expect("token exchange request missing");
+    assert!(token_request.contains("code=callback-code"));
+    assert!(token_request.contains(&format!("redirect_uri={}", urlencoding::encode(&relay_uri))));
     assert!(requests
         .iter()
         .any(|r| r.starts_with("GET /v1/auth/operators/by-user")));
@@ -336,6 +398,31 @@ fn auth_login_writes_profile_and_legacy_credentials_json() {
     assert!(profile.contains("access-after-login"));
     assert!(legacy.contains("access-after-login"));
     assert!(legacy.contains("tn_login123"));
+}
+
+#[test]
+fn auth_login_without_client_secret_uses_default_public_client() {
+    let tmp = TempDir::new().unwrap();
+    let (server_url, rx, handle) = start_login_server(3);
+
+    let out = isolated_command(tmp.path())
+        .env("TACHYON_API_URL", &server_url)
+        .env("TACHYON_COGNITO_DOMAIN", &server_url)
+        .env_remove("TACHYON_COGNITO_CLIENT_ID")
+        .env_remove("TACHYON_COGNITO_CLIENT_SECRET")
+        .args(["auth", "login", "--no-browser"])
+        .output()
+        .expect("run tachyon auth login without Cognito client secret");
+
+    assert_ok(&out, "auth login with default public client");
+    handle.join().unwrap();
+    let requests: Vec<String> = rx.try_iter().collect();
+    let token_request = requests
+        .iter()
+        .find(|request| request.starts_with("POST /oauth2/token"))
+        .expect("token exchange request missing");
+    assert!(token_request.contains("client_id=4101nun74fvfusnlsanc00urke"));
+    assert!(!token_request.contains("client_secret="));
 }
 
 #[test]
@@ -407,4 +494,78 @@ fn invalid_profile_name_is_rejected() {
         stderr.contains("reserved") || stderr.contains("invalid"),
         "expected validation error, got:\n{stderr}"
     );
+}
+
+#[test]
+fn auth_login_receives_the_code_on_a_localhost_callback() {
+    let tmp = TempDir::new().unwrap();
+    let (server_url, rx, handle) = start_login_server(2);
+
+    let mut child = isolated_command(tmp.path())
+        .env("TACHYON_API_URL", &server_url)
+        .env("TACHYON_COGNITO_DOMAIN", &server_url)
+        .env_remove("TACHYON_COGNITO_CLIENT_ID")
+        .env_remove("TACHYON_COGNITO_CLIENT_SECRET")
+        .args(["auth", "login", "--profile", "work"])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn tachyon auth login");
+
+    let mut stdout = BufReader::new(child.stdout.take().unwrap());
+    let mut printed = String::new();
+    while !printed.contains("/oauth2/authorize?") {
+        let mut line = String::new();
+        assert!(
+            stdout.read_line(&mut line).unwrap() > 0,
+            "CLI exited before printing the authorize URL:\n{printed}"
+        );
+        printed.push_str(&line);
+    }
+    let redirect_uri = authorize_param(&printed, "redirect_uri");
+    let state = authorize_param(&printed, "state");
+    let port: u16 = redirect_uri
+        .strip_prefix("http://localhost:")
+        .and_then(|rest| rest.strip_suffix("/callback"))
+        .expect("redirect_uri is http://localhost:{port}/callback")
+        .parse()
+        .unwrap();
+    assert!([42813, 42814, 42815].contains(&port), "{redirect_uri}");
+    assert!(!printed.contains("enter this code"));
+
+    let mut browser = TcpStream::connect(("127.0.0.1", port)).unwrap();
+    write!(
+        browser,
+        "GET /callback?code=loopback-code&state={} HTTP/1.1\r\nHost: localhost:{port}\r\n\r\n",
+        urlencoding::encode(&state)
+    )
+    .unwrap();
+    let mut page = String::new();
+    browser.read_to_string(&mut page).unwrap();
+    assert!(page.starts_with("HTTP/1.1 200 OK"), "{page}");
+
+    let mut rest = String::new();
+    stdout.read_to_string(&mut rest).unwrap();
+    let out = child.wait_with_output().unwrap();
+    assert!(
+        out.status.success(),
+        "auth login failed\nstdout:\n{printed}{rest}\nstderr:\n{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    handle.join().unwrap();
+
+    let requests: Vec<String> = rx.try_iter().collect();
+    assert!(!requests.iter().any(|r| r.contains("/v1/auth/cli/")));
+    let token_request = requests
+        .iter()
+        .find(|r| r.starts_with("POST /oauth2/token"))
+        .expect("token exchange request missing");
+    assert!(token_request.contains("code=loopback-code"));
+    assert!(token_request.contains(&format!(
+        "redirect_uri={}",
+        urlencoding::encode(&redirect_uri)
+    )));
+    assert!(token_request.contains("code_verifier="));
+    let profile = fs::read_to_string(config_root(tmp.path()).join("profiles/work.json")).unwrap();
+    assert!(profile.contains("access-after-login"));
 }

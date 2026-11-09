@@ -6,6 +6,7 @@ All URIs are relative to *http://localhost*
 |------------- | ------------- | -------------|
 | [**checkPoliciesForTenants**](AuthPoliciesApi.md#checkpoliciesfortenants) | **POST** /v1/auth/policies/check-tenants | Evaluate one policy action across the authenticated user\&#39;s tenant scopes. |
 | [**checkPolicyForResource**](AuthPoliciesApi.md#checkpolicyforresourceoperation) | **POST** /v1/auth/policies/check-for-resource | Check permission for a specific resource |
+| [**deletePolicy**](AuthPoliciesApi.md#deletepolicy) | **DELETE** /v1/auth/policies/{id} | Delete an unreferenced custom policy. |
 | [**evaluatePoliciesBatch**](AuthPoliciesApi.md#evaluatepoliciesbatchoperation) | **POST** /v1/auth/policies/check | Evaluate multiple policy actions in batch |
 | [**getPolicy**](AuthPoliciesApi.md#getpolicy) | **GET** /v1/auth/policies/{id} | Get a policy by ID |
 | [**listActions**](AuthPoliciesApi.md#listactions) | **GET** /v1/auth/actions | List all registered actions |
@@ -148,6 +149,75 @@ No authorization required
 | **200** | Permission check result |  -  |
 | **400** | Bad request |  -  |
 | **403** | Forbidden |  -  |
+
+[[Back to top]](#) [[Back to API list]](../README.md#api-endpoints) [[Back to Model list]](../README.md#models) [[Back to README]](../README.md)
+
+
+## deletePolicy
+
+> deletePolicy(id)
+
+Delete an unreferenced custom policy.
+
+### Example
+
+```ts
+import {
+  Configuration,
+  AuthPoliciesApi,
+} from '@tachyon/sdk';
+import type { DeletePolicyRequest } from '@tachyon/sdk';
+
+async function example() {
+  console.log("🚀 Testing @tachyon/sdk SDK...");
+  const api = new AuthPoliciesApi();
+
+  const body = {
+    // string | Policy ID
+    id: id_example,
+  } satisfies DeletePolicyRequest;
+
+  try {
+    const data = await api.deletePolicy(body);
+    console.log(data);
+  } catch (error) {
+    console.error(error);
+  }
+}
+
+// Run the test
+example().catch(console.error);
+```
+
+### Parameters
+
+
+| Name | Type | Description  | Notes |
+|------------- | ------------- | ------------- | -------------|
+| **id** | `string` | Policy ID | [Defaults to `undefined`] |
+
+### Return type
+
+`void` (Empty response body)
+
+### Authorization
+
+No authorization required
+
+### HTTP request headers
+
+- **Content-Type**: Not defined
+- **Accept**: `application/json`
+
+
+### HTTP response details
+| Status code | Description | Response headers |
+|-------------|-------------|------------------|
+| **204** | Policy deleted |  -  |
+| **400** | Invalid policy ID |  -  |
+| **403** | Protected policy or forbidden tenant |  -  |
+| **404** | Policy not found |  -  |
+| **409** | Policy is still referenced |  -  |
 
 [[Back to top]](#) [[Back to API list]](../README.md#api-endpoints) [[Back to Model list]](../README.md#models) [[Back to README]](../README.md)
 

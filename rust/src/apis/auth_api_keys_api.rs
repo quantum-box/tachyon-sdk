@@ -51,16 +51,14 @@ pub async fn create_api_key(
     let uri_str = format!(
         "{}/v1/auth/service-accounts/{service_account_id}/api-keys",
         configuration.base_path,
-        service_account_id =
-            crate::apis::urlencode(p_path_service_account_id)
+        service_account_id = crate::apis::urlencode(p_path_service_account_id)
     );
     let mut req_builder = configuration
         .client
         .request(reqwest::Method::POST, &uri_str);
 
     if let Some(ref user_agent) = configuration.user_agent {
-        req_builder = req_builder
-            .header(reqwest::header::USER_AGENT, user_agent.clone());
+        req_builder = req_builder.header(reqwest::header::USER_AGENT, user_agent.clone());
     }
     req_builder = req_builder.json(&p_body_create_api_key_request);
 
@@ -84,8 +82,7 @@ pub async fn create_api_key(
         }
     } else {
         let content = resp.text().await?;
-        let entity: Option<CreateApiKeyError> =
-            serde_json::from_str(&content).ok();
+        let entity: Option<CreateApiKeyError> = serde_json::from_str(&content).ok();
         Err(Error::ResponseError(ResponseContent {
             status,
             content,
@@ -106,17 +103,13 @@ pub async fn list_api_keys(
     let uri_str = format!(
         "{}/v1/auth/service-accounts/{service_account_id}/api-keys",
         configuration.base_path,
-        service_account_id =
-            crate::apis::urlencode(p_path_service_account_id)
+        service_account_id = crate::apis::urlencode(p_path_service_account_id)
     );
-    let mut req_builder =
-        configuration.client.request(reqwest::Method::GET, &uri_str);
+    let mut req_builder = configuration.client.request(reqwest::Method::GET, &uri_str);
 
-    req_builder = req_builder
-        .query(&[("operator_id", &p_query_operator_id.to_string())]);
+    req_builder = req_builder.query(&[("operator_id", &p_query_operator_id.to_string())]);
     if let Some(ref user_agent) = configuration.user_agent {
-        req_builder = req_builder
-            .header(reqwest::header::USER_AGENT, user_agent.clone());
+        req_builder = req_builder.header(reqwest::header::USER_AGENT, user_agent.clone());
     }
 
     let req = req_builder.build()?;
@@ -139,8 +132,7 @@ pub async fn list_api_keys(
         }
     } else {
         let content = resp.text().await?;
-        let entity: Option<ListApiKeysError> =
-            serde_json::from_str(&content).ok();
+        let entity: Option<ListApiKeysError> = serde_json::from_str(&content).ok();
         Err(Error::ResponseError(ResponseContent {
             status,
             content,
@@ -156,15 +148,13 @@ pub async fn verify_api_key(
     // add a prefix to parameters to efficiently prevent name collisions
     let p_body_verify_api_key_request = verify_api_key_request;
 
-    let uri_str =
-        format!("{}/v1/auth/api-keys/verify", configuration.base_path);
+    let uri_str = format!("{}/v1/auth/api-keys/verify", configuration.base_path);
     let mut req_builder = configuration
         .client
         .request(reqwest::Method::POST, &uri_str);
 
     if let Some(ref user_agent) = configuration.user_agent {
-        req_builder = req_builder
-            .header(reqwest::header::USER_AGENT, user_agent.clone());
+        req_builder = req_builder.header(reqwest::header::USER_AGENT, user_agent.clone());
     }
     req_builder = req_builder.json(&p_body_verify_api_key_request);
 
@@ -188,8 +178,7 @@ pub async fn verify_api_key(
         }
     } else {
         let content = resp.text().await?;
-        let entity: Option<VerifyApiKeyError> =
-            serde_json::from_str(&content).ok();
+        let entity: Option<VerifyApiKeyError> = serde_json::from_str(&content).ok();
         Err(Error::ResponseError(ResponseContent {
             status,
             content,

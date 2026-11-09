@@ -36,13 +36,9 @@ pub enum VerifyError {
 pub async fn sign_in_with_platform(
     configuration: &configuration::Configuration,
     sign_in_with_platform_request: models::SignInWithPlatformRequest,
-) -> Result<
-    models::SignInWithPlatformResponse,
-    Error<SignInWithPlatformError>,
-> {
+) -> Result<models::SignInWithPlatformResponse, Error<SignInWithPlatformError>> {
     // add a prefix to parameters to efficiently prevent name collisions
-    let p_body_sign_in_with_platform_request =
-        sign_in_with_platform_request;
+    let p_body_sign_in_with_platform_request = sign_in_with_platform_request;
 
     let uri_str = format!(
         "{}/auth/v1beta/sign-in-with-platform",
@@ -53,8 +49,7 @@ pub async fn sign_in_with_platform(
         .request(reqwest::Method::POST, &uri_str);
 
     if let Some(ref user_agent) = configuration.user_agent {
-        req_builder = req_builder
-            .header(reqwest::header::USER_AGENT, user_agent.clone());
+        req_builder = req_builder.header(reqwest::header::USER_AGENT, user_agent.clone());
     }
     req_builder = req_builder.json(&p_body_sign_in_with_platform_request);
 
@@ -78,8 +73,7 @@ pub async fn sign_in_with_platform(
         }
     } else {
         let content = resp.text().await?;
-        let entity: Option<SignInWithPlatformError> =
-            serde_json::from_str(&content).ok();
+        let entity: Option<SignInWithPlatformError> = serde_json::from_str(&content).ok();
         Err(Error::ResponseError(ResponseContent {
             status,
             content,
@@ -101,8 +95,7 @@ pub async fn verify(
         .request(reqwest::Method::POST, &uri_str);
 
     if let Some(ref user_agent) = configuration.user_agent {
-        req_builder = req_builder
-            .header(reqwest::header::USER_AGENT, user_agent.clone());
+        req_builder = req_builder.header(reqwest::header::USER_AGENT, user_agent.clone());
     }
     req_builder = req_builder.json(&p_body_verify_request);
 
@@ -126,8 +119,7 @@ pub async fn verify(
         }
     } else {
         let content = resp.text().await?;
-        let entity: Option<VerifyError> =
-            serde_json::from_str(&content).ok();
+        let entity: Option<VerifyError> = serde_json::from_str(&content).ok();
         Err(Error::ResponseError(ResponseContent {
             status,
             content,

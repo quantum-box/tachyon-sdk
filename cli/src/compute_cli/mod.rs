@@ -1,10 +1,11 @@
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, Context, Result};
 use chrono::{DateTime, TimeZone, Utc};
 use clap::{Args, Subcommand, ValueEnum};
 use dialoguer::{theme::ColorfulTheme, Password};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::future::Future;
 use std::io::{self, IsTerminal, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -19,6 +20,14 @@ use crate::resolve;
 
 const BUILD_LOGS_FOLLOW_INTERVAL: Duration = Duration::from_secs(2);
 const BUILD_LOGS_MAX_NO_PROGRESS_NONE_TOKEN_POLLS: usize = 3;
+// Healthy builds-list requests were measured at about 3s. Keep a 10x margin
+// while bounding the observed 62-120s tail.
+const BUILDS_LIST_DEFAULT_TIMEOUT_SECS: u64 = 30;
+// Preview URLs are optional enrichment shown after the build table, so they
+// get a smaller independent budget and never fail the primary list result.
+const BUILDS_LIST_DEFAULT_PREVIEW_TIMEOUT_SECS: u64 = 5;
+const BUILDS_LIST_PROGRESS_DELAY: Duration = Duration::from_secs(2);
+const BUILDS_LIST_PROGRESS_INTERVAL: Duration = Duration::from_secs(5);
 
 #[derive(Debug, Clone, Args)]
 pub struct ComputeArgs {
@@ -121,6 +130,7 @@ pub enum ComputeCommand {
 
 mod apps;
 mod builds;
+pub(crate) mod change_control;
 mod deployments;
 mod domains;
 mod env;
@@ -136,8 +146,9 @@ pub use local::PagesApp;
 pub use scaling::ScalingCommand;
 
 pub(crate) use apps::{
-    app_entry_to_api_body, normalize_cloud_apps_document, plan_env_vars, run_apps_apply,
-    run_apps_apply_manifest, select_app_entries, AppsApplyManifestInput,
+    app_entry_to_api_body, normalize_cloud_apps_document, plan_env_vars,
+    resolve_app_entry_for_environment, run_apps_apply, run_apps_apply_manifest, select_app_entries,
+    validate_generated_env_target, AppsApplyInput, AppsApplyManifestInput,
 };
 pub(crate) use env::validate_secret_key;
 
@@ -260,6 +271,11 @@ pub async fn run(
                 let id = resolve::resolve_app_id(&api, app_id).await?;
                 run_apps_get(&api, &id, *json).await
             }
+            AppsCommand::Update {
+                app_id,
+                connection_id,
+                yes,
+            } => run_apps_update(&api, app_id, connection_id, *yes).await,
             AppsCommand::Delete { app_id } => {
                 let app_id = app_id_or_default(app_id, project_config)?;
                 let id = resolve::resolve_app_id(&api, app_id).await?;
@@ -270,17 +286,19 @@ pub async fn run(
                 app,
                 environment,
                 change_control_token,
+                release_checks_only,
                 dry_run,
             } => {
-                run_apps_apply(
-                    &api,
+                run_apps_apply(AppsApplyInput {
+                    api: &api,
                     tenant_id,
                     file,
-                    app.as_deref(),
+                    selected_app: app.as_deref(),
                     environment,
-                    change_control_token.as_deref(),
-                    *dry_run,
-                )
+                    change_control_token: change_control_token.as_deref(),
+                    release_checks_only: *release_checks_only,
+                    dry_run: *dry_run,
+                })
                 .await
             }
             AppsCommand::SyncSecrets {
@@ -298,6 +316,11 @@ pub async fn run(
             Some(PreviewCommand::Create { app, branch }) => {
                 run_preview_create(&api, app, branch).await
             }
+            Some(PreviewCommand::Database { command }) => match command {
+                PreviewDatabaseCommand::Delete { app, pr, yes, json } => {
+                    run_preview_database_delete(&api, app, *pr, *yes, *json).await
+                }
+            },
             None => {
                 run_preview(
                     &api,
@@ -314,10 +337,37 @@ pub async fn run(
                 app_id,
                 limit,
                 json,
+                timeout_secs,
+                preview_timeout_secs,
+                verbose,
             } => {
+                let command_started = Instant::now();
                 let app_id = app_id_or_default(app_id, project_config)?;
-                let id = resolve::resolve_app_id(&api, app_id).await?;
-                run_builds_list(&api, &id, *limit, *json).await
+                let timeout = Duration::from_secs(*timeout_secs);
+                let resolve_started = Instant::now();
+                let id = wait_for_builds_list_stage(
+                    "app resolution",
+                    resolve_started,
+                    timeout,
+                    tokio::time::Instant::now() + timeout,
+                    resolve::resolve_app_id(&api, app_id),
+                )
+                .await;
+                print_builds_list_timing(*verbose, "resolve app", resolve_started.elapsed());
+                let id = id?;
+                run_builds_list(
+                    &api,
+                    &id,
+                    *limit,
+                    *json,
+                    BuildsListOptions {
+                        timeout,
+                        preview_timeout: Duration::from_secs(*preview_timeout_secs),
+                        verbose: *verbose,
+                        command_started,
+                    },
+                )
+                .await
             }
             BuildsCommand::Get { build_id, json } => run_builds_get(&api, build_id, *json).await,
             BuildsCommand::Trigger { app_id, branch, pr } => {
@@ -409,10 +459,20 @@ pub async fn run(
             DeploymentsCommand::Rollback {
                 app_id,
                 deployment_id,
+                to_previous,
             } => {
                 let app_id = app_id_or_default(app_id, project_config)?;
                 let id = resolve::resolve_app_id(&api, app_id).await?;
-                run_deployments_rollback(&api, &id, deployment_id).await
+                run_deployments_rollback(&api, &id, deployment_id.as_deref(), *to_previous).await
+            }
+            DeploymentsCommand::RollbackCandidates {
+                app_id,
+                limit,
+                json,
+            } => {
+                let app_id = app_id_or_default(app_id, project_config)?;
+                let id = resolve::resolve_app_id(&api, app_id).await?;
+                run_deployments_rollback_candidates(&api, &id, *limit, *json).await
             }
         },
         ComputeCommand::Env { command } => match command {
@@ -517,17 +577,49 @@ pub async fn run(
                 app_id,
                 min_instances,
                 max_instances,
+                lambda_memory_size,
+                lambda_timeout,
             } => {
                 let app_id = app_id_or_default(app_id, project_config)?;
                 let id = resolve::resolve_app_id(&api, app_id).await?;
-                run_scaling_update(&api, &id, *min_instances, *max_instances).await
+                run_scaling_update(
+                    &api,
+                    &id,
+                    *min_instances,
+                    *max_instances,
+                    *lambda_memory_size,
+                    *lambda_timeout,
+                )
+                .await
             }
         },
         // Legacy shortcuts
         ComputeCommand::Status { app_id, limit } => {
+            let command_started = Instant::now();
             let app_id = app_id_or_default(app_id, project_config)?;
-            let id = resolve::resolve_app_id(&api, app_id).await?;
-            run_builds_list(&api, &id, *limit, false).await
+            let timeout = Duration::from_secs(BUILDS_LIST_DEFAULT_TIMEOUT_SECS);
+            let resolve_started = Instant::now();
+            let id = wait_for_builds_list_stage(
+                "app resolution",
+                resolve_started,
+                timeout,
+                tokio::time::Instant::now() + timeout,
+                resolve::resolve_app_id(&api, app_id),
+            )
+            .await?;
+            run_builds_list(
+                &api,
+                &id,
+                *limit,
+                false,
+                BuildsListOptions {
+                    timeout,
+                    preview_timeout: Duration::from_secs(BUILDS_LIST_DEFAULT_PREVIEW_TIMEOUT_SECS),
+                    verbose: false,
+                    command_started,
+                },
+            )
+            .await
         }
         ComputeCommand::Logs {
             app_id,
@@ -604,7 +696,7 @@ mod tests {
                 {
                     "name": "SENTRY_DSN",
                     "valueFrom": {
-                        "secret": "SENTRY_DSN"
+                        "secret": "sentry/dsn"
                     }
                 }
             ]
@@ -732,6 +824,54 @@ mod tests {
     }
 
     #[test]
+    fn sync_secrets_request_uses_preview_overlay_object_secret_ref() {
+        let entry = json!({
+            "name": "tachyon-field-api",
+            "envVars": [{
+                "name": "DATABASE_URL",
+                "type": "credential",
+                "valueFrom": {
+                    "databaseRef": {
+                        "name": "tidb_field_prod",
+                        "field": "url"
+                    }
+                }
+            }],
+            "environments": {
+                "preview": {
+                    "envVars": [{
+                        "name": "DATABASE_URL",
+                        "type": "credential",
+                        "valueFrom": {
+                            "secret": {
+                                "path": "providers/tidb_field_preview",
+                                "field": "DATABASE_URL"
+                            }
+                        }
+                    }]
+                }
+            }
+        });
+
+        let entry = resolve_app_entry_for_environment(&entry, "preview").unwrap();
+        let request = build_sync_secrets_request(&entry, "preview").unwrap();
+
+        assert_eq!(request.app_name, "tachyon-field-api");
+        assert_eq!(request.environment, "preview");
+        assert_eq!(request.refs.len(), 1);
+        assert_eq!(request.refs[0].key, "DATABASE_URL");
+        assert_eq!(request.refs[0].target, "preview");
+        assert_eq!(request.refs[0].source, "secretRef");
+        assert_eq!(
+            request.refs[0].source_ref,
+            json!({
+                "path": "providers/tidb_field_preview",
+                "field": "DATABASE_URL"
+            })
+        );
+    }
+
+    #[test]
     fn sync_secrets_request_enumerates_refs_in_stable_order() {
         let entry = json!({
             "name": "fieldadmin",
@@ -751,7 +891,10 @@ mod tests {
                     "name": "RESEND_API_KEY",
                     "type": "credential",
                     "valueFrom": {
-                        "secret": "prod/resend/api-key"
+                        "secret": {
+                            "path": "providers/notifications",
+                            "field": "RESEND_API_KEY"
+                        }
                     }
                 },
                 {
@@ -792,6 +935,13 @@ mod tests {
                 ("DATABASE_URL", "preview", "databaseRef"),
                 ("RESEND_API_KEY", "production", "secretRef"),
             ]
+        );
+        assert_eq!(
+            request.refs[2].source_ref,
+            json!({
+                "path": "providers/notifications",
+                "field": "RESEND_API_KEY"
+            })
         );
     }
 

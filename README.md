@@ -2,9 +2,15 @@
 
 Auto-generated multi-language API clients for the [Tachyon Platform](https://github.com/quantum-box/tachyon-apps) REST API, plus a standalone CLI binary.
 
+## Development
+
+Rust projects in this repository use `nightly-2026-06-04`, pinned in
+`rust-toolchain.toml`. The CLI has an additional
+`cli/rust-toolchain.toml` pin with the same version.
+
 ## CLI
 
-Latest release: **v0.6.13**
+Latest release: **v0.6.31**
 
 ### Install
 
@@ -24,6 +30,19 @@ curl -fsSL https://raw.githubusercontent.com/quantum-box/tachyon-sdk/main/script
 
 Installs `tachyon` to `/usr/local/bin` (or `~/.local/bin` if you lack write permission).
 
+Local development install (build from source):
+
+```sh
+sh scripts/dev-install.sh
+```
+
+Builds the CLI from the current source and installs a **real-file copy** to
+`~/.local/bin/tachyon` (or use `cargo install --path cli --force` for `~/.cargo/bin`).
+**Do not** symlink `~/.local/bin/tachyon` into `cli/target/release/` — a symlink into
+`target/` breaks when the directory is cleaned (disk cleanup / `cargo clean`) and silently
+takes down the CLI, including the CEO-escalation path and `tachyon-browser` (PLT-2636,
+2026-07-18 incident).
+
 Supported platforms:
 
 | OS | Architecture | Artifact |
@@ -32,6 +51,21 @@ Supported platforms:
 | Linux | arm64 | `tachyon-linux-arm64.tar.gz` |
 | macOS | arm64 (Apple Silicon) | `tachyon-darwin-arm64.tar.gz` |
 | macOS | x86_64 (Intel) | `tachyon-darwin-x86_64.tar.gz` |
+
+The Linux artifacts above are dynamically linked against glibc and are
+built on Ubuntu 24.04, so they require GLIBC_2.39 or newer. For older
+base images — notably Amazon Linux 2023 (glibc 2.34), used by the
+CodeBuild Cloud App build runners — use the statically linked musl
+artifacts instead:
+
+| OS | Architecture | Artifact |
+|----|--------------|----------|
+| Linux (static) | x86_64 | `tachyon-linux-musl-x86_64.tar.gz` |
+| Linux (static) | arm64 | `tachyon-linux-musl-arm64.tar.gz` |
+
+Automated consumers that run the CLI inside a build image should prefer
+the musl artifacts: they carry no libc version requirement, so they do
+not break when the release runner's glibc is upgraded.
 
 If you see `Failed to fetch latest release tag` (GitHub API 403 / rate limit), pass a token:
 
@@ -67,12 +101,43 @@ TACHYON_PROFILE=work tachyon compute apps list
 tachyon auth logout --profile personal
 ```
 
+`tachyon auth login` opens your browser and waits on `127.0.0.1` (port 42813,
+42814 or 42815, whichever is free) for the browser to return to
+`http://localhost:{port}/callback`. Set `TACHYON_NO_BROWSER=1` to only print
+the login URL instead of opening it; the browser still has to run on the same
+machine.
+
+When the browser runs on another machine (SSH, containers), use
+`--no-browser`. The CLI prints the login URL and a code such as `ABCD-EFGH`.
+Open the URL, sign in, and enter the code on the confirmation page; the CLI
+then finishes the login:
+
+```sh
+tachyon auth login --no-browser
+```
+
+Only enter the code on a page you opened from the URL your own terminal
+printed.
+
 Resolution order when picking a profile for a command:
 
 1. `--profile <name>` global flag
 2. `TACHYON_PROFILE` env var
 3. `~/.config/tachyon/active_profile` file (set by `auth login` / `auth use`)
 4. `default`
+
+To hand the logged-in user's token to a script without copying it by hand,
+pipe `tachyon auth token` into it:
+
+```sh
+tachyon auth token | node my-script.mjs --token-stdin
+tachyon auth token --profile work | ./tool --token-stdin
+```
+
+`auth token` refreshes the token first when it expires within 10 minutes
+(`--min-validity <seconds>` to change), writes only the token to stdout, and
+refuses to print it to a terminal. It also refuses while `--api-key` /
+`TACHYON_API_KEY` is set, because it only hands out the user's own login.
 
 Existing single-account installs are auto-migrated: an older
 `~/.config/tachyon/credentials.json` is copied to `profiles/default.json`
@@ -81,12 +146,118 @@ on first use, with the legacy file kept for downgrade safety.
 > Phase 2 (macOS Keychain / Linux secret-service / encryption-at-rest) is
 > tracked separately. Profiles are currently plaintext JSON with `0o600` perms.
 
+### Profile-specific PM defaults
+
+Project-management defaults can be stored separately for each auth profile.
+They are written to `~/.config/tachyon/settings.json`, not to the profile's
+credentials JSON, so logging in or refreshing a token does not overwrite them.
+
+```sh
+# Human-operated profile: leave Linear issues unassigned by default
+tachyon config set pm.no_delegate true --profile admin
+
+# Agent profile: keep automatic Linear delegation and use a default team
+tachyon config set pm.no_delegate false --profile agent_app
+tachyon config set pm.default_team "Platform Team" --profile agent_app
+
+# Read all settings or one setting for a profile
+tachyon config get --profile admin
+tachyon config get pm.no_delegate --profile admin
+
+# Remove a profile default
+tachyon config unset pm.default_team --profile agent_app
+```
+
+PM defaults are resolved in this order:
+
+1. Explicit CLI flags such as `--no-delegate`, `--team`, `--team-id`, or
+   `--delegate-id`
+2. `TACHYON_PM_NO_DELEGATE` and `TACHYON_PM_DEFAULT_TEAM`
+3. The selected profile's settings
+4. Existing behavior, including the server-side tenant IaC default team
+
+`TACHYON_PM_NO_DELEGATE` accepts `true` or `false`. An explicit
+`--delegate-id` always requests that delegate even when `no_delegate` is true
+for the environment or profile. The same defaults apply to `tachyon pm issue`,
+`tachyon issue`, and `tachyon linear issue`.
+
+### Stripe provider credentials
+
+Register a tenant's own Stripe platform credentials with hidden terminal
+prompts. The CLI sends the values directly to Tachyon's self-scoped provider
+credential endpoint and does not write them to a manifest, local IaC state, or
+the auth profile.
+
+```sh
+tachyon provider stripe credentials set \
+  --tenant-id tn_course \
+  --platform-id tn_course
+```
+
+The tenant must be explicit either through `--tenant-id` or
+`metadata.tenantId` / `metadata.tenant_id` in the nearest `tachyon.yml`.
+The command confirms that tenant before prompting. For automation, pipe one
+JSON object and acknowledge the pre-verified target explicitly:
+
+```sh
+secret-manager read courseboard-stripe --format json \
+  | tachyon provider stripe credentials set \
+      --tenant-id tn_course \
+      --platform-id tn_course \
+      --from-stdin \
+      --yes
+```
+
+The JSON fields are `secret_key`, `publishable_key`, and optional
+`webhook_secret` / `connect_webhook_secret`. Do not place their values in CLI
+arguments, shell history, or tracked files. Tachyon stores the secret values in
+its secrets context and keeps only `$secret_ref` entries in `ProjectConfig`.
+
+### IaC change-control approval and concurrent-update protection
+
+`tachyon iac apply`, `tachyon iac import-seed`, and `tachyon iac rollback`
+accept a change-control approval token through
+`TACHYON_CHANGE_CONTROL_APPROVAL_TOKEN` or `--change-control-token`. Prefer the
+environment variable so the token does not appear in shell history or process
+arguments. For example, in Bash:
+
+```bash
+read -rsp 'Change-control approval token: ' TACHYON_CHANGE_CONTROL_APPROVAL_TOKEN
+printf '\n'
+export TACHYON_CHANGE_CONTROL_APPROVAL_TOKEN
+
+tachyon iac apply --file tachyon.yml
+tachyon iac import-seed --file 003-iac-manifests.yaml
+tachyon iac rollback --kind CloudApp --name example --revision 3
+
+unset TACHYON_CHANGE_CONTROL_APPROVAL_TOKEN
+```
+
+The token is validated locally when supplied, then sent only in the
+`x-tachyon-change-control-token` request header. It is not placed in GraphQL
+variables, local IaC state, or command output. `import-seed --dry-run` sends no
+mutation and does not require a token.
+
+Before the first write, each command reads the latest saved revision for every
+target manifest and sends it as `expectedRevision`. If another writer changes a
+manifest after that preflight, the server returns a CAS conflict instead of
+overwriting the concurrent update; inspect the latest state and rerun the
+command to re-plan. Multi-manifest commands can still complete earlier writes
+before a later manifest conflicts.
+
+The token option remains optional at the CLI compatibility layer in this
+rollout stage. Commands without a token continue to use the existing
+server-side tenant and change-control policy behavior.
+
 ### Usage
 
 ```sh
 # Set credentials
 export TACHYON_API_URL=https://api.n1.tachy.one
 export TACHYON_TENANT_ID=tn_xxxx
+# Optional: platform scope (x-platform-id) for tenants you reach through a
+# parent platform rather than direct membership, e.g. the system tenant.
+export TACHYON_PLATFORM_ID=tn_xxxx
 export TACHYON_API_KEY=your-api-key
 
 # Show recent build status for an app
@@ -113,6 +284,27 @@ tachyon compute preview <app-id> --branch feature/my-change
 tachyon compute preview <app-id> --pr 123
 tachyon compute builds trigger <app-id> --pr 123
 
+# Preview a compute app GitHub connection update
+tachyon compute apps update <app-id> --connection-id <connection-id>
+
+# Apply after verifying the displayed app name and current connection
+tachyon compute apps update <app-id> --connection-id <connection-id> --yes
+
+# Clear the connection (empty string semantics are preserved)
+tachyon compute apps update <app-id> --connection-id "" --yes
+
+# Create a one-off Linear issue without automatic delegation
+tachyon issue create --provider linear --team PLT \
+  --title "Unassigned issue" --no-delegate
+
+# Reconcile only one app's production release-check contract.
+# Production change-control approval is still required.
+tachyon compute apps apply \
+  --file tachyon.yml \
+  --app <app-name> \
+  --environment production \
+  --release-checks-only
+
 # Compact JSON Lines for coding agents
 tachyon compute builds watch --build-id <build-id> --agent
 tachyon compute logs --build-id <build-id> --follow --agent
@@ -138,6 +330,63 @@ cancelled, and timed-out builds return non-zero so automation can stop early.
 > a cloud build and replays it locally in a CodeBuild-compatible Docker
 > container. Phase 1 requires `--mock <path>`; the live build-config endpoint
 > (PLT-913) lands in Phase 2.
+
+### Service accounts and API keys
+
+Set up a service account for automation (for example an IaC apply job) in the
+tenant selected by `TACHYON_TENANT_ID` / `--tenant-id`:
+
+```sh
+# Create the service account. Names must be unique within the tenant; the
+# command stops if one with the same name already exists.
+tachyon org service-accounts create gha.iac-apply.write
+
+# Attach a policy. Both arguments accept an ID or a name.
+tachyon org service-accounts attach-policy gha.iac-apply.write IacApplyWrite
+
+# Issue a key that expires after 90 days (omit --ttl-seconds for no expiry).
+tachyon api-key create gha.iac-apply.write --name github-actions \
+  --ttl-seconds 7776000 --json
+
+# Detach a policy, or delete the service account together with its API keys.
+tachyon org service-accounts detach-policy gha.iac-apply.write IacApplyWrite
+tachyon org service-accounts delete gha.iac-apply.write
+```
+
+A policy name resolves to the policy owned by the current tenant first, then to
+a system policy or a policy shared from an ancestor tenant. If more than one
+policy or service account matches a name, the command stops and lists the
+matching IDs; pass one of those IDs instead. All of these commands accept
+`--json`.
+
+### Slack notifications
+
+Use `--mention` more than once to mix Slack users, Teams (User Groups),
+broadcasts, and ProjectConfig aliases. `ops slack` is an alias for
+`ops notify`.
+
+```sh
+# Mention a Team by display name or @handle.
+tachyon ops notify send --text "Deploy complete" --mention "Platform Team"
+tachyon ops slack send --text "Incident detected" --mention @platform-team
+
+# User IDs, Team IDs, broadcasts, and configured aliases can be mixed.
+tachyon ops notify send --text "Please investigate" \
+  --mention U0123456789 \
+  --mention S0123456789 \
+  --mention @here \
+  --mention on-call
+
+# A raw Slack User Group mention token remains supported.
+tachyon ops notify send --text "Release ready" \
+  --mention '<!subteam^S0123456789>'
+```
+
+Team display names and handles are resolved through the tenant's saved Slack
+connection using exact, case-insensitive matching. The CLI never picks the
+first or closest candidate: unknown handles/IDs, ambiguous names/handles, and
+disabled Teams fail before the Slack notification is sent. Mentions that
+resolve to the same Slack target are sent only once.
 
 ### Worker runtime
 
@@ -250,7 +499,7 @@ Additional domain-specific TypeScript SDKs published under the `@tachyon-sdk/*` 
 
 | Package | Version | Description |
 |---------|---------|-------------|
-| [`@tachyon-sdk/cli`](packages/cli) | `0.6.13` | Global npm installer for the Tachyon CLI |
+| [`@tachyon-sdk/cli`](packages/cli) | `0.6.30` | Global npm installer for the Tachyon CLI |
 | [`@tachyon-sdk/storekit`](packages/storekit) | `0.3.0` | Commerce SDK: auth, order management (updateStatus/cancel/refund), inventory operations |
 | [`@tachyon-sdk/agent`](packages/agent) | — | Agent runtime SDK |
 | [`@tachyon-sdk/agent-chat`](packages/agent-chat) | — | Agent chat utilities + bundled skills |
@@ -387,3 +636,16 @@ STOREKIT_TYPESCRIPT_OUT=typescript-storekit \
 ## License
 
 MIT © 2026 Quantum Box株式会社
+
+## Feature flags
+
+The `feature-flag` command uses the current authentication profile and an explicit tenant scope.
+
+```sh
+tachyon feature-flag list --tenant-id <tenant-id> --search <key> --json
+tachyon feature-flag get <key> --tenant-id <tenant-id> --json
+tachyon feature-flag enable <key> --tenant-id <tenant-id> --json
+tachyon feature-flag disable <key> --tenant-id <tenant-id> --json
+```
+
+Enable and disable send a desired boolean state rather than toggling the current value, so retries do not invert it. The server resolves the key in the selected scope and enforces inherited-definition and publication-approval rules. These commands do not bypass host publication approvals or mutate the ancestor's row directly. GraphQL errors return a nonzero exit status.

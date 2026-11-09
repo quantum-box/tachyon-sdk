@@ -7,6 +7,9 @@ mod cloud_app_build_job;
 mod commands;
 mod compute_cli;
 mod config;
+mod data_cli;
+mod erp_replay_cli;
+mod feature_flag_cli;
 mod iac_cli;
 mod image_cli;
 mod install_cli;
@@ -17,9 +20,15 @@ mod mcp_cli;
 mod ops_cli;
 mod org_cli;
 mod pm_cli;
+mod pm_project_update_cli;
+mod pm_resource_cli;
+mod provider_cli;
 mod reconcile_cli;
 mod resolve;
+mod response_contract;
 mod secret_cli;
+mod settings;
+mod settings_cli;
 mod skills_cli;
 mod slack_cli;
 mod source_cli;
@@ -36,10 +45,8 @@ use crate::client::AuthDiagnostics;
 
 /// Default Cognito domain for the Tachyon production environment.
 const DEFAULT_COGNITO_DOMAIN: &str = "https://auth-pool.n1.tachy.one";
-/// Default Cognito client ID (tachyon-app-client).
-const DEFAULT_COGNITO_CLIENT_ID: &str = "5002hok6cj8mjmt3gepdpdq98i";
-/// Default Cognito client secret (tachyon-app-client).
-const DEFAULT_COGNITO_CLIENT_SECRET: &str = "3epft46iie79jshd4gkpeuj62q1pcmthequ1skbbd9dj1rdojrf";
+/// Default Cognito client ID (tachyon-cli-client, a public client).
+const DEFAULT_COGNITO_CLIENT_ID: &str = "4101nun74fvfusnlsanc00urke";
 
 #[derive(Parser)]
 #[command(name = "tachyon", version, about = "Tachyon Platform CLI")]
@@ -62,6 +69,17 @@ struct Cli {
     )]
     tenant_id: String,
 
+    /// Platform ID that scopes the request (x-platform-id header). Required
+    /// when the tenant is one you access through a parent platform rather
+    /// than direct membership, such as the system tenant for ops commands.
+    #[arg(
+        long,
+        visible_alias = "platform",
+        env = "TACHYON_PLATFORM_ID",
+        global = true
+    )]
+    platform_id: Option<String>,
+
     /// API key for authentication (overrides stored OAuth token)
     #[arg(long, env = "TACHYON_API_KEY")]
     api_key: Option<String>,
@@ -82,9 +100,9 @@ struct Cli {
     #[arg(long, env = "TACHYON_COGNITO_CLIENT_ID", default_value = DEFAULT_COGNITO_CLIENT_ID)]
     cognito_client_id: String,
 
-    /// Cognito OAuth client secret
-    #[arg(long, env = "TACHYON_COGNITO_CLIENT_SECRET", default_value = DEFAULT_COGNITO_CLIENT_SECRET)]
-    cognito_client_secret: String,
+    /// Cognito OAuth client secret for an explicitly configured confidential client
+    #[arg(long, env = "TACHYON_COGNITO_CLIENT_SECRET", hide_env_values = true)]
+    cognito_client_secret: Option<String>,
 
     #[command(subcommand)]
     command: Commands,
@@ -93,6 +111,165 @@ struct Cli {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn explicit_cognito_client_id_overrides_public_client_default() {
+        let cli = Cli::try_parse_from([
+            "tachyon",
+            "--cognito-client-id",
+            "explicit-client-id",
+            "auth",
+            "list",
+        ])
+        .unwrap();
+
+        assert_eq!(cli.cognito_client_id, "explicit-client-id");
+        assert_ne!(cli.cognito_client_id, DEFAULT_COGNITO_CLIENT_ID);
+    }
+
+    #[test]
+    fn parses_tenant_grant_create_with_repository_scope() {
+        let cli = Cli::try_parse_from([
+            "tachyon",
+            "iac",
+            "grants",
+            "create",
+            "--provider",
+            "github",
+            "--installation-id",
+            "12345",
+            "--verification",
+            "gv1_test",
+            "--repo",
+            "quantum-box/tachyon-apps",
+            "--repo",
+            "quantum-box/bernard-square",
+            "--json",
+        ])
+        .unwrap();
+
+        match cli.command {
+            Commands::Iac(iac_cli::IacArgs {
+                command:
+                    iac_cli::IacCommand::Grants {
+                        command:
+                            iac_cli::GrantsCommand::Create {
+                                provider,
+                                installation_id,
+                                verification,
+                                all,
+                                repos,
+                                json,
+                            },
+                    },
+            }) => {
+                assert_eq!(provider, "github");
+                assert_eq!(installation_id, "12345");
+                assert_eq!(verification, "gv1_test");
+                assert!(!all);
+                assert_eq!(
+                    repos,
+                    vec![
+                        "quantum-box/tachyon-apps".to_string(),
+                        "quantum-box/bernard-square".to_string(),
+                    ]
+                );
+                assert!(json);
+            }
+            _ => panic!("unexpected command"),
+        }
+    }
+
+    #[test]
+    fn parses_ops_erp_replays_request_with_the_host_tenant_default() {
+        let cli = Cli::try_parse_from([
+            "tachyon",
+            "ops",
+            "erp-replays",
+            "request",
+            "--outbox",
+            "usage",
+            "--record-id",
+            "credit_consumption_attempts:cca_1:input-token",
+            "--reason",
+            "PLT-4603 canary duplicate drill",
+            "--change-reference",
+            "PLT-4603 A6b: link",
+            "--platform-id",
+            "tn_platform",
+        ])
+        .unwrap();
+
+        assert_eq!(cli.platform_id.as_deref(), Some("tn_platform"));
+        match cli.command {
+            Commands::Ops(ops_cli::OpsArgs {
+                command:
+                    ops_cli::OpsCommand::ErpReplays {
+                        command:
+                            erp_replay_cli::ErpReplaysCommand::Request {
+                                outbox,
+                                record_ids,
+                                target,
+                                ..
+                            },
+                    },
+            }) => {
+                assert_eq!(outbox, erp_replay_cli::ReplayOutbox::Usage);
+                assert_eq!(record_ids.len(), 1);
+                assert_eq!(
+                    target.host_tenant_id,
+                    erp_replay_cli::DEFAULT_HOST_TENANT_ID
+                );
+            }
+            _ => panic!("expected ops erp-replays request"),
+        }
+    }
+
+    #[test]
+    fn ops_erp_replays_execute_requires_the_digest() {
+        assert!(
+            Cli::try_parse_from(["tachyon", "ops", "erp-replays", "execute", "edr_01",]).is_err()
+        );
+    }
+
+    #[test]
+    fn parses_platform_id_after_nested_ops_command() {
+        let cli = Cli::try_parse_from([
+            "tachyon",
+            "ops",
+            "sentry",
+            "issues",
+            "resolve",
+            "12345",
+            "--tenant-id",
+            "tn_system",
+            "--platform-id",
+            "tn_platform",
+        ])
+        .unwrap();
+
+        assert_eq!(cli.tenant_id, "tn_system");
+        assert_eq!(cli.platform_id.as_deref(), Some("tn_platform"));
+    }
+
+    #[test]
+    fn platform_id_defaults_to_none_and_accepts_platform_alias() {
+        let cli = Cli::try_parse_from(["tachyon", "auth", "list"]).unwrap();
+        assert_eq!(cli.platform_id, None);
+
+        let cli = Cli::try_parse_from([
+            "tachyon",
+            "--platform",
+            "tn_platform",
+            "ops",
+            "sentry",
+            "issues",
+            "view",
+            "12345",
+        ])
+        .unwrap();
+        assert_eq!(cli.platform_id.as_deref(), Some("tn_platform"));
+    }
 
     #[test]
     fn parses_tenant_id_after_nested_ops_command() {
@@ -117,12 +294,14 @@ mod tests {
                             ops_cli::NotifyCommand::Send {
                                 text,
                                 mentions,
+                                thread_key,
                                 json,
                             },
                     },
             }) => {
                 assert_eq!(text, "hello");
                 assert!(mentions.is_empty());
+                assert!(thread_key.is_none());
                 assert!(!json);
             }
             _ => panic!("expected ops slack send command"),
@@ -153,15 +332,82 @@ mod tests {
                             ops_cli::NotifyCommand::Send {
                                 text,
                                 mentions,
+                                thread_key,
                                 json,
                             },
                     },
             }) => {
                 assert_eq!(text, "hello");
                 assert_eq!(mentions, ["U123", "user@example.com"]);
+                assert!(thread_key.is_none());
                 assert!(!json);
             }
             _ => panic!("expected ops notify send command"),
+        }
+    }
+
+    #[test]
+    fn parses_ops_notify_send_thread_key() {
+        let cli = Cli::try_parse_from([
+            "tachyon",
+            "ops",
+            "slack",
+            "send",
+            "--text",
+            "確認しました",
+            "--thread-key",
+            "deploy-1234",
+        ])
+        .unwrap();
+
+        match cli.command {
+            Commands::Ops(ops_cli::OpsArgs {
+                command:
+                    ops_cli::OpsCommand::Notify {
+                        command: ops_cli::NotifyCommand::Send { thread_key, .. },
+                    },
+            }) => {
+                assert_eq!(thread_key.as_deref(), Some("deploy-1234"));
+            }
+            _ => panic!("expected ops slack send command"),
+        }
+    }
+
+    #[test]
+    fn parses_ops_notify_react_command() {
+        let cli = Cli::try_parse_from([
+            "tachyon",
+            "ops",
+            "slack",
+            "react",
+            "--thread-key",
+            "deploy-1234",
+            "--emoji",
+            "eyes",
+            "--ts",
+            "1754300000.000200",
+        ])
+        .unwrap();
+
+        match cli.command {
+            Commands::Ops(ops_cli::OpsArgs {
+                command:
+                    ops_cli::OpsCommand::Notify {
+                        command:
+                            ops_cli::NotifyCommand::React {
+                                thread_key,
+                                emoji,
+                                ts,
+                                json,
+                            },
+                    },
+            }) => {
+                assert_eq!(thread_key, "deploy-1234");
+                assert_eq!(emoji, "eyes");
+                assert_eq!(ts.as_deref(), Some("1754300000.000200"));
+                assert!(!json);
+            }
+            _ => panic!("expected ops slack react command"),
         }
     }
 
@@ -336,11 +582,13 @@ mod tests {
                     api_key_cli::ApiKeyCommand::Create {
                         service_account,
                         name,
+                        ttl_seconds,
                         json,
                     },
             }) => {
                 assert_eq!(service_account, "sa_123456789012");
                 assert_eq!(name, "CEO key");
+                assert_eq!(ttl_seconds, None);
                 assert!(json);
             }
             _ => panic!("expected api-key create command"),
@@ -388,10 +636,10 @@ mod tests {
             _ => panic!("expected pm issue command"),
         };
         let issue_command = match issue_cli.command {
-            Commands::Issue(pm_cli::IssueArgs { command }) => command,
+            Commands::Issue(args) => args.command,
             _ => panic!("expected top-level issue command"),
         };
-        assert_eq!(pm_command, issue_command);
+        assert_eq!(*pm_command, issue_command);
     }
 
     #[test]
@@ -412,23 +660,22 @@ mod tests {
 
         match cli.command {
             Commands::Linear(linear_cli::LinearArgs {
-                command:
-                    linear_cli::LinearCommand::Issue {
-                        command:
-                            pm_cli::IssueCommand::Create {
-                                provider,
-                                team_id,
-                                title,
-                                priority,
-                                ..
-                            },
-                    },
-            }) => {
-                assert_eq!(provider, None);
-                assert_eq!(team_id.as_deref(), Some("team_1"));
-                assert_eq!(title, "Compat issue");
-                assert_eq!(priority.as_deref(), Some("2"));
-            }
+                command: linear_cli::LinearCommand::Issue { command },
+            }) => match *command {
+                pm_cli::IssueCommand::Create {
+                    provider,
+                    team_id,
+                    title,
+                    priority,
+                    ..
+                } => {
+                    assert_eq!(provider, None);
+                    assert_eq!(team_id.as_deref(), Some("team_1"));
+                    assert_eq!(title, "Compat issue");
+                    assert_eq!(priority.as_deref(), Some("2"));
+                }
+                _ => panic!("expected linear issue create command"),
+            },
             _ => panic!("expected linear issue create command"),
         }
     }
@@ -442,10 +689,17 @@ enum Commands {
     Login(LoginArgs),
     /// Remove stored credentials (alias for `auth logout`)
     Logout(LogoutArgs),
+    /// Manage profile-specific CLI settings
+    Config(settings_cli::ConfigArgs),
     /// Manage compute apps, builds, deployments, and configuration
     Compute(compute_cli::ComputeArgs),
     /// Manage Cloud App environment variables
     Env(compute_cli::EnvArgs),
+    /// Manage Tachyon Data datasets and queries
+    Data(data_cli::DataArgs),
+    /// Inspect and set tenant feature flags
+    #[command(name = "feature-flag", visible_alias = "feature-flags")]
+    FeatureFlag(feature_flag_cli::FeatureFlagArgs),
     /// Generate a tachyon.yml project config
     Init(commands::init::InitArgs),
     /// Manage organizations, users, service accounts, and policies
@@ -453,6 +707,8 @@ enum Commands {
     /// Manage service-account API keys
     #[command(name = "api-key")]
     ApiKey(api_key_cli::ApiKeyArgs),
+    /// Manage external provider configuration
+    Provider(provider_cli::ProviderArgs),
     /// Manage Cloudflare Pages secrets
     Secret(secret_cli::SecretArgs),
     /// Manage agent sessions, protocols, workers, and memory
@@ -472,7 +728,7 @@ enum Commands {
     /// Manage project-management providers and issues
     Pm(pm_cli::PmArgs),
     /// Manage issues in the default project-management provider
-    Issue(pm_cli::IssueArgs),
+    Issue(Box<pm_cli::IssueArgs>),
     /// Manage Linear issues through connected integrations
     Linear(linear_cli::LinearArgs),
     /// Install bundled agent skills
@@ -506,6 +762,9 @@ enum AuthCommand {
     Init(commands::auth::init::InitAuthArgs),
     /// Issue credentials for a registered auth provider
     Issue(commands::auth::issue::IssueAuthArgs),
+    /// Print the logged-in user's API token to a pipe (refreshes it when it
+    /// is about to expire; refuses to print to a terminal)
+    Token(commands::auth::token::TokenAuthArgs),
     /// Remove a profile's stored credentials
     Logout(LogoutArgs),
     /// List registered profiles (active marked with *)
@@ -522,6 +781,24 @@ struct LoginArgs {
     /// On `auth login`, this overrides the global `--profile`.
     #[arg(long)]
     profile: Option<String>,
+
+    /// Log in without a local callback server, for when the browser runs on
+    /// another machine (SSH, containers). The CLI prints the login URL and a
+    /// code; after signing in, enter that code in the browser. By default the
+    /// CLI listens on 127.0.0.1 (port 42813, 42814 or 42815) and the browser
+    /// returns there.
+    #[arg(long)]
+    no_browser: bool,
+}
+
+impl LoginArgs {
+    fn method(&self) -> auth::LoginMethod {
+        if self.no_browser {
+            auth::LoginMethod::Relay
+        } else {
+            auth::LoginMethod::Loopback
+        }
+    }
 }
 
 #[derive(Args)]
@@ -591,12 +868,10 @@ async fn resolve_token(cli: &Cli, profile: &str) -> Option<auth::ApiBearerToken>
 
 /// Build an OAuthConfig from CLI args.
 fn build_oauth_config(cli: &Cli) -> auth::OAuthConfig {
-    let redirect_uri = format!("{}/v1/auth/cli/callback", cli.api_url.trim_end_matches('/'));
     auth::OAuthConfig {
         cognito_domain: cli.cognito_domain.clone(),
         client_id: cli.cognito_client_id.clone(),
-        client_secret: cli.cognito_client_secret.clone(),
-        redirect_uri,
+        client_secret: cli.cognito_client_secret.clone().unwrap_or_default(),
         scopes: auth::DEFAULT_OAUTH_SCOPES
             .iter()
             .map(|scope| (*scope).to_string())
@@ -608,6 +883,7 @@ fn build_oauth_config(cli: &Cli) -> auth::OAuthConfig {
 async fn build_config(cli: &Cli, profile: &str) -> Configuration {
     let mut config = Configuration::new();
     config.base_path = cli.api_url.clone();
+    config.client = client::sdk_http_client();
     config.bearer_access_token = resolve_token(cli, profile).await.map(|token| token.value);
     config
 }
@@ -666,6 +942,7 @@ async fn build_config_with_auth(
 ) -> (Configuration, Option<AuthDiagnostics>) {
     let mut config = Configuration::new();
     config.base_path = cli.api_url.clone();
+    config.client = client::sdk_http_client();
     let resolved = resolve_token(cli, profile).await;
     let diagnostics = Some(AuthDiagnostics {
         profile: Some(profile.to_string()),
@@ -692,6 +969,7 @@ async fn main() {
 
 async fn run() -> Result<()> {
     let cli = Cli::parse();
+    client::set_platform_id(cli.platform_id.as_deref())?;
 
     // Resolve the profile to use for this invocation. For most commands this
     // is the active profile (or the value of --profile / TACHYON_PROFILE for a
@@ -711,7 +989,7 @@ async fn run() -> Result<()> {
                     .clone()
                     .or_else(|| cli.profile.clone())
                     .unwrap_or_else(|| auth::DEFAULT_PROFILE.to_string());
-                auth::login(&oauth_config, &cli.api_url, &target).await
+                auth::login(&oauth_config, &cli.api_url, &target, login_args.method()).await
             }
             AuthCommand::Init(init_args) => {
                 commands::auth::init::run(init_args, cli.config.as_deref())
@@ -726,6 +1004,15 @@ async fn run() -> Result<()> {
                     &cli.api_url,
                     token,
                     &tenant_arg,
+                )
+                .await
+            }
+            AuthCommand::Token(token_args) => {
+                commands::auth::token::run(
+                    token_args,
+                    &build_oauth_config(&cli),
+                    &active,
+                    cli.api_key.is_some(),
                 )
                 .await
             }
@@ -766,7 +1053,7 @@ async fn run() -> Result<()> {
                 .clone()
                 .or_else(|| cli.profile.clone())
                 .unwrap_or_else(|| auth::DEFAULT_PROFILE.to_string());
-            auth::login(&oauth_config, &cli.api_url, &target).await
+            auth::login(&oauth_config, &cli.api_url, &target, login_args.method()).await
         }
         Commands::Logout(logout_args) => {
             let target = logout_args
@@ -776,6 +1063,7 @@ async fn run() -> Result<()> {
                 .unwrap_or(active.clone());
             auth::logout(&target)
         }
+        Commands::Config(args) => settings_cli::run(args, &active),
         Commands::Compute(args) => {
             let project_config = config::loader::load(cli.config.as_deref())?;
             let tenant_arg = tenant_arg(&cli, project_config.as_ref());
@@ -802,6 +1090,20 @@ async fn run() -> Result<()> {
             )
             .await
         }
+        Commands::Data(args) => {
+            let project_config = config::loader::load(cli.config.as_deref())?;
+            let tenant_arg = tenant_arg(&cli, project_config.as_ref());
+            let config = build_config(&cli, &active).await;
+            let tenant_id = resolve::resolve_tenant_id(&config, tenant_arg, &active).await?;
+            data_cli::run(args, &config, &tenant_id).await
+        }
+        Commands::FeatureFlag(args) => {
+            let project_config = config::loader::load(cli.config.as_deref())?;
+            let tenant_arg = tenant_arg(&cli, project_config.as_ref());
+            let config = build_config(&cli, &active).await;
+            let tenant_id = resolve::resolve_tenant_id(&config, tenant_arg, &active).await?;
+            feature_flag_cli::run(args, &config, &tenant_id).await
+        }
         Commands::Org(args) => {
             let project_config = config::loader::load(cli.config.as_deref())?;
             let tenant_arg = tenant_arg(&cli, project_config.as_ref());
@@ -815,6 +1117,17 @@ async fn run() -> Result<()> {
             let config = build_config(&cli, &active).await;
             let tenant_id = resolve::resolve_tenant_id(&config, tenant_arg, &active).await?;
             api_key_cli::run(args, &config, &tenant_id).await
+        }
+        Commands::Provider(args) => {
+            let (project_config, searched_paths) = load_project_config_for_context(&cli, None)?;
+            let tenant_arg = strict_tenant_arg(
+                &cli,
+                project_config.as_ref(),
+                &searched_paths,
+                "provider credentials",
+            )?;
+            let (config, tenant_id) = build_tenant_config(&cli, &active, tenant_arg).await?;
+            provider_cli::run(args, &config, &tenant_id).await
         }
         Commands::Secret(args) => {
             let project_config = config::loader::load(cli.config.as_deref())?;
@@ -834,11 +1147,15 @@ async fn run() -> Result<()> {
             worker_cli::run(args, &config, &tenant_id, &active).await
         }
         Commands::Iac(args) => {
-            let project_config = config::loader::load(cli.config.as_deref())?;
-            let tenant_arg = tenant_arg(&cli, project_config.as_ref());
             let config = build_config(&cli, &active).await;
-            let tenant_id = resolve::resolve_tenant_id(&config, tenant_arg, &active).await?;
-            iac_cli::run(args, &config, &tenant_id).await
+            if matches!(&args.command, iac_cli::IacCommand::HostConfig { .. }) {
+                iac_cli::run(args, &config, "").await
+            } else {
+                let project_config = config::loader::load(cli.config.as_deref())?;
+                let tenant_arg = tenant_arg(&cli, project_config.as_ref());
+                let tenant_id = resolve::resolve_tenant_id(&config, tenant_arg, &active).await?;
+                iac_cli::run(args, &config, &tenant_id).await
+            }
         }
         Commands::Manifest(args) => {
             if manifest::needs_tenant(args) {
@@ -853,12 +1170,27 @@ async fn run() -> Result<()> {
                 manifest::run(args, None, None).await
             }
         }
+        // ERP replays go to the Host tenant: skip the project config and
+        // the ordinary tenant resolution, which they do not use.
+        Commands::Ops(ops_cli::OpsArgs {
+            command: ops_cli::OpsCommand::ErpReplays { command },
+        }) => {
+            let config = build_config(&cli, &active).await;
+            erp_replay_cli::run(command, &config, cli.api_key.is_some()).await
+        }
         Commands::Ops(args) => {
             let project_config = config::loader::load(cli.config.as_deref())?;
             let tenant_arg = tenant_arg(&cli, project_config.as_ref());
             let config = build_config(&cli, &active).await;
             let tenant_id = resolve::resolve_tenant_id(&config, tenant_arg, &active).await?;
-            ops_cli::run(args, &config, &tenant_id, cli.config.as_deref()).await
+            ops_cli::run(
+                args,
+                &config,
+                &tenant_id,
+                cli.config.as_deref(),
+                cli.api_key.is_some(),
+            )
+            .await
         }
         Commands::Image(args) => {
             let project_config = config::loader::load(cli.config.as_deref())?;
@@ -879,21 +1211,24 @@ async fn run() -> Result<()> {
             let tenant_arg = tenant_arg(&cli, project_config.as_ref());
             let config = build_config(&cli, &active).await;
             let tenant_id = resolve::resolve_tenant_id(&config, tenant_arg, &active).await?;
-            pm_cli::run(args, &config, &tenant_id).await
+            let pm_settings = settings::resolve_pm(&active)?;
+            pm_cli::run(args, &config, &tenant_id, &pm_settings).await
         }
         Commands::Issue(args) => {
             let project_config = config::loader::load(cli.config.as_deref())?;
             let tenant_arg = tenant_arg(&cli, project_config.as_ref());
             let config = build_config(&cli, &active).await;
             let tenant_id = resolve::resolve_tenant_id(&config, tenant_arg, &active).await?;
-            pm_cli::run_top_level_issue(args, &config, &tenant_id).await
+            let pm_settings = settings::resolve_pm(&active)?;
+            pm_cli::run_top_level_issue(args, &config, &tenant_id, &pm_settings).await
         }
         Commands::Linear(args) => {
             let project_config = config::loader::load(cli.config.as_deref())?;
             let tenant_arg = tenant_arg(&cli, project_config.as_ref());
             let config = build_config(&cli, &active).await;
             let tenant_id = resolve::resolve_tenant_id(&config, tenant_arg, &active).await?;
-            linear_cli::run(args, &config, &tenant_id).await
+            let pm_settings = settings::resolve_pm(&active)?;
+            linear_cli::run(args, &config, &tenant_id, &pm_settings).await
         }
         Commands::Skills(args) => skills_cli::run(args),
         Commands::Source(args) => source_cli::run(args),

@@ -46,11 +46,7 @@ pub struct LineItemRequest {
 
 impl LineItemRequest {
     /// Line item input
-    pub fn new(
-        product_id: String,
-        quantity: i32,
-        unit_price: f32,
-    ) -> LineItemRequest {
+    pub fn new(product_id: String, quantity: i32, unit_price: f32) -> LineItemRequest {
         LineItemRequest {
             discount: None,
             id: None,

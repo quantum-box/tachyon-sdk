@@ -56,13 +56,10 @@ pub async fn create_chatroom(
         .request(reqwest::Method::POST, &uri_str);
 
     if let Some(ref user_agent) = configuration.user_agent {
-        req_builder = req_builder
-            .header(reqwest::header::USER_AGENT, user_agent.clone());
+        req_builder = req_builder.header(reqwest::header::USER_AGENT, user_agent.clone());
     }
-    req_builder = req_builder
-        .header("x-operator-id", p_header_x_operator_id.to_string());
-    req_builder = req_builder
-        .header("Authorization", p_header_authorization.to_string());
+    req_builder = req_builder.header("x-operator-id", p_header_x_operator_id.to_string());
+    req_builder = req_builder.header("Authorization", p_header_authorization.to_string());
     req_builder = req_builder.json(&p_body_create_chat_room_request);
 
     let req = req_builder.build()?;
@@ -85,8 +82,7 @@ pub async fn create_chatroom(
         }
     } else {
         let content = resp.text().await?;
-        let entity: Option<CreateChatroomError> =
-            serde_json::from_str(&content).ok();
+        let entity: Option<CreateChatroomError> = serde_json::from_str(&content).ok();
         Err(Error::ResponseError(ResponseContent {
             status,
             content,
@@ -116,13 +112,10 @@ pub async fn delete_chatroom(
         .request(reqwest::Method::DELETE, &uri_str);
 
     if let Some(ref user_agent) = configuration.user_agent {
-        req_builder = req_builder
-            .header(reqwest::header::USER_AGENT, user_agent.clone());
+        req_builder = req_builder.header(reqwest::header::USER_AGENT, user_agent.clone());
     }
-    req_builder = req_builder
-        .header("x-operator-id", p_header_x_operator_id.to_string());
-    req_builder = req_builder
-        .header("Authorization", p_header_authorization.to_string());
+    req_builder = req_builder.header("x-operator-id", p_header_x_operator_id.to_string());
+    req_builder = req_builder.header("Authorization", p_header_authorization.to_string());
 
     let req = req_builder.build()?;
     let resp = configuration.client.execute(req).await?;
@@ -133,8 +126,7 @@ pub async fn delete_chatroom(
         Ok(())
     } else {
         let content = resp.text().await?;
-        let entity: Option<DeleteChatroomError> =
-            serde_json::from_str(&content).ok();
+        let entity: Option<DeleteChatroomError> = serde_json::from_str(&content).ok();
         Err(Error::ResponseError(ResponseContent {
             status,
             content,
@@ -166,13 +158,10 @@ pub async fn update_chatroom(
         .request(reqwest::Method::PATCH, &uri_str);
 
     if let Some(ref user_agent) = configuration.user_agent {
-        req_builder = req_builder
-            .header(reqwest::header::USER_AGENT, user_agent.clone());
+        req_builder = req_builder.header(reqwest::header::USER_AGENT, user_agent.clone());
     }
-    req_builder = req_builder
-        .header("x-operator-id", p_header_x_operator_id.to_string());
-    req_builder = req_builder
-        .header("Authorization", p_header_authorization.to_string());
+    req_builder = req_builder.header("x-operator-id", p_header_x_operator_id.to_string());
+    req_builder = req_builder.header("Authorization", p_header_authorization.to_string());
     req_builder = req_builder.json(&p_body_update_chatroom_request);
 
     let req = req_builder.build()?;
@@ -195,8 +184,7 @@ pub async fn update_chatroom(
         }
     } else {
         let content = resp.text().await?;
-        let entity: Option<UpdateChatroomError> =
-            serde_json::from_str(&content).ok();
+        let entity: Option<UpdateChatroomError> = serde_json::from_str(&content).ok();
         Err(Error::ResponseError(ResponseContent {
             status,
             content,

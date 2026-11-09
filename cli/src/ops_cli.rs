@@ -1,5 +1,5 @@
 use std::{
-    collections::HashMap,
+    collections::{BTreeMap, HashMap, HashSet},
     io::{self, Read},
     path::{Path, PathBuf},
     time::{Duration, Instant},
@@ -7,13 +7,24 @@ use std::{
 
 use anyhow::{anyhow, bail, Context, Result};
 use clap::{Args, Subcommand};
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{json, Value};
 use tachyon_sdk::apis::configuration::Configuration;
 
 use crate::client::{print_json, truncate, ApiClient};
 use crate::config::loader::{self, LoadedProjectConfig, ProjectConfig, RepositoryConfig};
 use crate::resolve;
+
+const SENTRY_EVENT_TAG_ALLOWLIST: [&str; 8] = [
+    "event.name",
+    "authz.money_path",
+    "authz.action",
+    "authz.principal_kind",
+    "authz.principal_role",
+    "authz.tenant_id",
+    "authz.target_id",
+    "authz.deny_reason",
+];
 
 #[derive(Debug, Clone, Args)]
 pub struct OpsArgs {
@@ -49,6 +60,13 @@ pub enum OpsCommand {
     Sentry {
         #[command(subcommand)]
         command: SentryCommand,
+    },
+    /// Audited replay of delivered Field usage / accounting records
+    /// (request, approve, execute, revoke, get). Host tenant only, human
+    /// login session only.
+    ErpReplays {
+        #[command(subcommand)]
+        command: crate::erp_replay_cli::ErpReplaysCommand,
     },
 }
 
@@ -199,9 +217,32 @@ pub enum NotifyCommand {
         /// Notification text to send
         #[arg(long)]
         text: String,
-        /// Slack mention, raw Slack token, or friendly alias. Can be specified multiple times.
-        #[arg(long = "mention")]
+        /// Slack user, Team, broadcast, or configured alias. Can be repeated.
+        ///
+        /// Team selectors accept a display name, @handle, User Group ID (S...),
+        /// or raw Slack token (<!subteam^S...>). Names and handles use exact,
+        /// case-insensitive matching; ambiguous or disabled Teams are rejected.
+        #[arg(long = "mention", value_name = "MENTION")]
         mentions: Vec<String>,
+        /// Stable thread key. Reuse the key of an earlier notification to reply in its
+        /// Slack thread, or set a new key to make this notification repliable.
+        #[arg(long = "thread-key")]
+        thread_key: Option<String>,
+        /// Print the API response as JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// Add an emoji reaction to a notification thread
+    React {
+        /// Thread key used when the notification was sent
+        #[arg(long = "thread-key")]
+        thread_key: String,
+        /// Slack emoji name, with or without colons (e.g. eyes)
+        #[arg(long)]
+        emoji: String,
+        /// Slack ts of the message to react to. Defaults to the notification message.
+        #[arg(long)]
+        ts: Option<String>,
         /// Print the API response as JSON
         #[arg(long)]
         json: bool,
@@ -246,6 +287,7 @@ pub enum SentryIssuesCommand {
     },
     /// Get Sentry issue details
     View {
+        /// Numeric Sentry issue ID or short ID (for example TACHYON-API-1A2)
         issue_id: String,
         /// Print the API response as JSON
         #[arg(long)]
@@ -253,6 +295,25 @@ pub enum SentryIssuesCommand {
     },
     /// Mark a Sentry issue as resolved
     Resolve {
+        /// Numeric Sentry issue ID or short ID (for example TACHYON-API-1A2)
+        issue_id: String,
+        /// Print the API response as JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// Reopen a resolved or archived Sentry issue
+    #[command(visible_alias = "reopen")]
+    Unresolve {
+        /// Numeric Sentry issue ID or short ID (for example TACHYON-API-1A2)
+        issue_id: String,
+        /// Print the API response as JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// Archive a Sentry issue until it is manually reopened
+    #[command(visible_alias = "ignore")]
+    Archive {
+        /// Numeric Sentry issue ID or short ID (for example TACHYON-API-1A2)
         issue_id: String,
         /// Print the API response as JSON
         #[arg(long)]
@@ -260,9 +321,18 @@ pub enum SentryIssuesCommand {
     },
     /// Assign a Sentry issue to a user
     Assign {
+        /// Numeric Sentry issue ID or short ID (for example TACHYON-API-1A2)
         issue_id: String,
         /// Sentry user id, username, or email
         user: String,
+        /// Print the API response as JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// Clear the assignee of a Sentry issue
+    Unassign {
+        /// Numeric Sentry issue ID or short ID (for example TACHYON-API-1A2)
+        issue_id: String,
         /// Print the API response as JSON
         #[arg(long)]
         json: bool,
@@ -274,59 +344,91 @@ pub enum SentryIssuesCommand {
 #[derive(Debug, Deserialize, Serialize)]
 struct OpsDeploymentResponse {
     id: String,
-    #[serde(default)]
-    service: Option<String>,
-    #[serde(default)]
-    environment: Option<String>,
-    #[serde(default)]
-    status: Option<String>,
-    #[serde(default)]
-    version: Option<String>,
-    #[serde(default)]
-    created_at: Option<String>,
+    operator_id: String,
+    service_name: String,
+    version: String,
+    environment: String,
+    status: String,
+    ci_provider: Option<String>,
+    ci_run_url: Option<String>,
+    ci_repository: Option<String>,
+    ci_branch: Option<String>,
+    ci_commit_sha: Option<String>,
+    error_message: Option<String>,
+    started_at: String,
+    completed_at: Option<String>,
+    duration_ms: Option<i64>,
+    created_at: String,
+    updated_at: String,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct OpsDeploymentSummaryResponse {
+    id: String,
+    service_name: String,
+    version: String,
+    environment: String,
+    status: String,
+    ci_branch: Option<String>,
+    ci_commit_sha: Option<String>,
+    ci_run_url: Option<String>,
+    started_at: String,
+    completed_at: Option<String>,
+    duration_ms: Option<i64>,
+}
+
+#[derive(Debug, Deserialize)]
+struct OpsDeploymentListResponse {
+    deployments: Vec<OpsDeploymentSummaryResponse>,
+    total: i64,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
 struct ScenarioReportResponse {
-    #[serde(default)]
-    run_id: Option<String>,
-    #[serde(default)]
-    status: Option<String>,
-    #[serde(default)]
-    total: Option<i32>,
-    #[serde(default)]
-    passed: Option<i32>,
-    #[serde(default)]
-    failed: Option<i32>,
-    #[serde(default)]
-    created_at: Option<String>,
+    id: String,
+    status: String,
+    total_scenarios: i32,
+    passed_scenarios: i32,
+    failed_scenarios: i32,
+    total_duration_ms: i64,
+    ci_repository: Option<String>,
+    ci_branch: Option<String>,
+    ci_commit_sha: Option<String>,
+    ci_pull_request_number: Option<i64>,
+    created_at: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct ScenarioReportListResponse {
+    test_runs: Vec<ScenarioReportResponse>,
+    total: i64,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
 struct CodingJobResponse {
     coding_job_id: String,
-    #[serde(default)]
-    provider: Option<String>,
-    #[serde(default)]
-    status: Option<String>,
-    #[serde(default)]
-    prompt: Option<String>,
-    #[serde(default)]
+    provider: String,
+    status: String,
+    prompt: String,
     context_paths: Vec<String>,
-    #[serde(default)]
+    output_profile: Option<String>,
+    environment: HashMap<String, String>,
+    metadata: Value,
+    container_execution: Option<Value>,
+    executor: Value,
     normalized_output: Option<Value>,
-    #[serde(default)]
+    raw_events: Option<Vec<Value>>,
+    artifacts: Option<Vec<Value>>,
+    billing: Option<Value>,
     error_message: Option<String>,
-    #[serde(default)]
+    exit_code: Option<i32>,
     session_id: Option<String>,
-    #[serde(default)]
     resume_session_id: Option<String>,
-    #[serde(default)]
+    use_worktree: bool,
+    auto_merge: bool,
     assigned_worker_id: Option<String>,
-    #[serde(default)]
-    tool_name: Option<String>,
-    #[serde(default)]
-    created_at: Option<String>,
+    created_at: String,
+    updated_at: String,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -394,11 +496,36 @@ struct SendNotificationRequest {
     text: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     mentions: Vec<String>,
+    /// Stable key that threads the notification and lets replies be
+    /// collected or answered later.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    thread_key: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
 struct SendNotificationResponse {
     accepted: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    thread_key: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct AddReactionRequest {
+    thread_key: String,
+    emoji: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    ts: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct AddReactionResponse {
+    ok: bool,
+    thread_key: String,
+    channel_id: String,
+    ts: String,
+    emoji: String,
+    #[serde(default)]
+    already_reacted: bool,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -413,6 +540,19 @@ struct SlackUser {
     email: Option<String>,
     display_name: Option<String>,
     real_name: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+struct SlackUserGroup {
+    id: String,
+    name: String,
+    handle: String,
+    disabled: bool,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct ListSlackUserGroupsResponse {
+    user_groups: Vec<SlackUserGroup>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -452,6 +592,12 @@ struct SentryIssueResponse {
     assigned_to: Option<SentryAssignedTo>,
     #[serde(default, alias = "latestEvent")]
     latest_event: Option<SentryEventResponse>,
+    #[serde(
+        default,
+        alias = "latestEventDetails",
+        skip_serializing_if = "Option::is_none"
+    )]
+    latest_event_details: Option<SentryEventDetails>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -470,14 +616,140 @@ struct SentryAssignedTo {
 struct SentryEventResponse {
     #[serde(default)]
     id: Option<String>,
-    #[serde(default)]
+    #[serde(default, alias = "eventID")]
     event_id: Option<String>,
     #[serde(default)]
     title: Option<String>,
     #[serde(default)]
     message: Option<String>,
-    #[serde(default)]
+    #[serde(default, alias = "dateCreated", alias = "date_created")]
     timestamp: Option<String>,
+    #[serde(default)]
+    level: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_sentry_event_tags")]
+    tags: BTreeMap<String, String>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct SentryEventDetails {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    platform: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    environment: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    release: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    transaction: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    exceptions: Vec<SentryExceptionDetails>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    breadcrumbs: Vec<SentryBreadcrumbDetails>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    request: Option<SentryRequestDetails>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    contexts: Option<SentryEventContexts>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct SentryExceptionDetails {
+    #[serde(default, rename = "type", skip_serializing_if = "Option::is_none")]
+    exception_type: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    value: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    mechanism: Option<SentryExceptionMechanism>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    frames: Vec<SentryStackFrame>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct SentryExceptionMechanism {
+    #[serde(default, rename = "type", skip_serializing_if = "Option::is_none")]
+    mechanism_type: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    handled: Option<bool>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct SentryStackFrame {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    function: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    module: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    filename: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    line: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    column: Option<u64>,
+    #[serde(
+        default,
+        rename = "in_app",
+        alias = "inApp",
+        skip_serializing_if = "Option::is_none"
+    )]
+    in_app: Option<bool>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct SentryBreadcrumbDetails {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    timestamp: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    category: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    r#type: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    level: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    message: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct SentryRequestDetails {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    method: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    url: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct SentryEventContexts {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    browser: Option<SentryContextDetails>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    os: Option<SentryContextDetails>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    device: Option<SentryContextDetails>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    runtime: Option<SentryContextDetails>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct SentryContextDetails {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    version: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    family: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    brand: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    model: Option<String>,
+}
+
+fn deserialize_sentry_event_tags<'de, D>(
+    deserializer: D,
+) -> std::result::Result<BTreeMap<String, String>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let tags = BTreeMap::<String, String>::deserialize(deserializer)?;
+    Ok(tags
+        .into_iter()
+        .filter(|(key, _)| SENTRY_EVENT_TAG_ALLOWLIST.contains(&key.as_str()))
+        .collect())
 }
 
 #[derive(Debug, Serialize)]
@@ -485,10 +757,19 @@ struct SentryAssignRequest {
     user: String,
 }
 
+#[derive(Debug, Serialize)]
+struct SentryStatusRequest {
+    status: &'static str,
+}
+
 // ---- Handlers ----
 
 async fn run_deployments_list(api: &ApiClient, json: bool) -> Result<()> {
-    let deps: Vec<OpsDeploymentResponse> = api.get("/v1/ops/deployments").await?;
+    let response: OpsDeploymentListResponse = api.get("/v1/ops/deployments").await?;
+    let OpsDeploymentListResponse {
+        deployments: deps,
+        total,
+    } = response;
     if json {
         return print_json(&deps);
     }
@@ -497,7 +778,7 @@ async fn run_deployments_list(api: &ApiClient, json: bool) -> Result<()> {
         return Ok(());
     }
     println!(
-        "{:<28}  {:<20}  {:<12}  {:<12}  {:<16}  CREATED AT",
+        "{:<28}  {:<20}  {:<12}  {:<12}  {:<16}  STARTED AT",
         "ID", "SERVICE", "ENVIRONMENT", "STATUS", "VERSION"
     );
     println!(
@@ -508,13 +789,14 @@ async fn run_deployments_list(api: &ApiClient, json: bool) -> Result<()> {
         println!(
             "{:<28}  {:<20}  {:<12}  {:<12}  {:<16}  {}",
             d.id,
-            truncate(d.service.as_deref().unwrap_or("-"), 20),
-            d.environment.as_deref().unwrap_or("-"),
-            d.status.as_deref().unwrap_or("-"),
-            d.version.as_deref().unwrap_or("-"),
-            d.created_at.as_deref().unwrap_or("-"),
+            truncate(&d.service_name, 20),
+            d.environment,
+            d.status,
+            d.version,
+            d.started_at,
         );
     }
+    println!("Total: {total}");
     Ok(())
 }
 
@@ -524,16 +806,20 @@ async fn run_deployments_get(api: &ApiClient, id: &str, json: bool) -> Result<()
         return print_json(&d);
     }
     println!("ID:          {}", d.id);
-    println!("Service:     {}", d.service.as_deref().unwrap_or("-"));
-    println!("Environment: {}", d.environment.as_deref().unwrap_or("-"));
-    println!("Status:      {}", d.status.as_deref().unwrap_or("-"));
-    println!("Version:     {}", d.version.as_deref().unwrap_or("-"));
-    println!("Created:     {}", d.created_at.as_deref().unwrap_or("-"));
+    println!("Service:     {}", d.service_name);
+    println!("Environment: {}", d.environment);
+    println!("Status:      {}", d.status);
+    println!("Version:     {}", d.version);
+    println!("Created:     {}", d.created_at);
     Ok(())
 }
 
 async fn run_reports_list(api: &ApiClient, json: bool) -> Result<()> {
-    let reports: Vec<ScenarioReportResponse> = api.get("/v1/ops/scenario-reports").await?;
+    let response: ScenarioReportListResponse = api.get("/v1/ops/scenario-reports").await?;
+    let ScenarioReportListResponse {
+        test_runs: reports,
+        total,
+    } = response;
     if json {
         return print_json(&reports);
     }
@@ -552,20 +838,10 @@ async fn run_reports_list(api: &ApiClient, json: bool) -> Result<()> {
     for r in &reports {
         println!(
             "{:<28}  {:<10}  {:<8}  {:<8}  {:<8}  {}",
-            r.run_id.as_deref().unwrap_or("-"),
-            r.status.as_deref().unwrap_or("-"),
-            r.total
-                .map(|v| v.to_string())
-                .unwrap_or_else(|| "-".to_string()),
-            r.passed
-                .map(|v| v.to_string())
-                .unwrap_or_else(|| "-".to_string()),
-            r.failed
-                .map(|v| v.to_string())
-                .unwrap_or_else(|| "-".to_string()),
-            r.created_at.as_deref().unwrap_or("-"),
+            r.id, r.status, r.total_scenarios, r.passed_scenarios, r.failed_scenarios, r.created_at,
         );
     }
+    println!("Total: {total}");
     Ok(())
 }
 
@@ -869,15 +1145,15 @@ fn resolve_coding_job_cwd(
     }
 }
 
-fn is_terminal_coding_job_status(status: Option<&str>) -> bool {
-    matches!(status, Some("succeeded" | "failed" | "cancelled"))
+fn is_terminal_coding_job_status(status: &str) -> bool {
+    matches!(status, "succeeded" | "failed" | "cancelled")
 }
 
 fn print_coding_job_created(job: &CodingJobResponse) {
     println!("Coding job created.");
     println!("Job ID:   {}", job.coding_job_id);
-    println!("Provider: {}", job.provider.as_deref().unwrap_or("-"));
-    println!("Status:   {}", job.status.as_deref().unwrap_or("-"));
+    println!("Provider: {}", job.provider);
+    println!("Status:   {}", job.status);
     if let Some(worker_id) = &job.assigned_worker_id {
         println!("Worker:   {worker_id}");
     }
@@ -889,7 +1165,7 @@ fn print_coding_job_created(job: &CodingJobResponse) {
 }
 
 fn print_coding_job_final(job: &CodingJobResponse) -> Result<()> {
-    println!("Final status: {}", job.status.as_deref().unwrap_or("-"));
+    println!("Final status: {}", job.status);
     if let Some(output) = &job.normalized_output {
         if let Some(text) = output.pointer("/body/text").and_then(Value::as_str) {
             println!("{text}");
@@ -918,7 +1194,7 @@ async fn wait_coding_job(
             .get(&format!("/v1/agent/coding-jobs/{coding_job_id}"))
             .await?;
         let job = response.job;
-        if is_terminal_coding_job_status(job.status.as_deref()) {
+        if is_terminal_coding_job_status(&job.status) {
             return Ok(job);
         }
         if started_at.elapsed() >= timeout {
@@ -1068,21 +1344,14 @@ async fn run_coding_jobs_list(api: &ApiClient, json: bool) -> Result<()> {
         return Ok(());
     }
     println!(
-        "{:<28}  {:<16}  {:<12}  {:<20}  CREATED AT",
-        "JOB ID", "PROVIDER", "STATUS", "TOOL"
+        "{:<28}  {:<16}  {:<12}  CREATED AT",
+        "JOB ID", "PROVIDER", "STATUS"
     );
-    println!(
-        "{:-<28}  {:-<16}  {:-<12}  {:-<20}  {:-<19}",
-        "", "", "", "", ""
-    );
+    println!("{:-<28}  {:-<16}  {:-<12}  {:-<19}", "", "", "", "");
     for j in &jobs {
         println!(
-            "{:<28}  {:<16}  {:<12}  {:<20}  {}",
-            j.coding_job_id,
-            j.provider.as_deref().unwrap_or("-"),
-            j.status.as_deref().unwrap_or("-"),
-            truncate(j.tool_name.as_deref().unwrap_or("-"), 20),
-            j.created_at.as_deref().unwrap_or("-"),
+            "{:<28}  {:<16}  {:<12}  {}",
+            j.coding_job_id, j.provider, j.status, j.created_at,
         );
     }
     Ok(())
@@ -1124,17 +1393,21 @@ async fn run_coding_jobs_providers(api: &ApiClient, json: bool) -> Result<()> {
 
 async fn run_notify_send(
     api: &ApiClient,
+    config_flag: Option<&Path>,
     text: &str,
     mentions: &[String],
+    thread_key: Option<&str>,
     json: bool,
 ) -> Result<()> {
-    let mentions = normalize_mentions(mentions)?;
+    let configured_aliases = configured_slack_mention_aliases(config_flag)?;
+    let mentions = resolve_mentions(api, mentions, &configured_aliases).await?;
     let response: SendNotificationResponse = api
         .post(
             "/v1/chat/send",
             &SendNotificationRequest {
                 text: text.to_string(),
                 mentions,
+                thread_key: thread_key.map(ToOwned::to_owned),
             },
         )
         .await?;
@@ -1142,10 +1415,45 @@ async fn run_notify_send(
         return print_json(&response);
     }
     if response.accepted {
-        println!("Notification accepted.");
+        match response.thread_key.as_deref() {
+            Some(key) => println!("Notification accepted (thread_key={key})."),
+            None => println!("Notification accepted."),
+        }
     } else {
         println!("Notification was not accepted.");
     }
+    Ok(())
+}
+
+async fn run_notify_react(
+    api: &ApiClient,
+    thread_key: &str,
+    emoji: &str,
+    ts: Option<&str>,
+    json: bool,
+) -> Result<()> {
+    let response: AddReactionResponse = api
+        .post(
+            "/v1/chat/reactions",
+            &AddReactionRequest {
+                thread_key: thread_key.to_string(),
+                emoji: emoji.to_string(),
+                ts: ts.map(ToOwned::to_owned),
+            },
+        )
+        .await?;
+    if json {
+        return print_json(&response);
+    }
+    let state = if response.already_reacted {
+        "already present"
+    } else {
+        "added"
+    };
+    println!(
+        ":{}: {} on {} (ts {}).",
+        response.emoji, state, response.channel_id, response.ts
+    );
     Ok(())
 }
 
@@ -1204,17 +1512,18 @@ async fn run_sentry_issues_list(
     }
 
     println!(
-        "{:<14}  {:<10}  {:<10}  {:<8}  {:<18}  TITLE",
-        "ISSUE", "PROJECT", "STATUS", "COUNT", "LAST SEEN"
+        "{:<14}  {:<12}  {:<10}  {:<10}  {:<8}  {:<18}  TITLE",
+        "ISSUE", "ID", "PROJECT", "STATUS", "COUNT", "LAST SEEN"
     );
     println!(
-        "{:-<14}  {:-<10}  {:-<10}  {:-<8}  {:-<18}  {:-<60}",
-        "", "", "", "", "", ""
+        "{:-<14}  {:-<12}  {:-<10}  {:-<10}  {:-<8}  {:-<18}  {:-<60}",
+        "", "", "", "", "", "", ""
     );
     for issue in &issues {
         println!(
-            "{:<14}  {:<10}  {:<10}  {:<8}  {:<18}  {}",
+            "{:<14}  {:<12}  {:<10}  {:<10}  {:<8}  {:<18}  {}",
             sentry_issue_label(issue),
+            issue.id,
             truncate(issue.project.as_deref().unwrap_or("-"), 10),
             issue.status.as_deref().unwrap_or("-"),
             sentry_value_label(issue.count.as_ref()),
@@ -1247,6 +1556,40 @@ async fn run_sentry_issue_resolve(api: &ApiClient, issue_id: &str, json: bool) -
         return print_json(&issue);
     }
     println!("Sentry issue {} resolved.", sentry_issue_label(&issue));
+    Ok(())
+}
+
+async fn run_sentry_issue_set_status(
+    api: &ApiClient,
+    issue_id: &str,
+    status: &'static str,
+    done_label: &str,
+    json: bool,
+) -> Result<()> {
+    let issue: SentryIssueResponse = api
+        .post(
+            &format!("/v1/ops/sentry/issues/{issue_id}/status"),
+            &SentryStatusRequest { status },
+        )
+        .await?;
+    if json {
+        return print_json(&issue);
+    }
+    println!("Sentry issue {} {done_label}.", sentry_issue_label(&issue));
+    Ok(())
+}
+
+async fn run_sentry_issue_unassign(api: &ApiClient, issue_id: &str, json: bool) -> Result<()> {
+    let issue: SentryIssueResponse = api
+        .post(
+            &format!("/v1/ops/sentry/issues/{issue_id}/unassign"),
+            &json!({}),
+        )
+        .await?;
+    if json {
+        return print_json(&issue);
+    }
+    println!("Sentry issue {} unassigned.", sentry_issue_label(&issue));
     Ok(())
 }
 
@@ -1366,23 +1709,168 @@ fn print_sentry_issue(issue: &SentryIssueResponse) {
         "Permalink:    {}",
         issue.permalink.as_deref().unwrap_or("-")
     );
+    if let Some(details) = issue.latest_event_details.as_ref() {
+        print_sentry_event_details(details);
+    }
+}
+
+fn print_sentry_event_details(details: &SentryEventDetails) {
+    println!("Latest Event Details:");
+    for (label, value) in [
+        ("Platform", details.platform.as_deref()),
+        ("Environment", details.environment.as_deref()),
+        ("Release", details.release.as_deref()),
+        ("Transaction", details.transaction.as_deref()),
+    ] {
+        if let Some(value) = value {
+            println!("  {label}: {value}");
+        }
+    }
+
+    for (exception_index, exception) in details.exceptions.iter().enumerate() {
+        println!(
+            "  Exception {}: {}{}",
+            exception_index + 1,
+            exception.exception_type.as_deref().unwrap_or("Unknown"),
+            exception
+                .value
+                .as_deref()
+                .map(|value| format!(": {value}"))
+                .unwrap_or_default()
+        );
+        if let Some(mechanism) = exception.mechanism.as_ref() {
+            println!(
+                "    Mechanism: {}{}",
+                mechanism.mechanism_type.as_deref().unwrap_or("-"),
+                mechanism
+                    .handled
+                    .map(|handled| format!(" (handled: {handled})"))
+                    .unwrap_or_default()
+            );
+        }
+        for (frame_index, frame) in exception.frames.iter().enumerate() {
+            let location = match (frame.filename.as_deref(), frame.line, frame.column) {
+                (Some(filename), Some(line), Some(column)) => {
+                    format!("{filename}:{line}:{column}")
+                }
+                (Some(filename), Some(line), None) => format!("{filename}:{line}"),
+                (Some(filename), None, _) => filename.to_string(),
+                (None, Some(line), Some(column)) => format!("{line}:{column}"),
+                (None, Some(line), None) => line.to_string(),
+                (None, None, _) => "<unknown location>".to_string(),
+            };
+            let function = frame
+                .function
+                .as_deref()
+                .or(frame.module.as_deref())
+                .unwrap_or("<anonymous>");
+            let in_app = if frame.in_app == Some(true) {
+                " [in-app]"
+            } else {
+                ""
+            };
+            println!(
+                "    Frame {:>2}: {function} at {location}{in_app}",
+                frame_index + 1
+            );
+        }
+    }
+
+    if !details.breadcrumbs.is_empty() {
+        println!("  Breadcrumbs:");
+        for breadcrumb in &details.breadcrumbs {
+            let timestamp = breadcrumb.timestamp.as_deref().unwrap_or("-");
+            let category = breadcrumb.category.as_deref().unwrap_or("-");
+            let level = breadcrumb.level.as_deref().unwrap_or("-");
+            let breadcrumb_type = breadcrumb.r#type.as_deref().unwrap_or("-");
+            let message = breadcrumb.message.as_deref().unwrap_or("");
+            println!("    {timestamp}  {level}  {category} ({breadcrumb_type})  {message}");
+        }
+    }
+
+    if let Some(request) = details.request.as_ref() {
+        if request.method.is_some() || request.url.is_some() {
+            println!(
+                "  Request: {} {}",
+                request.method.as_deref().unwrap_or("-"),
+                request.url.as_deref().unwrap_or("-")
+            );
+        }
+    }
+
+    if let Some(contexts) = details.contexts.as_ref() {
+        for (label, context) in [
+            ("Browser", contexts.browser.as_ref()),
+            ("OS", contexts.os.as_ref()),
+            ("Device", contexts.device.as_ref()),
+            ("Runtime", contexts.runtime.as_ref()),
+        ] {
+            if let Some(context) = context {
+                let description = [
+                    context.name.as_deref(),
+                    context.version.as_deref(),
+                    context.family.as_deref(),
+                    context.brand.as_deref(),
+                    context.model.as_deref(),
+                ]
+                .into_iter()
+                .flatten()
+                .collect::<Vec<_>>()
+                .join(" ");
+                if !description.is_empty() {
+                    println!("  {label}: {description}");
+                }
+            }
+        }
+    }
 }
 
 fn normalize_mentions(mentions: &[String]) -> Result<Vec<String>> {
+    let parsed = mentions
+        .iter()
+        .map(|mention| parse_mention(mention))
+        .collect::<Result<Vec<_>>>()?;
+    Ok(dedupe_parsed_mentions(parsed))
+}
+
+fn dedupe_parsed_mentions(mentions: Vec<ParsedMention>) -> Vec<String> {
     let mut resolved = Vec::with_capacity(mentions.len());
-    let mut seen = std::collections::HashSet::new();
+    let mut seen = HashSet::new();
 
     for mention in mentions {
-        let mention = normalize_mention(mention)?;
+        let mention = mention.normalized;
         if seen.insert(mention.clone()) {
             resolved.push(mention);
         }
     }
 
-    Ok(resolved)
+    resolved
 }
 
-fn normalize_mention(input: &str) -> Result<String> {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MentionInputKind {
+    Broadcast,
+    UserId,
+    UserGroupId,
+    Handle,
+    NameOrAlias,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ParsedMention {
+    kind: MentionInputKind,
+    normalized: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ConfiguredMentionAliasTarget {
+    UserGroup(String),
+    Other,
+}
+
+type ConfiguredMentionAliases = HashMap<String, ConfiguredMentionAliasTarget>;
+
+fn parse_mention(input: &str) -> Result<ParsedMention> {
     let trimmed = input.trim();
     if trimmed.is_empty() {
         bail!("Slack mention cannot be empty");
@@ -1392,19 +1880,233 @@ fn normalize_mention(input: &str) -> Result<String> {
     }
 
     if let Some(token) = normalize_broadcast_mention(trimmed)? {
-        return Ok(token);
+        return Ok(ParsedMention {
+            kind: MentionInputKind::Broadcast,
+            normalized: token,
+        });
     }
     if let Some(token) = normalize_user_mention(trimmed)? {
-        return Ok(token);
+        return Ok(ParsedMention {
+            kind: MentionInputKind::UserId,
+            normalized: token,
+        });
     }
     if let Some(token) = normalize_user_group_mention(trimmed)? {
-        return Ok(token);
+        return Ok(ParsedMention {
+            kind: MentionInputKind::UserGroupId,
+            normalized: token,
+        });
     }
     if trimmed.starts_with('<') || trimmed.ends_with('>') {
         bail!("Malformed Slack mention: {trimmed}");
     }
 
-    Ok(trimmed.to_string())
+    let kind = if is_mention_handle(trimmed) {
+        MentionInputKind::Handle
+    } else {
+        MentionInputKind::NameOrAlias
+    };
+    Ok(ParsedMention {
+        kind,
+        normalized: trimmed.to_string(),
+    })
+}
+
+fn is_mention_handle(input: &str) -> bool {
+    input
+        .strip_prefix('@')
+        .is_some_and(|handle| !handle.is_empty() && !handle.chars().any(char::is_whitespace))
+}
+
+fn configured_slack_mention_aliases(
+    config_flag: Option<&Path>,
+) -> Result<ConfiguredMentionAliases> {
+    let aliases = loader::load(config_flag)?
+        .and_then(|config| config.spec.chat)
+        .and_then(|chat| chat.slack)
+        .map(|slack| {
+            slack
+                .mention_aliases
+                .into_iter()
+                .filter(|entry| !entry.alias.is_empty())
+                .map(|entry| {
+                    let target = match (entry.kind.as_deref(), entry.group_id) {
+                        (Some("user_group"), Some(group_id)) => {
+                            ConfiguredMentionAliasTarget::UserGroup(group_id)
+                        }
+                        _ => ConfiguredMentionAliasTarget::Other,
+                    };
+                    (entry.alias, target)
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    Ok(aliases)
+}
+
+fn is_email_mention(input: &str) -> bool {
+    let Some((local, domain)) = input.split_once('@') else {
+        return false;
+    };
+    !local.is_empty()
+        && !domain.is_empty()
+        && !input.chars().any(char::is_whitespace)
+        && !domain.contains('@')
+}
+
+fn needs_user_group_directory(
+    mention: &ParsedMention,
+    configured_aliases: &ConfiguredMentionAliases,
+) -> bool {
+    if let Some(target) = configured_aliases.get(&mention.normalized) {
+        return matches!(target, ConfiguredMentionAliasTarget::UserGroup(_));
+    }
+
+    match mention.kind {
+        MentionInputKind::UserGroupId | MentionInputKind::Handle => true,
+        MentionInputKind::NameOrAlias => !is_email_mention(&mention.normalized),
+        MentionInputKind::Broadcast | MentionInputKind::UserId => false,
+    }
+}
+
+async fn resolve_mentions(
+    api: &ApiClient,
+    mentions: &[String],
+    configured_aliases: &ConfiguredMentionAliases,
+) -> Result<Vec<String>> {
+    let parsed = mentions
+        .iter()
+        .map(|mention| parse_mention(mention))
+        .collect::<Result<Vec<_>>>()?;
+    if !parsed
+        .iter()
+        .any(|mention| needs_user_group_directory(mention, configured_aliases))
+    {
+        return normalize_mentions(mentions);
+    }
+
+    let response: ListSlackUserGroupsResponse = api.get("/v1/chat/user-groups").await?;
+    resolve_mentions_with_user_groups(parsed, &response.user_groups, configured_aliases)
+}
+
+fn resolve_mentions_with_user_groups(
+    mentions: Vec<ParsedMention>,
+    user_groups: &[SlackUserGroup],
+    configured_aliases: &ConfiguredMentionAliases,
+) -> Result<Vec<String>> {
+    let mut resolved = Vec::with_capacity(mentions.len());
+    let mut seen = HashSet::new();
+
+    for mention in mentions {
+        let value = if let Some(target) = configured_aliases.get(&mention.normalized) {
+            if let ConfiguredMentionAliasTarget::UserGroup(group_id) = target {
+                let matches = user_groups
+                    .iter()
+                    .filter(|group| group.id == *group_id)
+                    .collect::<Vec<_>>();
+                resolve_required_user_group(
+                    "ProjectConfig alias",
+                    &format!("{} -> {group_id}", mention.normalized),
+                    matches,
+                )?;
+            }
+            mention.normalized
+        } else {
+            match mention.kind {
+                MentionInputKind::UserGroupId => {
+                    let group_id = normalized_user_group_id(&mention.normalized)
+                        .expect("normalized Slack User Group mention contains an ID");
+                    let matches = user_groups
+                        .iter()
+                        .filter(|group| group.id == group_id)
+                        .collect::<Vec<_>>();
+                    resolve_required_user_group("User Group ID", group_id, matches)?
+                }
+                MentionInputKind::Handle => {
+                    let handle = mention.normalized.trim_start_matches('@');
+                    let matches = user_groups
+                        .iter()
+                        .filter(|group| normalized_eq(&group.handle, handle))
+                        .collect::<Vec<_>>();
+                    resolve_required_user_group("handle", &mention.normalized, matches)?
+                }
+                MentionInputKind::NameOrAlias if !is_email_mention(&mention.normalized) => {
+                    let matches = user_groups
+                        .iter()
+                        .filter(|group| normalized_eq(&group.name, &mention.normalized))
+                        .collect::<Vec<_>>();
+                    if matches.is_empty() {
+                        mention.normalized
+                    } else {
+                        resolve_required_user_group("name", &mention.normalized, matches)?
+                    }
+                }
+                MentionInputKind::Broadcast
+                | MentionInputKind::UserId
+                | MentionInputKind::NameOrAlias => mention.normalized,
+            }
+        };
+
+        if seen.insert(value.clone()) {
+            resolved.push(value);
+        }
+    }
+
+    Ok(resolved)
+}
+
+fn normalized_user_group_id(mention: &str) -> Option<&str> {
+    mention
+        .strip_prefix("<!subteam^")
+        .and_then(|value| value.strip_suffix('>'))
+}
+
+fn normalized_eq(left: &str, right: &str) -> bool {
+    left.trim().to_lowercase() == right.trim().to_lowercase()
+}
+
+fn resolve_required_user_group(
+    selector_kind: &str,
+    selector: &str,
+    mut matches: Vec<&SlackUserGroup>,
+) -> Result<String> {
+    matches.sort_by(|left, right| left.id.cmp(&right.id));
+
+    match matches.as_slice() {
+        [] => bail!(
+            "Slack Team {selector_kind} '{selector}' was not found; notification was not sent"
+        ),
+        [group] if group.disabled => bail!(
+            "Slack Team '{}' (@{}, {}) is disabled; notification was not sent",
+            group.name,
+            group.handle,
+            group.id
+        ),
+        [group] => normalize_user_group_mention(&group.id)?.ok_or_else(|| {
+            anyhow!(
+                "Slack User Group API returned an invalid group ID: {}",
+                group.id
+            )
+        }),
+        groups => {
+            let candidates = groups
+                .iter()
+                .map(|group| {
+                    format!(
+                        "{} (@{}, {}, {})",
+                        group.name,
+                        group.handle,
+                        group.id,
+                        if group.disabled { "disabled" } else { "active" }
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
+            bail!(
+                "Slack Team {selector_kind} '{selector}' is ambiguous; candidates: {candidates}; use @handle or a User Group ID"
+            )
+        }
+    }
 }
 
 fn normalize_broadcast_mention(input: &str) -> Result<Option<String>> {
@@ -1452,17 +2154,25 @@ fn normalize_user_group_mention(input: &str) -> Result<Option<String>> {
             .map(|(id, _)| id)
             .unwrap_or(value)
             .trim();
-        if !group_id.starts_with('S') || !group_id.chars().all(|c| c.is_ascii_alphanumeric()) {
+        if !is_slack_user_group_id(group_id) {
             bail!("Slack user group mention must use a Slack user group ID");
         }
         return Ok(Some(format!("<!subteam^{group_id}>")));
     }
 
-    if input.chars().all(|c| c.is_ascii_alphanumeric()) && input.starts_with('S') {
+    if is_slack_user_group_id(input) {
         return Ok(Some(format!("<!subteam^{input}>")));
     }
 
     Ok(None)
+}
+
+fn is_slack_user_group_id(input: &str) -> bool {
+    input.len() > 1
+        && input.starts_with('S')
+        && input
+            .chars()
+            .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit())
 }
 
 fn slack_user_display_name(user: &SlackUser) -> &str {
@@ -1481,6 +2191,7 @@ pub async fn run(
     config: &Configuration,
     tenant_id: &str,
     config_flag: Option<&Path>,
+    uses_api_key: bool,
 ) -> Result<()> {
     let api = ApiClient::new(config, tenant_id)?;
 
@@ -1577,10 +2288,32 @@ pub async fn run(
             NotifyCommand::Send {
                 text,
                 mentions,
+                thread_key,
                 json,
-            } => run_notify_send(&api, text, mentions, *json).await,
+            } => {
+                run_notify_send(
+                    &api,
+                    config_flag,
+                    text,
+                    mentions,
+                    thread_key.as_deref(),
+                    *json,
+                )
+                .await
+            }
+            NotifyCommand::React {
+                thread_key,
+                emoji,
+                ts,
+                json,
+            } => run_notify_react(&api, thread_key, emoji, ts.as_deref(), *json).await,
             NotifyCommand::Users { bot_token: _, json } => run_notify_users(&api, *json).await,
         },
+        // `main` dispatches this before tenant resolution; kept so the
+        // match stays exhaustive. Sent to the Host tenant either way.
+        OpsCommand::ErpReplays { command } => {
+            crate::erp_replay_cli::run(command, config, uses_api_key).await
+        }
         OpsCommand::Sentry { command } => match command {
             SentryCommand::Issues { command } => match command {
                 SentryIssuesCommand::List {
@@ -1609,6 +2342,16 @@ pub async fn run(
                     user,
                     json,
                 } => run_sentry_issue_assign(&api, issue_id, user, *json).await,
+                SentryIssuesCommand::Unresolve { issue_id, json } => {
+                    run_sentry_issue_set_status(&api, issue_id, "unresolved", "reopened", *json)
+                        .await
+                }
+                SentryIssuesCommand::Archive { issue_id, json } => {
+                    run_sentry_issue_set_status(&api, issue_id, "ignored", "archived", *json).await
+                }
+                SentryIssuesCommand::Unassign { issue_id, json } => {
+                    run_sentry_issue_unassign(&api, issue_id, *json).await
+                }
             },
         },
     }
@@ -1619,11 +2362,28 @@ mod tests {
     use super::*;
     use serde_json::json;
 
+    fn user_group(id: &str, name: &str, handle: &str, disabled: bool) -> SlackUserGroup {
+        SlackUserGroup {
+            id: id.to_string(),
+            name: name.to_string(),
+            handle: handle.to_string(),
+            disabled,
+        }
+    }
+
+    fn parse_mentions(inputs: &[&str]) -> Vec<ParsedMention> {
+        inputs
+            .iter()
+            .map(|input| parse_mention(input).unwrap())
+            .collect()
+    }
+
     #[test]
     fn serializes_notification_mentions() {
         let request = SendNotificationRequest {
             text: "deploy complete".to_string(),
             mentions: vec!["U123".to_string(), "U456".to_string()],
+            thread_key: None,
         };
 
         assert_eq!(
@@ -1640,11 +2400,64 @@ mod tests {
         let request = SendNotificationRequest {
             text: "deploy complete".to_string(),
             mentions: Vec::new(),
+            thread_key: None,
         };
 
         assert_eq!(
             serde_json::to_value(&request).unwrap(),
             json!({ "text": "deploy complete" })
+        );
+    }
+
+    #[test]
+    fn serializes_notification_thread_key() {
+        let request = SendNotificationRequest {
+            text: "確認しました".to_string(),
+            mentions: Vec::new(),
+            thread_key: Some("deploy-1234".to_string()),
+        };
+
+        assert_eq!(
+            serde_json::to_value(&request).unwrap(),
+            json!({
+                "text": "確認しました",
+                "thread_key": "deploy-1234",
+            })
+        );
+    }
+
+    #[test]
+    fn omits_reaction_ts_when_absent() {
+        let request = AddReactionRequest {
+            thread_key: "deploy-1234".to_string(),
+            emoji: "eyes".to_string(),
+            ts: None,
+        };
+
+        assert_eq!(
+            serde_json::to_value(&request).unwrap(),
+            json!({
+                "thread_key": "deploy-1234",
+                "emoji": "eyes",
+            })
+        );
+    }
+
+    #[test]
+    fn serializes_reaction_target_ts() {
+        let request = AddReactionRequest {
+            thread_key: "deploy-1234".to_string(),
+            emoji: ":white_check_mark:".to_string(),
+            ts: Some("1754300000.000200".to_string()),
+        };
+
+        assert_eq!(
+            serde_json::to_value(&request).unwrap(),
+            json!({
+                "thread_key": "deploy-1234",
+                "emoji": ":white_check_mark:",
+                "ts": "1754300000.000200",
+            })
         );
     }
 
@@ -1656,16 +2469,258 @@ mod tests {
     }
 
     #[test]
-    fn normalizes_slack_mentions_and_dedupes() {
+    fn parses_mention_input_forms_without_resolving_names() {
+        let cases = [
+            ("@here", MentionInputKind::Broadcast, "<!here>"),
+            ("<@U123|taka>", MentionInputKind::UserId, "<@U123>"),
+            (
+                "<!subteam^S123|platform>",
+                MentionInputKind::UserGroupId,
+                "<!subteam^S123>",
+            ),
+            ("S123", MentionInputKind::UserGroupId, "<!subteam^S123>"),
+            ("@platform-team", MentionInputKind::Handle, "@platform-team"),
+            (
+                "Platform Team",
+                MentionInputKind::NameOrAlias,
+                "Platform Team",
+            ),
+            ("CEO", MentionInputKind::NameOrAlias, "CEO"),
+            (
+                "user@example.com",
+                MentionInputKind::NameOrAlias,
+                "user@example.com",
+            ),
+        ];
+
+        for (input, kind, normalized) in cases {
+            assert_eq!(
+                parse_mention(input).unwrap(),
+                ParsedMention {
+                    kind,
+                    normalized: normalized.to_string(),
+                },
+                "input: {input}"
+            );
+        }
+    }
+
+    #[test]
+    fn treats_mixed_case_s_name_as_name_instead_of_raw_group_id() {
+        assert_eq!(
+            parse_mention("Sales").unwrap(),
+            ParsedMention {
+                kind: MentionInputKind::NameOrAlias,
+                normalized: "Sales".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn normalizes_mixed_slack_mentions_and_dedupes_by_token() {
         let mentions = normalize_mentions(&[
-            "CEO".to_string(),
             "<@U123|taka>".to_string(),
             "U123".to_string(),
+            "@platform-team".to_string(),
+            " @platform-team ".to_string(),
+            "<!subteam^S123|platform>".to_string(),
+            "S123".to_string(),
             "here".to_string(),
+            "@here".to_string(),
+            "CEO".to_string(),
+            "CEO".to_string(),
         ])
         .unwrap();
 
-        assert_eq!(mentions, vec!["CEO", "<@U123>", "<!here>"]);
+        assert_eq!(
+            mentions,
+            vec![
+                "<@U123>",
+                "@platform-team",
+                "<!subteam^S123>",
+                "<!here>",
+                "CEO",
+            ]
+        );
+    }
+
+    #[test]
+    fn preserves_existing_mention_paths() {
+        let mentions = normalize_mentions(&[
+            "U123".to_string(),
+            "@here".to_string(),
+            "@channel".to_string(),
+            "S123".to_string(),
+            "on-call".to_string(),
+        ])
+        .unwrap();
+
+        assert_eq!(
+            mentions,
+            vec![
+                "<@U123>",
+                "<!here>",
+                "<!channel>",
+                "<!subteam^S123>",
+                "on-call",
+            ]
+        );
+    }
+
+    #[test]
+    fn resolves_team_name_handle_and_id_then_dedupes_by_group_token() {
+        let groups = vec![user_group("S123", "Platform Team", "platform-team", false)];
+        let resolved = resolve_mentions_with_user_groups(
+            parse_mentions(&[
+                "Platform Team",
+                "@PLATFORM-TEAM",
+                "S123",
+                "<!subteam^S123|platform-team>",
+                "U123",
+                "@here",
+                "on-call",
+            ]),
+            &groups,
+            &HashMap::new(),
+        )
+        .unwrap();
+
+        assert_eq!(
+            resolved,
+            vec!["<!subteam^S123>", "<@U123>", "<!here>", "on-call"]
+        );
+    }
+
+    #[test]
+    fn ambiguous_team_name_lists_every_candidate_and_fails() {
+        let groups = vec![
+            user_group("S200", "Platform", "platform-emea", false),
+            user_group("S100", "platform", "platform-apac", true),
+        ];
+        let err = resolve_mentions_with_user_groups(
+            parse_mentions(&["Platform"]),
+            &groups,
+            &HashMap::new(),
+        )
+        .unwrap_err()
+        .to_string();
+
+        assert!(err.contains("is ambiguous"));
+        assert!(err.contains("S100"));
+        assert!(err.contains("@platform-apac"));
+        assert!(err.contains("disabled"));
+        assert!(err.contains("S200"));
+        assert!(err.contains("@platform-emea"));
+        assert!(err.contains("use @handle or a User Group ID"));
+    }
+
+    #[test]
+    fn disabled_team_name_handle_and_id_fail_instead_of_succeeding_silently() {
+        let groups = vec![user_group("S123", "Former Team", "former-team", true)];
+        for input in ["Former Team", "@former-team", "<!subteam^S123>"] {
+            let err = resolve_mentions_with_user_groups(
+                parse_mentions(&[input]),
+                &groups,
+                &HashMap::new(),
+            )
+            .unwrap_err()
+            .to_string();
+
+            assert!(err.contains("Former Team"), "input: {input}, error: {err}");
+            assert!(err.contains("S123"), "input: {input}, error: {err}");
+            assert!(err.contains("is disabled"), "input: {input}, error: {err}");
+            assert!(
+                err.contains("notification was not sent"),
+                "input: {input}, error: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn unknown_team_handle_and_id_fail_before_send() {
+        for input in ["@missing-team", "S999"] {
+            let err =
+                resolve_mentions_with_user_groups(parse_mentions(&[input]), &[], &HashMap::new())
+                    .unwrap_err()
+                    .to_string();
+
+            assert!(
+                err.contains("was not found"),
+                "input: {input}, error: {err}"
+            );
+            assert!(
+                err.contains("notification was not sent"),
+                "input: {input}, error: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn unmatched_plain_names_and_emails_keep_existing_server_resolution() {
+        let resolved = resolve_mentions_with_user_groups(
+            parse_mentions(&["Taka", "taka@example.com"]),
+            &[],
+            &HashMap::new(),
+        )
+        .unwrap();
+
+        assert_eq!(resolved, vec!["Taka", "taka@example.com"]);
+    }
+
+    #[test]
+    fn configured_project_alias_takes_precedence_over_team_name() {
+        let groups = vec![user_group("S123", "on-call", "on-call-team", false)];
+        let aliases = HashMap::from([(
+            "on-call".to_string(),
+            ConfiguredMentionAliasTarget::UserGroup("S123".to_string()),
+        )]);
+        let resolved =
+            resolve_mentions_with_user_groups(parse_mentions(&["on-call"]), &groups, &aliases)
+                .unwrap();
+
+        assert_eq!(resolved, vec!["on-call"]);
+    }
+
+    #[test]
+    fn configured_project_group_alias_rejects_disabled_target() {
+        let groups = vec![user_group("S123", "Former Team", "former-team", true)];
+        let aliases = HashMap::from([(
+            "on-call".to_string(),
+            ConfiguredMentionAliasTarget::UserGroup("S123".to_string()),
+        )]);
+        let err =
+            resolve_mentions_with_user_groups(parse_mentions(&["on-call"]), &groups, &aliases)
+                .unwrap_err()
+                .to_string();
+
+        assert!(err.contains("Former Team"));
+        assert!(err.contains("is disabled"));
+        assert!(err.contains("notification was not sent"));
+    }
+
+    #[test]
+    fn deserializes_user_group_directory_contract_including_disabled() {
+        let response: ListSlackUserGroupsResponse = serde_json::from_value(json!({
+            "user_groups": [
+                {
+                    "id": "S123",
+                    "name": "Platform Team",
+                    "handle": "platform-team",
+                    "disabled": false
+                },
+                {
+                    "id": "S456",
+                    "name": "Former Team",
+                    "handle": "former-team",
+                    "disabled": true
+                }
+            ]
+        }))
+        .unwrap();
+
+        assert_eq!(response.user_groups.len(), 2);
+        assert!(!response.user_groups[0].disabled);
+        assert!(response.user_groups[1].disabled);
     }
 
     #[test]
@@ -1736,6 +2791,59 @@ mod tests {
         let bare: SentryIssueListResponse =
             serde_json::from_value(json!([{ "id": "12345", "title": "TypeError" }])).unwrap();
         assert_eq!(sentry_issue_list_items(bare).len(), 1);
+    }
+
+    #[test]
+    fn preserves_sentry_latest_event_json_contract() {
+        let response: SentryIssueResponse = serde_json::from_value(json!({
+            "id": "7651276254",
+            "latestEvent": {
+                "eventID": "event-latest",
+                "dateCreated": "2026-08-04T07:33:41Z",
+                "level": "error",
+                "message": "money_path_authz_denied",
+                "tags": {
+                    "event.name": "money_path_authz_denied",
+                    "authz.money_path": "synthetic-path",
+                    "authz.action": "synthetic:Action",
+                    "authz.principal_kind": "user",
+                    "authz.principal_role": "OWNER",
+                    "authz.tenant_id": "tn_synthetic",
+                    "authz.target_id": "target_synthetic",
+                    "authz.deny_reason": "PermissionDenied",
+                    "unrelated": "SYNTHETIC_SECRET_MUST_NOT_LEAK"
+                },
+                "request": {"data": "SYNTHETIC_SECRET_MUST_NOT_LEAK"}
+            }
+        }))
+        .unwrap();
+
+        let serialized = serde_json::to_value(response).unwrap();
+
+        assert_eq!(
+            serialized["latest_event"],
+            json!({
+                "id": null,
+                "event_id": "event-latest",
+                "title": null,
+                "message": "money_path_authz_denied",
+                "timestamp": "2026-08-04T07:33:41Z",
+                "level": "error",
+                "tags": {
+                    "event.name": "money_path_authz_denied",
+                    "authz.money_path": "synthetic-path",
+                    "authz.action": "synthetic:Action",
+                    "authz.principal_kind": "user",
+                    "authz.principal_role": "OWNER",
+                    "authz.tenant_id": "tn_synthetic",
+                    "authz.target_id": "target_synthetic",
+                    "authz.deny_reason": "PermissionDenied"
+                }
+            })
+        );
+        assert!(!serialized
+            .to_string()
+            .contains("SYNTHETIC_SECRET_MUST_NOT_LEAK"));
     }
 
     #[test]

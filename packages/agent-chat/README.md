@@ -118,11 +118,11 @@ export function MyChatUI() {
     newChat,
     selectSession,
 
-    // Chat room CRUD
-    chatRooms,
-    fetchChatRooms,
-    createChatRoom,
-    deleteChatRoom,
+    // Session objects
+    sessions,
+    fetchSessions,
+    createSession,
+    deleteSession,
 
     // Model / settings
     selectedModel,
@@ -165,7 +165,7 @@ export function MyChatUI() {
 
 | Field               | Type                                        | Description                                        |
 | ------------------- | ------------------------------------------- | -------------------------------------------------- |
-| `sessionId`         | `string \| null`                            | Current chatroom ID                                |
+| `sessionId`         | `string \| null`                            | Current Session ID                                |
 | `setSessionId`      | `(id: string \| null) => void`              | Set session directly                               |
 | `newChat`           | `() => void`                               | Reset to a blank session                           |
 | `selectSession`     | `(id: string) => Promise<void>`            | Switch to an existing chatroom                     |
@@ -346,10 +346,10 @@ const client = new AgentChatClient({
   tenantId: 'tn_xxxxx',
 })
 
-// Create a chatroom and stream a task
-const room = await client.createChatRoom('My session')
+// Create a Session object and stream a task
+const session = await client.createSession('My session')
 
-for await (const chunk of client.streamAgent(room.chatroom.id, {
+for await (const chunk of client.streamAgent(session.session_id, {
   task: 'Summarise the latest quarterly report',
   model: 'anthropic/claude-sonnet-4.5',
   max_requests: 5,
@@ -450,3 +450,7 @@ type ToolAccess = Array<{
 
 ### API factories (advanced)
 `createChatroomApi` · `createAgentApi` · `createMemoryApi` · `createProtocolApi` · `createInsightApi` · `createCodingJobApi` · `createToolSearchApi`
+
+### Session migration
+
+New conversations use `as_` Session objects. `useAgentStream` creates a Session before the first message; it never falls back to creating a ChatRoom when Session creation fails. Use `createSessionApi` or `useAgentSessions` for listing, creation and deletion. Existing `ch_` conversations remain readable through the Session agent endpoints. ChatRoom helpers remain only for compatibility with legacy callers and are deprecated for new conversations.

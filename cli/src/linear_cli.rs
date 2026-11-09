@@ -5,6 +5,9 @@ use clap::{Args, Subcommand};
 use tachyon_sdk::apis::configuration::Configuration;
 
 use crate::pm_cli::{self, IssueCommand};
+use crate::pm_project_update_cli::{self, ProjectUpdateCommand};
+use crate::pm_resource_cli::{self, ResourceCommand};
+use crate::settings::ResolvedPmSettings;
 
 #[derive(Debug, Clone, Args)]
 pub struct LinearArgs {
@@ -17,14 +20,90 @@ pub enum LinearCommand {
     /// Manage Linear issues
     Issue {
         #[command(subcommand)]
-        command: IssueCommand,
+        command: Box<IssueCommand>,
+    },
+    /// Manage Linear projects
+    Project {
+        #[command(subcommand)]
+        command: ResourceCommand,
+    },
+    /// Manage Linear initiatives
+    Initiative {
+        #[command(subcommand)]
+        command: ResourceCommand,
+    },
+    /// Manage Linear cycles
+    Cycle {
+        #[command(subcommand)]
+        command: ResourceCommand,
+    },
+    /// Manage Linear teams
+    Team {
+        #[command(subcommand)]
+        command: ResourceCommand,
+    },
+    /// Manage Linear issue labels
+    Label {
+        #[command(subcommand)]
+        command: ResourceCommand,
+    },
+    /// Manage Linear documents
+    Document {
+        #[command(subcommand)]
+        command: ResourceCommand,
+    },
+    /// Manage Linear project milestones
+    Milestone {
+        #[command(subcommand)]
+        command: ResourceCommand,
+    },
+    /// Manage project status updates (the project's "Updates" tab)
+    ProjectUpdate {
+        #[command(subcommand)]
+        command: ProjectUpdateCommand,
     },
 }
 
-pub async fn run(args: &LinearArgs, config: &Configuration, tenant_id: &str) -> Result<()> {
+pub async fn run(
+    args: &LinearArgs,
+    config: &Configuration,
+    tenant_id: &str,
+    pm_settings: &ResolvedPmSettings,
+) -> Result<()> {
     match &args.command {
         LinearCommand::Issue { command } => {
-            pm_cli::run_issue(command, config, tenant_id, Some("linear")).await
+            pm_cli::run_issue(command, config, tenant_id, Some("linear"), pm_settings).await
+        }
+        LinearCommand::Project { command } => {
+            pm_resource_cli::run_resource("projects", command, config, tenant_id, Some("linear"))
+                .await
+        }
+        LinearCommand::Initiative { command } => {
+            pm_resource_cli::run_resource("initiatives", command, config, tenant_id, Some("linear"))
+                .await
+        }
+        LinearCommand::Cycle { command } => {
+            pm_resource_cli::run_resource("cycles", command, config, tenant_id, Some("linear"))
+                .await
+        }
+        LinearCommand::Team { command } => {
+            pm_resource_cli::run_resource("teams", command, config, tenant_id, Some("linear")).await
+        }
+        LinearCommand::Label { command } => {
+            pm_resource_cli::run_resource("labels", command, config, tenant_id, Some("linear"))
+                .await
+        }
+        LinearCommand::Document { command } => {
+            pm_resource_cli::run_resource("documents", command, config, tenant_id, Some("linear"))
+                .await
+        }
+        LinearCommand::Milestone { command } => {
+            pm_resource_cli::run_resource("milestones", command, config, tenant_id, Some("linear"))
+                .await
+        }
+        LinearCommand::ProjectUpdate { command } => {
+            pm_project_update_cli::run_project_update(command, config, tenant_id, Some("linear"))
+                .await
         }
     }
 }

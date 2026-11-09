@@ -21,6 +21,7 @@ import type {
   CheckPolicyForResourceResponse,
   CheckTenantsPolicyRequest,
   CheckTenantsPolicyResponse,
+  ErrorResponse,
   EvaluatePoliciesBatchRequest,
   EvaluatePoliciesBatchResponse,
   PolicyResponse,
@@ -41,6 +42,8 @@ import {
     CheckTenantsPolicyRequestToJSON,
     CheckTenantsPolicyResponseFromJSON,
     CheckTenantsPolicyResponseToJSON,
+    ErrorResponseFromJSON,
+    ErrorResponseToJSON,
     EvaluatePoliciesBatchRequestFromJSON,
     EvaluatePoliciesBatchRequestToJSON,
     EvaluatePoliciesBatchResponseFromJSON,
@@ -61,6 +64,10 @@ export interface CheckPoliciesForTenantsRequest {
 
 export interface CheckPolicyForResourceOperationRequest {
     checkPolicyForResourceRequest: CheckPolicyForResourceRequest;
+}
+
+export interface DeletePolicyRequest {
+    id: string;
 }
 
 export interface EvaluatePoliciesBatchOperationRequest {
@@ -185,6 +192,50 @@ export class AuthPoliciesApi extends runtime.BaseAPI {
     async checkPolicyForResource(requestParameters: CheckPolicyForResourceOperationRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<CheckPolicyForResourceResponse> {
         const response = await this.checkPolicyForResourceRaw(requestParameters, initOverrides);
         return await response.value();
+    }
+
+    /**
+     * Creates request options for deletePolicy without sending the request
+     */
+    async deletePolicyRequestOpts(requestParameters: DeletePolicyRequest): Promise<runtime.RequestOpts> {
+        if (requestParameters['id'] == null) {
+            throw new runtime.RequiredError(
+                'id',
+                'Required parameter "id" was null or undefined when calling deletePolicy().'
+            );
+        }
+
+        const queryParameters: any = {};
+
+        const headerParameters: runtime.HTTPHeaders = {};
+
+
+        let urlPath = `/v1/auth/policies/{id}`;
+        urlPath = urlPath.replace(`{${"id"}}`, encodeURIComponent(String(requestParameters['id'])));
+
+        return {
+            path: urlPath,
+            method: 'DELETE',
+            headers: headerParameters,
+            query: queryParameters,
+        };
+    }
+
+    /**
+     * Delete an unreferenced custom policy.
+     */
+    async deletePolicyRaw(requestParameters: DeletePolicyRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<void>> {
+        const requestOptions = await this.deletePolicyRequestOpts(requestParameters);
+        const response = await this.request(requestOptions, initOverrides);
+
+        return new runtime.VoidApiResponse(response);
+    }
+
+    /**
+     * Delete an unreferenced custom policy.
+     */
+    async deletePolicy(requestParameters: DeletePolicyRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<void> {
+        await this.deletePolicyRaw(requestParameters, initOverrides);
     }
 
     /**

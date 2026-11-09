@@ -34,12 +34,17 @@ pub enum SchemaKind {
     CloudApps,
     /// Auth manifest (custom actions and policies)
     Auth,
+    /// OAuth2 protected resource (kind: OAuth2Resource, RFC 8707 target)
+    OAuth2Resource,
 }
 
 pub(crate) fn run(args: &SchemaArgs) -> Result<()> {
     let schema = match args.kind {
         SchemaKind::CloudApps => schemars::schema_for!(CloudAppsDocument),
         SchemaKind::Auth => schemars::schema_for!(AuthManifest),
+        SchemaKind::OAuth2Resource => {
+            schemars::schema_for!(super::oauth2_resource::OAuth2ResourceManifest)
+        }
     };
     let output = if args.compact {
         serde_json::to_string(&schema)?
@@ -162,6 +167,13 @@ pub struct CloudAppSpec {
     /// default; values below the compute minimum are clamped.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub version_retention: Option<u16>,
+    /// Runtime sizing for the deployed function.
+    ///
+    /// This schema is what the CLI sends: a key it does not model is dropped
+    /// while parsing, so the server never sees it and `plan` reports no
+    /// change. Keep it in step with `CloudAppManifestSpec` in tachyon-apps.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scaling: Option<ScalingSpec>,
     /// Service tier. `enterprise` opts Lambda apps into a dedicated network
     /// profile (e.g. TiDB Serverless PrivateLink subnet).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -203,6 +215,12 @@ pub struct CloudAppSpec {
     /// Cloudflare R2 bucket bindings.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub r2_buckets: Vec<R2BucketSpec>,
+    /// Cloudflare Workers KV namespace declarations.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub kv_namespaces: Vec<KvNamespaceSpec>,
+    /// Control-plane generated Wrangler configuration.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub worker: Option<WorkerSpec>,
     /// Opt-in Speed Insights (Core Web Vitals collection). Only honored for
     /// static deployment targets.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -215,10 +233,16 @@ pub struct CloudAppSpec {
     /// origin receives a request.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub middleware: Option<MiddlewareConfig>,
-    /// End-user authentication evaluated by txcloud-proxy before the app
-    /// origin receives a request.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub auth: Option<AuthConfig>,
+    /// Opt-in shared-cache desired state. Omission preserves the current
+    /// delivery behavior; an explicit empty `rules` list clears the managed
+    /// set once reconciliation is implemented.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_optional_cache"
+    )]
+    #[schemars(with = "CloudAppCacheSpec")]
+    pub cache: Option<CloudAppCacheSpec>,
     /// Production liveness probe evaluated by tachyon-reconcile.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub liveness_proof: Option<ProofConfig>,
@@ -237,6 +261,57 @@ pub struct CloudAppSpec {
     /// Environment-specific overrides (preview / staging / production).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub environments: Option<EnvironmentOverrides>,
+}
+
+/// Cloudflare Workers configuration owned by the manifest.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WorkerSpec {
+    #[serde(default)]
+    pub generate_config: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub main: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub compatibility_date: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub compatibility_flags: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub observability: Option<WorkerObservabilitySpec>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub durable_objects: Vec<WorkerDurableObjectBinding>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub migrations: Vec<WorkerDurableObjectMigration>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WorkerObservabilitySpec {
+    #[serde(default)]
+    pub enabled: bool,
+}
+
+/// A Durable Object namespace local to the Worker being deployed.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WorkerDurableObjectBinding {
+    pub binding: String,
+    pub class_name: String,
+}
+
+/// Additive SQLite migration; keep existing tags and append new steps.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WorkerDurableObjectMigration {
+    pub tag: String,
+    pub new_sqlite_classes: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct KvNamespaceSpec {
+    pub binding: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
 }
 
 /// Source repository settings.
@@ -274,6 +349,9 @@ pub enum Framework {
     /// Vite app built to static output.
     Vite,
     Remix,
+    /// Astro site. Static output deploys with `deploymentTarget:
+    /// cloudflare_pages`; apps using the `@astrojs/cloudflare` adapter
+    /// deploy with `deploymentTarget: cloudflare_workers`.
     Astro,
     CreateReactApp,
     /// Cloudflare Workers script (raw Workers or edge frameworks such as
@@ -297,7 +375,7 @@ pub enum DeploymentTarget {
     CloudflarePages,
     Lambda,
     /// Cloudflare Workers (edge functions). Only valid with
-    /// `framework: worker`.
+    /// `framework: worker`, `rust_worker`, or `astro`.
     CloudflareWorkers,
     /// AWS ECS. Apps on ECS are deployed externally; the Cloud App registry
     /// only records the target for visibility.
@@ -357,6 +435,7 @@ pub struct BuildSpec {
 #[serde(rename_all = "snake_case")]
 pub enum BuildRunnerBackend {
     Codebuild,
+    GithubActions,
     KubernetesKata,
 }
 
@@ -699,52 +778,134 @@ pub enum MiddlewareAction {
     Rewrite,
 }
 
-/// End-user authentication evaluated by txcloud-proxy. When enabled, an
-/// OAuth2 client (`{appName}-web`) and its env vars are auto-provisioned.
+/// Shared-cache declaration owned by one Cloud App manifest.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub struct AuthConfig {
-    pub enabled: bool,
-    /// Only `tachyon` is supported.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub provider: Option<AuthProvider>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub issuer: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub client_id: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub login_url: Option<String>,
-    /// Paths that bypass authentication.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub public_paths: Vec<String>,
-    /// Session cookie names checked by the proxy. Defaults include
-    /// next-auth and txcloud session cookies.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub session_cookie_names: Vec<String>,
-    /// Env var names that receive the auto-provisioned OAuth2 client
-    /// credentials.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub env: Option<AuthEnvConfig>,
+pub struct CloudAppCacheSpec {
+    /// Named rules. The field is presence-sensitive: omission is invalid,
+    /// while an explicit empty list represents an empty managed set.
+    pub rules: Vec<CloudAppCacheRuleSpec>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum AuthProvider {
-    Tachyon,
+fn deserialize_optional_cache<'de, D>(
+    deserializer: D,
+) -> Result<Option<CloudAppCacheSpec>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    CloudAppCacheSpec::deserialize(deserializer).map(Some)
 }
 
+/// One shared-cache rule scoped to origin-relative paths on this app.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub struct AuthEnvConfig {
-    /// Defaults to `TACHYON_CLIENT_ID`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub client_id: Option<String>,
-    /// Defaults to `TACHYON_CLIENT_SECRET`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub client_secret: Option<String>,
-    /// Defaults to `TACHYON_USER_POOL_ID`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub user_pool_id: Option<String>,
+pub struct CloudAppCacheRuleSpec {
+    #[schemars(
+        length(min = 1),
+        extend(
+            "pattern" = r"^(?!.*[\u0000-\u001F\u007F-\u009F])(?!.*\p{Default_Ignorable_Code_Point})\S(?:.*\S)?$"
+        )
+    )]
+    pub name: String,
+    #[schemars(length(min = 1))]
+    pub paths: Vec<CloudAppCachePathPattern>,
+    #[schemars(length(min = 1))]
+    pub methods: Vec<CloudAppCacheMethod>,
+    /// Defaults to `true`. The initial contract accepts only `true` when the
+    /// field is present.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_only_anonymous"
+    )]
+    #[schemars(with = "bool", extend("const" = true))]
+    pub only_anonymous: Option<bool>,
+    pub edge_ttl: CloudAppCacheEdgeTtl,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "UPPERCASE")]
+pub enum CloudAppCacheMethod {
+    Get,
+    Head,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum CloudAppCacheEdgeTtl {
+    RespectOrigin,
+}
+
+/// Origin-relative path pattern accepted by the shared-cache contract.
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+#[serde(transparent)]
+#[schemars(
+    transparent,
+    extend(
+        "pattern" = r"^/(?!/)(?!\.{1,2}(?:/|$))(?!.*//)(?!.*/\.{1,2}(?:/|$))(?!.*[?#\\%\s\u0000-\u001F\u007F-\u009F])(?!.*\p{Default_Ignorable_Code_Point}).*$"
+    )
+)]
+pub struct CloudAppCachePathPattern(String);
+
+impl<'de> Deserialize<'de> for CloudAppCachePathPattern {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let path = String::deserialize(deserializer)?;
+        if is_safe_cache_path_pattern(&path) {
+            Ok(Self(path))
+        } else {
+            Err(serde::de::Error::custom(
+                "cache path must be an unambiguous origin-relative path pattern",
+            ))
+        }
+    }
+}
+
+pub(super) fn is_safe_cache_path_pattern(path: &str) -> bool {
+    if !path.starts_with('/')
+        || path.starts_with("//")
+        || path.contains("//")
+        || path
+            .chars()
+            .any(|character| matches!(character, '?' | '#' | '\\' | '%'))
+        || contains_disallowed_cache_character(path)
+    {
+        return false;
+    }
+
+    path.split('/')
+        .skip(1)
+        .all(|segment| !matches!(segment, "." | ".."))
+}
+
+pub(super) fn contains_disallowed_cache_character(value: &str) -> bool {
+    static DEFAULT_IGNORABLE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+
+    value
+        .chars()
+        .any(|character| character.is_control() || character.is_whitespace())
+        || DEFAULT_IGNORABLE
+            .get_or_init(|| {
+                regex::Regex::new(r"\p{Default_Ignorable_Code_Point}")
+                    .expect("default-ignorable Unicode property must compile")
+            })
+            .is_match(value)
+}
+
+fn deserialize_only_anonymous<'de, D>(deserializer: D) -> Result<Option<bool>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = bool::deserialize(deserializer)?;
+    if value {
+        Ok(Some(true))
+    } else {
+        Err(serde::de::Error::custom(
+            "onlyAnonymous must be true when present",
+        ))
+    }
 }
 
 /// Liveness/readiness probe configuration.
@@ -824,6 +985,28 @@ pub struct CustomDomainSpec {
     pub zone_id: Option<String>,
 }
 
+/// Runtime sizing for a Cloud App's deployed function.
+///
+/// Only the Lambda deployment target reads these. Omitted leaves the
+/// per-framework default in place.
+///
+/// This is the only durable home for the values: `PATCH /v1/apps/:id/scaling`
+/// writes onto the *active deployment*, and a new deployment starts from an
+/// empty scaling config, so a value set that way is discarded by the next
+/// deploy.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ScalingSpec {
+    /// Lambda memory in MiB (128-10240). Raise it for a function that decodes
+    /// what it is sent: the 512 MiB default is a ceiling an image or PDF
+    /// reader hits as an out-of-memory kill.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lambda_memory_size: Option<i32>,
+    /// Lambda invocation timeout in seconds (1-900).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lambda_timeout: Option<i32>,
+}
+
 /// Environment-specific overrides. Each overlay accepts the same fields as
 /// the app spec (except `environments`); set fields replace the base value
 /// for that runtime environment.
@@ -841,6 +1024,137 @@ pub struct EnvironmentOverrides {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The CLI is the transport: a key this schema does not model is invisible
+    /// to `plan`, so an operator declaring it sees "changed: <none>" and has no
+    /// way to tell a no-op from a dropped field. That is how a Lambda memory
+    /// bump looked applied while the app kept the 512 MiB default.
+    #[test]
+    fn cloud_app_spec_round_trips_scaling() {
+        let spec: CloudAppSpec =
+            serde_yaml::from_str("scaling:\n  lambdaMemorySize: 2048\n  lambdaTimeout: 60\n")
+                .unwrap();
+        let scaling = spec.scaling.clone().expect("scaling must survive parsing");
+        assert_eq!(scaling.lambda_memory_size, Some(2048));
+        assert_eq!(scaling.lambda_timeout, Some(60));
+
+        let rendered = serde_json::to_value(&spec).unwrap();
+        assert_eq!(rendered["scaling"]["lambdaMemorySize"], 2048);
+        assert_eq!(rendered["scaling"]["lambdaTimeout"], 60);
+    }
+
+    /// An overlay accepts the same fields as the base entry, so a preview that
+    /// does not need production's headroom can say so.
+    #[test]
+    fn environment_overlay_accepts_scaling() {
+        let spec: CloudAppSpec = serde_yaml::from_str(
+            "environments:\n  preview:\n    scaling:\n      lambdaMemorySize: 512\n",
+        )
+        .unwrap();
+        let preview = spec
+            .environments
+            .and_then(|environments| environments.preview)
+            .expect("preview overlay");
+        assert_eq!(
+            preview
+                .scaling
+                .and_then(|scaling| scaling.lambda_memory_size),
+            Some(512)
+        );
+    }
+
+    #[test]
+    fn cloud_app_spec_round_trips_cache_declaration() {
+        let value = serde_json::json!({
+            "cache": {
+                "rules": [{
+                    "name": "public-docs",
+                    "paths": ["/docs/*"],
+                    "methods": ["GET", "HEAD"],
+                    "edgeTtl": "respect-origin"
+                }]
+            }
+        });
+
+        let spec: CloudAppSpec = serde_json::from_value(value.clone()).unwrap();
+        assert_eq!(serde_json::to_value(spec).unwrap(), value);
+    }
+
+    #[test]
+    fn cloud_app_cache_schema_is_fail_closed() {
+        let schema = serde_json::to_value(schemars::schema_for!(CloudAppCacheRuleSpec)).unwrap();
+        let properties = &schema["properties"];
+
+        assert_eq!(properties["paths"]["minItems"], 1);
+        assert_eq!(properties["methods"]["minItems"], 1);
+        assert!(properties["name"]["pattern"]
+            .as_str()
+            .is_some_and(|pattern| {
+                pattern.contains("\\S") && pattern.contains("\\p{Default_Ignorable_Code_Point}")
+            }));
+        assert_eq!(properties["onlyAnonymous"]["const"], true);
+        assert_eq!(
+            properties["edgeTtl"]["$ref"],
+            "#/$defs/CloudAppCacheEdgeTtl"
+        );
+        assert!(schema["$defs"]["CloudAppCachePathPattern"]["pattern"]
+            .as_str()
+            .is_some_and(|pattern| {
+                pattern.contains("\\u0000") && pattern.contains("\\p{Default_Ignorable_Code_Point}")
+            }));
+
+        let false_value = serde_yaml::from_str::<CloudAppSpec>(
+            "cache:\n  rules:\n    - name: public-docs\n      paths: ['/docs/*']\n      methods: [GET]\n      onlyAnonymous: false\n      edgeTtl: respect-origin\n",
+        )
+        .expect_err("onlyAnonymous false must fail in the CLI transport");
+        assert!(false_value
+            .to_string()
+            .contains("onlyAnonymous must be true"));
+
+        let unsafe_path = serde_yaml::from_str::<CloudAppSpec>(
+            "cache:\n  rules:\n    - name: public-docs\n      paths: ['https://other.example/docs/*']\n      methods: [GET]\n      edgeTtl: respect-origin\n",
+        )
+        .expect_err("absolute cache path must fail in the CLI transport");
+        assert!(unsafe_path
+            .to_string()
+            .contains("origin-relative path pattern"));
+    }
+
+    #[test]
+    fn cloud_app_cache_requires_rules_but_preserves_explicit_empty_set() {
+        assert!(serde_yaml::from_str::<CloudAppSpec>("cache: {}\n").is_err());
+        assert!(serde_yaml::from_str::<CloudAppSpec>("cache: null\n").is_err());
+        assert!(serde_yaml::from_str::<CloudAppSpec>(
+            "cache:\n  rules:\n    - name: public-docs\n      paths: ['/docs/\u{a0}*']\n      methods: [GET]\n      edgeTtl: respect-origin\n"
+        )
+        .is_err());
+        assert!(serde_yaml::from_str::<CloudAppSpec>(
+            "cache:\n  rules:\n    - name: public-docs\n      paths: ['/docs/\u{feff}*']\n      methods: [GET]\n      edgeTtl: respect-origin\n"
+        )
+        .is_err());
+        for invisible in ['\u{200b}', '\u{200c}', '\u{2060}', '\u{180b}'] {
+            let manifest = format!(
+                "cache:\n  rules:\n    - name: public-docs\n      paths: ['/docs/{invisible}*']\n      methods: [GET]\n      edgeTtl: respect-origin\n"
+            );
+            assert!(
+                serde_yaml::from_str::<CloudAppSpec>(&manifest).is_err(),
+                "default-ignorable U+{:04X} must fail",
+                invisible as u32
+            );
+        }
+
+        let spec = serde_yaml::from_str::<CloudAppSpec>("cache:\n  rules: []\n").unwrap();
+        assert!(spec.cache.unwrap().rules.is_empty());
+
+        let schema = serde_json::to_value(schemars::schema_for!(CloudAppSpec)).unwrap();
+        assert!(schema["required"]
+            .as_array()
+            .is_none_or(|required| !required.iter().any(|field| field == "cache")));
+        assert_eq!(
+            schema["properties"]["cache"]["$ref"],
+            "#/$defs/CloudAppCacheSpec"
+        );
+    }
 
     #[test]
     fn cloud_apps_schema_lists_all_frameworks_and_targets() {
@@ -887,6 +1201,25 @@ mod tests {
         let rendered = serde_json::to_string(&schema).unwrap();
         assert!(rendered.contains("actions"));
         assert!(rendered.contains("policies"));
+    }
+
+    #[test]
+    fn typed_model_preserves_worker_durable_objects_and_kv() {
+        let worker = serde_json::json!({
+            "generateConfig": true, "main": "src/index.ts", "compatibilityDate": "2026-06-18",
+            "compatibilityFlags": ["nodejs_compat"], "observability": {"enabled": true},
+            "durableObjects": [{"binding": "ROOMS", "className": "Room"}],
+            "migrations": [{"tag": "v1", "newSqliteClasses": ["Room"]}]
+        });
+        let value = serde_json::json!({
+            "worker": worker, "kvNamespaces": [{"binding": "SESSIONS", "title": "sessions"}],
+            "environments": {"preview": {"worker": worker}}
+        });
+        let spec: CloudAppSpec = serde_json::from_value(value.clone()).unwrap();
+        assert_eq!(serde_json::to_value(spec).unwrap(), value);
+        let schema = serde_json::to_value(schemars::schema_for!(CloudAppSpec)).unwrap();
+        assert!(schema["properties"].get("worker").is_some());
+        assert!(schema["properties"].get("kvNamespaces").is_some());
     }
 
     #[test]
@@ -950,6 +1283,9 @@ spec:
       preview:
         build:
           runnerBackend: codebuild
+      production:
+        build:
+          runnerBackend: github_actions
 "#;
         let document: CloudAppsDocument = serde_yaml::from_str(yaml).unwrap();
         let CloudAppsDocument::CloudApps(manifest) = document else {
@@ -968,6 +1304,21 @@ spec:
                 .unwrap()
                 .runner_backend,
             Some(BuildRunnerBackend::KubernetesKata)
+        ));
+        assert!(matches!(
+            manifest.spec.apps[1]
+                .spec
+                .environments
+                .as_ref()
+                .unwrap()
+                .production
+                .as_ref()
+                .unwrap()
+                .build
+                .as_ref()
+                .unwrap()
+                .runner_backend,
+            Some(BuildRunnerBackend::GithubActions)
         ));
     }
 

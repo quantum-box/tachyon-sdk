@@ -24,11 +24,7 @@ pub struct AgentChunkEventOneOf5 {
 
 impl AgentChunkEventOneOf5 {
     /// Say/text content
-    pub fn new(
-        index: i32,
-        text: String,
-        r#type: Type,
-    ) -> AgentChunkEventOneOf5 {
+    pub fn new(index: i32, text: String, r#type: Type) -> AgentChunkEventOneOf5 {
         AgentChunkEventOneOf5 {
             index,
             text,
@@ -37,18 +33,7 @@ impl AgentChunkEventOneOf5 {
     }
 }
 ///
-#[derive(
-    Clone,
-    Copy,
-    Debug,
-    Eq,
-    PartialEq,
-    Ord,
-    PartialOrd,
-    Hash,
-    Serialize,
-    Deserialize,
-)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
 pub enum Type {
     #[serde(rename = "say")]
     Say,

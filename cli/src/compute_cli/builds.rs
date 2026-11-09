@@ -28,6 +28,40 @@ pub enum PreviewCommand {
         #[arg(long)]
         branch: String,
     },
+    /// Manage a pull request's managed preview database
+    Database {
+        #[command(subcommand)]
+        command: PreviewDatabaseCommand,
+    },
+}
+
+#[derive(Debug, Clone, Subcommand)]
+pub enum PreviewDatabaseCommand {
+    /// Delete a pull request's preview database so the next build recreates it
+    ///
+    /// The recovery hatch for a preview database that has become unusable —
+    /// a migration that died partway leaves SQLx refusing that migration
+    /// forever, and rewriting an already-applied migration leaves a checksum
+    /// the database disagrees with. Neither is repairable from the build
+    /// side.
+    ///
+    /// This is destructive and immediate: any data entered through the
+    /// preview is gone. The database itself is recreated by the next build,
+    /// not by this command.
+    Delete {
+        /// App ID or name
+        #[arg(long)]
+        app: String,
+        /// Pull request number
+        #[arg(long)]
+        pr: i32,
+        /// Delete without asking for confirmation
+        #[arg(long)]
+        yes: bool,
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[derive(Debug, Clone, Subcommand)]
@@ -42,6 +76,23 @@ pub enum BuildsCommand {
         /// Output as JSON
         #[arg(long)]
         json: bool,
+        /// Maximum time to wait for the builds response
+        #[arg(
+            long,
+            default_value_t = BUILDS_LIST_DEFAULT_TIMEOUT_SECS,
+            value_parser = clap::value_parser!(u64).range(1..)
+        )]
+        timeout_secs: u64,
+        /// Maximum time to wait for optional preview URLs
+        #[arg(
+            long,
+            default_value_t = BUILDS_LIST_DEFAULT_PREVIEW_TIMEOUT_SECS,
+            value_parser = clap::value_parser!(u64).range(1..)
+        )]
+        preview_timeout_secs: u64,
+        /// Print per-stage request and rendering timings to stderr
+        #[arg(long)]
+        verbose: bool,
     },
     /// Get details of a specific build
     Get {
@@ -155,9 +206,22 @@ pub(super) struct BuildResponse {
     pub(super) pr_number: Option<i32>,
     pub(super) status: String,
     #[serde(default)]
+    pub(super) artifact_status: Option<String>,
+    #[serde(default)]
+    pub(super) deploy_hook_status: Option<String>,
+    #[serde(default)]
     pub(super) duration_secs: Option<i32>,
     #[serde(default)]
     pub(super) error_message: Option<String>,
+    /// Output of the Tachyon IaC (plan/apply) step.
+    ///
+    /// `error_message` only carries the tail of the application
+    /// build log, so an IaC failure never shows up there. This
+    /// field is the only place the IaC failure is reported.
+    #[serde(default)]
+    pub(super) iac_plan_output: Option<String>,
+    #[serde(default)]
+    pub(super) iac_success: Option<bool>,
     #[serde(default)]
     pub(super) created_at: Option<String>,
     #[serde(default)]
@@ -214,6 +278,8 @@ pub(super) enum AgentBuildEvent<'a> {
     Build {
         build_id: &'a str,
         status: &'a str,
+        artifact_status: &'a str,
+        deploy_hook_status: &'a str,
     },
     Log {
         build_id: &'a str,
@@ -223,6 +289,8 @@ pub(super) enum AgentBuildEvent<'a> {
     Result {
         build_id: &'a str,
         status: &'a str,
+        artifact_status: &'a str,
+        deploy_hook_status: &'a str,
         exit_code: i32,
         #[serde(skip_serializing_if = "Option::is_none")]
         error_message: Option<&'a str>,
@@ -242,37 +310,200 @@ struct CreatePreviewBuildRequest {
     source_branch: String,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub(super) struct BuildsListOptions {
+    pub(super) timeout: Duration,
+    pub(super) preview_timeout: Duration,
+    pub(super) verbose: bool,
+    pub(super) command_started: Instant,
+}
+
+impl BuildResponse {
+    fn artifact_status(&self) -> &str {
+        self.artifact_status.as_deref().unwrap_or(&self.status)
+    }
+
+    fn deploy_hook_status(&self) -> &str {
+        self.deploy_hook_status.as_deref().unwrap_or("legacy")
+    }
+}
+
+pub(super) fn print_builds_list_timing(verbose: bool, stage: &str, elapsed: Duration) {
+    if verbose {
+        eprintln!("[timing] {stage}: {:.3}s", elapsed.as_secs_f64());
+    }
+}
+
+pub(super) async fn wait_for_builds_list_stage<T, F>(
+    stage: &str,
+    request_started: Instant,
+    timeout: Duration,
+    deadline: tokio::time::Instant,
+    future: F,
+) -> Result<T>
+where
+    F: Future<Output = Result<T>>,
+{
+    tokio::pin!(future);
+    let progress = tokio::time::sleep(BUILDS_LIST_PROGRESS_DELAY);
+    tokio::pin!(progress);
+    let deadline_timer = tokio::time::sleep_until(deadline);
+    tokio::pin!(deadline_timer);
+
+    loop {
+        tokio::select! {
+            result = &mut future => return result,
+            _ = &mut deadline_timer => {
+                return Err(anyhow!(
+                    "timed out waiting for {stage} after {}s",
+                    timeout.as_secs()
+                ));
+            }
+            _ = &mut progress => {
+                eprintln!(
+                    "Still waiting for {stage}... {}s elapsed (timeout: {}s).",
+                    request_started.elapsed().as_secs(),
+                    timeout.as_secs()
+                );
+                progress
+                    .as_mut()
+                    .reset(tokio::time::Instant::now() + BUILDS_LIST_PROGRESS_INTERVAL);
+            }
+        }
+    }
+}
+
+async fn fetch_builds_list_json<T: serde::de::DeserializeOwned>(
+    api: &ApiClient,
+    path: &str,
+    label: &str,
+    timeout: Duration,
+    verbose: bool,
+) -> Result<T> {
+    let request_started = Instant::now();
+    let deadline = tokio::time::Instant::now() + timeout;
+
+    let headers_started = Instant::now();
+    let headers_stage = format!("{label} response headers");
+    let response = wait_for_builds_list_stage(
+        &headers_stage,
+        request_started,
+        timeout,
+        deadline,
+        api.get_response(path),
+    )
+    .await;
+    print_builds_list_timing(verbose, &headers_stage, headers_started.elapsed());
+    let response = response?;
+
+    let body_started = Instant::now();
+    let body_stage = format!("{label} response body");
+    let body_context = format!("read GET {path} response body");
+    let body = wait_for_builds_list_stage(
+        &body_stage,
+        request_started,
+        timeout,
+        deadline,
+        async move { response.bytes().await.with_context(|| body_context) },
+    )
+    .await;
+    let body_elapsed = body_started.elapsed();
+    print_builds_list_timing(verbose, &body_stage, body_elapsed);
+    let body = body?;
+    if verbose {
+        eprintln!("[timing] {label} response bytes: {}", body.len());
+    }
+
+    let decode_started = Instant::now();
+    let decoded = serde_json::from_slice(&body).with_context(|| format!("parse GET {path}"));
+    print_builds_list_timing(
+        verbose,
+        &format!("{label} JSON decode"),
+        decode_started.elapsed(),
+    );
+    let decoded = decoded?;
+    print_builds_list_timing(
+        verbose,
+        &format!("{label} total"),
+        request_started.elapsed(),
+    );
+    Ok(decoded)
+}
+
 pub(super) async fn run_builds_list(
     api: &ApiClient,
     app_id: &str,
     limit: usize,
     json: bool,
+    options: BuildsListOptions,
 ) -> Result<()> {
-    let resp: ListBuildsResponse = api
-        .get(&format!("/v1/compute/apps/{app_id}/builds"))
-        .await?;
+    let builds_path = format!("/v1/compute/apps/{app_id}/builds?limit={limit}");
+    let resp: ListBuildsResponse = match fetch_builds_list_json(
+        api,
+        &builds_path,
+        "builds",
+        options.timeout,
+        options.verbose,
+    )
+    .await
+    {
+        Ok(resp) => resp,
+        Err(error) => {
+            print_builds_list_timing(
+                options.verbose,
+                "command total",
+                options.command_started.elapsed(),
+            );
+            return Err(error);
+        }
+    };
     if json {
+        let render_started = Instant::now();
         let builds = &resp.builds[..resp.builds.len().min(limit)];
-        return print_json(&builds);
+        let result = print_json(&builds);
+        print_builds_list_timing(options.verbose, "render output", render_started.elapsed());
+        print_builds_list_timing(
+            options.verbose,
+            "command total",
+            options.command_started.elapsed(),
+        );
+        return result;
     }
     if resp.builds.is_empty() {
+        let render_started = Instant::now();
         println!("No builds found for app {app_id}");
+        print_builds_list_timing(options.verbose, "render output", render_started.elapsed());
+        print_builds_list_timing(
+            options.verbose,
+            "command total",
+            options.command_started.elapsed(),
+        );
         return Ok(());
     }
+    let render_started = Instant::now();
     let builds = &resp.builds[..resp.builds.len().min(limit)];
     println!(
-        "{:<26}  {:<11}  {:<24}  {:<20}  {:<8}  {:<19}",
-        "BUILD ID", "STATUS", "EXECUTION", "BRANCH", "COMMIT", "CREATED AT"
+        "{:<26}  {:<11}  {:<11}  {:<12}  {:<24}  {:<20}  {:<8}  {:<19}",
+        "BUILD ID",
+        "EFFECTIVE",
+        "ARTIFACT",
+        "DEPLOY HOOK",
+        "EXECUTION",
+        "BRANCH",
+        "COMMIT",
+        "CREATED AT"
     );
     println!(
-        "{:-<26}  {:-<11}  {:-<24}  {:-<20}  {:-<8}  {:-<19}",
-        "", "", "", "", "", ""
+        "{:-<26}  {:-<11}  {:-<11}  {:-<12}  {:-<24}  {:-<20}  {:-<8}  {:-<19}",
+        "", "", "", "", "", "", "", ""
     );
     for build in builds {
         println!(
-            "{:<26}  {:<11}  {:<24}  {:<20}  {:<8}  {:<19}",
+            "{:<26}  {:<11}  {:<11}  {:<12}  {:<24}  {:<20}  {:<8}  {:<19}",
             build.id,
             build.status,
+            build.artifact_status(),
+            build.deploy_hook_status(),
             truncate(build_execution_label(build).as_deref().unwrap_or("-"), 24),
             truncate(build.source_branch.as_deref().unwrap_or("-"), 20),
             truncate_sha(build.commit_sha.as_deref().unwrap_or("-")),
@@ -283,6 +514,11 @@ pub(super) async fn run_builds_list(
                 .unwrap_or_else(|| "-".to_string()),
         );
     }
+    print_builds_list_timing(
+        options.verbose,
+        "render build table",
+        render_started.elapsed(),
+    );
 
     // Show active preview URLs below the build list.
     let build_pr_numbers: HashMap<&str, i32> = builds
@@ -290,26 +526,50 @@ pub(super) async fn run_builds_list(
         .filter_map(|build| build.pr_number.map(|pr| (build.id.as_str(), pr)))
         .collect();
     let preview_url = format!("/v1/compute/apps/{app_id}/deployments?environment=preview");
-    if let Ok(dep_resp) = api.get::<ListDeploymentsResponse>(&preview_url).await {
-        let active: Vec<_> = dep_resp
-            .deployments
-            .iter()
-            .filter(|d| d.status == "active" || d.status == "deploying")
-            .collect();
-        if !active.is_empty() {
-            println!();
-            println!("Preview URLs:");
-            for dep in &active {
-                let branch = dep.source_branch.as_deref().unwrap_or("-");
-                let pr_number = dep.pr_number.or_else(|| {
-                    dep.build_id
-                        .as_deref()
-                        .and_then(|build_id| build_pr_numbers.get(build_id).copied())
-                });
-                println!("  [{branch}] {}", dep.display_url_with_pr(pr_number));
+    match fetch_builds_list_json::<ListDeploymentsResponse>(
+        api,
+        &preview_url,
+        "preview deployments",
+        options.preview_timeout,
+        options.verbose,
+    )
+    .await
+    {
+        Ok(dep_resp) => {
+            let preview_render_started = Instant::now();
+            let active: Vec<_> = dep_resp
+                .deployments
+                .iter()
+                .filter(|d| d.status == "active" || d.status == "deploying")
+                .collect();
+            if !active.is_empty() {
+                println!();
+                println!("Preview URLs:");
+                for dep in &active {
+                    let branch = dep.source_branch.as_deref().unwrap_or("-");
+                    let pr_number = dep.pr_number.or_else(|| {
+                        dep.build_id
+                            .as_deref()
+                            .and_then(|build_id| build_pr_numbers.get(build_id).copied())
+                    });
+                    println!("  [{branch}] {}", dep.display_url_with_pr(pr_number));
+                }
             }
+            print_builds_list_timing(
+                options.verbose,
+                "render preview URLs",
+                preview_render_started.elapsed(),
+            );
+        }
+        Err(error) => {
+            eprintln!("Warning: preview URLs unavailable: {error}");
         }
     }
+    print_builds_list_timing(
+        options.verbose,
+        "command total",
+        options.command_started.elapsed(),
+    );
     Ok(())
 }
 
@@ -320,7 +580,9 @@ pub(super) async fn run_builds_get(api: &ApiClient, build_id: &str, json: bool) 
     }
     println!("ID:       {}", build.id);
     println!("App ID:   {}", build.app_id);
-    println!("Status:   {}", build.status);
+    println!("Effective:   {}", build.status);
+    println!("Artifact:    {}", build.artifact_status());
+    println!("Deploy Hook: {}", build.deploy_hook_status());
     println!(
         "Branch:   {}",
         build.source_branch.as_deref().unwrap_or("-")
@@ -337,6 +599,7 @@ pub(super) async fn run_builds_get(api: &ApiClient, build_id: &str, json: bool) 
     if let Some(err) = &build.error_message {
         println!("Error:    {err}");
     }
+    print_build_iac_diagnostics(&build);
     print_build_job_run_diagnostics(&build);
     println!(
         "Created:  {}",
@@ -348,7 +611,7 @@ pub(super) async fn run_builds_get(api: &ApiClient, build_id: &str, json: bool) 
     );
 
     // Fetch the associated deployment to show the preview URL.
-    if build.status == "succeeded" {
+    if build.artifact_status() == "succeeded" {
         let url: String = format!("/v1/compute/apps/{}/deployments", build.app_id);
         if let Ok(resp) = api.get::<ListDeploymentsResponse>(&url).await {
             if let Some(dep) = resp
@@ -487,6 +750,54 @@ pub(super) async fn run_preview_create(api: &ApiClient, app: &str, branch: &str)
     Ok(())
 }
 
+#[derive(Debug, Deserialize, Serialize)]
+pub(super) struct DeletePreviewDatabaseResponse {
+    pub(super) deleted: bool,
+}
+
+pub(super) async fn run_preview_database_delete(
+    api: &ApiClient,
+    app: &str,
+    pr: i32,
+    assume_yes: bool,
+    json: bool,
+) -> Result<()> {
+    if pr <= 0 {
+        anyhow::bail!("--pr must be a positive pull request number");
+    }
+    let app_id = resolve::resolve_app_id(api, app).await?;
+
+    if !assume_yes {
+        // Deleting takes the preview offline until the next build and drops
+        // whatever a reviewer entered through it, so an unattended
+        // invocation must not do that silently.
+        println!("App: {app_id}");
+        println!("Pull request: #{pr}");
+        println!();
+        println!("This deletes the preview database, its user, and its credential secret.");
+        println!("Data entered through the preview will be lost.");
+        println!("The next build for this pull request provisions a fresh database.");
+        println!();
+        println!("No changes made. Re-run with --yes to delete.");
+        return Ok(());
+    }
+
+    let resp: DeletePreviewDatabaseResponse = api
+        .delete_json(&format!("/v1/apps/{app_id}/previews/{pr}/database"))
+        .await?;
+
+    if json {
+        return print_json(&resp);
+    }
+    if resp.deleted {
+        println!("Deleted the preview database for {app_id} PR #{pr}.");
+        println!("The next build for this pull request provisions a fresh one.");
+    } else {
+        println!("No preview database was provisioned for {app_id} PR #{pr}.");
+    }
+    Ok(())
+}
+
 pub(super) async fn run_builds_trigger(
     api: &ApiClient,
     app_id: &str,
@@ -620,6 +931,8 @@ pub(super) async fn run_builds_logs(
             print_agent_event(&AgentBuildEvent::Result {
                 build_id: &resolved_build_id,
                 status: &build.status,
+                artifact_status: build.artifact_status(),
+                deploy_hook_status: build.deploy_hook_status(),
                 exit_code,
                 error_message: build.error_message.as_deref(),
             })?;
@@ -637,6 +950,33 @@ fn build_log_lines_signature(lines: &[BuildLogLineResponse]) -> Vec<(i64, String
         .iter()
         .map(|line| (line.timestamp, line.message.clone()))
         .collect()
+}
+
+/// Print the Tachyon IaC step result.
+///
+/// A build whose application artifact compiled fine can still fail in
+/// the IaC step. That failure is reported only here: `error_message`
+/// carries the tail of the application build log, which for such a
+/// build ends on a successful compile and hides the real cause.
+fn print_build_iac_diagnostics(build: &BuildResponse) {
+    let Some(output) = build
+        .iac_plan_output
+        .as_deref()
+        .map(str::trim)
+        .filter(|output| !output.is_empty())
+    else {
+        return;
+    };
+
+    let result = match build.iac_success {
+        Some(true) => "succeeded",
+        Some(false) => "failed",
+        None => "unknown",
+    };
+    println!("IaC:      {result}");
+    for line in output.lines() {
+        println!("          {line}");
+    }
 }
 
 fn print_build_job_run_diagnostics(build: &BuildResponse) {
@@ -756,6 +1096,8 @@ pub(super) async fn run_builds_watch(
     let timeout = timeout_secs.map(Duration::from_secs);
     let mut next_token: Option<String> = None;
     let mut last_status: Option<String> = None;
+    let mut last_artifact_status: Option<String> = None;
+    let mut last_deploy_hook_status: Option<String> = None;
     let mut last_execution: Option<String> = None;
 
     loop {
@@ -765,6 +1107,8 @@ pub(super) async fn run_builds_watch(
                     print_agent_event(&AgentBuildEvent::Result {
                         build_id: &resolved_build_id,
                         status: "timeout",
+                        artifact_status: "unknown",
+                        deploy_hook_status: "unknown",
                         exit_code: 124,
                         error_message: Some("watch timed out"),
                     })?;
@@ -776,16 +1120,29 @@ pub(super) async fn run_builds_watch(
         let build: BuildResponse = api
             .get(&format!("/v1/compute/builds/{resolved_build_id}"))
             .await?;
-        if last_status.as_deref() != Some(build.status.as_str()) {
+        if last_status.as_deref() != Some(build.status.as_str())
+            || last_artifact_status.as_deref() != Some(build.artifact_status())
+            || last_deploy_hook_status.as_deref() != Some(build.deploy_hook_status())
+        {
             if agent {
                 print_agent_event(&AgentBuildEvent::Build {
                     build_id: &resolved_build_id,
                     status: &build.status,
+                    artifact_status: build.artifact_status(),
+                    deploy_hook_status: build.deploy_hook_status(),
                 })?;
             } else {
-                println!("Build {}: {}", resolved_build_id, build.status);
+                println!(
+                    "Build {}: effective={}, artifact={}, deploy_hook={}",
+                    resolved_build_id,
+                    build.status,
+                    build.artifact_status(),
+                    build.deploy_hook_status()
+                );
             }
             last_status = Some(build.status.clone());
+            last_artifact_status = Some(build.artifact_status().to_string());
+            last_deploy_hook_status = Some(build.deploy_hook_status().to_string());
         }
         if !agent {
             let execution = build_execution_label(&build);
@@ -840,6 +1197,8 @@ pub(super) async fn run_builds_watch(
                 print_agent_event(&AgentBuildEvent::Result {
                     build_id: &resolved_build_id,
                     status: &build.status,
+                    artifact_status: build.artifact_status(),
+                    deploy_hook_status: build.deploy_hook_status(),
                     exit_code,
                     error_message: build.error_message.as_deref(),
                 })?;
@@ -1348,8 +1707,12 @@ mod tests {
             commit_message: None,
             pr_number: None,
             status: "building".to_string(),
+            artifact_status: Some("building".to_string()),
+            deploy_hook_status: Some("expected".to_string()),
             duration_secs: None,
             error_message: None,
+            iac_plan_output: None,
+            iac_success: None,
             created_at: None,
             updated_at: None,
             job_run: Some(BuildJobRunResponse {
@@ -1365,6 +1728,63 @@ mod tests {
             }),
             stuck,
         }
+    }
+
+    /// A build that failed in the IaC step still carries an
+    /// error_message describing a successful application build, so
+    /// the IaC fields must be deserialized and reported.
+    #[test]
+    fn build_response_deserializes_iac_fields() {
+        let build: BuildResponse = serde_json::from_str(
+            r#"{
+                "id": "bld_test",
+                "app_id": "app_test",
+                "status": "failed",
+                "error_message": "Finished `release` profile",
+                "iac_plan_output": "GLIBC_2.39 not found",
+                "iac_success": false
+            }"#,
+        )
+        .expect("build response with IaC fields must deserialize");
+
+        assert_eq!(
+            build.iac_plan_output.as_deref(),
+            Some("GLIBC_2.39 not found")
+        );
+        assert_eq!(build.iac_success, Some(false));
+    }
+
+    /// The API omits the IaC fields for builds that never ran an
+    /// IaC step, so they must stay optional.
+    #[test]
+    fn build_response_deserializes_without_iac_fields() {
+        let build: BuildResponse = serde_json::from_str(
+            r#"{"id": "bld_test", "app_id": "app_test", "status": "succeeded"}"#,
+        )
+        .expect("build response without IaC fields must deserialize");
+
+        assert!(build.iac_plan_output.is_none());
+        assert!(build.iac_success.is_none());
+        assert_eq!(build.artifact_status(), "succeeded");
+        assert_eq!(build.deploy_hook_status(), "legacy");
+    }
+
+    #[test]
+    fn build_response_deserializes_independent_build_gate_statuses() {
+        let build: BuildResponse = serde_json::from_str(
+            r#"{
+                "id": "bld_test",
+                "app_id": "app_test",
+                "status": "failed",
+                "artifact_status": "succeeded",
+                "deploy_hook_status": "not_reported"
+            }"#,
+        )
+        .expect("independent build gate statuses must deserialize");
+
+        assert_eq!(build.status, "failed");
+        assert_eq!(build.artifact_status(), "succeeded");
+        assert_eq!(build.deploy_hook_status(), "not_reported");
     }
 
     #[test]

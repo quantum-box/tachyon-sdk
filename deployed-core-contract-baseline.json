@@ -1,0 +1,125 @@
+{
+  "version": 1,
+  "entries": [
+    {
+      "method": "GET",
+      "path": "/oauth/{provider_name}/callback",
+      "reason": "pre-existing gap when the deployed core check was introduced (2026-10-15); confirm whether core still serves it, then remove from openapi.json or this baseline"
+    },
+    {
+      "method": "GET",
+      "path": "/oauth/{provider_name}/connect",
+      "reason": "pre-existing gap when the deployed core check was introduced (2026-10-15); confirm whether core still serves it, then remove from openapi.json or this baseline"
+    },
+    {
+      "method": "PUT",
+      "path": "/v1/auth/users/{user_id}/role",
+      "reason": "pre-existing gap when the deployed core check was introduced (2026-10-15); confirm whether core still serves it, then remove from openapi.json or this baseline"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/auth/users/{user_id}/tenants",
+      "reason": "pre-existing gap when the deployed core check was introduced (2026-10-15); confirm whether core still serves it, then remove from openapi.json or this baseline"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/crm/object-mappings",
+      "reason": "pre-existing gap when the deployed core check was introduced (2026-10-15); confirm whether core still serves it, then remove from openapi.json or this baseline"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/crm/object-mappings",
+      "reason": "pre-existing gap when the deployed core check was introduced (2026-10-15); confirm whether core still serves it, then remove from openapi.json or this baseline"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/delivery/shipping-destinations/{id}/availability",
+      "reason": "pre-existing gap when the deployed core check was introduced (2026-10-15); confirm whether core still serves it, then remove from openapi.json or this baseline"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/delivery/shipping-destinations",
+      "reason": "pre-existing gap when the deployed core check was introduced (2026-10-15); confirm whether core still serves it, then remove from openapi.json or this baseline"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/delivery/software/by-order/{order_id}",
+      "reason": "pre-existing gap when the deployed core check was introduced (2026-10-15); confirm whether core still serves it, then remove from openapi.json or this baseline"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/order/checkout",
+      "reason": "pre-existing gap when the deployed core check was introduced (2026-10-15); confirm whether core still serves it, then remove from openapi.json or this baseline"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/order/clients/{id}",
+      "reason": "pre-existing gap when the deployed core check was introduced (2026-10-15); confirm whether core still serves it, then remove from openapi.json or this baseline"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/order/clients",
+      "reason": "pre-existing gap when the deployed core check was introduced (2026-10-15); confirm whether core still serves it, then remove from openapi.json or this baseline"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/order/clients",
+      "reason": "pre-existing gap when the deployed core check was introduced (2026-10-15); confirm whether core still serves it, then remove from openapi.json or this baseline"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/order/purchase-orders/{id}",
+      "reason": "pre-existing gap when the deployed core check was introduced (2026-10-15); confirm whether core still serves it, then remove from openapi.json or this baseline"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/order/purchase-orders",
+      "reason": "pre-existing gap when the deployed core check was introduced (2026-10-15); confirm whether core still serves it, then remove from openapi.json or this baseline"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/order/quotes/{id}/issue",
+      "reason": "pre-existing gap when the deployed core check was introduced (2026-10-15); confirm whether core still serves it, then remove from openapi.json or this baseline"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/order/quotes/{id}",
+      "reason": "pre-existing gap when the deployed core check was introduced (2026-10-15); confirm whether core still serves it, then remove from openapi.json or this baseline"
+    },
+    {
+      "method": "PUT",
+      "path": "/v1/order/quotes/{id}",
+      "reason": "pre-existing gap when the deployed core check was introduced (2026-10-15); confirm whether core still serves it, then remove from openapi.json or this baseline"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/order/quotes",
+      "reason": "pre-existing gap when the deployed core check was introduced (2026-10-15); confirm whether core still serves it, then remove from openapi.json or this baseline"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/order/quotes",
+      "reason": "pre-existing gap when the deployed core check was introduced (2026-10-15); confirm whether core still serves it, then remove from openapi.json or this baseline"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/order/revenue/recurring",
+      "reason": "pre-existing gap when the deployed core check was introduced (2026-10-15); confirm whether core still serves it, then remove from openapi.json or this baseline"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/order/shipping-destinations",
+      "reason": "pre-existing gap when the deployed core check was introduced (2026-10-15); confirm whether core still serves it, then remove from openapi.json or this baseline"
+    },
+    {
+      "method": "DELETE",
+      "path": "/v1/procurement/variant-links/{id}",
+      "reason": "pre-existing gap when the deployed core check was introduced (2026-10-15); confirm whether core still serves it, then remove from openapi.json or this baseline"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/procurement/variant-links",
+      "reason": "pre-existing gap when the deployed core check was introduced (2026-10-15); confirm whether core still serves it, then remove from openapi.json or this baseline"
+    }
+  ]
+}

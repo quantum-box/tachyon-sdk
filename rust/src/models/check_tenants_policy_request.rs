@@ -29,10 +29,7 @@ pub struct CheckTenantsPolicyRequest {
 
 impl CheckTenantsPolicyRequest {
     /// Request to evaluate one action across multiple tenant scopes.
-    pub fn new(
-        action: String,
-        platform_id: String,
-    ) -> CheckTenantsPolicyRequest {
+    pub fn new(action: String, platform_id: String) -> CheckTenantsPolicyRequest {
         CheckTenantsPolicyRequest {
             action,
             platform_id,

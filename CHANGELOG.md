@@ -1,5 +1,242 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- Add `tachyon org users attach-policy` and `tachyon org users detach-policy`,
+  so a user's policies can be granted and revoked from the CLI instead of the
+  IAM screen of the web console. `quantum-box/tachyonfield`'s
+  `docs/runbooks/cloud-app-field-api-permissions.md` already documents
+  `tachyon org users attach-policy <user-id> --policy field:staff --tenant-id
+  <tn_...>`, but `org users` only had read commands, so the documented step
+  could not be run at all. `--policy` accepts a policy name or a `pol_` ID; a
+  name is resolved against the policies visible from the acting tenant and an
+  ambiguous name fails with every candidate listed, because different owners
+  can publish policies that share a name (`field:admin` is one such name).
+  `--resource-scope` routes to the `attach-with-scope` /
+  `detach-with-scope` endpoints and is rejected client-side unless it is a TRN,
+  since those endpoints store the value verbatim and a typo would silently
+  grant nothing. Both commands name the user, the policy, and the tenant they
+  wrote to, report a grant that was already listed or already absent, and
+  translate 403, 404, and 400 into the check to run next. (PLT-4873)
+- Rust SDK: `agent_session` (feature `agent-session`) calls the agent session
+  API as one caller: `create_session`, `execute` returning the open event
+  stream, and `submit_tool_result`, which resends a result a few times while
+  Tachyon briefly reports the pending call as missing. Request bodies pass
+  through unchanged (the generated `agent_api` reads `execute` as one JSON
+  body and its request model drops `attachments`). `parse_sse_record` and
+  `tool_result_text` read events and bound tool results.
+- `@tachyon-sdk/agent` 0.4.0: `TachyonAgentSessionClient` for the agent
+  session API (create a session, stream `execute` events, submit client-side
+  tool results), with a pluggable transport and paths so apps can go through
+  their own server. `readAgentEvents` reads a session event stream and fails
+  when it ends before `done`; `toolResultText` bounds a tool result's size.
+- Rust SDK: `AgentExecuteRequest.reasoning_effort` (e.g. `"low"`) asks the
+  agent's model for a reasoning effort. OpenAI models that use the Responses
+  API (`gpt-5*`, `gpt-6*`) receive it as `reasoning.effort`; other providers
+  and models ignore it.
+- Rust SDK: `integrations_api::get_github_billing_usage` reads a GitHub
+  organization's billing usage (`GET /v1/integrations/github/billing-usage`)
+  through the tenant's Tachyon GitHub App installation. Tachyon checks that the
+  installation is granted to the calling tenant and never returns the
+  installation token. (PLT-6105)
+- `tachyon auth token` prints the logged-in user's API token to a pipe, so a
+  script can read it with `--token-stdin` without the user handling the token.
+  It refreshes the token first when it expires within `--min-validity` seconds
+  (default 600), refuses to print to a terminal, and refuses while an API key
+  is set. Errors never contain the token.
+- `tachyon ops erp-replays request | approve | execute | revoke | get` drive
+  the audited ERP delivery replay API (`/v1/payment/erp-delivery-replays`).
+  `request` shows the dry-run's `targetDigest` and each item's `payloadSha256`
+  (`get --show-body` prints the exact bodies), and `execute` shows each
+  attempt's `outcome` with `allDuplicate`. The operator header is fixed to the
+  Host tenant (`--host-tenant-id`, defaulting to the production system tenant),
+  and API-key auth is refused before any request because the server only
+  accepts human login sessions. The server keeps enforcing that the approver
+  is neither the requester nor the executor. (PLT-5690)
+
+### Changed
+
+- CLI 0.6.90: `tachyon auth login` no longer hands the authorization code to
+  the Tachyon API to relay. It listens on `127.0.0.1` (port 42813, then 42814,
+  then 42815) and the browser returns to `http://localhost:{port}/callback`
+  (RFC 8252). A callback whose `state` does not match is rejected. On a machine
+  without a local browser, `tachyon auth login --no-browser` still relays
+  through the API, but prints a code (`XXXX-XXXX`) that you enter in the
+  browser after signing in; the API releases the code only after that. Before
+  this, anyone who got a user to open a login URL they had built could collect
+  that user's authorization code from the poll endpoint. CLI 0.6.89 and
+  earlier can no longer log in once the API requires the confirmation code.
+- When a service account name matches more than one service account, the error
+  now tells you to pass one of the listed IDs.
+- Rust SDK: removed `auth_contract_authority_api::resolve`
+  (`POST /v1/auth/contract-authority/resolve`) and its models, because core no
+  longer serves it. (PLT-6031)
+
+### Fixed
+- The CLI now uses `rustls-webpki` 0.103.16 and `webpki-roots` /
+  `webpki-root-certs` 1.0.10. These reject certificate paths that go through
+  the eMudhra intermediate CAs whose private keys were disclosed, and no longer
+  trust emSign ECC Root CA - G3. The `aws-lc-rs` / `aws-lc-sys` versions that
+  `rustls-webpki` 0.103.16 requires are updated along with them.
+
+- CLI 0.6.89: `kind: OAuth2Resource` manifests carry `spec.exchange`
+  (ADR-0166 token exchange). `manifest plan` diffs it and `manifest apply`
+  sends it; 0.6.88 and earlier dropped it and reported a live resource
+  without an exchange as Unchanged.
+
+- `tachyon env set <app> --secret KEY` only writes `valueFrom.secret` into the
+  local `tachyon.yml` when that manifest declares `<app>`. Setting another
+  app's secret leaves the file untouched and prints the reference to add
+  instead; before, it wrote into the first app of an unrelated `CloudApps`
+  manifest. A newly appended `envVars` entry now keeps its block indentation
+  instead of emitting `type:` / `target:` / `valueFrom:` at column zero.
+
+- `scripts/generate.sh` patches the Rust code openapi-generator emits for a
+  `oneOf` of string and array (`ArrayVecmodels::T(...)`) and for a nullable
+  inline `oneOf` (`OneOfLessThanGreaterThan`) before `cargo fmt`, so the
+  Generate SDKs workflow no longer fails parsing `message_content.rs`.
+- The Cloud App build job (Kata runner) now finds a `cargo_lambda` bootstrap
+  from the manifest's `build.binary` first (`<target>/lambda/<binary>/bootstrap`)
+  and only falls back to parsing `--bin` / `--flatten` from the build command,
+  so commands wrapped in `bash -c` or scripts still package the right binary.
+  Without `CARGO_TARGET_DIR`, the job asks `cargo metadata` for the target
+  directory, so a monorepo app selected with `rootDirectory` packages from the
+  workspace root's `target/` instead of `<rootDirectory>/target`. (PLT-5955)
+- `tachyon apps apply` accepts `build.runnerBackend: github_actions`
+  (and `github-actions`) in Cloud App manifests and sends it to the control
+  plane, matching the server-side backend parser. A `cargo_lambda` app on
+  GitHub Actions can omit `build.command`; the CLI derives it from
+  `package`/`binary`/`release`/`arch`. (PLT-5946)
+- Pass Cloud App Pages deploy string options as attached values, preserving
+  matching outer quotes through Wrangler's pinned parser. Workers `--name` and
+  IaC `--app` values are attached too, so dash-leading values stay intact.
+  (PLT-5893)
+- Pass `--commit-hash` to `wrangler pages deploy` in the Cloud App build job.
+  The job runs wrangler outside the git checkout, so wrangler could not detect
+  the commit and uploaded Pages deployments with an empty commit. The control
+  plane treats an empty commit as unverifiable and fails the preview check when
+  a push-triggered build is reused for the same head. (PLT-5540)
+
+### Added
+
+- Add `tachyon org service-accounts create <name>`, `delete <sa>`,
+  `attach-policy <sa> <policy>` and `detach-policy <sa> <policy>`. Creating a
+  service account and attaching a policy used to require platform-ui.
+  `<sa>` and `<policy>` accept an ID or a name. A policy name prefers the policy
+  owned by the current tenant and stops when the name is ambiguous. `create`
+  refuses a name that already exists in the tenant, because name resolution
+  fails once two service accounts share a name. `attach-policy` and
+  `detach-policy` call the existing `attachServiceAccountPolicy` /
+  `detachServiceAccountPolicy` GraphQL mutations, so they need no API update.
+- Add `--ttl-seconds` to `tachyon api-key create`. Without it the key still
+  never expires.
+
+- `tachyon iac apply` prints what a `kind: FeatureFlags` manifest did to each
+  flag: one line per entry with its outcome (`CREATED`, `UPDATED`,
+  `UNCHANGED`, `PRUNED`, `REFUSED_PUBLICATION`), whether the flag is ON or OFF
+  after the apply and why it is OFF (`INSERTED_OFF`, `ROW_OFF`, `PRUNED`),
+  followed by a warning for refused entries and a note for declared flags left
+  OFF. A manifest never publishes a flag, so `Applied` alone used to read as
+  "the flag is live" when it had been created OFF. The CLI selects the new
+  `featureFlagEntries` field only for FeatureFlags manifests; against a
+  tachyon-api that predates it, the server rejects the document before
+  executing anything and the CLI applies again without it. Exit status is
+  unchanged. (PLT-3399, slice S3399-2)
+
+- Add Gemini 3.8 Flash and Flash-Lite TTS models to `tachyon tts models`, list
+  the same IDs in `tachyon tts synthesize --help`, and reject model IDs outside
+  the catalog. Mark Gemini 3.1 Flash TTS Preview as legacy. (PLT-5411)
+
+- Add `tachyon data` for Tachyon Data: `dataset list`, `dataset create --name
+  <name> --file <csv> [--purpose <purpose>]` (multipart upload with the
+  `x-data-purpose` header), `dataset get <dataset_id> [--version <id>]`, and
+  `query run --sql <sql> --bind <name>=<dataset_id>[@<version>] [--wait]`, plus
+  `query get <job_id>` to pick up a job that was submitted without `--wait`.
+  Creating a dataset used to mean `curl` and an ID token copied by hand; these
+  commands use the credentials `tachyon auth login` already stores and never
+  print or save a token.
+
+  Two behaviours of the Data API are handled for the caller. A query binds an
+  alias to a dataset *version*, so `--bind sales=ds_...` describes the dataset
+  first and reports the version it read. And `POST /data/v1/query-jobs` answers
+  `202` even when the backend refuses the query, carrying the refusal as
+  `state: "failed"` with a code such as `QUERY_TOO_EXPENSIVE` or
+  `TENANT_QUERY_CONCURRENCY` — the CLI inspects the body and exits non-zero
+  with an explanation instead of reporting the query as accepted. A `404` with
+  an empty body, which is what the `data_platform` feature-flag gate returns,
+  is reported as "Data is not enabled for this tenant" rather than as a missing
+  dataset. `--json` prints the job, the assembled provenance (query job ID,
+  read versions, SQL digest, dialect, purpose, access revision), and the rows.
+  (PLT-4874)
+
+- Add `tachyon ops sentry issues unresolve` (alias `reopen`), `archive` (alias
+  `ignore`), and `unassign`, and accept a Sentry short ID such as
+  `TACHYON-API-1A2` wherever an issue ID is taken. The list table now shows the
+  numeric issue ID next to the short ID. Mutations use the tenant's own Sentry
+  connection once it grants `event:write`, so resolving no longer depends on an
+  operator-managed write token.
+
+- Add `tachyon linear project-update` (and `tachyon pm project-update`) to post, list, get, edit, and archive project status updates, the health-tagged posts on a Linear project's "Updates" tab. `create --project <id> --health on-track --body-file update.md` posts Markdown from a file (or `-` for stdin), and `list --project <id>` narrows to one project. This is separate from `project update`, which edits the project itself. Requires a Tachyon API that serves the `project-updates` PM resource and the `project_id` list filter.
+
+- Add `--prompt-secrets` to `tachyon iac apply`. New or changed provider
+  `$secret_ref` values can be entered through a hidden terminal prompt; the
+  plaintext is sent only in memory, while the server stores the provider
+  secret and local IaC state retains the reference.
+
+- Add `tachyon provider stripe credentials set` to register a tenant's own
+  Stripe platform keys through hidden prompts or JSON stdin. The command
+  requires explicit tenant context, confirms the target, calls the self-scoped
+  credential API, and never writes key material to arguments, manifests, IaC
+  state, auth profiles, or command output. (PLT-4475)
+
+- Add the global `--platform-id` option (alias `--platform`, env `TACHYON_PLATFORM_ID`) that sends `x-platform-id` on every request. Tenants reached through a parent platform instead of direct membership, such as the system tenant that holds the host Sentry token, rejected the CLI with 401 `Operator is not registered and no validated platform scope is available` even though the same request with the header succeeds; `tachyon ops sentry issues resolve` against the system tenant is the first consumer. (PLT-4322)
+
+- Add `--json` to `tachyon tts synthesize`, printing the saved path, MIME type, byte size, and cost as JSON. (PLT-4122)
+- `tachyon tts models` now lists `gemini-2.5-pro-preview-tts` and all 30 Gemini prebuilt voices. (PLT-4122)
+
+- Add `--lambda-timeout` and `--lambda-memory-size` to `tachyon compute scaling update`, and show both in `tachyon compute scaling get`. The scaling endpoint has always accepted them; only the CLI request left them out, so raising a function's invocation timeout meant the web console or a hand-rolled PATCH. That blocks recovery when a deploy hook invokes the app's own candidate alias and the migration gate needs longer than the 30s default. (PLT-3861)
+
+- Add `tachyon compute deployments rollback --to-previous` to roll back to the newest production rollback candidate without picking a deployment ID, and `tachyon compute deployments rollback-candidates` to list the eligible targets (successful serving record, provider metadata present) newest first. During an incident the deployment list mixes failed and deleted rows, so finding a valid rollback target used to require manual archaeology. (PLT-3787)
+
+- Add `requires` to auth manifest `ActionSpec`: each entry names a full action (`context:Name`) the declaring action depends on within a call context. `manifest apply` sends the declared edge set to `PUT /v1/auth/action-dependencies`, which validates ownership, cycles, and the system-action allowlist server-side. A manifest without `requires` never touches the platform's edge set. (PLT-3597)
+
+### Fixed
+
+- Write the API's canonical `app/key` secret reference to `tachyon.yml` after
+  `tachyon env set --secret`, preserving the manifest's comments and formatting.
+  The CLI previously wrote only the key, which the manifest parser rejects and
+  which cannot identify the stored app secret. (PLT-5249)
+
+- `tachyon tts synthesize` now saves a playable file. Gemini TTS returns raw 16-bit PCM, and the command used to write those bytes verbatim to a `.mp3` path, producing a file no player could open. The default `--format` is now `wav`, the output path defaults to `speech.<ext>` derived from the returned MIME type, an extension/MIME mismatch is warned on stderr, and a raw PCM response from an older API is wrapped in a WAV header locally. (PLT-4122)
+
+- Correct the Gemini 3.1 TTS model name in `tachyon tts` help and `tachyon tts models` to `gemini-3.1-flash-tts-preview`. The previous `gemini-3.1-flash-tts` does not exist in the Gemini API and always failed with 404. (PLT-4122)
+
+- Update existing auth manifest policies through the generated SDK PATCH API instead of reporting duplicate POST responses as a successful skip. Existing policy updates now report `updated`, failures exit non-zero, and output explicitly warns that the current API cannot verify or remove stale action membership. (PLT-3670)
+
+- Send `resourcePattern` in camelCase when registering actions from an auth manifest. The server silently ignored the snake_case key, so a declared `resource_pattern` was never stored and `manifest plan` reported a permanent diff. (PLT-3597)
+
+- Stream Cloud App build command output while retaining a bounded callback tail, allowing the control plane to distinguish active long builds from output stalls. (PLT-3402)
+
+## tachyon-cli-v0.6.32
+
+### Added
+
+- Add `--limit`, `--cursor`, and `--all` to `tachyon pm issue list` and `tachyon linear issue list`. The command previously had no way to page and stopped at 100 issues, so older issues could not be listed at all. (PLT-3235)
+
+### Fixed
+
+- Warn on stderr when `issue list` returns a truncated result. The 100-issue cutoff used to be invisible, so a full page looked identical to the end of the list and callers could wrongly conclude they had seen every issue. The warning names the next cursor and is emitted under `--json` too, keeping stdout parseable. (PLT-3235)
+
+## tachyon-cli-v0.6.31
+
+### Added
+
+- Add `tachyon compute apps update <app-id> --connection-id <connection-id>` to preview and update a compute app's GitHub connection. Pass an empty connection ID to clear it. (PLT-3092)
+- Publish statically linked musl release assets (`tachyon-linux-musl-x86_64.tar.gz`, `tachyon-linux-musl-arm64.tar.gz`). The existing gnu assets are built on Ubuntu 24.04 and require GLIBC_2.39, so they cannot start on older images such as Amazon Linux 2023 (glibc 2.34) used by the CodeBuild Cloud App build runners. (PLT-3176)
+- Show the Tachyon IaC step result in `tachyon compute builds get`. An IaC failure never appears in `error_message`, which carries the tail of the application build log, so a build that failed in IaC used to look like a clean compile. (PLT-3176)
+
 ## tachyon-cli-v0.6.5 - 2026-05-25
 
 ### Fixed

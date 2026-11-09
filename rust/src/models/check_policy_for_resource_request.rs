@@ -24,10 +24,7 @@ pub struct CheckPolicyForResourceRequest {
 
 impl CheckPolicyForResourceRequest {
     /// Request to check policy for a specific resource
-    pub fn new(
-        action: String,
-        resource_trn: String,
-    ) -> CheckPolicyForResourceRequest {
+    pub fn new(action: String, resource_trn: String) -> CheckPolicyForResourceRequest {
         CheckPolicyForResourceRequest {
             action,
             resource_trn,

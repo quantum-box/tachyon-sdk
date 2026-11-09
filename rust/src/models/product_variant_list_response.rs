@@ -21,9 +21,7 @@ pub struct ProductVariantListResponse {
 
 impl ProductVariantListResponse {
     /// Product variant list response
-    pub fn new(
-        items: Vec<models::ProductVariantResponse>,
-    ) -> ProductVariantListResponse {
+    pub fn new(items: Vec<models::ProductVariantResponse>) -> ProductVariantListResponse {
         ProductVariantListResponse { items }
     }
 }
