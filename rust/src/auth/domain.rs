@@ -2,8 +2,8 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use super::types::{
-    Identifier, OperatorId, PlatformId, PolicyId, PublicApiKeyId,
-    PublicApiKeyValue, ServiceAccountId, TenantId, UserId,
+    Identifier, OperatorId, PlatformId, PolicyId, PublicApiKeyId, PublicApiKeyValue,
+    ServiceAccountId, TenantId, UserId,
 };
 
 // ───────────────────── DefaultRole ─────────────────────
@@ -175,13 +175,7 @@ pub struct EvaluatePoliciesBatchOutcome {
 /// Trait for querying user information.
 #[async_trait::async_trait]
 pub trait UserQuery: std::fmt::Debug + Send + Sync {
-    async fn find_by_id(
-        &self,
-        id: &UserId,
-    ) -> super::error::AuthResult<Option<User>>;
+    async fn find_by_id(&self, id: &UserId) -> super::error::AuthResult<Option<User>>;
 
-    async fn find_by_tenant(
-        &self,
-        tenant_id: &TenantId,
-    ) -> super::error::AuthResult<Vec<User>>;
+    async fn find_by_tenant(&self, tenant_id: &TenantId) -> super::error::AuthResult<Vec<User>>;
 }

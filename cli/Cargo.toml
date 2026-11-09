@@ -1,6 +1,6 @@
 [package]
 name = "tachyon"
-version = "0.6.71"
+version = "0.6.94"
 edition = "2021"
 description = "CLI for the Tachyon Platform"
 license = "MIT"
@@ -21,7 +21,7 @@ dirs = "6"
 futures-util = "0.3"
 http = "1"
 rand = "0.8"
-reqwest = { version = "0.13", default-features = false, features = ["json", "form", "query", "rustls"] }
+reqwest = { version = "0.13", default-features = false, features = ["json", "form", "multipart", "query", "rustls"] }
 reqwest12 = { package = "reqwest", version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 regex = "1"
 rmcp = { version = "1.5", features = [
@@ -36,6 +36,7 @@ schemars = "1.0"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 serde_yaml = "0.9"
+yaml-edit = { version = "0.3.2", default-features = false }
 sha2 = "0.10"
 tachyon-sdk = { path = "../rust", default-features = false, features = ["rustls"] }
 tokio = { version = "1", features = ["full"] }

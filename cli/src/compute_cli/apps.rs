@@ -1451,6 +1451,7 @@ fn validate_build_runner_backend_at(build: Option<&Value>, path: &str) -> Result
 fn parse_build_runner_backend(value: &str) -> Result<&'static str> {
     match value.trim().to_ascii_lowercase().as_str() {
         "codebuild" | "aws_codebuild" | "aws-codebuild" => Ok("codebuild"),
+        "github_actions" | "github-actions" => Ok("github_actions"),
         "kubernetes_kata" | "kubernetes-kata" | "k8s_kata" | "k8s-kata" | "hetzner_k3s_kata"
         | "hetzner-k3s-kata" => Ok("kubernetes_kata"),
         other => Err(anyhow!("unsupported build runner backend: {other}")),
@@ -2320,6 +2321,66 @@ spec:
 
         assert!(body.get("tier").is_none());
         assert!(body.get("subnet").is_none());
+    }
+
+    /// A cargo_lambda app built on GitHub Actions can omit `build.command`;
+    /// apply must accept the backend and derive the command from
+    /// package/binary/release/arch, matching the server-side fallback.
+    #[test]
+    fn apply_plan_accepts_github_actions_cargo_lambda_without_command() {
+        let (_tmp, path) = write_manifest(
+            r#"
+apiVersion: apps.tachy.one/v1alpha
+kind: CloudApps
+spec:
+  apps:
+    - name: library-api
+      repository:
+        url: https://github.com/quantum-box/library
+        owner: quantum-box
+        name: library
+      framework: cargo_lambda
+      deploymentTarget: lambda
+      build:
+        runnerBackend: github_actions
+        package: library-api
+        binary: lambda-library-api
+"#,
+        );
+
+        let manifest = load_cloud_apps_manifest(&path).unwrap();
+        let entries = select_app_entries(&manifest, Some("library-api")).unwrap();
+        let plans =
+            build_app_apply_plans(entries, "tn_01ks18jhh1xvggktfzjx5jqsen", "prod").unwrap();
+        let plan = &plans[0];
+
+        assert_eq!(plan.runner_backend.as_deref(), Some("github_actions"));
+        assert_eq!(
+            plan.body["build_command"],
+            "cargo lambda build --package library-api --bin lambda-library-api --release --arm64"
+        );
+        assert!(plan.body.get("install_command").is_none());
+
+        let availability = BuildRunnerBackendAvailabilityResponse {
+            default_backend: Some("codebuild".to_string()),
+            backends: vec![BuildRunnerBackendStatusResponse {
+                backend: "github_actions".to_string(),
+                available: true,
+            }],
+        };
+        validate_build_runner_backend_availability(&plans, &availability).unwrap();
+    }
+
+    #[test]
+    fn parse_build_runner_backend_matches_server_aliases() {
+        for (input, expected) in [
+            ("github_actions", "github_actions"),
+            ("GitHub-Actions", "github_actions"),
+            ("aws-codebuild", "codebuild"),
+            ("hetzner_k3s_kata", "kubernetes_kata"),
+        ] {
+            assert_eq!(parse_build_runner_backend(input).unwrap(), expected);
+        }
     }
 
     #[test]

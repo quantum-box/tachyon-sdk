@@ -37,10 +37,7 @@ pub struct CreateProductRequest {
     )]
     pub id: Option<Option<String>>,
     /// File IDs for product images
-    #[serde(
-        rename = "imageFileIds",
-        skip_serializing_if = "Option::is_none"
-    )]
+    #[serde(rename = "imageFileIds", skip_serializing_if = "Option::is_none")]
     pub image_file_ids: Option<Vec<String>>,
     /// JAN code
     #[serde(

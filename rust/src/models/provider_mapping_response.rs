@@ -24,10 +24,7 @@ pub struct ProviderMappingResponse {
 
 impl ProviderMappingResponse {
     /// Provider mapping response
-    pub fn new(
-        provider_id: String,
-        provider_name: String,
-    ) -> ProviderMappingResponse {
+    pub fn new(provider_id: String, provider_name: String) -> ProviderMappingResponse {
         ProviderMappingResponse {
             provider_id,
             provider_name,

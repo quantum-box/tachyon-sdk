@@ -37,27 +37,35 @@ pub async fn get_models(
     let p_query_require_agent_product = require_agent_product;
 
     let uri_str = format!("{}/v1/llms/models", configuration.base_path);
-    let mut req_builder =
-        configuration.client.request(reqwest::Method::GET, &uri_str);
+    let mut req_builder = configuration.client.request(reqwest::Method::GET, &uri_str);
 
     if let Some(ref param_value) = p_query_supported_feature {
         req_builder = match "multi" {
-            "multi" => req_builder.query(&param_value.into_iter().map(|p| ("supported_feature".to_owned(), p.to_string())).collect::<Vec<(std::string::String, std::string::String)>>()),
-            _ => req_builder.query(&[("supported_feature", &param_value.into_iter().map(|p| p.to_string()).collect::<Vec<String>>().join(",").to_string())]),
+            "multi" => req_builder.query(
+                &param_value
+                    .into_iter()
+                    .map(|p| ("supported_feature".to_owned(), p.to_string()))
+                    .collect::<Vec<(std::string::String, std::string::String)>>(),
+            ),
+            _ => req_builder.query(&[(
+                "supported_feature",
+                &param_value
+                    .into_iter()
+                    .map(|p| p.to_string())
+                    .collect::<Vec<String>>()
+                    .join(",")
+                    .to_string(),
+            )]),
         };
     }
     if let Some(ref param_value) = p_query_require_agent_product {
-        req_builder = req_builder
-            .query(&[("require_agent_product", &param_value.to_string())]);
+        req_builder = req_builder.query(&[("require_agent_product", &param_value.to_string())]);
     }
     if let Some(ref user_agent) = configuration.user_agent {
-        req_builder = req_builder
-            .header(reqwest::header::USER_AGENT, user_agent.clone());
+        req_builder = req_builder.header(reqwest::header::USER_AGENT, user_agent.clone());
     }
-    req_builder = req_builder
-        .header("x-operator-id", p_header_x_operator_id.to_string());
-    req_builder = req_builder
-        .header("Authorization", p_header_authorization.to_string());
+    req_builder = req_builder.header("x-operator-id", p_header_x_operator_id.to_string());
+    req_builder = req_builder.header("Authorization", p_header_authorization.to_string());
 
     let req = req_builder.build()?;
     let resp = configuration.client.execute(req).await?;
@@ -79,8 +87,7 @@ pub async fn get_models(
         }
     } else {
         let content = resp.text().await?;
-        let entity: Option<GetModelsError> =
-            serde_json::from_str(&content).ok();
+        let entity: Option<GetModelsError> = serde_json::from_str(&content).ok();
         Err(Error::ResponseError(ResponseContent {
             status,
             content,

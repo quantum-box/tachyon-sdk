@@ -4,17 +4,16 @@
 //!   tachyon tts synthesize --text "..." [--voice Kore] [--output speech.wav]
 //!   tachyon tts models
 //!
-//! The API returns audio as base64. Gemini TTS models produce 16-bit PCM,
-//! which the API wraps in a WAV container (`audio/wav`). Older API
-//! versions returned the raw PCM (`audio/L16;codec=pcm;rate=24000`); this
-//! command wraps such payloads in a WAV header locally so the saved file
-//! is always playable.
+//! The API returns audio as base64. Gemini 3.8 TTS returns WAV for unary
+//! requests. Older models or API versions may return raw PCM
+//! (`audio/L16;codec=pcm;rate=24000`); this command wraps such payloads in a
+//! WAV header locally so the saved file is always playable.
 
 use std::path::Path;
 
 use anyhow::{Context, Result};
 use base64::Engine as _;
-use clap::{Args, Subcommand};
+use clap::{builder::PossibleValuesParser, Args, Subcommand};
 use serde::{Deserialize, Serialize};
 use tachyon_sdk::apis::configuration::Configuration;
 
@@ -26,6 +25,38 @@ pub const DEFAULT_FORMAT: &str = "wav";
 pub const DEFAULT_MODEL: &str = "gemini-2.5-flash-preview-tts";
 /// Sample rate assumed for raw PCM responses that omit `rate=`.
 const DEFAULT_PCM_SAMPLE_RATE: u32 = 24_000;
+
+struct TtsModel {
+    id: &'static str,
+    description: &'static str,
+}
+
+const TTS_MODELS: &[TtsModel] = &[
+    TtsModel {
+        id: "gemini-3.8-flash-tts",
+        description: "Google Gemini 3.8 Flash TTS (flagship)",
+    },
+    TtsModel {
+        id: "gemini-3.8-flash-lite-tts",
+        description: "Google Gemini 3.8 Flash-Lite TTS (fast, cost-efficient)",
+    },
+    TtsModel {
+        id: "gemini-3.1-flash-tts-preview",
+        description: "Google Gemini 3.1 Flash TTS Preview (legacy; migrate to Gemini 3.8)",
+    },
+    TtsModel {
+        id: "gemini-2.5-flash-preview-tts",
+        description: "Google Gemini 2.5 Flash Preview TTS",
+    },
+    TtsModel {
+        id: "gemini-2.5-pro-preview-tts",
+        description: "Google Gemini 2.5 Pro Preview TTS",
+    },
+];
+
+fn tts_model_value_parser() -> PossibleValuesParser {
+    PossibleValuesParser::new(TTS_MODELS.iter().map(|model| model.id))
+}
 
 #[derive(Debug, Clone, Args)]
 pub struct TtsArgs {
@@ -41,12 +72,16 @@ pub enum TtsCommand {
         #[arg(long, short = 't')]
         text: String,
 
-        /// Model to use for synthesis (gemini-2.5-flash-preview-tts,
-        /// gemini-2.5-pro-preview-tts, gemini-3.1-flash-tts-preview)
-        #[arg(long, short = 'm', default_value = DEFAULT_MODEL)]
+        /// Model to use for synthesis. Run `tachyon tts models` for details.
+        #[arg(
+            long,
+            short = 'm',
+            default_value = DEFAULT_MODEL,
+            value_parser = tts_model_value_parser()
+        )]
         model: String,
 
-        /// Voice name (e.g., Aoede, Charon, Fenrir, Kore, Puck, Orbit,
+        /// Voice name (e.g., Aoede, Charon, Fenrir, Kore, Puck,
         /// Zephyr). Run `tachyon tts models` for the full list.
         #[arg(long, short = 'v')]
         voice: Option<String>,
@@ -289,18 +324,14 @@ pub fn extension_for_mime(mime_type: &str) -> &'static str {
 async fn list_models(_config: &Configuration, _tenant_id: &str) -> Result<()> {
     println!("Available TTS models (output: wav, 16-bit PCM 24 kHz mono):");
     println!();
-    println!(
-        "  gemini-2.5-flash-preview-tts  \
-         Google Gemini 2.5 Flash Preview TTS (default)"
-    );
-    println!(
-        "  gemini-2.5-pro-preview-tts    \
-         Google Gemini 2.5 Pro Preview TTS"
-    );
-    println!(
-        "  gemini-3.1-flash-tts-preview  \
-         Google Gemini 3.1 Flash TTS Preview"
-    );
+    for model in TTS_MODELS {
+        let default_marker = if model.id == DEFAULT_MODEL {
+            " (default)"
+        } else {
+            ""
+        };
+        println!("  {:36} {}{}", model.id, model.description, default_marker);
+    }
     println!();
     println!("Available voices (all models):");
     let voices = [

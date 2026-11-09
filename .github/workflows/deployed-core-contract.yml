@@ -1,0 +1,65 @@
+name: Deployed core contract
+
+# Consumers call Tachyon core only through this SDK, so openapi.json is the
+# contract surface. This replaces per-consumer source scanning (for example
+# Field's former "Core HTTP contract" step): an operation may enter
+# openapi.json only after the deployed core serves it.
+
+on:
+  pull_request:
+    paths:
+      - 'openapi.json'
+      - 'deployed-core-contract-baseline.json'
+      - 'scripts/check-deployed-core-contract.mjs'
+      - 'scripts/test-check-deployed-core-contract.mjs'
+      - '.github/workflows/deployed-core-contract.yml'
+  push:
+    branches:
+      - main
+    paths:
+      - 'openapi.json'
+      - 'deployed-core-contract-baseline.json'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: Deployed core contract
+    runs-on: ubuntu-latest
+    env:
+      CORE_OPENAPI_URL: https://api.n1.tachy.one/v1/api-docs/openapi.json
+      BASELINE: deployed-core-contract-baseline.json
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Test checker
+        run: node scripts/test-check-deployed-core-contract.mjs
+
+      - name: Check openapi.json against deployed core
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          core_spec="${RUNNER_TEMP}/core.openapi.json"
+          curl --fail --silent --show-error --location \
+            --retry 3 --retry-all-errors \
+            --output "${core_spec}" "${CORE_OPENAPI_URL}" || {
+              echo "::error title=Core OpenAPI unavailable::could not download ${CORE_OPENAPI_URL}"
+              exit 1
+            }
+
+          args=(--sdk-spec openapi.json --core-spec "${core_spec}" --baseline "${BASELINE}")
+          if [[ -n "${BASE_SHA}" ]] && git cat-file -e "${BASE_SHA}:${BASELINE}" 2>/dev/null; then
+            base_baseline="${RUNNER_TEMP}/baseline.base.json"
+            git show "${BASE_SHA}:${BASELINE}" > "${base_baseline}"
+            args+=(--base-baseline "${base_baseline}")
+          fi
+          node scripts/check-deployed-core-contract.mjs "${args[@]}"

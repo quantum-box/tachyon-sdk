@@ -22,10 +22,7 @@ pub struct ActionListResponse {
 
 impl ActionListResponse {
     /// Response for action list
-    pub fn new(
-        actions: Vec<models::ActionResponse>,
-        total_count: i32,
-    ) -> ActionListResponse {
+    pub fn new(actions: Vec<models::ActionResponse>, total_count: i32) -> ActionListResponse {
         ActionListResponse {
             actions,
             total_count,

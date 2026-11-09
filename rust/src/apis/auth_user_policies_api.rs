@@ -73,15 +73,13 @@ pub async fn attach_user_policy(
     // add a prefix to parameters to efficiently prevent name collisions
     let p_body_attach_user_policy_request = attach_user_policy_request;
 
-    let uri_str =
-        format!("{}/v1/auth/user-policies/attach", configuration.base_path);
+    let uri_str = format!("{}/v1/auth/user-policies/attach", configuration.base_path);
     let mut req_builder = configuration
         .client
         .request(reqwest::Method::POST, &uri_str);
 
     if let Some(ref user_agent) = configuration.user_agent {
-        req_builder = req_builder
-            .header(reqwest::header::USER_AGENT, user_agent.clone());
+        req_builder = req_builder.header(reqwest::header::USER_AGENT, user_agent.clone());
     }
     req_builder = req_builder.json(&p_body_attach_user_policy_request);
 
@@ -94,8 +92,7 @@ pub async fn attach_user_policy(
         Ok(())
     } else {
         let content = resp.text().await?;
-        let entity: Option<AttachUserPolicyError> =
-            serde_json::from_str(&content).ok();
+        let entity: Option<AttachUserPolicyError> = serde_json::from_str(&content).ok();
         Err(Error::ResponseError(ResponseContent {
             status,
             content,
@@ -109,8 +106,7 @@ pub async fn attach_user_policy_with_scope(
     attach_user_policy_with_scope_request: models::AttachUserPolicyWithScopeRequest,
 ) -> Result<(), Error<AttachUserPolicyWithScopeError>> {
     // add a prefix to parameters to efficiently prevent name collisions
-    let p_body_attach_user_policy_with_scope_request =
-        attach_user_policy_with_scope_request;
+    let p_body_attach_user_policy_with_scope_request = attach_user_policy_with_scope_request;
 
     let uri_str = format!(
         "{}/v1/auth/user-policies/attach-with-scope",
@@ -121,11 +117,9 @@ pub async fn attach_user_policy_with_scope(
         .request(reqwest::Method::POST, &uri_str);
 
     if let Some(ref user_agent) = configuration.user_agent {
-        req_builder = req_builder
-            .header(reqwest::header::USER_AGENT, user_agent.clone());
+        req_builder = req_builder.header(reqwest::header::USER_AGENT, user_agent.clone());
     }
-    req_builder =
-        req_builder.json(&p_body_attach_user_policy_with_scope_request);
+    req_builder = req_builder.json(&p_body_attach_user_policy_with_scope_request);
 
     let req = req_builder.build()?;
     let resp = configuration.client.execute(req).await?;
@@ -136,8 +130,7 @@ pub async fn attach_user_policy_with_scope(
         Ok(())
     } else {
         let content = resp.text().await?;
-        let entity: Option<AttachUserPolicyWithScopeError> =
-            serde_json::from_str(&content).ok();
+        let entity: Option<AttachUserPolicyWithScopeError> = serde_json::from_str(&content).ok();
         Err(Error::ResponseError(ResponseContent {
             status,
             content,
@@ -153,15 +146,13 @@ pub async fn detach_user_policy(
     // add a prefix to parameters to efficiently prevent name collisions
     let p_body_detach_user_policy_request = detach_user_policy_request;
 
-    let uri_str =
-        format!("{}/v1/auth/user-policies/detach", configuration.base_path);
+    let uri_str = format!("{}/v1/auth/user-policies/detach", configuration.base_path);
     let mut req_builder = configuration
         .client
         .request(reqwest::Method::POST, &uri_str);
 
     if let Some(ref user_agent) = configuration.user_agent {
-        req_builder = req_builder
-            .header(reqwest::header::USER_AGENT, user_agent.clone());
+        req_builder = req_builder.header(reqwest::header::USER_AGENT, user_agent.clone());
     }
     req_builder = req_builder.json(&p_body_detach_user_policy_request);
 
@@ -174,8 +165,7 @@ pub async fn detach_user_policy(
         Ok(())
     } else {
         let content = resp.text().await?;
-        let entity: Option<DetachUserPolicyError> =
-            serde_json::from_str(&content).ok();
+        let entity: Option<DetachUserPolicyError> = serde_json::from_str(&content).ok();
         Err(Error::ResponseError(ResponseContent {
             status,
             content,
@@ -189,8 +179,7 @@ pub async fn detach_user_policy_with_scope(
     detach_user_policy_with_scope_request: models::DetachUserPolicyWithScopeRequest,
 ) -> Result<(), Error<DetachUserPolicyWithScopeError>> {
     // add a prefix to parameters to efficiently prevent name collisions
-    let p_body_detach_user_policy_with_scope_request =
-        detach_user_policy_with_scope_request;
+    let p_body_detach_user_policy_with_scope_request = detach_user_policy_with_scope_request;
 
     let uri_str = format!(
         "{}/v1/auth/user-policies/detach-with-scope",
@@ -201,11 +190,9 @@ pub async fn detach_user_policy_with_scope(
         .request(reqwest::Method::POST, &uri_str);
 
     if let Some(ref user_agent) = configuration.user_agent {
-        req_builder = req_builder
-            .header(reqwest::header::USER_AGENT, user_agent.clone());
+        req_builder = req_builder.header(reqwest::header::USER_AGENT, user_agent.clone());
     }
-    req_builder =
-        req_builder.json(&p_body_detach_user_policy_with_scope_request);
+    req_builder = req_builder.json(&p_body_detach_user_policy_with_scope_request);
 
     let req = req_builder.build()?;
     let resp = configuration.client.execute(req).await?;
@@ -216,8 +203,7 @@ pub async fn detach_user_policy_with_scope(
         Ok(())
     } else {
         let content = resp.text().await?;
-        let entity: Option<DetachUserPolicyWithScopeError> =
-            serde_json::from_str(&content).ok();
+        let entity: Option<DetachUserPolicyWithScopeError> = serde_json::from_str(&content).ok();
         Err(Error::ResponseError(ResponseContent {
             status,
             content,
@@ -230,26 +216,18 @@ pub async fn find_user_policy_mappings(
     configuration: &configuration::Configuration,
     tenant_id: &str,
     resource_scope: &str,
-) -> Result<
-    models::UserPolicyMappingListResponse,
-    Error<FindUserPolicyMappingsError>,
-> {
+) -> Result<models::UserPolicyMappingListResponse, Error<FindUserPolicyMappingsError>> {
     // add a prefix to parameters to efficiently prevent name collisions
     let p_query_tenant_id = tenant_id;
     let p_query_resource_scope = resource_scope;
 
-    let uri_str =
-        format!("{}/v1/auth/user-policy-mappings", configuration.base_path);
-    let mut req_builder =
-        configuration.client.request(reqwest::Method::GET, &uri_str);
+    let uri_str = format!("{}/v1/auth/user-policy-mappings", configuration.base_path);
+    let mut req_builder = configuration.client.request(reqwest::Method::GET, &uri_str);
 
-    req_builder =
-        req_builder.query(&[("tenantId", &p_query_tenant_id.to_string())]);
-    req_builder = req_builder
-        .query(&[("resourceScope", &p_query_resource_scope.to_string())]);
+    req_builder = req_builder.query(&[("tenantId", &p_query_tenant_id.to_string())]);
+    req_builder = req_builder.query(&[("resourceScope", &p_query_resource_scope.to_string())]);
     if let Some(ref user_agent) = configuration.user_agent {
-        req_builder = req_builder
-            .header(reqwest::header::USER_AGENT, user_agent.clone());
+        req_builder = req_builder.header(reqwest::header::USER_AGENT, user_agent.clone());
     }
 
     let req = req_builder.build()?;
@@ -272,8 +250,7 @@ pub async fn find_user_policy_mappings(
         }
     } else {
         let content = resp.text().await?;
-        let entity: Option<FindUserPolicyMappingsError> =
-            serde_json::from_str(&content).ok();
+        let entity: Option<FindUserPolicyMappingsError> = serde_json::from_str(&content).ok();
         Err(Error::ResponseError(ResponseContent {
             status,
             content,
@@ -296,16 +273,13 @@ pub async fn list_user_policies(
         configuration.base_path,
         user_id = crate::apis::urlencode(p_path_user_id)
     );
-    let mut req_builder =
-        configuration.client.request(reqwest::Method::GET, &uri_str);
+    let mut req_builder = configuration.client.request(reqwest::Method::GET, &uri_str);
 
     if let Some(ref param_value) = p_query_tenant_id {
-        req_builder =
-            req_builder.query(&[("tenantId", &param_value.to_string())]);
+        req_builder = req_builder.query(&[("tenantId", &param_value.to_string())]);
     }
     if let Some(ref user_agent) = configuration.user_agent {
-        req_builder = req_builder
-            .header(reqwest::header::USER_AGENT, user_agent.clone());
+        req_builder = req_builder.header(reqwest::header::USER_AGENT, user_agent.clone());
     }
 
     let req = req_builder.build()?;
@@ -328,8 +302,7 @@ pub async fn list_user_policies(
         }
     } else {
         let content = resp.text().await?;
-        let entity: Option<ListUserPoliciesError> =
-            serde_json::from_str(&content).ok();
+        let entity: Option<ListUserPoliciesError> = serde_json::from_str(&content).ok();
         Err(Error::ResponseError(ResponseContent {
             status,
             content,

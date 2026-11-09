@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
     collections::BTreeMap,
-    ffi::OsStr,
+    ffi::{OsStr, OsString},
     path::{Path, PathBuf},
     process::Stdio,
     time::{Duration, Instant, SystemTime},
@@ -36,6 +36,8 @@ pub struct BuildWorkloadSpec {
     env: Vec<BuildWorkloadEnvVar>,
     #[serde(default)]
     workers_secret_binding_keys: Vec<String>,
+    #[serde(default)]
+    workers_dispatch_namespace: Option<String>,
     artifact: BuildWorkloadArtifact,
     callback: Option<BuildWorkloadCallback>,
     deployment_target: Option<String>,
@@ -676,8 +678,7 @@ async fn run_iac_step(
         .arg(operation)
         .arg("--file")
         .arg(&manifest_path)
-        .arg("--app")
-        .arg(&iac.app_name)
+        .arg(iac_app_arg(&iac.app_name))
         .current_dir(checkout_dir)
         .env(TACHYON_API_URL_ENV, &api_url)
         // `TACHYON_API_KEY` takes precedence over profile auth, so the
@@ -717,6 +718,10 @@ fn validate_iac_operation(operation: &str) -> Result<&str> {
         "plan" | "apply" => Ok(operation),
         other => Err(anyhow!("unsupported Tachyon IaC operation: {other}")),
     }
+}
+
+fn iac_app_arg(app_name: &str) -> OsString {
+    format!("--app={app_name}").into()
 }
 
 /// Resolve the manifest path following the same candidate order as
@@ -908,6 +913,57 @@ fn is_lambda(workload: &BuildWorkloadSpec) -> bool {
 /// not depend on wrangler itself, so an upstream release can
 /// change CLI behavior mid-pipeline. Bump deliberately.
 const WRANGLER_NPM_SPEC: &str = "wrangler@4.100.0";
+const MAX_COMMIT_MESSAGE_LENGTH: usize = 2048;
+
+/// Build an attached Wrangler string option while preserving matching outer
+/// quotes through the pinned parser's `stripQuotes` behavior.
+///
+/// Wrangler 4.100.0 pins yargs-parser 21.1.1, whose attached-value path strips
+/// one matching pair of outer quotes. Values with matching quote edges get an
+/// extra double-quote pair so the parser restores the original value. Recheck
+/// this behavior when bumping `WRANGLER_NPM_SPEC`; see
+/// <https://github.com/yargs/yargs-parser/blob/yargs-parser-v21.1.1/lib/yargs-parser.ts#L1033-L1040>.
+fn wrangler_string_option(name: &str, value: &str) -> OsString {
+    let first = value.chars().next();
+    let last = value.chars().last();
+    let encoded = if matches!(first, Some('\'') | Some('"')) && first == last {
+        format!("\"{value}\"")
+    } else {
+        value.to_string()
+    };
+
+    format!("--{name}={encoded}").into()
+}
+
+/// Arguments after the wrangler spec for `wrangler pages deploy`.
+///
+/// Wrangler requires `--key=value` for dash-leading values. Its pinned parser
+/// also strips matching outer quotes from attached values; see
+/// `wrangler_string_option` for the quote-preserving encoding.
+///
+/// The commit is passed explicitly: the process working directory is not the
+/// git checkout, so wrangler cannot detect it and would upload the deployment
+/// with an empty commit. The control plane treats an empty commit as
+/// unverifiable and refuses to reuse that deployment for a preview.
+fn pages_deploy_args(
+    workload: &BuildWorkloadSpec,
+    output_dir: &Path,
+    project_name: &str,
+    commit_message: &str,
+) -> Vec<OsString> {
+    let mut args: Vec<OsString> = vec![
+        "pages".into(),
+        "deploy".into(),
+        output_dir.into(),
+        wrangler_string_option("project-name", project_name),
+        wrangler_string_option("branch", &workload.source.branch),
+    ];
+    if let Some(commit) = requested_commit(&workload.source) {
+        args.push(wrangler_string_option("commit-hash", commit));
+    }
+    args.push(wrangler_string_option("commit-message", commit_message));
+    args
+}
 
 async fn run_cloudflare_pages_deploy(
     workload: &BuildWorkloadSpec,
@@ -947,15 +1003,12 @@ async fn run_cloudflare_pages_deploy(
     command
         .arg("--yes")
         .arg(WRANGLER_NPM_SPEC)
-        .arg("pages")
-        .arg("deploy")
-        .arg(&output_dir)
-        .arg("--project-name")
-        .arg(project_name)
-        .arg("--branch")
-        .arg(&workload.source.branch)
-        .arg("--commit-message")
-        .arg(commit_message)
+        .args(pages_deploy_args(
+            workload,
+            &output_dir,
+            project_name,
+            &commit_message,
+        ))
         .envs(env)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
@@ -994,10 +1047,13 @@ async fn run_cloudflare_workers_deploy(
     );
 
     let mut command = Command::new("npx");
-    command.arg("--yes").arg(WRANGLER_NPM_SPEC).arg("deploy");
-    if let Some(name) = env_value(env, "WORKERS_SCRIPT_NAME") {
-        command.arg("--name").arg(name);
-    }
+    command
+        .arg("--yes")
+        .arg(WRANGLER_NPM_SPEC)
+        .args(workers_deploy_args(
+            env_value(env, "WORKERS_SCRIPT_NAME"),
+            workload.workers_dispatch_namespace.as_deref(),
+        )?);
     let _secret_file = add_workers_runtime_bindings(&mut command, workload, env)?;
     command
         .current_dir(app_dir)
@@ -1006,6 +1062,31 @@ async fn run_cloudflare_workers_deploy(
         .stderr(Stdio::piped());
 
     run_command("wrangler deploy", command).await
+}
+
+fn workers_deploy_args(
+    script_name: Option<&str>,
+    dispatch_namespace: Option<&str>,
+) -> Result<Vec<OsString>> {
+    let mut args = vec!["deploy".into()];
+    if let Some(name) = script_name {
+        args.push(wrangler_string_option("name", name));
+    }
+    if let Some(namespace) = dispatch_namespace {
+        if namespace.is_empty()
+            || namespace.len() > 63
+            || !namespace
+                .bytes()
+                .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+            || !namespace.as_bytes()[0].is_ascii_alphanumeric()
+            || !namespace.as_bytes()[namespace.len() - 1].is_ascii_alphanumeric()
+            || script_name.is_none_or(str::is_empty)
+        {
+            return Err(anyhow!("invalid Workers dispatch destination"));
+        }
+        args.push(wrangler_string_option("dispatch-namespace", namespace));
+    }
+    Ok(args)
 }
 
 /// Deploy redirect written by framework builds that generate their own
@@ -1555,7 +1636,13 @@ async fn run_lambda_package_and_upload(
         .ok_or_else(|| anyhow!("{LAMBDA_UPLOAD_URL_ENV} is required for Lambda artifact upload"))?;
 
     let inherited_target_dir = std::env::var_os(CARGO_TARGET_DIR_ENV);
-    let target_dir = cargo_target_dir(app_dir, env, inherited_target_dir.as_deref());
+    let target_dir = cargo_target_dir(app_dir, env, inherited_target_dir.as_deref(), |dir| {
+        if is_rust_lambda(workload) {
+            cargo_metadata_target_dir(dir)
+        } else {
+            None
+        }
+    });
     let (archive, source) =
         package_lambda_archive_for_workload(workload, app_dir, &target_dir, build_started_at)?;
     let size = archive.len();
@@ -1588,10 +1675,15 @@ fn package_lambda_archive_for_workload(
     package_lambda_archive(app_dir)
 }
 
+/// Resolve where Cargo wrote the build output. An explicit
+/// `CARGO_TARGET_DIR` wins; otherwise ask Cargo (`metadata_target_dir`),
+/// because a monorepo app selected with `rootDirectory` builds into the
+/// workspace root's `target/`, not `<app_dir>/target`.
 fn cargo_target_dir(
     app_dir: &Path,
     env: &BTreeMap<String, String>,
     inherited_target_dir: Option<&OsStr>,
+    metadata_target_dir: impl FnOnce(&Path) -> Option<PathBuf>,
 ) -> PathBuf {
     let configured = env
         .get(CARGO_TARGET_DIR_ENV)
@@ -1599,7 +1691,7 @@ fn cargo_target_dir(
         .or(inherited_target_dir)
         .filter(|value| !value.is_empty());
     let Some(configured) = configured else {
-        return app_dir.join("target");
+        return metadata_target_dir(app_dir).unwrap_or_else(|| app_dir.join("target"));
     };
 
     let configured = PathBuf::from(configured);
@@ -1608,6 +1700,40 @@ fn cargo_target_dir(
     } else {
         app_dir.join(configured)
     }
+}
+
+/// `target_directory` from `cargo metadata`, which accounts for the
+/// enclosing workspace and `.cargo/config.toml` `build.target-dir`.
+/// `None` when Cargo is unavailable or `app_dir` is not a Cargo project.
+fn cargo_metadata_target_dir(app_dir: &Path) -> Option<PathBuf> {
+    let output = std::process::Command::new("cargo")
+        .arg("metadata")
+        .arg("--no-deps")
+        .arg("--format-version")
+        .arg("1")
+        .current_dir(app_dir)
+        .output()
+        .map_err(|error| {
+            tracing::warn!(%error, "failed to run cargo metadata for Cargo target dir detection");
+        })
+        .ok()?;
+    if !output.status.success() {
+        tracing::warn!(
+            stderr = %String::from_utf8_lossy(&output.stderr),
+            "cargo metadata failed; falling back to <app_dir>/target"
+        );
+        return None;
+    }
+    cargo_metadata_target_dir_from_json(&output.stdout)
+}
+
+fn cargo_metadata_target_dir_from_json(stdout: &[u8]) -> Option<PathBuf> {
+    let metadata: serde_json::Value = serde_json::from_slice(stdout).ok()?;
+    metadata
+        .get("target_directory")
+        .and_then(|value| value.as_str())
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
 }
 
 fn package_lambda_archive(app_dir: &Path) -> Result<(Vec<u8>, String)> {
@@ -1685,24 +1811,35 @@ fn rust_server_bootstrap_path(
     ))
 }
 
+/// Locate the cargo-lambda `bootstrap`. The manifest's `build.binary`
+/// (`commands.binary`) is authoritative: cargo-lambda always writes
+/// `lambda/<binary>/bootstrap`. Parsing the build command for `--bin` /
+/// `--flatten` is only a fallback, since commands wrapped in `bash -c`
+/// or scripts hide those flags.
 fn cargo_lambda_bootstrap_path(
     workload: &BuildWorkloadSpec,
     cargo_target_dir: &Path,
 ) -> Result<PathBuf> {
+    let lambda_dir = cargo_target_dir.join("lambda");
     let build_command = workload.commands.build.as_deref();
-    let explicit_name = workload
+    let explicit_binary = workload
         .commands
         .binary
         .as_deref()
         .map(str::trim)
-        .filter(|name| !name.is_empty())
-        .map(ToString::to_string)
-        .or_else(|| build_command.and_then(cargo_lambda_bootstrap_name));
+        .filter(|name| !name.is_empty());
+
     let mut candidates = Vec::new();
+    if let Some(binary) = explicit_binary {
+        candidates.push(lambda_dir.join(binary).join("bootstrap"));
+    }
     if build_command.is_some_and(cargo_lambda_bootstrap_is_flattened) {
-        candidates.push(cargo_target_dir.join("lambda").join("bootstrap"));
-    } else if let Some(name) = explicit_name {
-        candidates.push(cargo_target_dir.join("lambda").join(name).join("bootstrap"));
+        candidates.push(lambda_dir.join("bootstrap"));
+    } else if let Some(name) = build_command.and_then(cargo_lambda_bootstrap_name) {
+        let candidate = lambda_dir.join(name).join("bootstrap");
+        if !candidates.contains(&candidate) {
+            candidates.push(candidate);
+        }
     }
 
     for candidate in &candidates {
@@ -1712,7 +1849,6 @@ fn cargo_lambda_bootstrap_path(
     }
 
     let mut discovered = Vec::new();
-    let lambda_dir = cargo_target_dir.join("lambda");
     if candidates.is_empty() && lambda_dir.is_dir() {
         let flattened = lambda_dir.join("bootstrap");
         if flattened.is_file() {
@@ -1733,10 +1869,15 @@ fn cargo_lambda_bootstrap_path(
         return Ok(path);
     }
 
-    let expected = candidates
-        .first()
-        .map(|path| path.display().to_string())
-        .unwrap_or_else(|| format!("{}/lambda/<name>/bootstrap", cargo_target_dir.display()));
+    let expected = if candidates.is_empty() {
+        format!("{}/lambda/<name>/bootstrap", cargo_target_dir.display())
+    } else {
+        candidates
+            .iter()
+            .map(|path| path.display().to_string())
+            .collect::<Vec<_>>()
+            .join(" or ")
+    };
     Err(anyhow!(
         "cargo-lambda bootstrap not found; expected {expected}. Ensure the \
          build command ran cargo lambda build and produced the configured Cargo target artifact"
@@ -1953,7 +2094,7 @@ fn ascii_commit_message(env: &BTreeMap<String, String>) -> String {
     if normalized.is_empty() {
         "Tachyon Cloud App build".to_string()
     } else {
-        normalized
+        normalized.chars().take(MAX_COMMIT_MESSAGE_LENGTH).collect()
     }
 }
 
@@ -2692,6 +2833,7 @@ mod tests {
             iac: None,
             wrangler_config: None,
             workers_secret_binding_keys: Vec::new(),
+            workers_dispatch_namespace: None,
         }
     }
 
@@ -2715,6 +2857,36 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         std::fs::write(temp.path().join("wrangler.jsonc"), "{}").unwrap();
         assert!(has_workers_deploy_config(temp.path()));
+    }
+
+    #[test]
+    fn workers_deploy_name_is_attached_to_its_option() {
+        let args = workers_deploy_args(Some("--synthetic-worker"), None).unwrap();
+        assert_eq!(
+            args,
+            vec![
+                OsString::from("deploy"),
+                OsString::from("--name=--synthetic-worker"),
+            ]
+        );
+        assert_eq!(
+            model_pinned_yargs_parser_21_1_1_attached_value(&args[1]),
+            Some(("name".to_string(), "--synthetic-worker".to_string()))
+        );
+    }
+
+    #[test]
+    fn workers_dispatch_uses_only_the_selected_namespace() {
+        assert_eq!(
+            workers_deploy_args(Some("order-sync"), Some("txcloud-apps")).unwrap(),
+            vec![
+                OsString::from("deploy"),
+                OsString::from("--name=order-sync"),
+                OsString::from("--dispatch-namespace=txcloud-apps"),
+            ],
+        );
+        assert!(workers_deploy_args(None, Some("txcloud-apps")).is_err());
+        assert!(workers_deploy_args(Some("order-sync"), Some("--invalid")).is_err());
     }
 
     /// A generated wrangler configuration must land before the app's own
@@ -2874,6 +3046,14 @@ mod tests {
         assert_eq!(validate_iac_operation("apply").unwrap(), "apply");
         let error = validate_iac_operation("destroy").unwrap_err();
         assert!(error.to_string().contains("unsupported"), "got: {error}");
+    }
+
+    #[test]
+    fn iac_app_name_is_attached_to_its_option() {
+        assert_eq!(
+            iac_app_arg("--synthetic-app"),
+            OsString::from("--app=--synthetic-app")
+        );
     }
 
     #[test]
@@ -3396,6 +3576,205 @@ mod tests {
         assert_eq!(initial_clone_branch(&workload.source), Some("feature/demo"));
     }
 
+    fn pages_args_with_message(workload: &BuildWorkloadSpec, message: &str) -> Vec<String> {
+        pages_deploy_args(workload, Path::new("/out"), "my-app", message)
+            .into_iter()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect()
+    }
+
+    fn pages_args(workload: &BuildWorkloadSpec) -> Vec<String> {
+        pages_args_with_message(workload, "msg")
+    }
+
+    /// Model yargs-parser 21.1.1's attached `--key=value` handling, including
+    /// its one-pair `stripQuotes` behavior. Keep this aligned with the parser
+    /// pinned by `WRANGLER_NPM_SPEC`.
+    fn model_pinned_yargs_parser_21_1_1_attached_value(arg: &OsStr) -> Option<(String, String)> {
+        let arg = arg.to_str()?;
+        let (name, value) = arg.split_once('=')?;
+        let name = name.strip_prefix("--")?;
+        let chars = value.chars().collect::<Vec<_>>();
+        let parsed_value = if chars.len() > 1
+            && matches!(chars.first(), Some('\'') | Some('"'))
+            && chars.first() == chars.last()
+        {
+            chars[1..chars.len() - 1].iter().collect()
+        } else {
+            value.to_string()
+        };
+
+        Some((name.to_string(), parsed_value))
+    }
+
+    fn parsed_attached_option(args: &[OsString], expected_name: &str) -> String {
+        let values = args
+            .iter()
+            .filter_map(|arg| model_pinned_yargs_parser_21_1_1_attached_value(arg))
+            .filter_map(|(name, value)| (name == expected_name).then_some(value))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            values.len(),
+            1,
+            "expected exactly one --{expected_name}= option"
+        );
+        values.into_iter().next().unwrap()
+    }
+
+    #[test]
+    fn wrangler_string_option_preserves_matching_outer_quotes_only() {
+        for (value, expected) in [
+            ("\"outer quotes\"", "--probe=\"\"outer quotes\"\""),
+            ("'outer quotes'", "--probe=\"'outer quotes'\""),
+            ("\"", "--probe=\"\"\""),
+            ("\"\"", "--probe=\"\"\"\""),
+            ("''", "--probe=\"''\""),
+            ("\"main\"", "--probe=\"\"main\"\""),
+            ("'main'", "--probe=\"'main'\""),
+        ] {
+            assert_eq!(
+                wrangler_string_option("probe", value),
+                OsString::from(expected)
+            );
+        }
+
+        for value in [
+            "a\"b",
+            "\"a",
+            "- foo_bar_baz",
+            "--",
+            "--foo",
+            "",
+            "plain text",
+        ] {
+            assert_eq!(
+                wrangler_string_option("probe", value),
+                OsString::from(format!("--probe={value}"))
+            );
+        }
+    }
+
+    fn assert_pages_commit_message_arg(raw: &str, expected: &str) {
+        let env = BTreeMap::from([("COMMIT_MESSAGE".to_string(), raw.to_string())]);
+        let message = ascii_commit_message(&env);
+        assert_eq!(message, expected);
+
+        let args = pages_deploy_args(&test_workload(None), Path::new("/out"), "my-app", &message);
+        let message_args = args
+            .iter()
+            .filter(|arg| arg.to_string_lossy().starts_with("--commit-message="))
+            .collect::<Vec<_>>();
+        assert_eq!(message_args.len(), 1);
+        let expected_arg = wrangler_string_option("commit-message", expected);
+        assert_eq!(message_args[0].as_os_str(), expected_arg.as_os_str());
+        assert!(!args
+            .iter()
+            .any(|arg| arg.as_os_str() == OsStr::new(expected)));
+        assert_eq!(parsed_attached_option(&args, "commit-message"), expected);
+
+        let worker_args = workers_deploy_args(Some(expected), None).unwrap();
+        assert_eq!(
+            parsed_attached_option(&worker_args, "name"),
+            expected,
+            "Workers name should round-trip for commit-message fixture {raw:?}"
+        );
+    }
+
+    #[test]
+    fn pages_deploy_passes_the_pinned_commit_to_wrangler() {
+        let workload = test_workload(None);
+
+        assert_eq!(
+            pages_args(&workload),
+            [
+                "pages",
+                "deploy",
+                "/out",
+                "--project-name=my-app",
+                "--branch=feature/demo",
+                "--commit-hash=abc",
+                "--commit-message=msg",
+            ]
+        );
+    }
+
+    #[test]
+    fn pages_commit_messages_are_passed_as_single_option_values() {
+        for (raw, expected) in [
+            ("候補の読みを更新", "Tachyon Cloud App build"),
+            (
+                "設定を更新する\n\n- 候補の読みが使う foo_bar_baz に処理を足す",
+                "- foo_bar_baz",
+            ),
+            ("--foo", "--foo"),
+            ("--", "--"),
+            ("--foo with trailing text", "--foo with trailing text"),
+            ("* leading line", "* leading line"),
+            ("\"outer quotes\"", "\"outer quotes\""),
+            ("'outer quotes'", "'outer quotes'"),
+            ("\"", "\""),
+            ("\"\"", "\"\""),
+            ("''", "''"),
+            ("\"main\"", "\"main\""),
+            ("'main'", "'main'"),
+            (
+                "quotes: \"double\" and 'single'",
+                "quotes: \"double\" and 'single'",
+            ),
+            ("equals=inside=message", "equals=inside=message"),
+            (
+                "backticks `literal` and $(not-a-command)",
+                "backticks `literal` and $(not-a-command)",
+            ),
+            ("", "Tachyon Cloud App build"),
+            (" \t\n ", "Tachyon Cloud App build"),
+        ] {
+            assert_pages_commit_message_arg(raw, expected);
+        }
+    }
+
+    #[test]
+    fn quoted_pages_branch_names_round_trip_through_pinned_parser_model() {
+        for branch in ["\"main\"", "'main'"] {
+            let mut workload = test_workload(None);
+            workload.source.branch = branch.to_string();
+            let args = pages_deploy_args(&workload, Path::new("/out"), "my-app", "msg");
+
+            let branch_args = args
+                .iter()
+                .filter(|arg| arg.to_string_lossy().starts_with("--branch="))
+                .collect::<Vec<_>>();
+            assert_eq!(branch_args.len(), 1);
+            assert_eq!(
+                branch_args[0].as_os_str(),
+                wrangler_string_option("branch", branch).as_os_str()
+            );
+            assert_eq!(parsed_attached_option(&args, "branch"), branch);
+        }
+    }
+
+    #[test]
+    fn pages_commit_message_is_capped_at_2048_characters() {
+        let raw = "x".repeat(2049);
+        let expected = "x".repeat(2048);
+        assert_pages_commit_message_arg(&raw, &expected);
+    }
+
+    #[test]
+    fn pages_deploy_omits_commit_hash_when_the_commit_is_unresolved() {
+        for unresolved in ["", "  ", "HEAD"] {
+            let mut workload = test_workload(None);
+            workload.source.commit_sha = unresolved.to_string();
+
+            assert!(
+                !pages_args(&workload)
+                    .iter()
+                    .any(|arg| arg.starts_with("--commit-hash=")),
+                "commit {unresolved:?} must not be sent as a commit hash"
+            );
+        }
+    }
+
     #[test]
     fn build_workload_env_var_deserializes_legacy_value() {
         let item: BuildWorkloadEnvVar = serde_json::from_value(serde_json::json!({
@@ -3627,6 +4006,173 @@ mod tests {
     }
 
     #[test]
+    fn cargo_lambda_bootstrap_path_prefers_binary_over_flatten_parse() {
+        let temp = tempfile::tempdir().unwrap();
+        let target_dir = temp.path().join("target");
+        let explicit = target_dir
+            .join("lambda")
+            .join("lambda-app")
+            .join("bootstrap");
+        let flattened = target_dir.join("lambda").join("bootstrap");
+        std::fs::create_dir_all(explicit.parent().unwrap()).unwrap();
+        std::fs::write(&explicit, b"manifest binary").unwrap();
+        std::fs::write(&flattened, b"stale flattened").unwrap();
+
+        let mut workload = test_workload(Some("lambda"));
+        workload.framework = Some("cargo_lambda".to_string());
+        workload.commands.binary = Some("lambda-app".to_string());
+        workload.commands.build =
+            Some("cargo lambda build --bin lambda-app --flatten other --release".to_string());
+
+        assert_eq!(
+            cargo_lambda_bootstrap_path(&workload, &target_dir).unwrap(),
+            explicit
+        );
+    }
+
+    #[test]
+    fn cargo_lambda_bootstrap_path_uses_binary_when_command_is_wrapped() {
+        let temp = tempfile::tempdir().unwrap();
+        let target_dir = temp.path().join("target");
+        let explicit = target_dir
+            .join("lambda")
+            .join("lambda-app")
+            .join("bootstrap");
+        let other = target_dir
+            .join("lambda")
+            .join("aaa-other")
+            .join("bootstrap");
+        std::fs::create_dir_all(explicit.parent().unwrap()).unwrap();
+        std::fs::create_dir_all(other.parent().unwrap()).unwrap();
+        std::fs::write(&explicit, b"manifest binary").unwrap();
+        std::fs::write(&other, b"other binary").unwrap();
+
+        let mut workload = test_workload(Some("lambda"));
+        workload.framework = Some("cargo_lambda".to_string());
+        workload.commands.binary = Some("lambda-app".to_string());
+        workload.commands.build = Some(
+            "bash -c 'cargo lambda build --package app --bin lambda-app --release --arm64'"
+                .to_string(),
+        );
+
+        assert_eq!(
+            cargo_lambda_bootstrap_path(&workload, &target_dir).unwrap(),
+            explicit
+        );
+    }
+
+    #[test]
+    fn cargo_lambda_bootstrap_path_falls_back_to_command_when_binary_missing_on_disk() {
+        let temp = tempfile::tempdir().unwrap();
+        let target_dir = temp.path().join("target");
+        let flattened = target_dir.join("lambda").join("bootstrap");
+        std::fs::create_dir_all(flattened.parent().unwrap()).unwrap();
+        std::fs::write(&flattened, b"flattened binary").unwrap();
+
+        let mut workload = test_workload(Some("lambda"));
+        workload.framework = Some("cargo_lambda".to_string());
+        workload.commands.binary = Some("lambda-app".to_string());
+        workload.commands.build =
+            Some("cargo lambda build --bin lambda-app --flatten lambda-app --release".to_string());
+
+        assert_eq!(
+            cargo_lambda_bootstrap_path(&workload, &target_dir).unwrap(),
+            flattened
+        );
+    }
+
+    #[test]
+    fn cargo_lambda_bootstrap_path_reports_every_candidate() {
+        let temp = tempfile::tempdir().unwrap();
+        let target_dir = temp.path().join("target");
+
+        let mut workload = test_workload(Some("lambda"));
+        workload.framework = Some("cargo_lambda".to_string());
+        workload.commands.binary = Some("lambda-app".to_string());
+        workload.commands.build =
+            Some("cargo lambda build --bin command-binary --release".to_string());
+
+        let error = cargo_lambda_bootstrap_path(&workload, &target_dir)
+            .unwrap_err()
+            .to_string();
+
+        assert!(error.contains("target/lambda/lambda-app/bootstrap"));
+        assert!(error.contains("target/lambda/command-binary/bootstrap"));
+    }
+
+    #[test]
+    fn cargo_target_dir_uses_cargo_metadata_when_unset() {
+        let temp = tempfile::tempdir().unwrap();
+        let workspace_target = temp.path().join("target");
+        let app_dir = temp.path().join("apps").join("api");
+
+        let target_dir = cargo_target_dir(&app_dir, &BTreeMap::new(), None, |dir| {
+            assert_eq!(dir, app_dir.as_path());
+            Some(workspace_target.clone())
+        });
+
+        assert_eq!(target_dir, workspace_target);
+    }
+
+    #[test]
+    fn cargo_target_dir_ignores_empty_env_and_uses_cargo_metadata() {
+        let temp = tempfile::tempdir().unwrap();
+        let workspace_target = temp.path().join("target");
+        let env = BTreeMap::from([(CARGO_TARGET_DIR_ENV.to_string(), String::new())]);
+
+        let target_dir =
+            cargo_target_dir(temp.path(), &env, None, |_| Some(workspace_target.clone()));
+
+        assert_eq!(target_dir, workspace_target);
+    }
+
+    #[test]
+    fn cargo_metadata_target_dir_from_json_reads_target_directory() {
+        let stdout = br#"{"packages":[],"target_directory":"/work/repo/target"}"#;
+        assert_eq!(
+            cargo_metadata_target_dir_from_json(stdout),
+            Some(PathBuf::from("/work/repo/target"))
+        );
+        assert_eq!(
+            cargo_metadata_target_dir_from_json(br#"{"packages":[]}"#),
+            None
+        );
+        assert_eq!(cargo_metadata_target_dir_from_json(b"not json"), None);
+    }
+
+    #[test]
+    fn cargo_metadata_target_dir_finds_workspace_root_target_for_member() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path();
+        std::fs::write(
+            root.join("Cargo.toml"),
+            "[workspace]\nmembers = [\"apps/api\"]\nresolver = \"2\"\n",
+        )
+        .unwrap();
+        let member = root.join("apps").join("api");
+        std::fs::create_dir_all(member.join("src")).unwrap();
+        std::fs::write(
+            member.join("Cargo.toml"),
+            "[package]\nname = \"api\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+        )
+        .unwrap();
+        std::fs::write(member.join("src").join("main.rs"), "fn main() {}\n").unwrap();
+
+        if std::env::var_os(CARGO_TARGET_DIR_ENV).is_some() {
+            // An inherited CARGO_TARGET_DIR overrides the workspace target.
+            return;
+        }
+        let target_dir = cargo_metadata_target_dir(&member).expect("cargo metadata target dir");
+
+        assert!(
+            target_dir == root.join("target")
+                || target_dir == root.canonicalize().unwrap().join("target"),
+            "unexpected target dir {}",
+            target_dir.display()
+        );
+    }
+
+    #[test]
     fn package_cargo_lambda_archive_uses_configured_target_dir() {
         let temp = tempfile::tempdir().unwrap();
         let app_dir = temp.path().join("app");
@@ -3636,6 +4182,7 @@ mod tests {
             &app_dir,
             &BTreeMap::new(),
             Some(configured_target_dir.as_os_str()),
+            |_| panic!("explicit CARGO_TARGET_DIR must not consult cargo metadata"),
         );
         let bootstrap = target_dir
             .join("lambda")
@@ -3667,7 +4214,7 @@ mod tests {
     #[test]
     fn package_cargo_lambda_archive_falls_back_to_app_target_dir() {
         let temp = tempfile::tempdir().unwrap();
-        let target_dir = cargo_target_dir(temp.path(), &BTreeMap::new(), None);
+        let target_dir = cargo_target_dir(temp.path(), &BTreeMap::new(), None, |_| None);
         assert_eq!(target_dir, temp.path().join("target"));
         let bootstrap = target_dir
             .join("lambda")
@@ -3755,7 +4302,7 @@ mod tests {
     #[test]
     fn package_rust_server_archive_falls_back_to_app_target_dir() {
         let temp = tempfile::tempdir().unwrap();
-        let target_dir = cargo_target_dir(temp.path(), &BTreeMap::new(), None);
+        let target_dir = cargo_target_dir(temp.path(), &BTreeMap::new(), None, |_| None);
         assert_eq!(target_dir, temp.path().join("target"));
         let binary = target_dir
             .join("aarch64-unknown-linux-gnu")
@@ -3793,6 +4340,7 @@ mod tests {
             &app_dir,
             &BTreeMap::new(),
             Some(configured_target_dir.as_os_str()),
+            |_| panic!("explicit CARGO_TARGET_DIR must not consult cargo metadata"),
         );
         let binary = target_dir
             .join("aarch64-unknown-linux-gnu")
@@ -3831,7 +4379,7 @@ mod tests {
     #[test]
     fn package_cargo_lambda_archive_rejects_stale_bootstrap() {
         let temp = tempfile::tempdir().unwrap();
-        let target_dir = cargo_target_dir(temp.path(), &BTreeMap::new(), None);
+        let target_dir = cargo_target_dir(temp.path(), &BTreeMap::new(), None, |_| None);
         let bootstrap = target_dir
             .join("lambda")
             .join("tachyon-field-api")
@@ -3857,7 +4405,7 @@ mod tests {
     #[test]
     fn package_rust_server_archive_rejects_stale_binary() {
         let temp = tempfile::tempdir().unwrap();
-        let target_dir = cargo_target_dir(temp.path(), &BTreeMap::new(), None);
+        let target_dir = cargo_target_dir(temp.path(), &BTreeMap::new(), None, |_| None);
         let binary = target_dir
             .join("aarch64-unknown-linux-gnu")
             .join("release")
@@ -4061,6 +4609,7 @@ mod tests {
             iac: None,
             wrangler_config: None,
             workers_secret_binding_keys: Vec::new(),
+            workers_dispatch_namespace: None,
         };
 
         assert_eq!(
@@ -4104,6 +4653,7 @@ mod tests {
             iac: None,
             wrangler_config: None,
             workers_secret_binding_keys: Vec::new(),
+            workers_dispatch_namespace: None,
         };
 
         assert_eq!(
@@ -4391,6 +4941,7 @@ mod tests {
             iac: None,
             wrangler_config: None,
             workers_secret_binding_keys: Vec::new(),
+            workers_dispatch_namespace: None,
         };
 
         assert_eq!(
@@ -4435,6 +4986,7 @@ mod tests {
             iac: None,
             wrangler_config: None,
             workers_secret_binding_keys: Vec::new(),
+            workers_dispatch_namespace: None,
         };
 
         assert_eq!(docker_context_path(&workload, &checkout, &app), app);
@@ -4476,6 +5028,7 @@ mod tests {
             iac: None,
             wrangler_config: None,
             workers_secret_binding_keys: Vec::new(),
+            workers_dispatch_namespace: None,
         };
         let context = docker_context_path(&workload, &checkout, &app);
 
@@ -4521,6 +5074,7 @@ mod tests {
             iac: None,
             wrangler_config: None,
             workers_secret_binding_keys: Vec::new(),
+            workers_dispatch_namespace: None,
         };
 
         assert_eq!(docker_context_path(&workload, &checkout, &app), checkout);
@@ -4563,6 +5117,7 @@ mod tests {
             iac: None,
             wrangler_config: None,
             workers_secret_binding_keys: Vec::new(),
+            workers_dispatch_namespace: None,
         };
 
         assert_eq!(docker_context_path(&workload, &checkout, &app), context);

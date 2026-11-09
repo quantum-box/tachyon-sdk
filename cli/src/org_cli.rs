@@ -2,6 +2,7 @@ use anyhow::{anyhow, Result};
 use clap::{Args, Subcommand};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
 use tachyon_sdk::apis::configuration::Configuration;
 
 use crate::client::{http_error_status, print_json, truncate, ApiClient};
@@ -101,23 +102,38 @@ pub enum UsersCommand {
         #[arg(long)]
         json: bool,
     },
+    /// Attach a policy to a user in the acting tenant (--tenant-id)
+    AttachPolicy {
+        /// User ID (e.g. us_xxx)
+        user_id: String,
+        /// Policy name (e.g. field:staff) or policy ID (pol_xxx)
+        #[arg(long)]
+        policy: String,
+        /// Narrow the grant to one resource, in TRN format
+        /// (e.g. trn:library:repo:rp_xxx). Omit to grant the policy
+        /// across the whole tenant.
+        #[arg(long)]
+        resource_scope: Option<String>,
+    },
+    /// Detach a policy from a user in the acting tenant (--tenant-id).
+    /// Without --resource-scope this removes every grant of the policy for
+    /// the user in that tenant, including grants narrowed to a resource.
+    DetachPolicy {
+        /// User ID (e.g. us_xxx)
+        user_id: String,
+        /// Policy name (e.g. field:staff) or policy ID (pol_xxx)
+        #[arg(long)]
+        policy: String,
+        /// Remove only the grant narrowed to this TRN resource scope
+        #[arg(long)]
+        resource_scope: Option<String>,
+    },
 }
 
 // --- Service Accounts ---
 
 #[derive(Debug, Clone, Subcommand)]
 pub enum ServiceAccountsCommand {
-    /// Create a service account in the acting tenant (--tenant-id)
-    ///
-    /// The account is created empty: it holds no API key and no policy, so it
-    /// can do nothing until both are granted. Issue a key with
-    /// `tachyon api-key create`.
-    Create {
-        /// Display name, e.g. gha.auth-manifest-drift-guard
-        name: String,
-        #[arg(long)]
-        json: bool,
-    },
     /// List service accounts
     List {
         #[arg(long)]
@@ -137,17 +153,40 @@ pub enum ServiceAccountsCommand {
         #[arg(long)]
         json: bool,
     },
-    /// Delete a service account and every API key issued to it
-    ///
-    /// Destructive and immediate: anything authenticating with one of the
-    /// account's keys starts failing as soon as this returns. Without --yes
-    /// the command only reports what it would delete.
+    /// Create a service account in the current tenant
+    Create {
+        /// Service account name (must be unique within the tenant)
+        name: String,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Delete a service account. Its API keys are deleted with it.
     Delete {
         /// Service account ID or name
-        service_account_id: String,
-        /// Delete instead of only reporting what would be deleted
+        service_account: String,
+        /// Confirm deletion of the account and its API keys
         #[arg(long)]
         yes: bool,
+        #[arg(long, requires = "yes")]
+        json: bool,
+    },
+    /// Attach a policy to a service account
+    AttachPolicy {
+        /// Service account ID or name
+        service_account: String,
+        /// Policy ID or name. A name prefers the policy owned by the current
+        /// tenant and fails when it is ambiguous.
+        policy: String,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Detach a policy from a service account
+    DetachPolicy {
+        /// Service account ID or name
+        service_account: String,
+        /// Policy ID or name. A name prefers the policy owned by the current
+        /// tenant and fails when it is ambiguous.
+        policy: String,
         #[arg(long)]
         json: bool,
     },
@@ -260,12 +299,6 @@ struct ServiceAccountListResponse {
     service_accounts: Vec<ServiceAccountResponse>,
 }
 
-/// Body of `POST /v1/auth/service-accounts`.
-///
-/// `tenantId` is required by the API schema, but the server compares it with
-/// the authorized `x-operator-id` scope and answers 403 on a mismatch, so it
-/// is always the tenant the command is already acting as rather than a
-/// separate option.
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct CreateServiceAccountRequest {
@@ -273,10 +306,26 @@ struct CreateServiceAccountRequest {
     name: String,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct DeleteServiceAccountResponse {
     id: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DeleteServiceAccountOutput {
+    id: String,
+    deleted: bool,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ServiceAccountPolicyOutput {
+    service_account_id: String,
+    policy_id: String,
+    policy_name: Option<String>,
+    attached: bool,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -361,6 +410,23 @@ struct GrantTenantAccessRequest {
     email: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     platform_id: Option<String>,
+}
+
+/// Body shared by the four user-policy write endpoints. `attach` and
+/// `detach` ignore `resourceScope`; `attach-with-scope` and
+/// `detach-with-scope` require it.
+///
+/// `tenantId` is required by the API schema, but the server derives the
+/// tenant it actually writes to from the authorized `x-operator-id` scope, so
+/// this must be the same tenant the command is acting as.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct UserPolicyRequest {
+    user_id: String,
+    policy_id: String,
+    tenant_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    resource_scope: Option<String>,
 }
 
 // response-contract:auth.actions.list:start
@@ -566,19 +632,161 @@ async fn run_users_policies(api: &ApiClient, user_id: &str, json: bool) -> Resul
     Ok(())
 }
 
-// --- Service account create / delete ---
+// --- User policy attach / detach ---
 
-/// The API stores a service account name as a `Text` value object: non-empty
-/// after trimming, and at most this many bytes.
-const SERVICE_ACCOUNT_NAME_MAX_BYTES: usize = 191;
+/// A policy resolved from `--policy`, carrying both the ID the API needs and
+/// the name the operator typed, so output can name the grant unambiguously.
+struct ResolvedPolicy {
+    id: String,
+    name: String,
+}
 
-/// Writing a service account needs an explicit tenant. The API derives the
-/// tenant it writes to from the authorized `x-operator-id` scope, and an empty
-/// scope is rejected far from its cause.
-fn require_service_account_tenant<'a>(tenant_id: &'a str, command: &str) -> Result<&'a str> {
+impl std::fmt::Display for ResolvedPolicy {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{} ({})", self.name, self.id)
+    }
+}
+
+/// Describe a policy by ID and owner, for disambiguating same-named policies.
+fn describe_policy_owner(policy: &PolicyResponse) -> String {
+    let owner = policy
+        .owner_tenant_id
+        .as_deref()
+        .or(policy.tenant_id.as_deref())
+        .unwrap_or(if policy.is_system { "system" } else { "-" });
+    format!("{} (owner: {owner})", policy.id)
+}
+
+/// Resolve `--policy` to a policy the acting tenant can grant.
+///
+/// A `pol_` ID is read back so the command can print the policy's name;
+/// anything else is matched by exact name against the policies visible from
+/// the acting tenant. Names are not unique across owners — two tenants can
+/// both publish `field:admin` — so an ambiguous name fails instead of
+/// silently picking one.
+async fn resolve_user_policy(
+    api: &ApiClient,
+    tenant_id: &str,
+    name_or_id: &str,
+) -> Result<ResolvedPolicy> {
+    if name_or_id.starts_with("pol_") && resolve::looks_like_id(name_or_id) {
+        return resolve_policy_by_id(api, tenant_id, name_or_id).await;
+    }
+
+    let response: PolicyListResponse = api.get("/v1/auth/policies").await?;
+    let matches: Vec<&PolicyResponse> = response
+        .policies
+        .iter()
+        .filter(|policy| policy.name == name_or_id)
+        .collect();
+
+    match matches.as_slice() {
+        [] => Err(anyhow!(
+            "no policy named '{name_or_id}' is visible from tenant {tenant_id}. \
+             Run `tachyon org policies list --tenant-id {tenant_id}` to see the \
+             policies this tenant can grant, or pass the ID as `--policy pol_...`."
+        )),
+        [policy] => Ok(ResolvedPolicy {
+            id: policy.id.clone(),
+            name: policy.name.clone(),
+        }),
+        ambiguous => Err(anyhow!(
+            "policy name '{name_or_id}' is ambiguous in tenant {tenant_id}: {}. \
+             Pass the ID as `--policy pol_...` to choose one.",
+            ambiguous
+                .iter()
+                .map(|policy| describe_policy_owner(policy))
+                .collect::<Vec<_>>()
+                .join(", ")
+        )),
+    }
+}
+
+async fn resolve_policy_by_id(
+    api: &ApiClient,
+    tenant_id: &str,
+    policy_id: &str,
+) -> Result<ResolvedPolicy> {
+    match api
+        .get::<PolicyResponse>(&format!("/v1/auth/policies/{policy_id}"))
+        .await
+    {
+        Ok(policy) => Ok(ResolvedPolicy {
+            id: policy.id,
+            name: policy.name,
+        }),
+        Err(err) if http_error_status(&err) == Some(reqwest::StatusCode::NOT_FOUND) => Err(err
+            .context(format!(
+                "policy {policy_id} does not exist. Run \
+                 `tachyon org policies list --tenant-id {tenant_id}` to see the \
+                 policies this tenant can grant."
+            ))),
+        // The lookup only supplies a human-readable name for the output, so a
+        // read the caller is not allowed to make must not block the write.
+        Err(err) => {
+            eprintln!("Warning: could not read policy {policy_id}: {err}");
+            Ok(ResolvedPolicy {
+                id: policy_id.to_string(),
+                name: "-".to_string(),
+            })
+        }
+    }
+}
+
+/// Confirm the target user and return a label for the output.
+///
+/// `user_policies` has a foreign key on `user_id`, so attaching to an unknown
+/// user fails deep inside the API; a 404 here turns that into an answerable
+/// message before anything is written.
+async fn resolve_user_label(api: &ApiClient, tenant_id: &str, user_id: &str) -> Result<String> {
+    match api
+        .get::<UserResponse>(&format!("/v1/auth/users/{user_id}"))
+        .await
+    {
+        Ok(user) => Ok(user.email.or(user.name).unwrap_or_else(|| "-".to_string())),
+        Err(err) if http_error_status(&err) == Some(reqwest::StatusCode::NOT_FOUND) => Err(err
+            .context(format!(
+                "user {user_id} does not exist. Run \
+                 `tachyon org users list --tenant-id {tenant_id}` to see the users \
+                 of this tenant, or invite the user first with \
+                 `tachyon org users invite <email> --tenant-id {tenant_id}`."
+            ))),
+        Err(err) => {
+            eprintln!("Warning: could not read user {user_id}: {err}");
+            Ok("-".to_string())
+        }
+    }
+}
+
+/// Whether `policy_id` is already listed for the user in the acting tenant,
+/// or `None` when the read failed.
+///
+/// The API reports a user's policies without their resource scopes, so this
+/// answers "is this policy listed at all", not "is this exact grant present".
+async fn policy_is_listed_for_user(
+    api: &ApiClient,
+    user_id: &str,
+    policy_id: &str,
+) -> Option<bool> {
+    match api
+        .get::<UserPolicyListResponse>(&format!("/v1/auth/users/{user_id}/policies"))
+        .await
+    {
+        Ok(response) => Some(response.policy_ids.iter().any(|id| id == policy_id)),
+        Err(err) => {
+            eprintln!("Warning: could not read the current policies of user {user_id}: {err}");
+            None
+        }
+    }
+}
+
+/// Writing a grant needs an explicit tenant: the API derives the tenant it
+/// writes to from the authorized `x-operator-id` scope, and an empty value
+/// would be rejected far from its cause.
+fn require_tenant<'a>(tenant_id: &'a str, command: &str) -> Result<&'a str> {
     if tenant_id.trim().is_empty() {
         return Err(anyhow!(
-            "`tachyon org service-accounts {command}` needs a tenant. Pass \
+            "`tachyon org users {command}` needs a tenant. Pass \
              `--tenant-id <tn_...>`, set TACHYON_TENANT_ID, or use a profile \
              whose login carries an operator."
         ));
@@ -586,232 +794,151 @@ fn require_service_account_tenant<'a>(tenant_id: &'a str, command: &str) -> Resu
     Ok(tenant_id)
 }
 
-/// Check the name against the value object the API will parse it into.
-///
-/// The create usecase parses the name after the policy check, and that parse
-/// failure converts into a 500 rather than a 400, so an empty or over-long
-/// name comes back as an internal error that says nothing about the name.
-fn validate_service_account_name(name: &str) -> Result<()> {
-    if name.trim().is_empty() {
-        return Err(anyhow!(
-            "service account name must not be empty or only whitespace."
-        ));
-    }
-    if name.len() > SERVICE_ACCOUNT_NAME_MAX_BYTES {
-        return Err(anyhow!(
-            "service account name is {} bytes; the API accepts at most \
-             {SERVICE_ACCOUNT_NAME_MAX_BYTES}.",
-            name.len()
-        ));
-    }
-    Ok(())
-}
-
-/// The ID of a service account that already carries this exact name in the
-/// tenant, or `None` when there is none.
-///
-/// The API has no uniqueness constraint on (tenant, name), so this is a
-/// client-side check rather than a read of a constraint the server enforces.
-async fn existing_service_account_named(
-    api: &ApiClient,
-    tenant_id: &str,
-    name: &str,
-) -> Option<String> {
-    match api
-        .get_query::<ServiceAccountListResponse>(
-            "/v1/auth/service-accounts",
-            &[("operator_id", tenant_id)],
-        )
-        .await
-    {
-        Ok(response) => response
-            .service_accounts
-            .into_iter()
-            .find(|sa| sa.name == name)
-            .map(|sa| sa.id),
-        // The read exists only to catch a duplicate name early. A caller that
-        // may create an account but not list them must still be able to
-        // create one.
-        Err(err) => {
-            eprintln!("Warning: could not list the service accounts of tenant {tenant_id}: {err}");
-            None
-        }
-    }
-}
-
-/// Turn the API's status into the next thing the operator can do.
-fn create_service_account_hint(err: anyhow::Error, tenant_id: &str, name: &str) -> anyhow::Error {
-    let hint = match http_error_status(&err) {
-        Some(reqwest::StatusCode::FORBIDDEN) => format!(
-            "could not create service account '{name}' in tenant {tenant_id}: the \
-             acting profile is not allowed to. Creating one needs a policy that \
-             grants `auth:CreateServiceAccount` in this tenant, and the API also \
-             refuses a tenant other than the authorized `--tenant-id` scope. \
-             Check the caller's own grants with `tachyon org users policies \
-             <your-user-id> --tenant-id {tenant_id}`, or re-run with \
-             `--profile <admin-profile>`."
-        ),
-        Some(reqwest::StatusCode::BAD_REQUEST) => format!(
-            "could not create service account '{name}': the API rejected the \
-             request. `--tenant-id` must resolve to a `tn_...` tenant ID."
-        ),
-        _ => format!("could not create service account '{name}' in tenant {tenant_id}."),
-    };
-    err.context(hint)
-}
-
-async fn run_service_accounts_create(
-    api: &ApiClient,
-    tenant_id: &str,
-    name: &str,
-    json: bool,
-) -> Result<()> {
-    let tenant_id = require_service_account_tenant(tenant_id, "create")?;
-    validate_service_account_name(name)?;
-
-    if let Some(existing_id) = existing_service_account_named(api, tenant_id, name).await {
-        return Err(anyhow!(
-            "tenant {tenant_id} already has a service account named '{name}' \
-             ({existing_id}). The API would create a second one, and the name \
-             would then be ambiguous everywhere the CLI takes a service account \
-             by name, such as `tachyon api-key create {name}`. Reuse that \
-             account, or choose another name."
-        ));
-    }
-
-    let request = CreateServiceAccountRequest {
-        tenant_id: tenant_id.to_string(),
-        name: name.to_string(),
-    };
-    // Not idempotent: without a uniqueness constraint on (tenant, name), a
-    // replayed request creates a second account. Send it exactly once.
-    let sa: ServiceAccountResponse = api
-        .post_once("/v1/auth/service-accounts", &request)
-        .await
-        .map_err(|err| create_service_account_hint(err, tenant_id, name))?;
-
-    if json {
-        return print_json(&sa);
-    }
-    println!("Service account created.");
-    println!("ID:          {}", sa.id);
-    println!("Tenant ID:   {}", sa.tenant_id);
-    println!("Name:        {}", sa.name);
-    println!("Created:     {}", sa.created_at);
-    println!();
-    println!("The account holds no API key and no policy yet, so it cannot call anything.");
-    println!(
-        "Issue a key with: tachyon api-key create {} --name <key-name> --tenant-id {tenant_id}",
-        sa.id
-    );
-    Ok(())
-}
-
-/// Turn the API's status into the next thing the operator can do.
-fn delete_service_account_hint(err: anyhow::Error, tenant_id: &str, id: &str) -> anyhow::Error {
-    let hint = match http_error_status(&err) {
-        Some(reqwest::StatusCode::NOT_FOUND) => format!(
-            "tenant {tenant_id} has no service account {id}. The API only reads \
-             service accounts within the acting tenant, so an account of another \
-             tenant looks missing here. List this tenant's accounts with \
-             `tachyon org service-accounts list --tenant-id {tenant_id}`."
-        ),
-        Some(reqwest::StatusCode::FORBIDDEN) => format!(
-            "could not delete service account {id} in tenant {tenant_id}: the \
-             acting profile is not allowed to. Deleting one needs a policy that \
-             grants `auth:DeleteServiceAccount` in this tenant. Check the \
-             caller's own grants with `tachyon org users policies <your-user-id> \
-             --tenant-id {tenant_id}`, or re-run with `--profile <admin-profile>`."
-        ),
-        _ => format!("could not delete service account {id} in tenant {tenant_id}."),
-    };
-    err.context(hint)
-}
-
-/// How many API keys the account currently has, or `None` when the list could
-/// not be read. Only the count is reported; key material is never read back
-/// into the output.
-async fn service_account_api_key_count(
-    api: &ApiClient,
-    tenant_id: &str,
-    id: &str,
-) -> Option<usize> {
-    match api
-        .get_query::<ApiKeyListResponse>(
-            &format!("/v1/auth/service-accounts/{id}/api-keys"),
-            &[("operator_id", tenant_id)],
-        )
-        .await
-    {
-        Ok(response) => Some(response.api_keys.len()),
-        Err(err) => {
-            eprintln!("Warning: could not list the API keys of service account {id}: {err}");
-            None
-        }
-    }
-}
-
-async fn run_service_accounts_delete(
-    api: &ApiClient,
-    tenant_id: &str,
-    name_or_id: &str,
-    assume_yes: bool,
-    json: bool,
-) -> Result<()> {
-    let tenant_id = require_service_account_tenant(tenant_id, "delete")?;
-    if json && !assume_yes {
-        // The confirmation step reports in prose, so --json without --yes
-        // would hand a script something it cannot parse and a zero exit code.
-        return Err(anyhow!(
-            "--json requires --yes. Without --yes the command only reports what \
-             it would delete, and that report is not JSON."
-        ));
-    }
-    // Resolved here rather than by the caller so the tenant is checked before
-    // a name lookup that needs it.
-    let id = &resolve::resolve_service_account_id(api, tenant_id, name_or_id).await?;
-
-    let sa: ServiceAccountResponse = api
-        .get_query(
-            &format!("/v1/auth/service-accounts/{id}"),
-            &[("operator_id", tenant_id)],
-        )
-        .await
-        .map_err(|err| delete_service_account_hint(err, tenant_id, id))?;
-    let key_count = service_account_api_key_count(api, tenant_id, &sa.id).await;
-
-    if !assume_yes {
-        println!("Service account: {} ({})", sa.name, sa.id);
-        println!("Tenant ID:       {}", sa.tenant_id);
-        println!("Created:         {}", sa.created_at);
-        match key_count {
-            Some(count) => println!("API keys:        {count} (all destroyed with the account)"),
-            None => println!("API keys:        unknown (the list could not be read)"),
-        }
-        println!();
-        println!("Deleting the account also deletes every API key issued to it, and any");
-        println!("caller still presenting one of those keys starts failing immediately.");
-        println!("Revoking a single key instead: tachyon api-key revoke {} <api-key-id> --tenant-id {tenant_id}", sa.id);
-        println!();
-        println!("No changes made. Re-run with --yes to delete.");
+/// The scope endpoints store `resourceScope` verbatim without validating it,
+/// so a typo is accepted by the API and then matches nothing. Reject anything
+/// that is not a TRN before it is written.
+fn validate_resource_scope(scope: &str) -> Result<()> {
+    if scope == "*" {
         return Ok(());
     }
+    let parts: Vec<&str> = scope.split(':').collect();
+    if parts.len() == 4 && parts[0] == "trn" && parts[1..].iter().all(|part| !part.is_empty()) {
+        return Ok(());
+    }
+    Err(anyhow!(
+        "invalid --resource-scope '{scope}'. Expected a TRN of the form \
+         `trn:<service>:<resource-type>:<resource-id>` (for example \
+         `trn:library:repo:rp_xxx`), where any part may be `*`, or `*` on its \
+         own for every resource."
+    ))
+}
 
-    let deleted: DeleteServiceAccountResponse = api
-        .delete_json(&format!("/v1/auth/service-accounts/{}", sa.id))
+/// Turn the API's status into the next thing the operator can do.
+fn user_policy_write_hint(
+    err: anyhow::Error,
+    verb: &str,
+    tenant_id: &str,
+    user_id: &str,
+    policy: &ResolvedPolicy,
+) -> anyhow::Error {
+    let hint = match http_error_status(&err) {
+        Some(reqwest::StatusCode::NOT_FOUND) => format!(
+            "could not {verb} policy {policy} for user {user_id}: the API reports \
+             the user or the policy as missing in tenant {tenant_id}. Check both \
+             with `tachyon org users list --tenant-id {tenant_id}` and \
+             `tachyon org policies list --tenant-id {tenant_id}`."
+        ),
+        Some(reqwest::StatusCode::FORBIDDEN) => format!(
+            "could not {verb} policy {policy} for user {user_id} in tenant \
+             {tenant_id}: the acting profile is not allowed to grant it. A policy \
+             can only be granted from the tenant scope that owns or inherits it, \
+             and AdministratorAccess additionally requires the caller to hold \
+             AdministratorAccess in the same tenant. Check the caller's own grants \
+             with `tachyon org users policies <your-user-id> --tenant-id \
+             {tenant_id}`, or re-run with `--profile <admin-profile>`."
+        ),
+        Some(reqwest::StatusCode::BAD_REQUEST) => format!(
+            "could not {verb} policy {policy} for user {user_id}: the API rejected \
+             the identifiers. The user argument must be a `us_...` ID rather than \
+             an email address, and `--policy` must resolve to a `pol_...` ID."
+        ),
+        _ => format!("could not {verb} policy {policy} for user {user_id} in tenant {tenant_id}."),
+    };
+    err.context(hint)
+}
+
+async fn run_users_attach_policy(
+    api: &ApiClient,
+    tenant_id: &str,
+    user_id: &str,
+    policy: &str,
+    resource_scope: Option<&str>,
+) -> Result<()> {
+    let tenant_id = require_tenant(tenant_id, "attach-policy")?;
+    if let Some(scope) = resource_scope {
+        validate_resource_scope(scope)?;
+    }
+
+    let policy = resolve_user_policy(api, tenant_id, policy).await?;
+    let user_label = resolve_user_label(api, tenant_id, user_id).await?;
+    let listed_before = policy_is_listed_for_user(api, user_id, &policy.id).await;
+
+    let request = UserPolicyRequest {
+        user_id: user_id.to_string(),
+        policy_id: policy.id.clone(),
+        tenant_id: tenant_id.to_string(),
+        resource_scope: resource_scope.map(str::to_string),
+    };
+    let path = if resource_scope.is_some() {
+        "/v1/auth/user-policies/attach-with-scope"
+    } else {
+        "/v1/auth/user-policies/attach"
+    };
+    let _: serde_json::Value = api
+        .post(path, &request)
         .await
-        .map_err(|err| delete_service_account_hint(err, tenant_id, &sa.id))?;
+        .map_err(|err| user_policy_write_hint(err, "attach", tenant_id, user_id, &policy))?;
 
-    if json {
-        return print_json(&deleted);
+    println!("Attached policy {policy} to user {user_id} ({user_label}) in tenant {tenant_id}.");
+    if let Some(scope) = resource_scope {
+        println!("Resource scope: {scope}");
     }
-    println!(
-        "Service account {} ({}) deleted from tenant {tenant_id}.",
-        sa.name, deleted.id
-    );
-    if let Some(count) = key_count {
-        println!("{count} API key(s) issued to it were deleted with it.");
+    if listed_before == Some(true) {
+        println!(
+            "Note: the policy was already listed for this user in this tenant \
+             before the call, and attaching is idempotent."
+        );
     }
+    println!("Verify with: tachyon org users policies {user_id} --tenant-id {tenant_id}");
+    Ok(())
+}
+
+async fn run_users_detach_policy(
+    api: &ApiClient,
+    tenant_id: &str,
+    user_id: &str,
+    policy: &str,
+    resource_scope: Option<&str>,
+) -> Result<()> {
+    let tenant_id = require_tenant(tenant_id, "detach-policy")?;
+    if let Some(scope) = resource_scope {
+        validate_resource_scope(scope)?;
+    }
+
+    let policy = resolve_user_policy(api, tenant_id, policy).await?;
+    let user_label = resolve_user_label(api, tenant_id, user_id).await?;
+    let listed_before = policy_is_listed_for_user(api, user_id, &policy.id).await;
+
+    let request = UserPolicyRequest {
+        user_id: user_id.to_string(),
+        policy_id: policy.id.clone(),
+        tenant_id: tenant_id.to_string(),
+        resource_scope: resource_scope.map(str::to_string),
+    };
+    let path = if resource_scope.is_some() {
+        "/v1/auth/user-policies/detach-with-scope"
+    } else {
+        "/v1/auth/user-policies/detach"
+    };
+    let _: serde_json::Value = api
+        .post(path, &request)
+        .await
+        .map_err(|err| user_policy_write_hint(err, "detach", tenant_id, user_id, &policy))?;
+
+    println!("Detached policy {policy} from user {user_id} ({user_label}) in tenant {tenant_id}.");
+    match resource_scope {
+        Some(scope) => {
+            println!("Resource scope: {scope} (grants with any other scope are left in place)")
+        }
+        None => println!("Every scope of this policy for the user in this tenant was removed."),
+    }
+    if listed_before == Some(false) {
+        println!(
+            "Note: the policy was not listed for this user in this tenant before \
+             the call, so nothing was removed."
+        );
+    }
+    println!("Verify with: tachyon org users policies {user_id} --tenant-id {tenant_id}");
     Ok(())
 }
 
@@ -893,6 +1020,187 @@ async fn run_service_accounts_api_keys(
             "{:<28}  {:<20}  {:<16}  {}",
             k.id, k.name, k.value, k.created_at,
         );
+    }
+    Ok(())
+}
+
+async fn run_service_accounts_create(
+    api: &ApiClient,
+    tenant_id: &str,
+    name: &str,
+    json: bool,
+) -> Result<()> {
+    let name = name.trim();
+    if name.is_empty() || name.len() > 191 {
+        return Err(anyhow!(
+            "service account name must contain between 1 and 191 bytes"
+        ));
+    }
+
+    // Names are how the CLI resolves service accounts, so refuse to create a
+    // second one with the same name instead of making later lookups ambiguous.
+    let existing: ServiceAccountListResponse = api
+        .get_query("/v1/auth/service-accounts", &[("operator_id", tenant_id)])
+        .await?;
+    if let Some(sa) = existing.service_accounts.iter().find(|sa| sa.name == name) {
+        return Err(anyhow!(
+            "service account '{name}' already exists in tenant {tenant_id}: {}",
+            sa.id
+        ));
+    }
+
+    let request = CreateServiceAccountRequest {
+        tenant_id: tenant_id.to_string(),
+        name: name.to_string(),
+    };
+    let sa: ServiceAccountResponse = api.post_once("/v1/auth/service-accounts", &request).await?;
+    if json {
+        return print_json(&sa);
+    }
+    println!("Service account created.");
+    println!("ID:          {}", sa.id);
+    println!("Tenant ID:   {}", sa.tenant_id);
+    println!("Name:        {}", sa.name);
+    println!("Created:     {}", sa.created_at);
+    Ok(())
+}
+
+async fn run_service_accounts_delete(api: &ApiClient, id: &str, json: bool) -> Result<()> {
+    let response: DeleteServiceAccountResponse = api
+        .delete_json(&format!("/v1/auth/service-accounts/{id}"))
+        .await?;
+    if json {
+        return print_json(&DeleteServiceAccountOutput {
+            id: response.id,
+            deleted: true,
+        });
+    }
+    println!("Service account {} deleted.", response.id);
+    Ok(())
+}
+
+/// Picks the policy a name refers to. A policy owned by `tenant_id` wins over
+/// system policies and policies shared from an ancestor tenant; more than one
+/// match at the winning level is an error.
+fn select_policy_by_name<'a>(
+    policies: &'a [PolicyResponse],
+    tenant_id: &str,
+    name: &str,
+) -> Result<&'a PolicyResponse> {
+    let (owned, others): (Vec<_>, Vec<_>) =
+        policies.iter().filter(|p| p.name == name).partition(|p| {
+            p.tenant_id.as_deref() == Some(tenant_id)
+                || p.owner_tenant_id.as_deref() == Some(tenant_id)
+        });
+    let candidates = if owned.is_empty() { others } else { owned };
+    match candidates.as_slice() {
+        [] => Err(anyhow!(
+            "no policy named '{name}' is visible to tenant {tenant_id}"
+        )),
+        [policy] => Ok(policy),
+        many => {
+            let ids: Vec<_> = many.iter().map(|p| p.id.as_str()).collect();
+            Err(anyhow!(
+                "multiple policies match name '{name}': {}. Pass a policy ID instead",
+                ids.join(", ")
+            ))
+        }
+    }
+}
+
+/// Resolves a policy ID or name to `(id, name)`. The name is `None` when an ID
+/// was given, because the CLI then sends it without a lookup.
+async fn resolve_policy(
+    api: &ApiClient,
+    tenant_id: &str,
+    policy: &str,
+) -> Result<(String, Option<String>)> {
+    // Names are free-form and may look like IDs (`pol_financereader`), so
+    // always consult the list: exact ID first, then name.
+    let response: PolicyListResponse = api.get("/v1/auth/policies").await?;
+    if let Some(p) = response.policies.iter().find(|p| p.id == policy) {
+        return Ok((p.id.clone(), Some(p.name.clone())));
+    }
+    if !response.policies.iter().any(|p| p.name == policy)
+        && resolve::is_canonical_id(policy, "pol_")
+    {
+        // An ID the list does not show is left for the server to judge.
+        return Ok((policy.to_string(), None));
+    }
+    let selected = select_policy_by_name(&response.policies, tenant_id, policy)?;
+    eprintln!("Resolved policy '{}' → {}", policy, selected.id);
+    Ok((selected.id.clone(), Some(selected.name.clone())))
+}
+
+async fn graphql_mutation(api: &ApiClient, query: &str, variables: Value) -> Result<Value> {
+    // `ApiClient::post` refreshes an expired OAuth token and retries once.
+    // Attach and detach are idempotent, so the replay is safe.
+    let payload: Value = api
+        .post(
+            "/v1/graphql",
+            &json!({ "query": query, "variables": variables }),
+        )
+        .await?;
+    if let Some(errors) = payload.get("errors") {
+        return Err(anyhow!("graphql error: {errors}"));
+    }
+    payload
+        .get("data")
+        .cloned()
+        .ok_or_else(|| anyhow!("missing data in graphql response"))
+}
+
+const ATTACH_SERVICE_ACCOUNT_POLICY: &str = "mutation AttachServiceAccountPolicy($input: AttachServiceAccountPolicyInput!) { attachServiceAccountPolicy(input: $input) { success message } }";
+const DETACH_SERVICE_ACCOUNT_POLICY: &str = "mutation DetachServiceAccountPolicy($input: DetachServiceAccountPolicyInput!) { detachServiceAccountPolicy(input: $input) { success message } }";
+
+async fn run_service_accounts_policy(
+    api: &ApiClient,
+    tenant_id: &str,
+    service_account: &str,
+    policy: &str,
+    attach: bool,
+    json: bool,
+) -> Result<()> {
+    let service_account_id =
+        resolve::resolve_service_account_id(api, tenant_id, service_account).await?;
+    let (policy_id, policy_name) = resolve_policy(api, tenant_id, policy).await?;
+
+    let (query, field) = if attach {
+        (ATTACH_SERVICE_ACCOUNT_POLICY, "attachServiceAccountPolicy")
+    } else {
+        (DETACH_SERVICE_ACCOUNT_POLICY, "detachServiceAccountPolicy")
+    };
+    let data = graphql_mutation(
+        api,
+        query,
+        json!({
+            "input": {
+                "serviceAccountId": service_account_id,
+                "policyId": policy_id,
+            }
+        }),
+    )
+    .await?;
+    if data.pointer(&format!("/{field}/success")) != Some(&Value::Bool(true)) {
+        return Err(anyhow!("{field} did not succeed: {data}"));
+    }
+
+    if json {
+        return print_json(&ServiceAccountPolicyOutput {
+            service_account_id,
+            policy_id,
+            policy_name,
+            attached: attach,
+        });
+    }
+    let label = match &policy_name {
+        Some(name) => format!("{name} ({policy_id})"),
+        None => policy_id.clone(),
+    };
+    if attach {
+        println!("Policy {label} attached to service account {service_account_id}.");
+    } else {
+        println!("Policy {label} detached from service account {service_account_id}.");
     }
     Ok(())
 }
@@ -1058,11 +1366,24 @@ pub async fn run(args: &OrgArgs, config: &Configuration, tenant_id: &str) -> Res
             UsersCommand::Policies { user_id, json } => {
                 run_users_policies(&api, user_id, *json).await
             }
+            UsersCommand::AttachPolicy {
+                user_id,
+                policy,
+                resource_scope,
+            } => {
+                run_users_attach_policy(&api, tenant_id, user_id, policy, resource_scope.as_deref())
+                    .await
+            }
+            UsersCommand::DetachPolicy {
+                user_id,
+                policy,
+                resource_scope,
+            } => {
+                run_users_detach_policy(&api, tenant_id, user_id, policy, resource_scope.as_deref())
+                    .await
+            }
         },
         OrgCommand::ServiceAccounts { command } => match command {
-            ServiceAccountsCommand::Create { name, json } => {
-                run_service_accounts_create(&api, tenant_id, name, *json).await
-            }
             ServiceAccountsCommand::List { json } => {
                 run_service_accounts_list(&api, tenant_id, *json).await
             }
@@ -1082,12 +1403,40 @@ pub async fn run(args: &OrgArgs, config: &Configuration, tenant_id: &str) -> Res
                     .await?;
                 run_service_accounts_api_keys(&api, tenant_id, &id, *json).await
             }
+            ServiceAccountsCommand::Create { name, json } => {
+                run_service_accounts_create(&api, tenant_id, name, *json).await
+            }
             ServiceAccountsCommand::Delete {
-                service_account_id,
+                service_account,
                 yes,
                 json,
             } => {
-                run_service_accounts_delete(&api, tenant_id, service_account_id, *yes, *json).await
+                let id =
+                    resolve::resolve_service_account_id(&api, tenant_id, service_account).await?;
+                if !yes {
+                    println!("Service account: {id}");
+                    println!("Tenant ID: {tenant_id}");
+                    println!("Deleting the account also deletes its API keys.");
+                    println!("No changes made. Re-run with --yes to delete.");
+                    return Ok(());
+                }
+                run_service_accounts_delete(&api, &id, *json).await
+            }
+            ServiceAccountsCommand::AttachPolicy {
+                service_account,
+                policy,
+                json,
+            } => {
+                run_service_accounts_policy(&api, tenant_id, service_account, policy, true, *json)
+                    .await
+            }
+            ServiceAccountsCommand::DetachPolicy {
+                service_account,
+                policy,
+                json,
+            } => {
+                run_service_accounts_policy(&api, tenant_id, service_account, policy, false, *json)
+                    .await
             }
         },
         OrgCommand::Policies { command } => match command {
@@ -1102,5 +1451,105 @@ pub async fn run(args: &OrgArgs, config: &Configuration, tenant_id: &str) -> Res
                 json,
             } => run_policy_mappings(&api, tenant_id, resource_scope, *json).await,
         },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const TENANT: &str = "tn_tenant1234567890";
+
+    fn policy(
+        id: &str,
+        name: &str,
+        tenant_id: Option<&str>,
+        owner: Option<&str>,
+    ) -> PolicyResponse {
+        PolicyResponse {
+            id: id.to_string(),
+            name: name.to_string(),
+            description: None,
+            is_system: tenant_id.is_none() && owner.is_none(),
+            tenant_id: tenant_id.map(str::to_string),
+            shared_with_descendants: false,
+            owner_tenant_id: owner.map(str::to_string),
+            created_at: "2026-10-14T00:00:00Z".to_string(),
+            updated_at: "2026-10-14T00:00:00Z".to_string(),
+        }
+    }
+
+    #[test]
+    fn select_policy_prefers_policy_owned_by_tenant() {
+        let policies = vec![
+            policy("pol_system000000001", "IacApply", None, None),
+            policy(
+                "pol_parent000000001",
+                "IacApply",
+                Some("tn_parent12345678901"),
+                None,
+            ),
+            policy("pol_owned0000000001", "IacApply", Some(TENANT), None),
+        ];
+        let selected = select_policy_by_name(&policies, TENANT, "IacApply").unwrap();
+        assert_eq!(selected.id, "pol_owned0000000001");
+    }
+
+    #[test]
+    fn select_policy_treats_owner_tenant_as_owned() {
+        let policies = vec![
+            policy("pol_system000000001", "IacApply", None, None),
+            policy("pol_global000000001", "IacApply", None, Some(TENANT)),
+        ];
+        let selected = select_policy_by_name(&policies, TENANT, "IacApply").unwrap();
+        assert_eq!(selected.id, "pol_global000000001");
+    }
+
+    #[test]
+    fn select_policy_falls_back_to_single_visible_policy() {
+        let policies = vec![
+            policy("pol_system000000001", "AdminPolicy", None, None),
+            policy("pol_other0000000001", "Other", Some(TENANT), None),
+        ];
+        let selected = select_policy_by_name(&policies, TENANT, "AdminPolicy").unwrap();
+        assert_eq!(selected.id, "pol_system000000001");
+    }
+
+    #[test]
+    fn select_policy_rejects_ambiguous_owned_names() {
+        let policies = vec![
+            policy("pol_owned0000000001", "IacApply", Some(TENANT), None),
+            policy("pol_owned0000000002", "IacApply", Some(TENANT), None),
+        ];
+        let err = select_policy_by_name(&policies, TENANT, "IacApply").unwrap_err();
+        let message = err.to_string();
+        assert!(message.contains("pol_owned0000000001"), "{message}");
+        assert!(message.contains("pol_owned0000000002"), "{message}");
+    }
+
+    #[test]
+    fn select_policy_rejects_ambiguous_names_without_owned_match() {
+        let policies = vec![
+            policy("pol_system000000001", "IacApply", None, None),
+            policy(
+                "pol_parent000000001",
+                "IacApply",
+                Some("tn_parent12345678901"),
+                None,
+            ),
+        ];
+        assert!(select_policy_by_name(&policies, TENANT, "IacApply").is_err());
+    }
+
+    #[test]
+    fn select_policy_reports_missing_name() {
+        let policies = vec![policy(
+            "pol_owned0000000001",
+            "IacApply",
+            Some(TENANT),
+            None,
+        )];
+        let err = select_policy_by_name(&policies, TENANT, "Missing").unwrap_err();
+        assert!(err.to_string().contains("no policy named 'Missing'"));
     }
 }

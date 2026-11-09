@@ -28,6 +28,8 @@ pub struct HttpError {
     pub body: String,
     /// Extra authentication diagnostics appended for 401 responses.
     pub diagnostics: Option<String>,
+    /// `retry-after` seconds advertised by the server, for 429 responses.
+    pub retry_after_secs: Option<u64>,
 }
 
 impl std::fmt::Display for HttpError {
@@ -125,6 +127,40 @@ pub fn sdk_http_client() -> reqwest12::Client {
         .default_headers(headers)
         .build()
         .expect("reqwest client with default headers should build")
+}
+
+/// Body for [`ApiClient::send`], rebuilt per attempt so a 401 retry can
+/// replay a request whose body was already consumed.
+pub enum RequestBody<'a> {
+    /// No request body.
+    None,
+    /// A JSON body serialized once by the caller.
+    Json(&'a serde_json::Value),
+    /// A multipart form produced fresh for each attempt.
+    Multipart(&'a dyn Fn() -> reqwest::multipart::Form),
+}
+
+impl RequestBody<'_> {
+    fn apply(&self, request: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
+        match self {
+            Self::None => request,
+            Self::Json(value) => request.json(value),
+            Self::Multipart(build) => request.multipart(build()),
+        }
+    }
+}
+
+/// Seconds advertised by a `retry-after` response header, when it is the
+/// integer form. HTTP-date values are ignored; callers fall back to their own
+/// default wait.
+fn retry_after_secs(headers: &header::HeaderMap) -> Option<u64> {
+    headers
+        .get(header::RETRY_AFTER)?
+        .to_str()
+        .ok()?
+        .trim()
+        .parse()
+        .ok()
 }
 
 /// Shared API client that carries Tachyon auth headers.
@@ -521,6 +557,73 @@ impl ApiClient {
             .with_context(|| format!("parse DELETE {path}"))
     }
 
+    /// Send a request that needs per-call headers or a non-JSON body, and
+    /// return the successful response without reading it.
+    ///
+    /// The JSON helpers above cover the common case; this one exists for
+    /// endpoints that take an extra header (such as `x-data-purpose`) or a
+    /// multipart upload. It keeps the shared 401-refresh retry, and records
+    /// the `retry-after` seconds on the error so callers can tell the user
+    /// how long to wait after a 429.
+    ///
+    /// `body` is rebuilt for each attempt, so the 401 retry can replay a
+    /// multipart upload that was already consumed by the first attempt.
+    pub async fn send(
+        &self,
+        method: reqwest::Method,
+        path: &str,
+        headers: &[(&str, String)],
+        body: &RequestBody<'_>,
+    ) -> Result<reqwest::Response> {
+        let url = format!("{}{}", self.base_url, path);
+        let method_label = method.as_str().to_string();
+        let attempt = |bearer: Option<String>| {
+            let mut request = self.client.request(method.clone(), &url);
+            for (name, value) in headers {
+                request = request.header(*name, value);
+            }
+            if let Some(token) = bearer {
+                request = request.bearer_auth(token);
+            }
+            body.apply(request)
+        };
+
+        let resp = attempt(None)
+            .send()
+            .await
+            .with_context(|| format!("{method_label} {url}"))?;
+        let status = resp.status();
+        if status.is_success() {
+            return Ok(resp);
+        }
+
+        if status == reqwest::StatusCode::UNAUTHORIZED {
+            if let Some(token) = self.refresh_bearer_after_401().await {
+                let retry = attempt(Some(token))
+                    .send()
+                    .await
+                    .with_context(|| format!("{method_label} {url}"))?;
+                let retry_status = retry.status();
+                if retry_status.is_success() {
+                    return Ok(retry);
+                }
+                let retry_after = retry_after_secs(retry.headers());
+                let body_text = retry.text().await.unwrap_or_default();
+                return Err(self.http_error_with_retry_after(
+                    &method_label,
+                    path,
+                    retry_status,
+                    &body_text,
+                    retry_after,
+                ));
+            }
+        }
+
+        let retry_after = retry_after_secs(resp.headers());
+        let body_text = resp.text().await.unwrap_or_default();
+        Err(self.http_error_with_retry_after(&method_label, path, status, &body_text, retry_after))
+    }
+
     async fn json_or_error<T: DeserializeOwned>(
         &self,
         method: &str,
@@ -599,6 +702,17 @@ impl ApiClient {
         status: reqwest::StatusCode,
         body: &str,
     ) -> anyhow::Error {
+        self.http_error_with_retry_after(method, path, status, body, None)
+    }
+
+    fn http_error_with_retry_after(
+        &self,
+        method: &str,
+        path: &str,
+        status: reqwest::StatusCode,
+        body: &str,
+        retry_after_secs: Option<u64>,
+    ) -> anyhow::Error {
         let make = |diagnostics: Option<String>| {
             anyhow::Error::new(HttpError {
                 method: method.to_string(),
@@ -606,6 +720,7 @@ impl ApiClient {
                 status,
                 body: body.to_string(),
                 diagnostics,
+                retry_after_secs,
             })
         };
 
@@ -667,6 +782,7 @@ mod tests {
             status,
             body: status.canonical_reason().unwrap_or("error").to_string(),
             diagnostics: diagnostics.map(str::to_string),
+            retry_after_secs: None,
         })
     }
 
