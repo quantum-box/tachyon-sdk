@@ -350,7 +350,7 @@ tachyon api-key create gha.iac-apply.write --name github-actions \
 
 # Detach a policy, or delete the service account together with its API keys.
 tachyon org service-accounts detach-policy gha.iac-apply.write IacApplyWrite
-tachyon org service-accounts delete gha.iac-apply.write
+tachyon org service-accounts delete gha.iac-apply.write --yes
 ```
 
 A policy name resolves to the policy owned by the current tenant first, then to
