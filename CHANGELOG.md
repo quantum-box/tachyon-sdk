@@ -4,6 +4,22 @@
 
 ### Added
 
+- Add `tachyon org users attach-policy` and `tachyon org users detach-policy`,
+  so a user's policies can be granted and revoked from the CLI instead of the
+  IAM screen of the web console. `quantum-box/tachyonfield`'s
+  `docs/runbooks/cloud-app-field-api-permissions.md` already documents
+  `tachyon org users attach-policy <user-id> --policy field:staff --tenant-id
+  <tn_...>`, but `org users` only had read commands, so the documented step
+  could not be run at all. `--policy` accepts a policy name or a `pol_` ID; a
+  name is resolved against the policies visible from the acting tenant and an
+  ambiguous name fails with every candidate listed, because different owners
+  can publish policies that share a name (`field:admin` is one such name).
+  `--resource-scope` routes to the `attach-with-scope` /
+  `detach-with-scope` endpoints and is rejected client-side unless it is a TRN,
+  since those endpoints store the value verbatim and a typo would silently
+  grant nothing. Both commands name the user, the policy, and the tenant they
+  wrote to, report a grant that was already listed or already absent, and
+  translate 403, 404, and 400 into the check to run next. (PLT-4873)
 - Rust SDK: `agent_session` (feature `agent-session`) calls the agent session
   API as one caller: `create_session`, `execute` returning the open event
   stream, and `submit_tool_result`, which resends a result a few times while

@@ -6,7 +6,7 @@ use tachyon_sdk::apis::configuration::Configuration;
 
 /// Returns true if the value looks like a Tachyon resource ID.
 /// Tachyon IDs follow the pattern: prefix_base32chars (e.g., app_01km2dr0f6hvgj0qvcteyydfbe)
-fn looks_like_id(value: &str) -> bool {
+pub(crate) fn looks_like_id(value: &str) -> bool {
     if let Some(pos) = value.find('_') {
         let after = &value[pos + 1..];
         after.len() > 10 && after.chars().all(|c| c.is_ascii_alphanumeric())
