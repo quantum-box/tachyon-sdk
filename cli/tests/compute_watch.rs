@@ -465,10 +465,13 @@ fn compute_builds_logs_follow_continues_when_next_token_advances() {
 }
 
 #[test]
-fn compute_builds_logs_without_follow_fetches_once() {
+fn compute_builds_logs_without_follow_reads_every_page() {
     let tmp = TempDir::new().unwrap();
+    // Deploy hook logs follow the build's own output, so stopping at the
+    // first page hid them (PLT-6671).
     let (api_url, rx, handle) = start_server(vec![
         r#"{"lines":[{"timestamp":1767225600000,"message":"first page"}],"next_token":"n1","is_complete":false}"#,
+        r#"{"lines":[{"timestamp":1767225601000,"message":"deploy hook page"}],"next_token":null,"is_complete":false}"#,
     ]);
 
     let output = isolated_command(tmp.path())
@@ -490,12 +493,19 @@ fn compute_builds_logs_without_follow_fetches_once() {
         String::from_utf8_lossy(&output.stderr),
     );
 
-    let request = rx.recv().unwrap();
+    let first_req = rx.recv().unwrap();
+    let second_req = rx.recv().unwrap();
     handle.join().unwrap();
-    assert!(request.starts_with("GET /v1/compute/builds/bld_test1234567890/logs "));
+    assert!(first_req.starts_with("GET /v1/compute/builds/bld_test1234567890/logs "));
+    assert!(second_req.starts_with("GET /v1/compute/builds/bld_test1234567890/logs?next_token=n1 "));
+    assert!(
+        rx.try_recv().is_err(),
+        "must stop when no token is returned"
+    );
 
     let stdout = String::from_utf8(output.stdout).unwrap();
     assert!(stdout.contains("first page"), "stdout:\n{stdout}");
+    assert!(stdout.contains("deploy hook page"), "stdout:\n{stdout}");
 }
 
 #[test]
