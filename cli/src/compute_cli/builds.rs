@@ -873,6 +873,20 @@ pub(super) async fn run_builds_cancel(api: &ApiClient, build_id: &str) -> Result
     Ok(())
 }
 
+/// Upper bound for one `builds logs` call without `--follow`. The server
+/// pages ~1000 lines, so this covers far more than any real build.
+const BUILD_LOGS_MAX_PAGES_WITHOUT_FOLLOW: usize = 500;
+
+/// Whether another page is waiting. A running build's provider can hand
+/// back the same token when nothing new was written; that is the end of
+/// what exists now, not another page.
+fn has_unread_log_page(requested: Option<&str>, returned: Option<&str>) -> bool {
+    match returned {
+        Some(token) => requested != Some(token),
+        None => false,
+    }
+}
+
 pub(super) async fn run_builds_logs(
     api: &ApiClient,
     app_id: Option<&str>,
@@ -900,6 +914,7 @@ pub(super) async fn run_builds_logs(
     let mut is_complete = false;
     let mut last_none_token_signature: Option<Vec<(i64, String)>> = None;
     let mut no_progress_none_token_polls = 0_usize;
+    let mut pages_read = 0_usize;
     let follow_interval = build_logs_follow_interval();
     loop {
         let path = format!("/v1/compute/builds/{resolved_build_id}/logs");
@@ -951,14 +966,28 @@ pub(super) async fn run_builds_logs(
             no_progress_none_token_polls = 0;
         }
 
-        next_token = response_next_token;
         if follow {
+            next_token = response_next_token;
             if no_progress_none_token_polls >= BUILD_LOGS_MAX_NO_PROGRESS_NONE_TOKEN_POLLS {
                 break;
             }
             sleep(follow_interval).await;
         } else {
-            break;
+            // Read every page already written. Deploy hook logs come after
+            // the build's own output, so stopping at the first page hid them
+            // behind the compile log (PLT-6671).
+            if !has_unread_log_page(next_token.as_deref(), response_next_token.as_deref()) {
+                break;
+            }
+            pages_read += 1;
+            if pages_read >= BUILD_LOGS_MAX_PAGES_WITHOUT_FOLLOW {
+                eprintln!(
+                    "Stopped after {pages_read} log pages; \
+                     use --follow to keep reading"
+                );
+                break;
+            }
+            next_token = response_next_token;
         }
     }
 
@@ -1736,6 +1765,23 @@ pub(super) fn run_builds_reproduce(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn unread_log_page_follows_a_new_token() {
+        assert!(has_unread_log_page(None, Some("page-2")));
+        assert!(has_unread_log_page(Some("page-2"), Some("page-3")));
+    }
+
+    #[test]
+    fn unread_log_page_stops_at_the_last_page() {
+        assert!(!has_unread_log_page(None, None));
+        assert!(!has_unread_log_page(Some("page-2"), None));
+    }
+
+    #[test]
+    fn unread_log_page_stops_on_a_repeated_token() {
+        assert!(!has_unread_log_page(Some("page-2"), Some("page-2")));
+    }
 
     fn build_with_job_run(
         phase: &str,
