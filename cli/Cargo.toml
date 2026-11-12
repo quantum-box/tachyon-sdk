@@ -50,6 +50,9 @@ zip = { version = "2", default-features = false, features = ["deflate"] }
 
 tempfile = "3"
 
+[target.'cfg(target_os = "linux")'.dependencies]
+libc = "0.2"
+
 [dev-dependencies]
 base64 = "0.22"
 rstest = "0.21"
