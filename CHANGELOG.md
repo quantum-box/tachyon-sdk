@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+### Security
+
+- `tachyon worker` no longer lets a claimed Coding Job choose host resources.
+  A job's `workspace`, fallback `context_paths` entry and `codex_home` must
+  resolve, through symlinks and `..`, under `TACHYON_WORKER_MOUNT_ALLOWLIST`;
+  its `image` must be `CODEX_CONTAINER_IMAGE` or listed in
+  `TACHYON_WORKER_ALLOWED_IMAGES`; and an app-server network other than host
+  loopback must be listed in `TACHYON_WORKER_ALLOWED_NETWORKS`. A job that asks
+  for more fails before Docker starts. Jobs without a workspace get an empty
+  scratch directory instead of the host `/tmp`, and job containers run with
+  `--cap-drop=ALL` and `--security-opt=no-new-privileges`. Previously a tenant
+  member who could create a Coding Job could mount `/etc/tachyon` (the worker
+  API key) or any other host path read-write into an image they published.
+  Workers that mount repositories must now set `TACHYON_WORKER_MOUNT_ALLOWLIST`.
+  (PLT-6566)
+
 ### Added
 
 - `tachyon compute preview create --wait` waits for the build and displays its preview URL when available.

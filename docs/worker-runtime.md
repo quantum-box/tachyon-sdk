@@ -103,6 +103,33 @@ The systemd commands wrap `systemctl` and `journalctl` for the local
 | `CODEX_CONTAINER_IMAGE` | Codex runner image |
 | `CODEX_CONTAINER_NETWORK` | Docker network for job containers |
 | `CODEX_CONTAINER_MEMORY` | Docker memory limit |
+| `TACHYON_WORKER_MOUNT_ALLOWLIST` | `:`-separated host directories a job may mount as its workspace or Codex home. Unset means jobs cannot mount host paths |
+| `TACHYON_WORKER_ALLOWED_IMAGES` | `,`-separated images a job may request besides `CODEX_CONTAINER_IMAGE` |
+| `TACHYON_WORKER_ALLOWED_NETWORKS` | `,`-separated Docker networks an app-server job may request besides host loopback |
+
+## Job Container Policy
+
+Coding Job contents are written by tenant members, who do not necessarily
+administer the worker host. The worker therefore treats the job's
+`container_execution` (and the matching `metadata.container` keys) as a request
+checked against the worker's own environment, and fails the job before starting
+Docker when it asks for more:
+
+- `workspace`, a fallback `context_paths` entry, and `codex_home` are resolved
+  through symlinks and `..` and must lie under a directory in
+  `TACHYON_WORKER_MOUNT_ALLOWLIST`. Paths containing `:` are refused. A job
+  that names no workspace gets an empty per-job scratch directory instead of
+  the host `/tmp`.
+- `image` must be `CODEX_CONTAINER_IMAGE` (default
+  `ghcr.io/quantum-box/codex-runner:latest`) or be listed in
+  `TACHYON_WORKER_ALLOWED_IMAGES`. Only those images receive the worker's
+  `OPENAI_API_KEY` and its own Codex home.
+- In `app_server_ws` mode the container uses host networking, which the
+  worker needs to reach the app-server on loopback. Other networks must be
+  listed in `TACHYON_WORKER_ALLOWED_NETWORKS`. Exec mode always uses
+  `CODEX_CONTAINER_NETWORK`.
+- Job containers run with `--cap-drop=ALL` and
+  `--security-opt=no-new-privileges`.
 
 ## E2E Check
 

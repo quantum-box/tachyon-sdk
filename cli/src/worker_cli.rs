@@ -425,14 +425,16 @@ async fn claim_and_process_job(
 }
 
 async fn run_containerized_codex(job: &WorkerCodingJob) -> Result<WorkerJobOutput> {
+    let policy = WorkerContainerPolicy::from_env();
+    let plan = ContainerPlan::for_job(job, &policy)?;
     ensure_docker_available().await?;
 
     if job.execution_mode() == WorkerExecutionMode::AppServerWs {
-        return run_containerized_codex_app_server(job).await;
+        return run_containerized_codex_app_server(job, &plan).await;
     }
 
     let container_name = format!("tachyon-codex-{}", job.coding_job_id.to_lowercase());
-    let docker_args = build_codex_exec_docker_args(job, &container_name);
+    let docker_args = build_codex_exec_docker_args(job, &plan, &container_name);
 
     let mut child = TokioCommand::new("docker")
         .args(&docker_args)
@@ -570,11 +572,14 @@ fn trim_leading_utf8_continuation_bytes(bytes: &[u8]) -> &[u8] {
     &bytes[start..]
 }
 
-async fn run_containerized_codex_app_server(job: &WorkerCodingJob) -> Result<WorkerJobOutput> {
+async fn run_containerized_codex_app_server(
+    job: &WorkerCodingJob,
+    plan: &ContainerPlan,
+) -> Result<WorkerJobOutput> {
     let port = allocate_loopback_port()?;
     let listen_url = format!("ws://127.0.0.1:{port}");
     let container_name = format!("tachyon-codex-{}", job.coding_job_id.to_lowercase());
-    let docker_args = build_codex_app_server_docker_args(job, &container_name, &listen_url);
+    let docker_args = build_codex_app_server_docker_args(job, plan, &container_name, &listen_url);
     let timeout_secs = job.timeout_seconds();
 
     let mut child = TokioCommand::new("docker")
@@ -655,15 +660,14 @@ async fn run_containerized_codex_app_server(job: &WorkerCodingJob) -> Result<Wor
     })
 }
 
-fn build_codex_exec_docker_args(job: &WorkerCodingJob, container_name: &str) -> Vec<String> {
-    let image = job.container_image();
-    let network = env::var("CODEX_CONTAINER_NETWORK").unwrap_or_else(|_| "bridge".to_string());
-    let memory = env::var("CODEX_CONTAINER_MEMORY").unwrap_or_else(|_| "2g".to_string());
-    let workspace = job.host_workspace();
-
-    let mut docker_args = base_docker_args(job, container_name, &network, &workspace, &memory);
+fn build_codex_exec_docker_args(
+    job: &WorkerCodingJob,
+    plan: &ContainerPlan,
+    container_name: &str,
+) -> Vec<String> {
+    let mut docker_args = base_docker_args(job, plan, container_name);
     docker_args.extend([
-        image,
+        plan.image.clone(),
         "codex".to_string(),
         "exec".to_string(),
         "--json".to_string(),
@@ -674,17 +678,13 @@ fn build_codex_exec_docker_args(job: &WorkerCodingJob, container_name: &str) -> 
 
 fn build_codex_app_server_docker_args(
     job: &WorkerCodingJob,
+    plan: &ContainerPlan,
     container_name: &str,
     listen_url: &str,
 ) -> Vec<String> {
-    let image = job.container_image();
-    let network = job.app_server_network();
-    let memory = job.container_memory();
-    let workspace = job.host_workspace();
-
-    let mut docker_args = base_docker_args(job, container_name, &network, &workspace, &memory);
+    let mut docker_args = base_docker_args(job, plan, container_name);
     docker_args.extend([
-        image,
+        plan.image.clone(),
         "codex".to_string(),
         "app-server".to_string(),
         "--listen".to_string(),
@@ -695,10 +695,8 @@ fn build_codex_app_server_docker_args(
 
 fn base_docker_args(
     job: &WorkerCodingJob,
+    plan: &ContainerPlan,
     container_name: &str,
-    network: &str,
-    workspace: &str,
-    memory: &str,
 ) -> Vec<String> {
     let mut docker_args = vec![
         "run".to_string(),
@@ -709,21 +707,28 @@ fn base_docker_args(
         "tachyon.worker.managed=true".to_string(),
         "--label".to_string(),
         format!("tachyon.coding_job_id={}", job.coding_job_id),
-        format!("--network={network}"),
+        // The job image runs untrusted model-driven commands; it gets no
+        // kernel capabilities and cannot regain privileges through setuid.
+        "--cap-drop=ALL".to_string(),
+        "--security-opt=no-new-privileges".to_string(),
+        format!("--network={}", plan.network),
         "-v".to_string(),
-        format!("{workspace}:/workspace"),
+        format!("{}:/workspace", plan.workspace().display()),
         "-w".to_string(),
         job.container_working_dir(),
         "--memory".to_string(),
-        memory.to_string(),
+        plan.memory.clone(),
     ];
 
     if env::var_os("OPENAI_API_KEY").is_some() {
         docker_args.extend(["-e".to_string(), "OPENAI_API_KEY".to_string()]);
     }
 
-    if let Some(codex_home) = job.codex_home() {
-        docker_args.extend(["-v".to_string(), format!("{codex_home}:/codex-home")]);
+    if let Some(codex_home) = &plan.codex_home {
+        docker_args.extend([
+            "-v".to_string(),
+            format!("{}:/codex-home", codex_home.display()),
+        ]);
         docker_args.extend(["-e".to_string(), "CODEX_HOME=/codex-home".to_string()]);
     }
 
@@ -734,6 +739,229 @@ fn base_docker_args(
     }
 
     docker_args
+}
+
+const DEFAULT_CODEX_CONTAINER_IMAGE: &str = "ghcr.io/quantum-box/codex-runner:latest";
+
+/// Host resources job containers may use. It comes from the worker's own
+/// environment; a claimed job can only pick values inside it, because job
+/// contents are written by tenant members who do not administer this host.
+#[derive(Debug, Clone)]
+struct WorkerContainerPolicy {
+    default_image: String,
+    allowed_images: Vec<String>,
+    mount_roots: Vec<PathBuf>,
+    worker_codex_home: Option<String>,
+    exec_network: String,
+    allowed_networks: Vec<String>,
+    default_memory: String,
+}
+
+impl WorkerContainerPolicy {
+    fn from_env() -> Self {
+        let mount_roots = env::var("TACHYON_WORKER_MOUNT_ALLOWLIST")
+            .or_else(|_| env::var("CODEX_CONTAINER_MOUNT_ALLOWLIST"))
+            .map(|value| split_list(&value, ':'))
+            .unwrap_or_default();
+        Self::new(
+            env::var("CODEX_CONTAINER_IMAGE").ok(),
+            env::var("TACHYON_WORKER_ALLOWED_IMAGES")
+                .map(|value| split_list(&value, ','))
+                .unwrap_or_default(),
+            &mount_roots,
+            env::var("CODEX_HOME")
+                .ok()
+                .or_else(|| env::var("HOME").ok().map(|home| format!("{home}/.codex"))),
+            env::var("CODEX_CONTAINER_NETWORK").ok(),
+            env::var("TACHYON_WORKER_ALLOWED_NETWORKS")
+                .map(|value| split_list(&value, ','))
+                .unwrap_or_default(),
+            env::var("CODEX_CONTAINER_MEMORY").ok(),
+        )
+    }
+
+    fn new(
+        default_image: Option<String>,
+        allowed_images: Vec<String>,
+        mount_roots: &[String],
+        worker_codex_home: Option<String>,
+        exec_network: Option<String>,
+        allowed_networks: Vec<String>,
+        default_memory: Option<String>,
+    ) -> Self {
+        Self {
+            default_image: default_image
+                .unwrap_or_else(|| DEFAULT_CODEX_CONTAINER_IMAGE.to_string()),
+            allowed_images,
+            // Roots are canonicalized once so the prefix check compares real
+            // paths; a root that does not exist allows nothing.
+            mount_roots: mount_roots
+                .iter()
+                .filter_map(|root| fs::canonicalize(root).ok())
+                .collect(),
+            worker_codex_home,
+            exec_network: exec_network.unwrap_or_else(|| "bridge".to_string()),
+            allowed_networks,
+            default_memory: default_memory.unwrap_or_else(|| "2g".to_string()),
+        }
+    }
+
+    fn image(&self, requested: Option<&str>) -> Result<String> {
+        match requested {
+            None => Ok(self.default_image.clone()),
+            Some(image)
+                if image == self.default_image
+                    || self.allowed_images.iter().any(|allowed| allowed == image) =>
+            {
+                Ok(image.to_string())
+            }
+            Some(image) => bail!(
+                "container image {image} is not allowed on this worker; \
+                 add it to TACHYON_WORKER_ALLOWED_IMAGES to run it"
+            ),
+        }
+    }
+
+    fn app_server_network(&self, requested: Option<&str>) -> Result<String> {
+        // The app-server is reached on host loopback, so host networking is
+        // the mode's own requirement; any other network needs worker opt-in.
+        match requested.unwrap_or("host_loopback") {
+            "host" | "host_loopback" => Ok("host".to_string()),
+            network
+                if self
+                    .allowed_networks
+                    .iter()
+                    .any(|allowed| allowed == network) =>
+            {
+                Ok(network.to_string())
+            }
+            network => bail!(
+                "container network {network} is not allowed on this worker; \
+                 add it to TACHYON_WORKER_ALLOWED_NETWORKS to use it"
+            ),
+        }
+    }
+
+    /// Resolves a job-selected host path and rejects it unless it lies under
+    /// a configured mount root.
+    fn resolve_mount_source(&self, field: &str, source: &str) -> Result<PathBuf> {
+        if source.contains(':') {
+            bail!("container {field} must not contain ':'");
+        }
+        // canonicalize resolves `..` and symlinks, so the prefix check runs on
+        // the real host path and a symlink inside a root cannot point outside.
+        let resolved = fs::canonicalize(source)
+            .with_context(|| format!("container {field} {source} does not exist on this worker"))?;
+        if self
+            .mount_roots
+            .iter()
+            .any(|root| resolved.starts_with(root))
+        {
+            Ok(resolved)
+        } else {
+            bail!(
+                "container {field} {source} is outside the worker mount allowlist; \
+                 add a parent directory to TACHYON_WORKER_MOUNT_ALLOWLIST to mount it"
+            )
+        }
+    }
+}
+
+fn split_list(value: &str, separator: char) -> Vec<String> {
+    value
+        .split(separator)
+        .map(str::trim)
+        .filter(|part| !part.is_empty())
+        .map(str::to_string)
+        .collect()
+}
+
+/// Docker settings for one job, checked against the worker policy before any
+/// container starts.
+#[derive(Debug)]
+struct ContainerPlan {
+    image: String,
+    network: String,
+    memory: String,
+    workspace: PlannedWorkspace,
+    codex_home: Option<PathBuf>,
+}
+
+#[derive(Debug)]
+enum PlannedWorkspace {
+    Host(PathBuf),
+    /// An empty directory owned by this job, removed when the plan drops.
+    Scratch(tempfile::TempDir),
+}
+
+impl ContainerPlan {
+    fn for_job(job: &WorkerCodingJob, policy: &WorkerContainerPolicy) -> Result<Self> {
+        let config = job.container_execution.as_ref();
+        let image = policy.image(
+            config
+                .and_then(|config| config.image.as_deref())
+                .or_else(|| metadata_string(&job.metadata, &["container", "image"])),
+        )?;
+        let network = match job.execution_mode() {
+            WorkerExecutionMode::AppServerWs => {
+                policy.app_server_network(job.requested_app_server_network())?
+            }
+            WorkerExecutionMode::Exec => policy.exec_network.clone(),
+        };
+        let memory = job
+            .requested_memory()
+            .map(str::to_string)
+            .unwrap_or_else(|| policy.default_memory.clone());
+
+        let requested_workspace = config
+            .and_then(|config| config.workspace.as_deref())
+            .or_else(|| metadata_string(&job.metadata, &["container", "workspace"]));
+        let workspace = if let Some(workspace) = requested_workspace {
+            PlannedWorkspace::Host(policy.resolve_mount_source("workspace", workspace)?)
+        } else if let Some(context_path) = job
+            .context_paths
+            .iter()
+            .find(|path| Path::new(path.as_str()).exists())
+        {
+            PlannedWorkspace::Host(policy.resolve_mount_source("workspace", context_path)?)
+        } else {
+            PlannedWorkspace::Scratch(
+                tempfile::Builder::new()
+                    .prefix("tachyon-worker-job-")
+                    .tempdir()
+                    .context("failed to create job workspace")?,
+            )
+        };
+
+        let requested_codex_home = config
+            .and_then(|config| config.codex_home.as_deref())
+            .or_else(|| metadata_string(&job.metadata, &["container", "codex_home"]));
+        let codex_home = match requested_codex_home {
+            Some(codex_home) => Some(policy.resolve_mount_source("codex_home", codex_home)?),
+            // The worker's own Codex login goes only to an image the worker
+            // allowed, which `image` above already enforced.
+            None => policy
+                .worker_codex_home
+                .as_deref()
+                .filter(|path| Path::new(path).exists())
+                .map(PathBuf::from),
+        };
+
+        Ok(Self {
+            image,
+            network,
+            memory,
+            workspace,
+            codex_home,
+        })
+    }
+
+    fn workspace(&self) -> &Path {
+        match &self.workspace {
+            PlannedWorkspace::Host(path) => path,
+            PlannedWorkspace::Scratch(dir) => dir.path(),
+        }
+    }
 }
 
 async fn run_app_server_connection(
@@ -1064,49 +1292,15 @@ impl WorkerCodingJob {
         }
     }
 
-    fn container_image(&self) -> String {
-        self.container_execution
-            .as_ref()
-            .and_then(|config| config.image.clone())
-            .or_else(|| {
-                metadata_string(&self.metadata, &["container", "image"]).map(str::to_string)
-            })
-            .or_else(|| env::var("CODEX_CONTAINER_IMAGE").ok())
-            .unwrap_or_else(|| "ghcr.io/quantum-box/codex-runner:latest".to_string())
-    }
-
-    fn container_memory(&self) -> String {
+    fn requested_memory(&self) -> Option<&str> {
         self.container_execution
             .as_ref()
             .and_then(|config| config.resource_limits.as_ref())
-            .and_then(|limits| limits.memory.clone())
+            .and_then(|limits| limits.memory.as_deref())
             .or_else(|| {
                 metadata_string(&self.metadata, &["container", "resource_limits", "memory"])
-                    .map(str::to_string)
             })
-            .or_else(|| {
-                metadata_string(&self.metadata, &["container", "resources", "memory"])
-                    .map(str::to_string)
-            })
-            .or_else(|| env::var("CODEX_CONTAINER_MEMORY").ok())
-            .unwrap_or_else(|| "2g".to_string())
-    }
-
-    fn host_workspace(&self) -> String {
-        self.container_execution
-            .as_ref()
-            .and_then(|config| config.workspace.clone())
-            .or_else(|| {
-                metadata_string(&self.metadata, &["container", "workspace"]).map(str::to_string)
-            })
-            .filter(|path| Path::new(path).exists())
-            .or_else(|| {
-                self.context_paths
-                    .iter()
-                    .find(|path| Path::new(path.as_str()).exists())
-                    .cloned()
-            })
-            .unwrap_or_else(|| "/tmp".to_string())
+            .or_else(|| metadata_string(&self.metadata, &["container", "resources", "memory"]))
     }
 
     fn container_working_dir(&self) -> String {
@@ -1127,31 +1321,12 @@ impl WorkerCodingJob {
             .unwrap_or_else(|| self.container_working_dir())
     }
 
-    fn app_server_network(&self) -> String {
-        let requested = self
-            .container_execution
+    fn requested_app_server_network(&self) -> Option<&str> {
+        self.container_execution
             .as_ref()
             .and_then(|config| config.network.as_deref())
             .or_else(|| metadata_string(&self.metadata, &["container", "network"]))
             .or_else(|| metadata_string(&self.metadata, &["network"]))
-            .unwrap_or("host_loopback");
-
-        match requested {
-            "host" | "host_loopback" => "host".to_string(),
-            _ => requested.to_string(),
-        }
-    }
-
-    fn codex_home(&self) -> Option<String> {
-        self.container_execution
-            .as_ref()
-            .and_then(|config| config.codex_home.clone())
-            .or_else(|| {
-                metadata_string(&self.metadata, &["container", "codex_home"]).map(str::to_string)
-            })
-            .or_else(|| env::var("CODEX_HOME").ok())
-            .or_else(|| env::var("HOME").ok().map(|home| format!("{home}/.codex")))
-            .filter(|path| Path::new(path).exists())
     }
 
     fn timeout_seconds(&self) -> u64 {
@@ -1769,13 +1944,22 @@ mod tests {
             resume_session_id: None,
         };
 
-        let args =
-            build_codex_app_server_docker_args(&job, "tachyon-codex-test", "ws://127.0.0.1:34567");
+        let policy = policy_allowing(&[workspace.path()], &["codex:test"]);
+        let plan = ContainerPlan::for_job(&job, &policy).unwrap();
+        let args = build_codex_app_server_docker_args(
+            &job,
+            &plan,
+            "tachyon-codex-test",
+            "ws://127.0.0.1:34567",
+        );
         let image_index = args.iter().position(|arg| arg == "codex:test").unwrap();
 
         assert_eq!(job.execution_mode(), WorkerExecutionMode::AppServerWs);
         assert!(args.contains(&"--network=host".to_string()));
-        assert!(args.contains(&format!("{}:/workspace", workspace.path().display())));
+        assert!(args.contains(&format!(
+            "{}:/workspace",
+            fs::canonicalize(workspace.path()).unwrap().display()
+        )));
         assert_eq!(
             &args[image_index + 1..],
             &[
@@ -1804,7 +1988,9 @@ mod tests {
             resume_session_id: None,
         };
 
-        let args = build_codex_exec_docker_args(&job, "tachyon-codex-test");
+        let policy = policy_allowing(&[workspace.path()], &[]);
+        let plan = ContainerPlan::for_job(&job, &policy).unwrap();
+        let args = build_codex_exec_docker_args(&job, &plan, "tachyon-codex-test");
         let image_index = args
             .iter()
             .position(|arg| arg == "ghcr.io/quantum-box/codex-runner:latest")
@@ -1819,6 +2005,211 @@ mod tests {
                 "--json".to_string(),
                 "inspect".to_string(),
             ]
+        );
+    }
+
+    fn policy_allowing(roots: &[&Path], images: &[&str]) -> WorkerContainerPolicy {
+        let roots = roots
+            .iter()
+            .map(|root| root.display().to_string())
+            .collect::<Vec<_>>();
+        WorkerContainerPolicy::new(
+            None,
+            images.iter().map(|image| image.to_string()).collect(),
+            &roots,
+            None,
+            None,
+            Vec::new(),
+            None,
+        )
+    }
+
+    fn app_server_job(config: WorkerContainerExecutionConfig) -> WorkerCodingJob {
+        WorkerCodingJob {
+            coding_job_id: "01KVTESTPOLICY00000000000".to_string(),
+            prompt: "inspect".to_string(),
+            output_profile: None,
+            context_paths: Vec::new(),
+            environment: HashMap::new(),
+            metadata: Value::Null,
+            container_execution: Some(WorkerContainerExecutionConfig {
+                codex_mode: Some("app_server_ws".to_string()),
+                ..config
+            }),
+            resume_session_id: None,
+        }
+    }
+
+    fn plan_error(job: &WorkerCodingJob, policy: &WorkerContainerPolicy) -> String {
+        ContainerPlan::for_job(job, policy).unwrap_err().to_string()
+    }
+
+    #[test]
+    fn job_cannot_mount_host_paths_outside_the_allowlist() {
+        let allowed = TempDir::new().unwrap();
+        let outside = TempDir::new().unwrap();
+        let policy = policy_allowing(&[allowed.path()], &[]);
+
+        for workspace in ["/", "/etc", &outside.path().display().to_string()] {
+            let job = app_server_job(WorkerContainerExecutionConfig {
+                workspace: Some(workspace.to_string()),
+                ..Default::default()
+            });
+            assert!(
+                plan_error(&job, &policy).contains("outside the worker mount allowlist"),
+                "{workspace} must be refused"
+            );
+        }
+
+        let job = app_server_job(WorkerContainerExecutionConfig {
+            codex_home: Some(outside.path().display().to_string()),
+            ..Default::default()
+        });
+        assert!(plan_error(&job, &policy).contains("codex_home"));
+    }
+
+    #[test]
+    fn job_cannot_mount_anything_when_no_allowlist_is_configured() {
+        let workspace = TempDir::new().unwrap();
+        let policy = policy_allowing(&[], &[]);
+        let job = app_server_job(WorkerContainerExecutionConfig {
+            workspace: Some(workspace.path().display().to_string()),
+            ..Default::default()
+        });
+
+        assert!(plan_error(&job, &policy).contains("outside the worker mount allowlist"));
+    }
+
+    #[test]
+    fn context_path_fallback_is_also_checked_against_the_allowlist() {
+        let allowed = TempDir::new().unwrap();
+        let policy = policy_allowing(&[allowed.path()], &[]);
+        let mut job = app_server_job(WorkerContainerExecutionConfig::default());
+        job.context_paths = vec!["/does/not/exist".to_string(), "/etc".to_string()];
+
+        assert!(plan_error(&job, &policy).contains("outside the worker mount allowlist"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlink_inside_an_allowed_root_cannot_escape_it() {
+        let allowed = TempDir::new().unwrap();
+        let outside = TempDir::new().unwrap();
+        let link = allowed.path().join("escape");
+        std::os::unix::fs::symlink(outside.path(), &link).unwrap();
+        let policy = policy_allowing(&[allowed.path()], &[]);
+
+        for workspace in [
+            link.display().to_string(),
+            format!(
+                "{}/../{}",
+                allowed.path().display(),
+                outside.path().display()
+            ),
+        ] {
+            let job = app_server_job(WorkerContainerExecutionConfig {
+                workspace: Some(workspace.clone()),
+                ..Default::default()
+            });
+            assert!(
+                ContainerPlan::for_job(&job, &policy).is_err(),
+                "{workspace} must be refused"
+            );
+        }
+    }
+
+    #[test]
+    fn mount_source_with_a_colon_is_refused() {
+        let allowed = TempDir::new().unwrap();
+        let policy = policy_allowing(&[allowed.path()], &[]);
+        let job = app_server_job(WorkerContainerExecutionConfig {
+            workspace: Some(format!("{}:/etc", allowed.path().display())),
+            ..Default::default()
+        });
+
+        assert!(plan_error(&job, &policy).contains("must not contain ':'"));
+    }
+
+    #[test]
+    fn allowed_workspace_and_codex_home_are_mounted_by_canonical_path() {
+        let allowed = TempDir::new().unwrap();
+        let workspace = allowed.path().join("repo");
+        let codex_home = allowed.path().join("codex");
+        fs::create_dir_all(&workspace).unwrap();
+        fs::create_dir_all(&codex_home).unwrap();
+        let policy = policy_allowing(&[allowed.path()], &[]);
+        let job = app_server_job(WorkerContainerExecutionConfig {
+            workspace: Some(format!("{}/../repo", codex_home.display())),
+            codex_home: Some(codex_home.display().to_string()),
+            ..Default::default()
+        });
+
+        let plan = ContainerPlan::for_job(&job, &policy).unwrap();
+        let args = build_codex_app_server_docker_args(&job, &plan, "c", "ws://127.0.0.1:1");
+        let workspace = fs::canonicalize(workspace).unwrap();
+        let codex_home = fs::canonicalize(codex_home).unwrap();
+
+        assert!(args.contains(&format!("{}:/workspace", workspace.display())));
+        assert!(args.contains(&format!("{}:/codex-home", codex_home.display())));
+        assert!(args.contains(&"--cap-drop=ALL".to_string()));
+        assert!(args.contains(&"--security-opt=no-new-privileges".to_string()));
+    }
+
+    #[test]
+    fn job_without_a_workspace_gets_an_empty_scratch_directory() {
+        let policy = policy_allowing(&[], &[]);
+        let job = app_server_job(WorkerContainerExecutionConfig::default());
+
+        let plan = ContainerPlan::for_job(&job, &policy).unwrap();
+        let scratch = plan.workspace().to_path_buf();
+
+        assert_ne!(scratch, Path::new("/tmp"));
+        assert_eq!(fs::read_dir(&scratch).unwrap().count(), 0);
+        drop(plan);
+        assert!(!scratch.exists());
+    }
+
+    #[test]
+    fn job_cannot_pick_an_image_the_worker_did_not_allow() {
+        let policy = policy_allowing(&[], &["ghcr.io/acme/codex:1"]);
+
+        let job = app_server_job(WorkerContainerExecutionConfig {
+            image: Some("registry.invalid/dummy:1".to_string()),
+            ..Default::default()
+        });
+        assert!(plan_error(&job, &policy).contains("TACHYON_WORKER_ALLOWED_IMAGES"));
+
+        let mut exec_job = app_server_job(WorkerContainerExecutionConfig::default());
+        exec_job.container_execution = None;
+        exec_job.metadata = json!({ "container": { "image": "registry.invalid/dummy:1" } });
+        assert!(plan_error(&exec_job, &policy).contains("TACHYON_WORKER_ALLOWED_IMAGES"));
+
+        for image in ["ghcr.io/acme/codex:1", DEFAULT_CODEX_CONTAINER_IMAGE] {
+            let job = app_server_job(WorkerContainerExecutionConfig {
+                image: Some(image.to_string()),
+                ..Default::default()
+            });
+            assert_eq!(ContainerPlan::for_job(&job, &policy).unwrap().image, image);
+        }
+    }
+
+    #[test]
+    fn job_cannot_pick_a_network_the_worker_did_not_allow() {
+        let policy = policy_allowing(&[], &[]);
+
+        let job = app_server_job(WorkerContainerExecutionConfig {
+            network: Some("container:other".to_string()),
+            ..Default::default()
+        });
+        assert!(plan_error(&job, &policy).contains("TACHYON_WORKER_ALLOWED_NETWORKS"));
+
+        let job = app_server_job(WorkerContainerExecutionConfig {
+            network: Some("host_loopback".to_string()),
+            ..Default::default()
+        });
+        assert_eq!(
+            ContainerPlan::for_job(&job, &policy).unwrap().network,
+            "host"
         );
     }
 }
