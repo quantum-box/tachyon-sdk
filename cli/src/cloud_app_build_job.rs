@@ -328,6 +328,7 @@ struct CommandResult {
 }
 
 pub async fn run_from_env(spec_env: &str) -> Result<()> {
+    protect_process_environment()?;
     let started = Instant::now();
     let workload = parse_workload_from_env(spec_env)?;
     tracing::info!(
@@ -507,6 +508,7 @@ async fn run_build(
         let phase_started = Instant::now();
         prepare_docker_config(&env).await?;
         let phase_result = run_buildkit(workload, &checkout_dir, &app_dir, &env).await;
+        remove_docker_config().await;
         phase_durations.insert(
             "artifact".to_string(),
             phase_started.elapsed().as_secs_f64(),
@@ -2212,8 +2214,16 @@ fn docker_tag_component(value: &str) -> String {
     tag.trim_matches(['.', '-']).to_string()
 }
 
+/// Write the registry credential only now, after the repository's install
+/// and build commands have finished, so they never find it on disk. The
+/// entrypoint passes it in the process env rather than writing the file.
 async fn prepare_docker_config(env: &BTreeMap<String, String>) -> Result<()> {
-    let Some(config_json) = env.get(DOCKER_CONFIG_ENV) else {
+    let Some(config_json) = env
+        .get(DOCKER_CONFIG_ENV)
+        .cloned()
+        .or_else(|| std::env::var(DOCKER_CONFIG_ENV).ok())
+        .filter(|value| !value.trim().is_empty())
+    else {
         return Ok(());
     };
     let docker_dir = Path::new(BUILDKIT_DOCKER_CONFIG_DIR);
@@ -2234,6 +2244,17 @@ async fn prepare_docker_config(env: &BTreeMap<String, String>) -> Result<()> {
             )
         })?;
     Ok(())
+}
+
+/// Drop the registry credential once the push is done; later steps never
+/// need it.
+async fn remove_docker_config() {
+    let path = Path::new(BUILDKIT_DOCKER_CONFIG_DIR).join("config.json");
+    if let Err(error) = tokio::fs::remove_file(&path).await {
+        if error.kind() != std::io::ErrorKind::NotFound {
+            tracing::warn!(path = %path.display(), %error, "failed to remove Docker registry config");
+        }
+    }
 }
 
 async fn run_buildkit(
@@ -2419,6 +2440,36 @@ fn package_manager_root(app_dir: &Path) -> Option<PathBuf> {
     None
 }
 
+/// Platform credentials the builder holds for its own deploy, registry push
+/// and IaC steps. Install and build commands come from the repository (and
+/// its dependencies), so they must never see these: the Cloudflare token is
+/// account-wide and the registry token can write every app's images.
+const PLATFORM_CREDENTIAL_ENV: &[&str] = &[
+    "CLOUDFLARE_API_TOKEN",
+    "CLOUDFLARE_D1_API_TOKEN",
+    TACHYON_AUTH_TOKEN_ENV,
+    "TACHYON_API_KEY",
+    "TACHYON_GAR_ACCESS_TOKEN",
+    DOCKER_CONFIG_ENV,
+    "DOCKER_CONFIG",
+    "TACHYON_BUILD_WORKLOAD_SPEC_JSON",
+];
+
+fn is_platform_credential_env(name: &str) -> bool {
+    PLATFORM_CREDENTIAL_ENV.contains(&name)
+}
+
+/// The workload env without platform credentials, for repository commands.
+fn repository_command_env(env: &BTreeMap<String, String>) -> BTreeMap<String, String> {
+    env.iter()
+        .filter(|(name, _)| !is_platform_credential_env(name))
+        .map(|(name, value)| (name.clone(), value.clone()))
+        .collect()
+}
+
+/// Run a repository-supplied command. The child gets the workload env minus
+/// platform credentials, and the inherited process env is scrubbed of them
+/// too, since the pod delivers some of them as plain env vars.
 async fn run_shell(
     label: &str,
     command: &str,
@@ -2427,13 +2478,37 @@ async fn run_shell(
 ) -> Result<CommandResult> {
     tracing::info!(%label, %command, cwd = %cwd.display(), "running build command");
     let mut cmd = Command::new("bash");
-    cmd.arg("-lc")
-        .arg(command)
-        .current_dir(cwd)
-        .envs(env)
+    cmd.arg("-lc").arg(command).current_dir(cwd);
+    for name in PLATFORM_CREDENTIAL_ENV {
+        cmd.env_remove(name);
+    }
+    cmd.envs(repository_command_env(env))
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     run_command(label, cmd).await
+}
+
+/// Keep same-user processes, including anything a repository command leaves
+/// running, from reading this process's environment and memory through
+/// `/proc/<pid>/environ` or ptrace. The builder's env holds the platform
+/// credentials that [`run_shell`] withholds from its children.
+#[cfg(target_os = "linux")]
+fn protect_process_environment() -> Result<()> {
+    // SAFETY: PR_SET_DUMPABLE takes plain integer arguments and touches no
+    // memory owned by Rust.
+    let result = unsafe { libc::prctl(libc::PR_SET_DUMPABLE, 0, 0, 0, 0) };
+    if result != 0 {
+        return Err(anyhow!(
+            "failed to mark the build process non-dumpable: {}",
+            std::io::Error::last_os_error()
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(not(target_os = "linux"))]
+fn protect_process_environment() -> Result<()> {
+    Ok(())
 }
 
 async fn run_command(label: &str, command: Command) -> Result<CommandResult> {
@@ -3784,6 +3859,56 @@ mod tests {
         .unwrap();
 
         assert_eq!(item.resolve().unwrap(), "enabled");
+    }
+
+    #[tokio::test]
+    async fn repository_commands_never_see_platform_credentials() {
+        // PLT-6577 / PLT-6582: install and build commands come from the
+        // repository, so neither the workload env nor the inherited pod env
+        // may hand them the Cloudflare or registry credentials.
+        std::env::set_var("TACHYON_GAR_ACCESS_TOKEN", "dummy-gar-token");
+        let env = BTreeMap::from([
+            ("CLOUDFLARE_API_TOKEN".to_string(), "dummy-cf-token".to_string()),
+            (
+                DOCKER_CONFIG_ENV.to_string(),
+                "{\"auths\":{}}".to_string(),
+            ),
+            ("APP_SETTING".to_string(), "kept".to_string()),
+        ]);
+        let cwd = std::env::temp_dir();
+
+        let result = run_shell(
+            "build",
+            "printf 'cf=%s gar=%s docker=%s app=%s' \
+             \"${CLOUDFLARE_API_TOKEN:-}\" \"${TACHYON_GAR_ACCESS_TOKEN:-}\" \
+             \"${TACHYON_DOCKER_CONFIG_JSON:-}\" \"${APP_SETTING:-}\"",
+            &cwd,
+            &env,
+        )
+        .await;
+
+        std::env::remove_var("TACHYON_GAR_ACCESS_TOKEN");
+        assert_eq!(result.unwrap().stdout, "cf= gar= docker= app=kept");
+    }
+
+    #[test]
+    fn platform_steps_keep_the_credentials_repository_commands_lose() {
+        let env = BTreeMap::from([
+            ("CLOUDFLARE_API_TOKEN".to_string(), "dummy-cf-token".to_string()),
+            ("APP_SETTING".to_string(), "kept".to_string()),
+        ]);
+
+        let repository_env = repository_command_env(&env);
+
+        assert_eq!(
+            env.get("CLOUDFLARE_API_TOKEN").map(String::as_str),
+            Some("dummy-cf-token")
+        );
+        assert!(!repository_env.contains_key("CLOUDFLARE_API_TOKEN"));
+        assert_eq!(
+            repository_env.get("APP_SETTING").map(String::as_str),
+            Some("kept")
+        );
     }
 
     #[test]
