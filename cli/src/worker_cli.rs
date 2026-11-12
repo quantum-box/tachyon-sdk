@@ -425,7 +425,7 @@ async fn claim_and_process_job(
 }
 
 async fn run_containerized_codex(job: &WorkerCodingJob) -> Result<WorkerJobOutput> {
-    let policy = WorkerContainerPolicy::from_env();
+    let policy = WorkerContainerPolicy::from_env()?;
     let plan = ContainerPlan::for_job(job, &policy)?;
     ensure_docker_available().await?;
 
@@ -711,6 +711,13 @@ fn base_docker_args(
         // kernel capabilities and cannot regain privileges through setuid.
         "--cap-drop=ALL".to_string(),
         "--security-opt=no-new-privileges".to_string(),
+        // Run as the worker's own identity so the container can use the
+        // worker-owned workspace (including the mode-0700 scratch dir) and
+        // Codex home without DAC_OVERRIDE. The image's home may belong to
+        // another user, so HOME points at the container's writable /tmp.
+        format!("--user={}", plan.user),
+        "-e".to_string(),
+        "HOME=/tmp".to_string(),
         format!("--network={}", plan.network),
         "-v".to_string(),
         format!("{}:/workspace", plan.workspace().display()),
@@ -755,15 +762,16 @@ struct WorkerContainerPolicy {
     exec_network: String,
     allowed_networks: Vec<String>,
     default_memory: String,
+    container_user: String,
 }
 
 impl WorkerContainerPolicy {
-    fn from_env() -> Self {
+    fn from_env() -> Result<Self> {
         let mount_roots = env::var("TACHYON_WORKER_MOUNT_ALLOWLIST")
             .or_else(|_| env::var("CODEX_CONTAINER_MOUNT_ALLOWLIST"))
             .map(|value| split_list(&value, ':'))
             .unwrap_or_default();
-        Self::new(
+        Ok(Self::new(
             env::var("CODEX_CONTAINER_IMAGE").ok(),
             env::var("TACHYON_WORKER_ALLOWED_IMAGES")
                 .map(|value| split_list(&value, ','))
@@ -777,9 +785,12 @@ impl WorkerContainerPolicy {
                 .map(|value| split_list(&value, ','))
                 .unwrap_or_default(),
             env::var("CODEX_CONTAINER_MEMORY").ok(),
-        )
+            host_container_user()?,
+        ))
     }
 
+    // One parameter per worker setting read by `from_env`.
+    #[allow(clippy::too_many_arguments)]
     fn new(
         default_image: Option<String>,
         allowed_images: Vec<String>,
@@ -788,6 +799,7 @@ impl WorkerContainerPolicy {
         exec_network: Option<String>,
         allowed_networks: Vec<String>,
         default_memory: Option<String>,
+        container_user: String,
     ) -> Self {
         Self {
             default_image: default_image
@@ -803,6 +815,7 @@ impl WorkerContainerPolicy {
             exec_network: exec_network.unwrap_or_else(|| "bridge".to_string()),
             allowed_networks,
             default_memory: default_memory.unwrap_or_else(|| "2g".to_string()),
+            container_user,
         }
     }
 
@@ -881,6 +894,7 @@ fn split_list(value: &str, separator: char) -> Vec<String> {
 #[derive(Debug)]
 struct ContainerPlan {
     image: String,
+    user: String,
     network: String,
     memory: String,
     workspace: PlannedWorkspace,
@@ -949,6 +963,7 @@ impl ContainerPlan {
 
         Ok(Self {
             image,
+            user: policy.container_user.clone(),
             network,
             memory,
             workspace,
@@ -1688,18 +1703,33 @@ fn current_binary_path() -> Result<PathBuf> {
 }
 
 fn current_uid() -> Result<u32> {
+    current_id("-u")
+}
+
+fn current_gid() -> Result<u32> {
+    current_id("-g")
+}
+
+fn current_id(flag: &str) -> Result<u32> {
     let output = StdCommand::new("id")
-        .arg("-u")
+        .arg(flag)
         .output()
-        .context("failed to run id -u")?;
+        .with_context(|| format!("failed to run id {flag}"))?;
     if !output.status.success() {
-        bail!("id -u failed");
+        bail!("id {flag} failed");
     }
     let stdout = String::from_utf8_lossy(&output.stdout);
     stdout
         .trim()
         .parse::<u32>()
-        .context("failed to parse current uid")
+        .with_context(|| format!("failed to parse id {flag}"))
+}
+
+/// `uid:gid` of the worker process. Job containers run as this identity:
+/// with `--cap-drop=ALL` a root container cannot bypass file permissions, so
+/// only the owner of the mounted workspace and Codex home can use them.
+fn host_container_user() -> Result<String> {
+    Ok(format!("{}:{}", current_uid()?, current_gid()?))
 }
 
 fn service_user() -> String {
@@ -2021,6 +2051,7 @@ mod tests {
             None,
             Vec::new(),
             None,
+            "1234:5678".to_string(),
         )
     }
 
@@ -2211,5 +2242,38 @@ mod tests {
             ContainerPlan::for_job(&job, &policy).unwrap().network,
             "host"
         );
+    }
+
+    #[test]
+    fn job_container_runs_as_the_policy_user() {
+        let policy = policy_allowing(&[], &[]);
+        let job = app_server_job(WorkerContainerExecutionConfig::default());
+        let plan = ContainerPlan::for_job(&job, &policy).unwrap();
+
+        let args = build_codex_app_server_docker_args(&job, &plan, "c", "ws://127.0.0.1:1");
+        let exec_args = build_codex_exec_docker_args(&job, &plan, "c");
+
+        for args in [args, exec_args] {
+            assert!(args.contains(&"--user=1234:5678".to_string()));
+            assert!(args.contains(&"HOME=/tmp".to_string()));
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn host_container_user_owns_the_scratch_workspace() {
+        use std::os::unix::fs::MetadataExt;
+
+        let mut policy = policy_allowing(&[], &[]);
+        policy.container_user = host_container_user().unwrap();
+        let job = app_server_job(WorkerContainerExecutionConfig::default());
+        let plan = ContainerPlan::for_job(&job, &policy).unwrap();
+        let metadata = fs::metadata(plan.workspace()).unwrap();
+
+        // The scratch dir is mode 0700, so the container must run as its
+        // owning uid to read or write /workspace without capabilities. The
+        // group is not compared: BSD hosts inherit it from the parent dir.
+        let uid = plan.user.split(':').next().unwrap();
+        assert_eq!(uid, metadata.uid().to_string());
     }
 }

@@ -128,8 +128,9 @@ Docker when it asks for more:
   worker needs to reach the app-server on loopback. Other networks must be
   listed in `TACHYON_WORKER_ALLOWED_NETWORKS`. Exec mode always uses
   `CODEX_CONTAINER_NETWORK`.
-- Job containers run with `--cap-drop=ALL` and
-  `--security-opt=no-new-privileges`.
+- Job containers run as the worker's own UID/GID (`--user`, with
+  `HOME=/tmp`), with `--cap-drop=ALL` and `--security-opt=no-new-privileges`,
+  so they can use worker-owned mounts but cannot bypass file permissions.
 
 ## E2E Check
 

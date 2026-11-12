@@ -11,8 +11,9 @@
   `TACHYON_WORKER_ALLOWED_IMAGES`; and an app-server network other than host
   loopback must be listed in `TACHYON_WORKER_ALLOWED_NETWORKS`. A job that asks
   for more fails before Docker starts. Jobs without a workspace get an empty
-  scratch directory instead of the host `/tmp`, and job containers run with
-  `--cap-drop=ALL` and `--security-opt=no-new-privileges`. Previously a tenant
+  scratch directory instead of the host `/tmp`, and job containers run as the
+  worker's UID/GID with `--cap-drop=ALL` and
+  `--security-opt=no-new-privileges`. Previously a tenant
   member who could create a Coding Job could mount `/etc/tachyon` (the worker
   API key) or any other host path read-write into an image they published.
   Workers that mount repositories must now set `TACHYON_WORKER_MOUNT_ALLOWLIST`.
