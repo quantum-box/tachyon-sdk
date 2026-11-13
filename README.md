@@ -427,6 +427,9 @@ flags or environment variables:
 | `CODEX_CONTAINER_IMAGE` | Docker image used for containerized Codex jobs. |
 | `CODEX_CONTAINER_NETWORK` | Docker network used for job containers. |
 | `CODEX_CONTAINER_MEMORY` | Docker memory limit, for example `2g`. |
+| `TACHYON_WORKER_MOUNT_ALLOWLIST` | `:`-separated host directories a job may mount. Unset means none. |
+| `TACHYON_WORKER_ALLOWED_IMAGES` | `,`-separated images a job may request besides `CODEX_CONTAINER_IMAGE`. |
+| `TACHYON_WORKER_ALLOWED_NETWORKS` | `,`-separated networks an app-server job may request besides host loopback. |
 
 See [docs/worker-runtime.md](docs/worker-runtime.md) for foreground and
 systemd operation, installed files, and the E2E checklist.
