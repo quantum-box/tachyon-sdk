@@ -58,6 +58,8 @@ pub enum WorkerProviderKind {
     CursorAgent,
     /// OpenCode provider.
     OpenCode,
+    /// Devin provider (external cloud coding agent, API-dispatched).
+    Devin,
 }
 
 impl fmt::Display for WorkerProviderKind {
@@ -70,6 +72,7 @@ impl fmt::Display for WorkerProviderKind {
             }
             Self::CursorAgent => write!(f, "cursor_agent"),
             Self::OpenCode => write!(f, "open_code"),
+            Self::Devin => write!(f, "devin"),
         }
     }
 }
@@ -355,6 +358,7 @@ mod tests {
             ),
             (WorkerProviderKind::CursorAgent, "cursor_agent"),
             (WorkerProviderKind::OpenCode, "open_code"),
+            (WorkerProviderKind::Devin, "devin"),
         ];
 
         for (provider, expected) in cases {
