@@ -1011,7 +1011,20 @@ async fn run() -> Result<()> {
     // one-shot override). `auth login` / `auth use` choose their own target
     // profile, so they ignore `active`.
     let active = auth::resolve_active_profile(cli.profile.as_deref())?;
-    if cli.api_key.is_none() && !configure_workload_identity(&cli)? {
+    // `auth workload-identity token` builds its own exchange from its
+    // arguments (which may come from the same variables), so it does not use
+    // the credential mode.
+    let explicit_exchange = matches!(
+        &cli.command,
+        Commands::Auth(AuthArgs {
+            command: AuthCommand::WorkloadIdentity(
+                commands::auth::workload_identity::WorkloadIdentityArgs {
+                    command: commands::auth::workload_identity::WorkloadIdentityCommand::Token(_),
+                }
+            ),
+        })
+    );
+    if cli.api_key.is_none() && (explicit_exchange || !configure_workload_identity(&cli)?) {
         auth::set_runtime_auth_context(active.clone(), build_oauth_config(&cli));
     }
 

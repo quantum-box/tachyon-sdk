@@ -11,7 +11,7 @@
 //! later step prints it.
 
 use std::path::PathBuf;
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use anyhow::{anyhow, bail, Result};
 use tachyon_sdk::workload_identity::{
@@ -29,6 +29,7 @@ pub const ENV_SUBJECT_TOKEN_ENV: &str = "TACHYON_WORKLOAD_IDENTITY_SUBJECT_TOKEN
 pub const ENV_TTL: &str = "TACHYON_WORKLOAD_IDENTITY_TTL";
 
 static CREDENTIALS: OnceLock<Arc<WorkloadIdentityCredentials>> = OnceLock::new();
+static LAST_MASKED: Mutex<Option<String>> = Mutex::new(None);
 
 /// Choose where the subject token comes from: an explicit file, then an
 /// explicit variable, then the GitHub Actions OIDC service.
@@ -141,6 +142,16 @@ pub fn mask_in_github_actions(token: &str) {
     }
 }
 
+/// Mask each distinct token once; the same cached token is handed out for
+/// every request.
+fn mask_once(token: &str) {
+    let mut last = LAST_MASKED.lock().unwrap_or_else(|e| e.into_inner());
+    if last.as_deref() != Some(token) {
+        mask_in_github_actions(token);
+        *last = Some(token.to_string());
+    }
+}
+
 /// Token for API calls in credential mode, or `None` when the mode is off.
 pub async fn current_token() -> Option<Result<String>> {
     let credentials = CREDENTIALS.get()?;
@@ -148,7 +159,7 @@ pub async fn current_token() -> Option<Result<String>> {
         credentials
             .access_token()
             .await
-            .inspect(|token| mask_in_github_actions(token))
+            .inspect(|token| mask_once(token))
             .map_err(|err| anyhow!("workload identity token exchange failed: {err}")),
     )
 }
@@ -159,7 +170,7 @@ pub async fn refresh_after_401() -> Option<String> {
     let credentials = CREDENTIALS.get()?;
     match credentials.refresh().await {
         Ok(token) => {
-            mask_in_github_actions(&token);
+            mask_once(&token);
             eprintln!("Workload identity token re-exchanged after 401.");
             Some(token)
         }

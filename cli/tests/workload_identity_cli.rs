@@ -489,3 +489,109 @@ fn provider_delete_calls_delete_endpoint() {
     let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(json["deleted"], true);
 }
+
+fn exchange_body_with(token: &str) -> String {
+    format!(r#"{{"tokenType":"Bearer","accessToken":"{token}","expiresIn":900}}"#)
+}
+
+#[test]
+fn token_flags_are_used_even_when_credential_mode_variables_are_incomplete() {
+    let tmp = TempDir::new().unwrap();
+    let (url, rx, handle) = start_server(vec![("200 OK", exchange_body(300))]);
+
+    // Only the app ID comes from the environment; credential mode would
+    // reject this, but the explicit exchange has everything it needs.
+    let output = isolated_command(tmp.path(), &url)
+        .env("TACHYON_WORKLOAD_IDENTITY_APP_ID", APP)
+        .env("MY_OIDC", "env-oidc-jwt")
+        .args([
+            "auth",
+            "workload-identity",
+            "token",
+            "--environment",
+            "production",
+            "--action",
+            "deploy",
+            "--subject-token-env",
+            "MY_OIDC",
+        ])
+        .output()
+        .unwrap();
+    assert_success(&output);
+    handle.join().unwrap();
+
+    let body: serde_json::Value = serde_json::from_str(&rx.recv().unwrap().body).unwrap();
+    assert_eq!(body["appId"], APP);
+    assert_eq!(body["environment"], "production");
+    assert_eq!(body["subjectToken"], "env-oidc-jwt");
+}
+
+#[test]
+fn credential_mode_reuses_the_re_exchanged_token_for_later_requests() {
+    let tmp = TempDir::new().unwrap();
+    let sa_list =
+        r#"{"serviceAccounts":[{"id":"sa_01jz0aaaaaaaaaaaaaaaaaaaaa","name":"gha.deploy"}]}"#;
+    let binding = serde_json::json!({
+        "id": "wi_01",
+        "appId": APP,
+        "operatorId": TENANT,
+        "environment": "production",
+        "serviceAccountId": "sa_01jz0aaaaaaaaaaaaaaaaaaaaa",
+        "allowedActions": ["deploy"],
+        "enabled": true,
+    })
+    .to_string();
+    let (url, rx, handle) = start_server(vec![
+        ("200 OK", exchange_body_with("first-token")),
+        ("401 Unauthorized", r#"{"message":"expired"}"#.to_string()),
+        ("200 OK", exchange_body_with("second-token")),
+        ("200 OK", sa_list.to_string()),
+        ("200 OK", binding),
+    ]);
+
+    let output = isolated_command(tmp.path(), &url)
+        .env("TACHYON_WORKLOAD_IDENTITY_APP_ID", APP)
+        .env("TACHYON_WORKLOAD_IDENTITY_ENVIRONMENT", "production")
+        .env(
+            "TACHYON_WORKLOAD_IDENTITY_ACTION",
+            "auth:UpdateServiceAccount",
+        )
+        .env("TACHYON_WORKLOAD_IDENTITY_SUBJECT_TOKEN_ENV", "MY_OIDC")
+        .env("MY_OIDC", "env-oidc-jwt")
+        .args([
+            "auth",
+            "workload-identity",
+            "ensure",
+            "--app-id",
+            APP,
+            "--environment",
+            "production",
+            "--service-account",
+            "gha.deploy",
+            "--allowed-action",
+            "deploy",
+            "--json",
+        ])
+        .output()
+        .unwrap();
+    assert_success(&output);
+    handle.join().unwrap();
+
+    let requests: Vec<Request> = rx.try_iter().collect();
+    assert_eq!(requests.len(), 5);
+    assert!(requests[1]
+        .head
+        .contains("authorization: Bearer first-token"));
+    assert!(requests[3]
+        .head
+        .contains("authorization: Bearer second-token"));
+    // The request after the retry carries the cached token instead of the
+    // rejected one, so no further 401 or exchange happens.
+    assert!(requests[4]
+        .head
+        .starts_with("PUT /v1/auth/workload-identities "));
+    assert!(requests[4]
+        .head
+        .contains("authorization: Bearer second-token"));
+    assert!(!requests[4].head.contains("first-token"));
+}
