@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+### Fixed
+
+- `tachyon org operators delete` now says what it does: it requests the
+  deletion (the operator is locked at once and purged after the grace period
+  unless the request is cancelled) and prints the request, its state and when
+  the purge starts. It used to call itself a hard delete and print
+  "deleted". `--json` prints the deletion request.
+- `tachyon org operators by-alias` sends the `platform_id` the API requires
+  (`--platform-id`, or `--tenant-id` when that is the platform). It failed with
+  400 before.
+
 ### Security
 
 - `tachyon worker` no longer lets a claimed Coding Job choose host resources.

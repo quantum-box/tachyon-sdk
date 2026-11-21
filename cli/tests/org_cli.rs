@@ -601,11 +601,11 @@ fn policy_actions_decode_full_name_and_reject_legacy_action_field() {
 }
 
 #[test]
-fn operators_delete_200_reports_success() {
+fn operators_delete_200_reports_the_deletion_request() {
     let tmp = TempDir::new().unwrap();
     let (api_url, rx, handle) = start_server(vec![MockResponse {
         status: "200 OK",
-        body: r#"{"success":true}"#,
+        body: r#"{"success":true,"deletion":{"id":"tdr_01","operatorId":"tn_target1234567890","status":"pending","requestedBy":"us_admin","requestedAt":"2026-11-21T00:00:00+00:00","purgeAfter":"2026-12-21T00:00:00+00:00","cancelledAt":null,"purgeStartedAt":null}}"#,
     }]);
 
     let output = run_org(
@@ -622,7 +622,8 @@ fn operators_delete_200_reports_success() {
     );
     assert_eq!(
         String::from_utf8_lossy(&output.stdout),
-        "Operator tn_target1234567890 deleted.\n"
+        "Deletion of operator tn_target1234567890 requested (pending, request tdr_01).\n\
+         The operator is locked now. Its data is purged after 2026-12-21T00:00:00+00:00 unless the request is cancelled before then.\n"
     );
 }
 

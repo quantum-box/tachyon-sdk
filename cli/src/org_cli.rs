@@ -56,17 +56,23 @@ pub enum OperatorsCommand {
         #[arg(long)]
         json: bool,
     },
-    /// Get operator by alias
+    /// Get operator by alias, among the operators of the platform given by
+    /// --platform-id (or --tenant-id when that is the platform)
     ByAlias {
         /// Alias to look up
         alias: String,
         #[arg(long)]
         json: bool,
     },
-    /// Delete an operator (hard delete, for cleaning up empty organizations).
-    /// The acting scope (--tenant-id) must be the target operator itself or
-    /// its parent platform.
-    Delete { operator_id: String },
+    /// Request deletion of an operator. It is locked at once and purged
+    /// with its data after the grace period (30 days by default) unless the
+    /// request is cancelled first. The acting scope (--tenant-id) must be
+    /// the target operator itself or its parent platform.
+    Delete {
+        operator_id: String,
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 // --- Users ---
@@ -253,6 +259,15 @@ tachyon_response_contract! {
 struct DeleteOperatorResponse {
     #[allow(dead_code)]
     success: bool,
+    deletion: OperatorDeletion,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct OperatorDeletion {
+    id: String,
+    status: String,
+    purge_after: String,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -510,9 +525,17 @@ async fn run_operators_get(api: &ApiClient, id: &str, json: bool) -> Result<()> 
     Ok(())
 }
 
-async fn run_operators_by_alias(api: &ApiClient, alias: &str, json: bool) -> Result<()> {
+async fn run_operators_by_alias(
+    api: &ApiClient,
+    alias: &str,
+    platform_id: &str,
+    json: bool,
+) -> Result<()> {
     let op: OperatorResponse = api
-        .get_query("/v1/auth/operators/by-alias", &[("alias", alias)])
+        .get_query(
+            "/v1/auth/operators/by-alias",
+            &[("platform_id", platform_id), ("alias", alias)],
+        )
         .await?;
     if json {
         return print_json(&op);
@@ -524,9 +547,20 @@ async fn run_operators_by_alias(api: &ApiClient, alias: &str, json: bool) -> Res
     Ok(())
 }
 
-async fn run_operators_delete(api: &ApiClient, id: &str) -> Result<()> {
-    let _: DeleteOperatorResponse = api.delete_json(&format!("/v1/auth/operators/{id}")).await?;
-    println!("Operator {id} deleted.");
+async fn run_operators_delete(api: &ApiClient, id: &str, json: bool) -> Result<()> {
+    let response: DeleteOperatorResponse =
+        api.delete_json(&format!("/v1/auth/operators/{id}")).await?;
+    if json {
+        return print_json(&response.deletion);
+    }
+    println!(
+        "Deletion of operator {id} requested ({}, request {}).",
+        response.deletion.status, response.deletion.id
+    );
+    println!(
+        "The operator is locked now. Its data is purged after {} unless the request is cancelled before then.",
+        response.deletion.purge_after
+    );
     Ok(())
 }
 
@@ -1347,10 +1381,11 @@ pub async fn run(args: &OrgArgs, config: &Configuration, tenant_id: &str) -> Res
                 run_operators_get(&api, operator_id, *json).await
             }
             OperatorsCommand::ByAlias { alias, json } => {
-                run_operators_by_alias(&api, alias, *json).await
+                let platform_id = crate::client::platform_id().unwrap_or(tenant_id);
+                run_operators_by_alias(&api, alias, platform_id, *json).await
             }
-            OperatorsCommand::Delete { operator_id } => {
-                run_operators_delete(&api, operator_id).await
+            OperatorsCommand::Delete { operator_id, json } => {
+                run_operators_delete(&api, operator_id, *json).await
             }
         },
         OrgCommand::Users { command } => match command {
