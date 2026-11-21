@@ -41,6 +41,13 @@
   (masked with `::add-mask::` in GitHub Actions); `ensure`, `list`, and
   `provider add|list|delete` manage bindings and federation providers.
   An API key still takes precedence. See `docs/workload-identity.md`.
+  Cloud App builds withhold the workload identity inputs from repository
+  commands and from the platform steps that can run repository code
+  (wrangler, git, buildkit): every `TACHYON_WORKLOAD_IDENTITY_*` variable,
+  `ACTIONS_ID_TOKEN_REQUEST_URL` / `ACTIONS_ID_TOKEN_REQUEST_TOKEN`, and the
+  variable `TACHYON_WORKLOAD_IDENTITY_SUBJECT_TOKEN_ENV` names, from both the
+  workload env and the inherited env. Otherwise a build script could mint its
+  own Tachyon token, as `TACHYON_API_KEY` is already withheld to prevent.
 - Rust SDK: `workload_identity` (feature `workload-identity`) with
   `exchange_token`, `fetch_github_actions_id_token`, `SubjectTokenSource`,
   and the caching `WorkloadIdentityCredentials`.
