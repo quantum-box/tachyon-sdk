@@ -3868,11 +3868,11 @@ mod tests {
         // may hand them the Cloudflare or registry credentials.
         std::env::set_var("TACHYON_GAR_ACCESS_TOKEN", "dummy-gar-token");
         let env = BTreeMap::from([
-            ("CLOUDFLARE_API_TOKEN".to_string(), "dummy-cf-token".to_string()),
             (
-                DOCKER_CONFIG_ENV.to_string(),
-                "{\"auths\":{}}".to_string(),
+                "CLOUDFLARE_API_TOKEN".to_string(),
+                "dummy-cf-token".to_string(),
             ),
+            (DOCKER_CONFIG_ENV.to_string(), "{\"auths\":{}}".to_string()),
             ("APP_SETTING".to_string(), "kept".to_string()),
         ]);
         let cwd = std::env::temp_dir();
@@ -3894,7 +3894,10 @@ mod tests {
     #[test]
     fn platform_steps_keep_the_credentials_repository_commands_lose() {
         let env = BTreeMap::from([
-            ("CLOUDFLARE_API_TOKEN".to_string(), "dummy-cf-token".to_string()),
+            (
+                "CLOUDFLARE_API_TOKEN".to_string(),
+                "dummy-cf-token".to_string(),
+            ),
             ("APP_SETTING".to_string(), "kept".to_string()),
         ]);
 

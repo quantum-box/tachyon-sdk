@@ -1347,13 +1347,28 @@ pub(super) async fn run_runtime_log_tail_once(
     url: &str,
     options: RuntimeLogTailOptions,
 ) -> Result<()> {
+    let request = || {
+        api.client
+            .get(url)
+            .header(reqwest::header::ACCEPT, "text/event-stream")
+    };
     let mut resp = api
-        .client
-        .get(url)
-        .header(reqwest::header::ACCEPT, "text/event-stream")
+        .authorize(request())
+        .await
         .send()
         .await
         .map_err(|e| anyhow!("GET {url} failed: {e}"))?;
+    // A reconnect may happen after the token expired; refresh it once so the
+    // tail keeps going instead of failing on every reconnect.
+    if resp.status() == reqwest::StatusCode::UNAUTHORIZED {
+        if let Some(token) = api.refresh_bearer_after_401().await {
+            resp = request()
+                .bearer_auth(token)
+                .send()
+                .await
+                .map_err(|e| anyhow!("GET {url} failed: {e}"))?;
+        }
+    }
     let status = resp.status();
     if !status.is_success() {
         let body = resp.text().await.unwrap_or_default();

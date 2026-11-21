@@ -168,6 +168,9 @@ pub struct ApiClient {
     pub client: Client,
     pub base_url: String,
     auth_diagnostics: Option<AuthDiagnostics>,
+    /// The client's token comes from the workload identity credential mode,
+    /// so requests carry the mode's current token instead of the fixed one.
+    workload_identity: bool,
 }
 
 impl ApiClient {
@@ -193,6 +196,9 @@ impl ApiClient {
             client,
             base_url,
             auth_diagnostics,
+            workload_identity: crate::workload_identity::manages(
+                config.bearer_access_token.as_deref(),
+            ),
         })
     }
 
@@ -226,8 +232,8 @@ impl ApiClient {
     pub async fn get_response(&self, path: &str) -> Result<reqwest::Response> {
         let url = format!("{}{}", self.base_url, path);
         let resp = self
-            .client
-            .get(&url)
+            .authorize(self.client.get(&url))
+            .await
             .send()
             .await
             .with_context(|| format!("GET {url}"))?;
@@ -259,8 +265,8 @@ impl ApiClient {
     ) -> Result<T> {
         let url = format!("{}{}", self.base_url, path);
         let resp = self
-            .client
-            .get(&url)
+            .authorize(self.client.get(&url))
+            .await
             .query(query)
             .send()
             .await
@@ -296,8 +302,8 @@ impl ApiClient {
     ) -> Result<T> {
         let url = format!("{}{}", self.base_url, path);
         let resp = self
-            .client
-            .post(&url)
+            .authorize(self.client.post(&url))
+            .await
             .json(body)
             .send()
             .await
@@ -337,8 +343,8 @@ impl ApiClient {
     ) -> Result<T> {
         let url = format!("{}{}", self.base_url, path);
         let resp = self
-            .client
-            .post(&url)
+            .authorize(self.client.post(&url))
+            .await
             .json(body)
             .send()
             .await
@@ -350,8 +356,8 @@ impl ApiClient {
     pub async fn post_no_body(&self, path: &str) -> Result<String> {
         let url = format!("{}{}", self.base_url, path);
         let resp = self
-            .client
-            .post(&url)
+            .authorize(self.client.post(&url))
+            .await
             .send()
             .await
             .with_context(|| format!("POST {url}"))?;
@@ -384,8 +390,8 @@ impl ApiClient {
     pub async fn post_no_response<B: serde::Serialize>(&self, path: &str, body: &B) -> Result<()> {
         let url = format!("{}{}", self.base_url, path);
         let resp = self
-            .client
-            .post(&url)
+            .authorize(self.client.post(&url))
+            .await
             .json(body)
             .send()
             .await
@@ -426,8 +432,8 @@ impl ApiClient {
     ) -> Result<T> {
         let url = format!("{}{}", self.base_url, path);
         let resp = self
-            .client
-            .patch(&url)
+            .authorize(self.client.patch(&url))
+            .await
             .json(body)
             .send()
             .await
@@ -463,8 +469,8 @@ impl ApiClient {
     ) -> Result<T> {
         let url = format!("{}{}", self.base_url, path);
         let resp = self
-            .client
-            .put(&url)
+            .authorize(self.client.put(&url))
+            .await
             .json(body)
             .send()
             .await
@@ -496,8 +502,8 @@ impl ApiClient {
     pub async fn delete(&self, path: &str) -> Result<()> {
         let url = format!("{}{}", self.base_url, path);
         let resp = self
-            .client
-            .delete(&url)
+            .authorize(self.client.delete(&url))
+            .await
             .send()
             .await
             .with_context(|| format!("DELETE {url}"))?;
@@ -530,8 +536,8 @@ impl ApiClient {
     pub async fn delete_json<T: DeserializeOwned>(&self, path: &str) -> Result<T> {
         let url = format!("{}{}", self.base_url, path);
         let resp = self
-            .client
-            .delete(&url)
+            .authorize(self.client.delete(&url))
+            .await
             .send()
             .await
             .with_context(|| format!("DELETE {url}"))?;
@@ -588,7 +594,7 @@ impl ApiClient {
             body.apply(request)
         };
 
-        let resp = attempt(None)
+        let resp = attempt(self.workload_identity_bearer().await)
             .send()
             .await
             .with_context(|| format!("{method_label} {url}"))?;
@@ -650,7 +656,37 @@ impl ApiClient {
         Ok(resp)
     }
 
-    async fn refresh_bearer_after_401(&self) -> Option<String> {
+    /// Bearer token of the workload identity credential mode, which can
+    /// change during a long-running command, so it is read per request
+    /// instead of being fixed in the client's default headers.
+    pub(crate) async fn workload_identity_bearer(&self) -> Option<String> {
+        if !self.workload_identity {
+            return None;
+        }
+        crate::workload_identity::current_token()
+            .await
+            .and_then(|result| result.ok())
+    }
+
+    /// Attach the current workload identity token, which overrides the
+    /// default `Authorization` header; other modes keep the request as is.
+    /// Callers that build requests on [`Self::client`] directly must pass
+    /// them through here, or a long-running command keeps the first token.
+    pub async fn authorize(&self, request: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
+        match self.workload_identity_bearer().await {
+            Some(token) => request.bearer_auth(token),
+            None => request,
+        }
+    }
+
+    pub(crate) async fn refresh_bearer_after_401(&self) -> Option<String> {
+        if self.workload_identity {
+            return crate::workload_identity::refresh_after_401().await;
+        }
+        if crate::workload_identity::is_active() {
+            // An explicitly supplied credential has nothing to refresh.
+            return None;
+        }
         let context = auth::runtime_auth_context()?;
         let creds = match auth::load_profile(&context.profile) {
             Ok(Some(creds)) => creds,

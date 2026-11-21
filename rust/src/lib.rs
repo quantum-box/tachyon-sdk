@@ -27,3 +27,6 @@ pub mod agent_session;
 
 #[cfg(feature = "worker-runtime")]
 pub mod worker_runtime;
+
+#[cfg(feature = "workload-identity")]
+pub mod workload_identity;

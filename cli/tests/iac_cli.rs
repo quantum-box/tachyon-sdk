@@ -66,6 +66,9 @@ fn start_graphql_server(
             loop {
                 match listener.accept() {
                     Ok((mut stream, _)) => {
+                        // The listener is nonblocking so the loop can time out; on macOS the
+                        // accepted stream inherits that, so reads would fail with WouldBlock.
+                        stream.set_nonblocking(false).unwrap();
                         let mut buf = [0_u8; 16_384];
                         let n = stream.read(&mut buf).unwrap();
                         tx.send(String::from_utf8_lossy(&buf[..n]).to_string())

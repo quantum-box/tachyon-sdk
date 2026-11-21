@@ -130,6 +130,7 @@ pub enum ApiTokenKind {
     Access,
     Id,
     ApiKey,
+    WorkloadIdentity,
 }
 
 impl ApiTokenKind {
@@ -138,6 +139,7 @@ impl ApiTokenKind {
             Self::Access => "access_token",
             Self::Id => "id_token",
             Self::ApiKey => "api_key",
+            Self::WorkloadIdentity => "workload_identity",
         }
     }
 }

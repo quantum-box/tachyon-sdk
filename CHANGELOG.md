@@ -21,6 +21,18 @@
 
 ### Added
 
+- Workload Identity Federation in the CLI: with `TACHYON_API_KEY` unset and
+  `TACHYON_WORKLOAD_IDENTITY_APP_ID`, `_ENVIRONMENT` and `_ACTION` set, every
+  command exchanges the workload's OIDC token (GitHub Actions automatically,
+  or `_SUBJECT_TOKEN_FILE` / `_SUBJECT_TOKEN_ENV`) for a short-lived Tachyon
+  token, reuses it until shortly before expiry, and exchanges again after a
+  401. `tachyon auth workload-identity token` prints the token to a pipe
+  (masked with `::add-mask::` in GitHub Actions); `ensure`, `list`, and
+  `provider add|list|delete` manage bindings and federation providers.
+  An API key still takes precedence. See `docs/workload-identity.md`.
+- Rust SDK: `workload_identity` (feature `workload-identity`) with
+  `exchange_token`, `fetch_github_actions_id_token`, `SubjectTokenSource`,
+  and the caching `WorkloadIdentityCredentials`.
 - `tachyon compute preview create --wait` waits for the build and displays its preview URL when available.
 - Add `tachyon org users attach-policy` and `tachyon org users detach-policy`,
   so a user's policies can be granted and revoked from the CLI instead of the
