@@ -3621,7 +3621,7 @@ async fn graphql_request_with_change_control(
     change_control_token: Option<&str>,
 ) -> Result<Value> {
     let url = format!("{}/v1/graphql", api.base_url);
-    let mut request = api.client.post(url).json(&body);
+    let mut request = api.authorize(api.client.post(url).json(&body)).await;
     if let Some(token) = change_control_token
         .map(str::trim)
         .filter(|token| !token.is_empty())

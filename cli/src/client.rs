@@ -661,14 +661,16 @@ impl ApiClient {
 
     /// Attach the current workload identity token, which overrides the
     /// default `Authorization` header; other modes keep the request as is.
-    async fn authorize(&self, request: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
+    /// Callers that build requests on [`Self::client`] directly must pass
+    /// them through here, or a long-running command keeps the first token.
+    pub async fn authorize(&self, request: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
         match self.workload_identity_bearer().await {
             Some(token) => request.bearer_auth(token),
             None => request,
         }
     }
 
-    async fn refresh_bearer_after_401(&self) -> Option<String> {
+    pub(crate) async fn refresh_bearer_after_401(&self) -> Option<String> {
         if crate::workload_identity::is_active() {
             return crate::workload_identity::refresh_after_401().await;
         }

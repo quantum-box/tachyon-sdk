@@ -595,3 +595,49 @@ fn credential_mode_reuses_the_re_exchanged_token_for_later_requests() {
         .contains("authorization: Bearer second-token"));
     assert!(!requests[4].head.contains("first-token"));
 }
+
+#[test]
+fn credential_mode_runtime_log_tail_reconnects_with_the_refreshed_token() {
+    let tmp = TempDir::new().unwrap();
+    let (url, rx, handle) = start_server(vec![
+        ("200 OK", exchange_body_with("first-token")),
+        ("401 Unauthorized", r#"{"message":"expired"}"#.to_string()),
+        ("200 OK", exchange_body_with("second-token")),
+        // The stream ends at once, so the tail reconnects after its backoff.
+        ("200 OK", String::new()),
+        ("200 OK", String::new()),
+    ]);
+
+    let mut child = isolated_command(tmp.path(), &url)
+        .env("TACHYON_WORKLOAD_IDENTITY_APP_ID", APP)
+        .env("TACHYON_WORKLOAD_IDENTITY_ENVIRONMENT", "production")
+        .env("TACHYON_WORKLOAD_IDENTITY_ACTION", "compute:GetApp")
+        .env("TACHYON_WORKLOAD_IDENTITY_SUBJECT_TOKEN_ENV", "MY_OIDC")
+        .env("MY_OIDC", "env-oidc-jwt")
+        .args(["compute", "logs", "--tail", APP])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .unwrap();
+    handle.join().unwrap();
+    child.kill().ok();
+    child.wait().ok();
+
+    let requests: Vec<Request> = rx.try_iter().collect();
+    assert_eq!(requests.len(), 5);
+    let tail = format!("GET /v1/compute/apps/{APP}/logs/tail ");
+    assert!(requests[1].head.starts_with(&tail));
+    assert!(requests[1]
+        .head
+        .contains("authorization: Bearer first-token"));
+    assert!(requests[3].head.starts_with(&tail));
+    assert!(requests[3]
+        .head
+        .contains("authorization: Bearer second-token"));
+    // The reconnect uses the cached refreshed token, not the rejected one.
+    assert!(requests[4].head.starts_with(&tail));
+    assert!(requests[4]
+        .head
+        .contains("authorization: Bearer second-token"));
+    assert!(!requests[4].head.contains("first-token"));
+}
