@@ -140,6 +140,25 @@ const JOB_SUCCEEDED: &str = r#"{"job_id":"qj_1","state":"succeeded","bindings":{
 
 const JOB_RESULT: &str = r#"{"job_id":"qj_1","schema":{"columns":[{"name":"region","type":"string","nullable":true},{"name":"total","type":"decimal","nullable":true}]},"rows":[["east","150"],["west","250"]],"total_rows":2,"truncated":false,"read_versions":{"sales":"dsv_1"}}"#;
 
+/// `--data-api-url` sends Data calls to Data itself, whose paths start at
+/// `/v1`, while the Tachyon API URL stays for sign-in.
+#[test]
+fn an_explicit_data_url_is_called_without_the_data_prefix() {
+    let home = TempDir::new().unwrap();
+    let (url, rx) = start_server(vec![Reply(200, DATASET_PAGE)]);
+
+    let output = run(
+        home.path(),
+        "http://127.0.0.1:9",
+        &["data", "--data-api-url", &url, "dataset", "list"],
+    );
+    assert_success(&output);
+
+    let requests = rx.recv().unwrap();
+    requests[0].assert_start_line("GET /v1/datasets");
+    assert_eq!(requests[0].header("x-operator-id"), Some(TENANT_ID));
+}
+
 #[test]
 fn dataset_list_renders_a_table_and_sends_tenant_headers() {
     let home = TempDir::new().unwrap();

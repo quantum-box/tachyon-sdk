@@ -8,9 +8,12 @@
 //!   tachyon data query run --sql "SELECT ..." --bind sales=<dataset_id> --wait
 //!   tachyon data query get <job_id> [--wait]
 //!
-//! The commands talk to the Data surface that `tachyon-api` nests under
-//! `/data`, so they reuse the profile credentials `tachyon auth login`
-//! already stores. Nothing here prints, logs, or writes a token.
+//! The commands talk to Tachyon Data directly (ADR-0176): against the
+//! production Tachyon API they call `https://data-api.txcloud.app/v1/...`,
+//! and against any other `--api-url` they keep that API's `/data` forward.
+//! `--data-api-url` / `TACHYON_DATA_API_URL` names Data explicitly. They
+//! reuse the profile credentials `tachyon auth login` already stores.
+//! Nothing here prints, logs, or writes a token.
 //!
 //! Two shapes of the Data API need care:
 //!
@@ -18,7 +21,7 @@
 //!    `--bind name=<dataset_id>` form people want is resolved here by
 //!    describing the dataset first and taking its published version, so the
 //!    version that was read is always known and reportable.
-//! 2. `POST /data/v1/query-jobs` answers `202` even when the backend refuses
+//! 2. `POST /v1/query-jobs` answers `202` even when the backend refuses
 //!    the query: the refusal arrives as `state: "failed"` with a
 //!    `failure.code` such as `QUERY_TOO_EXPENSIVE`. Checking the HTTP status
 //!    alone would report a refused query as accepted, so every job body is
@@ -39,11 +42,15 @@ use tachyon_sdk::apis::configuration::Configuration;
 
 use crate::client::{ApiClient, HttpError, RequestBody};
 
-/// Path prefix `tachyon-api` nests the Data router under.
-const DATA_PREFIX: &str = "/data/v1";
+/// Path prefix of the Data API under its base URL.
+const DATA_PREFIX: &str = "/v1";
+/// The production Tachyon API (`--api-url` default).
+const PRODUCTION_API_URL: &str = "https://api.n1.tachy.one";
+/// Production Tachyon Data (ADR-0176).
+pub const PRODUCTION_DATA_API_URL: &str = "https://data-api.txcloud.app";
 /// Header that declares why data is being read or written.
 const PURPOSE_HEADER: &str = "x-data-purpose";
-/// Upload cap enforced by `POST /data/v1/datasets` (64 MiB).
+/// Upload cap enforced by `POST /v1/datasets` (64 MiB).
 const MAX_UPLOAD_BYTES: u64 = 64 * 1024 * 1024;
 /// Default seconds between `--wait` polls of a query job.
 const DEFAULT_POLL_INTERVAL_SECS: u64 = 2;
@@ -53,8 +60,30 @@ const DEFAULT_POLL_INTERVAL_SECS: u64 = 2;
 const DEFAULT_WAIT_TIMEOUT_SECS: u64 = 300;
 #[derive(Debug, Clone, Args)]
 pub struct DataArgs {
+    /// Tachyon Data base URL, before `/v1` (default: https://data-api.txcloud.app
+    /// for the production Tachyon API, otherwise `<api-url>/data`)
+    #[arg(long, env = "TACHYON_DATA_API_URL", global = true)]
+    pub data_api_url: Option<String>,
+
     #[command(subcommand)]
     pub command: DataCommand,
+}
+
+/// Where Data is for a Tachyon API at `api_url`.
+///
+/// An explicit URL wins. The production API's Data is its own service;
+/// any other API (local, staging, a stub) is reached through its `/data`
+/// forward, which serves the same paths.
+pub fn data_base_url(api_url: &str, explicit: Option<&str>) -> String {
+    if let Some(explicit) = explicit.map(str::trim).filter(|url| !url.is_empty()) {
+        return explicit.trim_end_matches('/').to_string();
+    }
+    let api = api_url.trim().trim_end_matches('/');
+    if api == PRODUCTION_API_URL {
+        PRODUCTION_DATA_API_URL.to_string()
+    } else {
+        format!("{api}/data")
+    }
 }
 
 #[derive(Debug, Clone, Subcommand)]
@@ -468,10 +497,11 @@ pub fn explain_http_error(err: anyhow::Error, tenant_id: &str) -> anyhow::Error 
 
     let hint = match status.as_u16() {
         404 if envelope.is_none() && http.body.trim().is_empty() => format!(
-            "Tachyon Data is not enabled for tenant {tenant_id}. `/data/v1/*` is gated by \
-             the `data_platform` feature flag, and a tenant without it gets 404 before \
-             authentication. Ask an operator to enable the flag, or check that \
-             --api-url points at a tachyon-api that serves Tachyon Data."
+            "Tachyon Data is not enabled for tenant {tenant_id} at this URL. Through \
+             tachyon-api's `/data/v1/*` forward, a tenant without the `data_platform` \
+             feature flag gets 404 before authentication. Ask an operator to enable \
+             the flag, or check that --data-api-url (or --api-url) points at a server \
+             that serves Tachyon Data."
         ),
         404 => format!("Not found on tenant {tenant_id}. {detail}"),
         403 => format!(
@@ -669,7 +699,7 @@ impl Provenance {
 
 // -------------------------------------------------------------------- client
 
-/// Thin wrapper that adds the `/data/v1` prefix, the optional purpose header,
+/// Thin wrapper that adds the `/v1` prefix, the optional purpose header,
 /// and Data-specific error messages.
 struct DataApi<'a> {
     api: ApiClient,
@@ -677,9 +707,12 @@ struct DataApi<'a> {
 }
 
 impl<'a> DataApi<'a> {
-    fn new(config: &Configuration, tenant_id: &'a str) -> Result<Self> {
+    /// `config` is the Tachyon API's; requests go to `data_base_url`.
+    fn new(config: &Configuration, data_base_url: String, tenant_id: &'a str) -> Result<Self> {
+        let mut config = config.clone();
+        config.base_path = data_base_url;
         Ok(Self {
-            api: ApiClient::new(config, tenant_id)?,
+            api: ApiClient::new(&config, tenant_id)?,
             tenant_id,
         })
     }
@@ -818,7 +851,8 @@ impl<'a> DataApi<'a> {
 // ------------------------------------------------------------------ commands
 
 pub async fn run(args: &DataArgs, config: &Configuration, tenant_id: &str) -> Result<()> {
-    let api = DataApi::new(config, tenant_id)?;
+    let base = data_base_url(&config.base_path, args.data_api_url.as_deref());
+    let api = DataApi::new(config, base, tenant_id)?;
     match &args.command {
         DataCommand::Dataset(dataset) => match &dataset.command {
             DatasetCommand::List {
@@ -1289,6 +1323,34 @@ mod tests {
             diagnostics: None,
             retry_after_secs: retry_after,
         })
+    }
+
+    #[test]
+    fn production_api_reaches_data_api_directly() {
+        assert_eq!(
+            data_base_url("https://api.n1.tachy.one", None),
+            PRODUCTION_DATA_API_URL
+        );
+        assert_eq!(
+            data_base_url("https://api.n1.tachy.one/", Some("  ")),
+            "https://data-api.txcloud.app"
+        );
+    }
+
+    #[test]
+    fn other_apis_keep_their_data_forward() {
+        assert_eq!(
+            data_base_url("http://localhost:50054/", None),
+            "http://localhost:50054/data"
+        );
+    }
+
+    #[test]
+    fn an_explicit_data_url_wins() {
+        assert_eq!(
+            data_base_url("https://api.n1.tachy.one", Some("https://data.example/")),
+            "https://data.example"
+        );
     }
 
     #[test]
