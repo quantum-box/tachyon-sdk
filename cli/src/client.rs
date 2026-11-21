@@ -653,7 +653,7 @@ impl ApiClient {
     /// Bearer token of the workload identity credential mode, which can
     /// change during a long-running command, so it is read per request
     /// instead of being fixed in the client's default headers.
-    async fn workload_identity_bearer(&self) -> Option<String> {
+    pub(crate) async fn workload_identity_bearer(&self) -> Option<String> {
         crate::workload_identity::current_token()
             .await
             .and_then(|result| result.ok())

@@ -699,3 +699,53 @@ fn credential_mode_uses_the_tenant_next_to_the_manifest() {
         .head
         .contains(&format!("x-operator-id: {MANIFEST_TENANT}")));
 }
+
+#[test]
+fn credential_mode_policy_update_uses_the_refreshed_token() {
+    let tmp = TempDir::new().unwrap();
+    std::fs::write(
+        tmp.path().join("auth.yml"),
+        "actions: []\npolicies:\n  - name: ManifestPolicy\n    description: Updated\n    actions:\n      - action: manifest:Read\n        effect: allow\n",
+    )
+    .unwrap();
+    let policies = format!(
+        r#"{{"policies":[{{"id":"pol_existing","name":"ManifestPolicy","isSystem":false,"tenantId":"{TENANT}"}}]}}"#
+    );
+    let updated = format!(
+        r#"{{"createdAt":"2026-11-21T00:00:00Z","description":"Updated","id":"pol_existing","isSystem":false,"name":"ManifestPolicy","tenantId":"{TENANT}","updatedAt":"2026-11-21T00:00:01Z"}}"#
+    );
+    let (url, rx, handle) = start_server(vec![
+        ("200 OK", exchange_body_with("first-token")),
+        ("401 Unauthorized", r#"{"message":"expired"}"#.to_string()),
+        ("200 OK", exchange_body_with("second-token")),
+        ("200 OK", policies),
+        ("200 OK", updated),
+    ]);
+
+    let output = isolated_command(tmp.path(), &url)
+        .env("TACHYON_WORKLOAD_IDENTITY_APP_ID", APP)
+        .env("TACHYON_WORKLOAD_IDENTITY_ENVIRONMENT", "production")
+        .env("TACHYON_WORKLOAD_IDENTITY_ACTION", "auth:UpdatePolicy")
+        .env("TACHYON_WORKLOAD_IDENTITY_SUBJECT_TOKEN_ENV", "MY_OIDC")
+        .env("MY_OIDC", "env-oidc-jwt")
+        .args(["auth", "manifest", "apply", "--file", "auth.yml", "--json"])
+        .output()
+        .unwrap();
+    assert_success(&output);
+    handle.join().unwrap();
+
+    let requests: Vec<Request> = rx.try_iter().collect();
+    assert_eq!(requests.len(), 5);
+    assert!(requests[3].head.starts_with("GET /v1/auth/policies "));
+    // The generated-SDK PATCH carries the refreshed token, not the one the
+    // SDK configuration was built with.
+    assert!(requests[4]
+        .head
+        .starts_with("PATCH /v1/auth/policies/pol_existing "));
+    assert!(requests[4]
+        .head
+        .contains("authorization: Bearer second-token"));
+    assert!(requests[4]
+        .head
+        .contains(&format!("x-operator-id: {TENANT}")));
+}

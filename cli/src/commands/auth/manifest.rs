@@ -1103,7 +1103,6 @@ pub async fn apply_manifest(
     } else {
         Some(api.get::<PolicyListResponse>("/v1/auth/policies").await?)
     };
-    let sdk_config = policy_sdk_configuration(config, default_tenant_id)?;
     let mut warned_incomplete_policy_reconciliation = false;
 
     for spec in &manifest.policies {
@@ -1183,8 +1182,8 @@ pub async fn apply_manifest(
                 // so Updated is only reported after the API acknowledges it.
                 description: Some(spec.description.clone()),
             };
-            match auth_policies_api::update_policy(&sdk_config, &existing.id, update).await {
-                Ok(_) => ApplyOutcome::Updated,
+            match update_policy(api, config, default_tenant_id, &existing.id, update).await {
+                Ok(()) => ApplyOutcome::Updated,
                 Err(error) => ApplyOutcome::Error(error.to_string()),
             }
         } else {
@@ -1267,15 +1266,53 @@ pub async fn apply_manifest(
     })
 }
 
+/// Update a policy through the generated SDK with the token that is current
+/// now (a workload identity token may have been refreshed since `config` was
+/// built), refreshing once and retrying when the API answers 401, as the
+/// CLI's ApiClient does for its own requests.
+async fn update_policy(
+    api: &ApiClient,
+    config: &Configuration,
+    tenant_id: &str,
+    policy_id: &str,
+    update: UpdatePolicyRequest,
+) -> Result<()> {
+    let token = api
+        .workload_identity_bearer()
+        .await
+        .or_else(|| config.bearer_access_token.clone());
+    let sdk_config = policy_sdk_configuration(config, tenant_id, token.as_deref())?;
+    match auth_policies_api::update_policy(&sdk_config, policy_id, update.clone()).await {
+        Ok(_) => Ok(()),
+        Err(tachyon_sdk::apis::Error::ResponseError(response))
+            if response.status == reqwest12::StatusCode::UNAUTHORIZED =>
+        {
+            let Some(token) = api.refresh_bearer_after_401().await else {
+                return Err(anyhow!(tachyon_sdk::apis::Error::ResponseError(response)));
+            };
+            let sdk_config = policy_sdk_configuration(config, tenant_id, Some(&token))?;
+            auth_policies_api::update_policy(&sdk_config, policy_id, update)
+                .await
+                .map(|_| ())
+                .map_err(|error| anyhow!(error.to_string()))
+        }
+        Err(error) => Err(anyhow!(error.to_string())),
+    }
+}
+
 /// Build the generated SDK's reqwest 0.12 client with the same authentication
 /// context used by the CLI's reqwest 0.13 ApiClient.
-fn policy_sdk_configuration(config: &Configuration, tenant_id: &str) -> Result<Configuration> {
+fn policy_sdk_configuration(
+    config: &Configuration,
+    tenant_id: &str,
+    bearer_token: Option<&str>,
+) -> Result<Configuration> {
     let mut headers = reqwest12::header::HeaderMap::new();
     headers.insert(
         "x-operator-id",
         reqwest12::header::HeaderValue::from_str(tenant_id)?,
     );
-    if let Some(token) = &config.bearer_access_token {
+    if let Some(token) = bearer_token {
         headers.insert(
             reqwest12::header::AUTHORIZATION,
             reqwest12::header::HeaderValue::from_str(&format!("Bearer {token}"))?,
