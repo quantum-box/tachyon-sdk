@@ -641,3 +641,61 @@ fn credential_mode_runtime_log_tail_reconnects_with_the_refreshed_token() {
         .contains("authorization: Bearer second-token"));
     assert!(!requests[4].head.contains("first-token"));
 }
+
+#[test]
+fn credential_mode_uses_the_tenant_next_to_the_manifest() {
+    const MANIFEST_TENANT: &str = "tn_01manifesttenant000000000";
+    let tmp = TempDir::new().unwrap();
+    std::fs::create_dir(tmp.path().join(".git")).unwrap();
+    // The working directory belongs to another tenant; the manifest's own
+    // tachyon.yml must win, as it does for the command itself.
+    std::fs::write(
+        tmp.path().join("tachyon.yml"),
+        "metadata:\n  tenantId: tn_01workdirtenant0000000000\n",
+    )
+    .unwrap();
+    let service = tmp.path().join("svc");
+    std::fs::create_dir_all(service.join(".tachyon/manifests")).unwrap();
+    std::fs::write(
+        service.join("tachyon.yml"),
+        format!("metadata:\n  tenantId: {MANIFEST_TENANT}\n"),
+    )
+    .unwrap();
+    std::fs::write(
+        service.join(".tachyon/manifests/auth.yml"),
+        "actions:\n  - context: manifest\n    name: Read\npolicies: []\n",
+    )
+    .unwrap();
+    let (url, rx, handle) = start_server(vec![
+        ("200 OK", exchange_body(900)),
+        ("200 OK", "{}".to_string()),
+    ]);
+
+    let _ = isolated_command(tmp.path(), &url)
+        .env_remove("TACHYON_TENANT_ID")
+        .env("TACHYON_WORKLOAD_IDENTITY_APP_ID", APP)
+        .env("TACHYON_WORKLOAD_IDENTITY_ENVIRONMENT", "production")
+        .env("TACHYON_WORKLOAD_IDENTITY_ACTION", "auth:CreateAction")
+        .env("TACHYON_WORKLOAD_IDENTITY_SUBJECT_TOKEN_ENV", "MY_OIDC")
+        .env("MY_OIDC", "env-oidc-jwt")
+        .args([
+            "manifest",
+            "apply",
+            "--file",
+            "svc/.tachyon/manifests/auth.yml",
+        ])
+        .output()
+        .unwrap();
+    handle.join().unwrap();
+
+    let exchange = rx.recv().unwrap();
+    assert!(exchange
+        .head
+        .starts_with("POST /v1/auth/workload-identities/token/exchange "));
+    let body: serde_json::Value = serde_json::from_str(&exchange.body).unwrap();
+    assert_eq!(body["operatorId"], MANIFEST_TENANT);
+    let next = rx.recv().unwrap();
+    assert!(next
+        .head
+        .contains(&format!("x-operator-id: {MANIFEST_TENANT}")));
+}

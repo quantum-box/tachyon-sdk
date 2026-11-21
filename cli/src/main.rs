@@ -890,11 +890,37 @@ fn configure_workload_identity(cli: &Cli) -> Result<bool> {
     if std::env::var_os(workload_identity::ENV_APP_ID).is_none() {
         return Ok(false);
     }
-    // The tenant may come from tachyon.yml; a broken file is reported by the
-    // command itself, so fall back to the flag/env value here.
-    let project_config = config::loader::load(cli.config.as_deref()).ok().flatten();
-    let tenant = tenant_arg(cli, project_config.as_ref());
-    workload_identity::configure_from_env(&cli.api_url, tenant)
+    // The tenant may come from tachyon.yml, found the same way the command
+    // finds it. A broken file is reported by the command itself, so fall
+    // back to the flag/env value here.
+    let tenant = match workload_identity_context(cli) {
+        Some(context_file) => load_project_config_for_context(cli, context_file)
+            .ok()
+            .and_then(|(loaded, _)| loaded)
+            .and_then(|loaded| loaded.config.metadata.tenant_id)
+            .filter(|_| cli.tenant_id.is_empty())
+            .unwrap_or_else(|| cli.tenant_id.clone()),
+        None => {
+            let project_config = config::loader::load(cli.config.as_deref()).ok().flatten();
+            tenant_arg(cli, project_config.as_ref()).to_string()
+        }
+    };
+    workload_identity::configure_from_env(&cli.api_url, &tenant)
+}
+
+/// For commands that look up tachyon.yml relative to a file they act on
+/// (via [`load_project_config_for_context`]), that file; `None` for commands
+/// that use the default project config lookup.
+fn workload_identity_context(cli: &Cli) -> Option<Option<&Path>> {
+    match &cli.command {
+        Commands::Auth(AuthArgs {
+            command: AuthCommand::Manifest(args),
+        }) => Some(auth_manifest_file(args)),
+        Commands::Manifest(args) => Some(manifest::context_file(args)),
+        Commands::Reconcile(args) => Some(args.file.as_deref()),
+        Commands::Provider(_) => Some(None),
+        _ => None,
+    }
 }
 
 /// Build an OAuthConfig from CLI args.
