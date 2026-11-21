@@ -359,6 +359,28 @@ policy or service account matches a name, the command stops and lists the
 matching IDs; pass one of those IDs instead. All of these commands accept
 `--json`.
 
+### Workload Identity Federation (keyless CI)
+
+GitHub Actions and other OIDC workloads can authenticate without a long-lived
+`TACHYON_API_KEY`. With `permissions: id-token: write` in the workflow and
+`TACHYON_API_KEY` unset, set the binding and every command exchanges the
+GitHub OIDC token for a short-lived Tachyon token:
+
+```yaml
+permissions:
+  id-token: write
+env:
+  TACHYON_TENANT_ID: tn_...
+  TACHYON_WORKLOAD_IDENTITY_APP_ID: app_...
+  TACHYON_WORKLOAD_IDENTITY_ENVIRONMENT: production
+  TACHYON_WORKLOAD_IDENTITY_ACTION: compute:CreateDeployment
+```
+
+`tachyon auth workload-identity token` prints the token for other tools (and
+masks it with `::add-mask::` in Actions); `ensure`, `list` and `provider
+add|list|delete` manage the bindings and trusted issuers. See
+[docs/workload-identity.md](docs/workload-identity.md).
+
 ### Slack notifications
 
 Use `--mention` more than once to mix Slack users, Teams (User Groups),

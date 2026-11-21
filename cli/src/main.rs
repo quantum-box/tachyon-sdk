@@ -35,6 +35,7 @@ mod source_cli;
 mod switch_cli;
 mod tts_cli;
 mod worker_cli;
+mod workload_identity;
 
 use anyhow::{anyhow, Result};
 use clap::{Args, Parser, Subcommand};
@@ -773,6 +774,10 @@ enum AuthCommand {
     Use(UseArgs),
     /// Manage auth manifest (custom actions and policies as code)
     Manifest(commands::auth::manifest::ManifestArgs),
+    /// Workload Identity Federation: exchange an OIDC token (e.g. GitHub
+    /// Actions) for a Tachyon token, and manage bindings and providers
+    #[command(name = "workload-identity", visible_alias = "wif")]
+    WorkloadIdentity(commands::auth::workload_identity::WorkloadIdentityArgs),
 }
 
 #[derive(Args)]
@@ -825,6 +830,18 @@ async fn resolve_token(cli: &Cli, profile: &str) -> Option<auth::ApiBearerToken>
             kind: auth::ApiTokenKind::ApiKey,
         });
     }
+    if let Some(result) = workload_identity::current_token().await {
+        return match result {
+            Ok(value) => Some(auth::ApiBearerToken {
+                value,
+                kind: auth::ApiTokenKind::WorkloadIdentity,
+            }),
+            Err(err) => {
+                eprintln!("Error: {err}");
+                None
+            }
+        };
+    }
     match auth::load_profile(profile) {
         Ok(Some(creds)) => {
             let expired = creds
@@ -866,6 +883,20 @@ async fn resolve_token(cli: &Cli, profile: &str) -> Option<auth::ApiBearerToken>
     }
 }
 
+/// Turn on Workload Identity Federation credentials when
+/// `TACHYON_WORKLOAD_IDENTITY_APP_ID` is set (only called without an API
+/// key, which always takes precedence). Returns whether the mode is active.
+fn configure_workload_identity(cli: &Cli) -> Result<bool> {
+    if std::env::var_os(workload_identity::ENV_APP_ID).is_none() {
+        return Ok(false);
+    }
+    // The tenant may come from tachyon.yml; a broken file is reported by the
+    // command itself, so fall back to the flag/env value here.
+    let project_config = config::loader::load(cli.config.as_deref()).ok().flatten();
+    let tenant = tenant_arg(cli, project_config.as_ref());
+    workload_identity::configure_from_env(&cli.api_url, tenant)
+}
+
 /// Build an OAuthConfig from CLI args.
 fn build_oauth_config(cli: &Cli) -> auth::OAuthConfig {
     auth::OAuthConfig {
@@ -893,7 +924,11 @@ fn profile_operator_id(profile: &str) -> Result<Option<String>> {
 }
 
 fn profile_for_tenant(cli: &Cli, active: &str, tenant_id: &str) -> Result<String> {
-    if cli.profile.is_some() || cli.api_key.is_some() || tenant_id.trim().is_empty() {
+    if cli.profile.is_some()
+        || cli.api_key.is_some()
+        || workload_identity::is_active()
+        || tenant_id.trim().is_empty()
+    {
         return Ok(active.to_string());
     }
 
@@ -976,7 +1011,7 @@ async fn run() -> Result<()> {
     // one-shot override). `auth login` / `auth use` choose their own target
     // profile, so they ignore `active`.
     let active = auth::resolve_active_profile(cli.profile.as_deref())?;
-    if cli.api_key.is_none() {
+    if cli.api_key.is_none() && !configure_workload_identity(&cli)? {
         auth::set_runtime_auth_context(active.clone(), build_oauth_config(&cli));
     }
 
@@ -1044,6 +1079,17 @@ async fn run() -> Result<()> {
                 };
                 commands::auth::manifest::run(manifest_args, &config, &tenant_id, auth_diagnostics)
                     .await
+            }
+            AuthCommand::WorkloadIdentity(wif_args) => {
+                use commands::auth::workload_identity as wif_cmd;
+                let project_config = config::loader::load(cli.config.as_deref())?;
+                let tenant_arg = tenant_arg(&cli, project_config.as_ref()).to_string();
+                if let wif_cmd::WorkloadIdentityCommand::Token(token_args) = &wif_args.command {
+                    return wif_cmd::run_token(token_args, &cli.api_url, &tenant_arg).await;
+                }
+                let (config, tenant_id) = build_tenant_config(&cli, &active, &tenant_arg).await?;
+                let api = client::ApiClient::new(&config, &tenant_id)?;
+                wif_cmd::run_management(wif_args, &api, &tenant_id).await
             }
         },
         Commands::Login(login_args) => {

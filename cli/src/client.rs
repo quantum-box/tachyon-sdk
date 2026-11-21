@@ -651,6 +651,9 @@ impl ApiClient {
     }
 
     async fn refresh_bearer_after_401(&self) -> Option<String> {
+        if crate::workload_identity::is_active() {
+            return crate::workload_identity::refresh_after_401().await;
+        }
         let context = auth::runtime_auth_context()?;
         let creds = match auth::load_profile(&context.profile) {
             Ok(Some(creds)) => creds,

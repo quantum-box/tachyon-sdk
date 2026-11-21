@@ -21,7 +21,7 @@ chrono = { version = "0.4", features = ["serde"], optional = true }
 mockall = { version = "0.13", optional = true }
 
 # agent-session feature dependencies
-tokio = { version = "1", features = ["time"], optional = true }
+tokio = { version = "1", features = ["time", "sync"], optional = true }
 
 [features]
 default = ["rustls"]
@@ -31,6 +31,7 @@ auth = ["async-trait", "chrono"]
 platform-traits = ["auth", "async-trait", "chrono"]
 worker-runtime = ["async-trait", "chrono"]
 agent-session = ["dep:tokio"]
+workload-identity = ["dep:tokio"]
 test = ["auth", "mockall"]
 
 [dev-dependencies]
