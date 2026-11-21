@@ -120,6 +120,9 @@ fn start_server(
         loop {
             match listener.accept() {
                 Ok((mut stream, _)) => {
+                    // The listener is nonblocking so the loop can time out; on macOS the
+                    // accepted stream inherits that, so reads would fail with WouldBlock.
+                    stream.set_nonblocking(false).unwrap();
                     requests.push(read_request(&mut stream));
 
                     match responses.get(response_index) {
