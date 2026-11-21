@@ -749,3 +749,57 @@ fn credential_mode_policy_update_uses_the_refreshed_token() {
         .head
         .contains(&format!("x-operator-id: {TENANT}")));
 }
+
+#[test]
+fn credential_mode_keeps_an_explicit_iac_apply_key_for_writes() {
+    let tmp = TempDir::new().unwrap();
+    let manifest = tmp.path().join("tachyon.json");
+    std::fs::write(
+        &manifest,
+        r#"{"apiVersion":"apps.tachy.one/v1alpha","kind":"CloudApp","metadata":{"name":"fieldadmin"},"spec":{"envVars":[]}}"#,
+    )
+    .unwrap();
+    let history = r#"{"data":{"manifestHistory":[{"revision":7,"contentHash":"h","appliedBy":"t","appliedAt":"2026-11-21T00:00:00Z","manifest":"{}"}]}}"#;
+    let (url, rx, handle) = start_server(vec![
+        ("200 OK", exchange_body(900)),
+        ("200 OK", history.to_string()),
+        (
+            "200 OK",
+            r#"{"data":{"saveManifest":{"kind":"CloudApp"}}}"#.to_string(),
+        ),
+        (
+            "200 OK",
+            r#"{"data":{"applyManifest":{"success":true,"serviceAccountsCreated":[],"serviceAccountsModified":[],"providersApplied":[],"seedDataTables":[]}}}"#.to_string(),
+        ),
+    ]);
+
+    let output = isolated_command(tmp.path(), &url)
+        .env("TACHYON_WORKLOAD_IDENTITY_APP_ID", APP)
+        .env("TACHYON_WORKLOAD_IDENTITY_ENVIRONMENT", "production")
+        .env("TACHYON_WORKLOAD_IDENTITY_ACTION", "iac:GetManifestHistory")
+        .env("TACHYON_WORKLOAD_IDENTITY_SUBJECT_TOKEN_ENV", "MY_OIDC")
+        .env("MY_OIDC", "env-oidc-jwt")
+        .env("TACHYON_IAC_APPLY_API_KEY", "write-key")
+        .env_remove("TACHYON_CHANGE_CONTROL_APPROVAL_TOKEN")
+        .arg("iac")
+        .arg("apply")
+        .arg("--file")
+        .arg(&manifest)
+        .arg("--state")
+        .arg(tmp.path().join("tachyon.tfstate"))
+        .output()
+        .unwrap();
+    assert_success(&output);
+    handle.join().unwrap();
+
+    let requests: Vec<Request> = rx.try_iter().collect();
+    assert_eq!(requests.len(), 4);
+    assert!(requests[1]
+        .head
+        .contains(&format!("authorization: Bearer {EXCHANGED}")));
+    for write in &requests[2..] {
+        assert!(write.head.starts_with("POST /v1/graphql "));
+        assert!(write.head.contains("authorization: Bearer write-key"));
+        assert!(!write.head.contains(EXCHANGED));
+    }
+}

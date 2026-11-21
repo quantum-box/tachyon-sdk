@@ -10,6 +10,7 @@
 //! token is registered with `::add-mask::` so the runner redacts it if a
 //! later step prints it.
 
+use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, OnceLock};
 
@@ -29,7 +30,10 @@ pub const ENV_SUBJECT_TOKEN_ENV: &str = "TACHYON_WORKLOAD_IDENTITY_SUBJECT_TOKEN
 pub const ENV_TTL: &str = "TACHYON_WORKLOAD_IDENTITY_TTL";
 
 static CREDENTIALS: OnceLock<Arc<WorkloadIdentityCredentials>> = OnceLock::new();
-static LAST_MASKED: Mutex<Option<String>> = Mutex::new(None);
+/// Tokens this process obtained by exchange. A client configured with one
+/// of them follows the credential mode; any other token was supplied
+/// explicitly (e.g. `TACHYON_IAC_APPLY_API_KEY`) and is left alone.
+static ISSUED: Mutex<Option<HashSet<String>>> = Mutex::new(None);
 
 /// Choose where the subject token comes from: an explicit file, then an
 /// explicit variable, then the GitHub Actions OIDC service.
@@ -142,14 +146,33 @@ pub fn mask_in_github_actions(token: &str) {
     }
 }
 
-/// Mask each distinct token once; the same cached token is handed out for
-/// every request.
+/// Record a token handed out by the credential mode and mask it the first
+/// time; the same cached token is handed out for every request.
 fn mask_once(token: &str) {
-    let mut last = LAST_MASKED.lock().unwrap_or_else(|e| e.into_inner());
-    if last.as_deref() != Some(token) {
+    let mut issued = ISSUED.lock().unwrap_or_else(|e| e.into_inner());
+    if issued
+        .get_or_insert_with(HashSet::new)
+        .insert(token.to_string())
+    {
         mask_in_github_actions(token);
-        *last = Some(token.to_string());
     }
+}
+
+/// Whether a client configured with `token` should use the credential
+/// mode: the mode is on and the token is missing (the exchange failed) or
+/// came from the mode itself.
+pub fn manages(token: Option<&str>) -> bool {
+    if !is_active() {
+        return false;
+    }
+    let Some(token) = token else {
+        return true;
+    };
+    ISSUED
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .as_ref()
+        .is_some_and(|issued| issued.contains(token))
 }
 
 /// Token for API calls in credential mode, or `None` when the mode is off.

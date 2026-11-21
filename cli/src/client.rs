@@ -168,6 +168,9 @@ pub struct ApiClient {
     pub client: Client,
     pub base_url: String,
     auth_diagnostics: Option<AuthDiagnostics>,
+    /// The client's token comes from the workload identity credential mode,
+    /// so requests carry the mode's current token instead of the fixed one.
+    workload_identity: bool,
 }
 
 impl ApiClient {
@@ -193,6 +196,9 @@ impl ApiClient {
             client,
             base_url,
             auth_diagnostics,
+            workload_identity: crate::workload_identity::manages(
+                config.bearer_access_token.as_deref(),
+            ),
         })
     }
 
@@ -654,6 +660,9 @@ impl ApiClient {
     /// change during a long-running command, so it is read per request
     /// instead of being fixed in the client's default headers.
     pub(crate) async fn workload_identity_bearer(&self) -> Option<String> {
+        if !self.workload_identity {
+            return None;
+        }
         crate::workload_identity::current_token()
             .await
             .and_then(|result| result.ok())
@@ -671,8 +680,12 @@ impl ApiClient {
     }
 
     pub(crate) async fn refresh_bearer_after_401(&self) -> Option<String> {
-        if crate::workload_identity::is_active() {
+        if self.workload_identity {
             return crate::workload_identity::refresh_after_401().await;
+        }
+        if crate::workload_identity::is_active() {
+            // An explicitly supplied credential has nothing to refresh.
+            return None;
         }
         let context = auth::runtime_auth_context()?;
         let creds = match auth::load_profile(&context.profile) {
