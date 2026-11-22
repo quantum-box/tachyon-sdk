@@ -15,7 +15,7 @@
 //!     app_id: "app_01...".into(),
 //!     operator_id: "tn_01...".into(),
 //!     environment: "production".into(),
-//!     action: "compute:CreateDeployment".into(),
+//!     action: None,
 //!     subject_token: SubjectTokenSource::github_actions_from_env(None)
 //!         .expect("running inside GitHub Actions with id-token: write"),
 //!     ttl_seconds: None,
@@ -96,8 +96,12 @@ pub struct TokenExchangeRequest {
     pub operator_id: String,
     /// Binding environment, e.g. `production`.
     pub environment: String,
-    /// Action to authorize; must be one of the binding's allowed actions.
-    pub action: String,
+    /// Action to authorize; when given it must be one of the binding's
+    /// allowed actions. Omitted from the request when `None`: the token
+    /// carries the binding's allowed actions either way. Servers before
+    /// tachyon-api v0.92.921 require it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub action: Option<String>,
     /// OIDC token issued to the workload.
     pub subject_token: String,
     /// Requested lifetime. The server clamps it to 60-900 seconds.
@@ -335,8 +339,9 @@ pub struct WorkloadIdentityConfig {
     pub operator_id: String,
     /// Binding environment.
     pub environment: String,
-    /// Action to authorize.
-    pub action: String,
+    /// Action to authorize, or `None` to omit it (see
+    /// [`TokenExchangeRequest::action`]).
+    pub action: Option<String>,
     /// Where the subject token comes from.
     pub subject_token: SubjectTokenSource,
     /// Requested lifetime (server clamps to 60-900 seconds).

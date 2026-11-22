@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+### Changed
+
+- Workload identity: the action is optional. `tachyon auth workload-identity
+  token --action` and `TACHYON_WORKLOAD_IDENTITY_ACTION` may be left out
+  (app ID and environment are enough to turn on the credential mode), and the
+  exchange request then has no `action` field. The token carries the
+  binding's allowed actions either way. This needs tachyon-api v0.92.921 or
+  later; when an older server rejects the request, the error says to set
+  `--action` / `TACHYON_WORKLOAD_IDENTITY_ACTION`. `tachyon auth
+  workload-identity ensure` no longer requires `--allowed-action`; without it
+  the binding allows `*`, so the service account's policies decide.
+- Rust SDK (breaking): `workload_identity::TokenExchangeRequest::action` and
+  `WorkloadIdentityConfig::action` are `Option<String>`; `None` omits the
+  field from the exchange request.
+
 ### Fixed
 
 - `tachyon org operators delete` now says what it does: it requests the

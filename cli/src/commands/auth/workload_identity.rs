@@ -6,7 +6,7 @@ use std::collections::BTreeMap;
 use std::io::{IsTerminal, Write};
 use std::path::PathBuf;
 
-use anyhow::{anyhow, bail, Result};
+use anyhow::{bail, Result};
 use clap::{Args, Subcommand, ValueEnum};
 use serde::{Deserialize, Serialize};
 use tachyon_sdk::workload_identity::{WorkloadIdentityConfig, DEFAULT_AUDIENCE};
@@ -16,6 +16,9 @@ use crate::workload_identity as wif;
 
 /// Issuer of GitHub Actions OIDC tokens.
 pub const GITHUB_ACTIONS_ISSUER: &str = "https://token.actions.githubusercontent.com";
+
+/// Allowed-actions entry that defers to the service account's policies.
+const ALL_ACTIONS: &str = "*";
 
 const BINDINGS_PATH: &str = "/v1/auth/workload-identities";
 const PROVIDERS_PATH: &str = "/v1/auth/workload-identities/federation-providers";
@@ -50,8 +53,9 @@ pub enum WorkloadIdentityCommand {
         /// Service account ID or name the exchanged token acts as
         #[arg(long)]
         service_account: String,
-        /// Action the workload may request (repeatable)
-        #[arg(long = "allowed-action", required = true)]
+        /// Action the workload may request (repeatable). Omit to allow
+        /// every action (`*`), so the service account's policies decide.
+        #[arg(long = "allowed-action")]
         allowed_actions: Vec<String>,
         #[arg(long)]
         json: bool,
@@ -71,9 +75,11 @@ pub struct TokenArgs {
     /// Binding environment, e.g. production
     #[arg(long, env = wif::ENV_ENVIRONMENT)]
     pub environment: String,
-    /// Action to authorize (one of the binding's allowed actions)
+    /// Action to authorize (one of the binding's allowed actions). Omit to
+    /// send none; the token carries the binding's allowed actions either
+    /// way. Servers before tachyon-api v0.92.921 require it.
     #[arg(long, env = wif::ENV_ACTION)]
-    pub action: String,
+    pub action: Option<String>,
     /// Audience requested from GitHub Actions OIDC
     #[arg(long, env = wif::ENV_AUDIENCE, default_value = DEFAULT_AUDIENCE)]
     pub audience: String,
@@ -237,7 +243,12 @@ pub async fn run_token(args: &TokenArgs, api_url: &str, tenant: &str) -> Result<
         app_id: args.app_id.clone(),
         operator_id: wif::operator_id(tenant)?,
         environment: args.environment.clone(),
-        action: args.action.clone(),
+        action: args
+            .action
+            .as_deref()
+            .map(str::trim)
+            .filter(|action| !action.is_empty())
+            .map(str::to_string),
         subject_token: wif::subject_token_source(
             args.subject_token_file.clone(),
             args.subject_token_env.clone(),
@@ -249,7 +260,7 @@ pub async fn run_token(args: &TokenArgs, api_url: &str, tenant: &str) -> Result<
     let response = config
         .exchange(&reqwest12::Client::new())
         .await
-        .map_err(|err| anyhow!("workload identity token exchange failed: {err}"))?;
+        .map_err(|err| wif::exchange_error(err, config.action.is_some()))?;
     wif::mask_in_github_actions(&response.access_token);
 
     let mut stdout = std::io::stdout().lock();
@@ -258,9 +269,14 @@ pub async fn run_token(args: &TokenArgs, api_url: &str, tenant: &str) -> Result<
         TokenFormat::Json => writeln!(stdout, "{}", serde_json::to_string(&response)?)?,
     }
     stdout.flush()?;
+    let action = config
+        .action
+        .as_deref()
+        .map(|action| format!(", action {action}"))
+        .unwrap_or_default();
     eprintln!(
-        "Exchanged a workload identity token for {} ({}, action {}), valid for {}s.",
-        config.app_id, config.environment, config.action, response.expires_in
+        "Exchanged a workload identity token for {} ({}{action}), valid for {}s.",
+        config.app_id, config.environment, response.expires_in
     );
     Ok(())
 }
@@ -308,12 +324,17 @@ pub async fn run_management(
         } => {
             let service_account_id =
                 crate::resolve::resolve_service_account_id(api, tenant_id, service_account).await?;
+            let allowed_actions = if allowed_actions.is_empty() {
+                vec![ALL_ACTIONS.to_string()]
+            } else {
+                allowed_actions.clone()
+            };
             let request = EnsureBindingRequest {
                 app_id,
                 operator_id: tenant_id,
                 environment,
                 service_account_id: &service_account_id,
-                allowed_actions,
+                allowed_actions: &allowed_actions,
             };
             let binding: BindingResponse = api.put(BINDINGS_PATH, &request).await?;
             if *json {

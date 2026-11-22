@@ -803,3 +803,137 @@ fn credential_mode_keeps_an_explicit_iac_apply_key_for_writes() {
         assert!(!write.head.contains(EXCHANGED));
     }
 }
+
+#[test]
+fn token_without_action_omits_the_field() {
+    let tmp = TempDir::new().unwrap();
+    let (url, rx, handle) = start_server(vec![("200 OK", exchange_body(300))]);
+
+    let output = isolated_command(tmp.path(), &url)
+        .env("MY_OIDC", "env-oidc-jwt")
+        .args([
+            "auth",
+            "workload-identity",
+            "token",
+            "--app-id",
+            APP,
+            "--environment",
+            "production",
+            "--subject-token-env",
+            "MY_OIDC",
+        ])
+        .output()
+        .unwrap();
+    assert_success(&output);
+    handle.join().unwrap();
+
+    let body: serde_json::Value = serde_json::from_str(&rx.recv().unwrap().body).unwrap();
+    assert!(body.get("action").is_none(), "{body}");
+    assert_eq!(body["environment"], "production");
+}
+
+#[test]
+fn credential_mode_works_without_an_action() {
+    let tmp = TempDir::new().unwrap();
+    let (url, rx, handle) = start_server(vec![
+        ("200 OK", exchange_body(900)),
+        ("200 OK", "[]".to_string()),
+    ]);
+
+    let output = isolated_command(tmp.path(), &url)
+        .env("TACHYON_WORKLOAD_IDENTITY_APP_ID", APP)
+        .env("TACHYON_WORKLOAD_IDENTITY_ENVIRONMENT", "production")
+        .env("TACHYON_WORKLOAD_IDENTITY_SUBJECT_TOKEN_ENV", "MY_OIDC")
+        .env("MY_OIDC", "env-oidc-jwt")
+        .args(["auth", "workload-identity", "list", "--json"])
+        .output()
+        .unwrap();
+    assert_success(&output);
+    handle.join().unwrap();
+
+    let exchange = rx.recv().unwrap();
+    let body: serde_json::Value = serde_json::from_str(&exchange.body).unwrap();
+    assert!(body.get("action").is_none(), "{body}");
+    let list = rx.recv().unwrap();
+    assert!(list
+        .head
+        .contains(&format!("authorization: Bearer {EXCHANGED}")));
+}
+
+#[test]
+fn token_without_action_hints_at_old_servers() {
+    let tmp = TempDir::new().unwrap();
+    let (url, _rx, handle) = start_server(vec![(
+        "422 Unprocessable Entity",
+        r#"{"message":"missing field `action`"}"#.to_string(),
+    )]);
+
+    let output = isolated_command(tmp.path(), &url)
+        .env("MY_OIDC", "env-oidc-jwt")
+        .args([
+            "auth",
+            "workload-identity",
+            "token",
+            "--app-id",
+            APP,
+            "--environment",
+            "production",
+            "--subject-token-env",
+            "MY_OIDC",
+        ])
+        .output()
+        .unwrap();
+    handle.join().unwrap();
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("status=422"), "{stderr}");
+    assert!(stderr.contains("v0.92.921"), "{stderr}");
+    assert!(
+        stderr.contains("TACHYON_WORKLOAD_IDENTITY_ACTION"),
+        "{stderr}"
+    );
+}
+
+#[test]
+fn ensure_without_allowed_actions_sends_wildcard() {
+    let tmp = TempDir::new().unwrap();
+    let sa_list =
+        r#"{"serviceAccounts":[{"id":"sa_01jz0aaaaaaaaaaaaaaaaaaaaa","name":"gha.deploy"}]}"#;
+    let binding = serde_json::json!({
+        "id": "wi_01",
+        "appId": APP,
+        "operatorId": TENANT,
+        "environment": "production",
+        "serviceAccountId": "sa_01jz0aaaaaaaaaaaaaaaaaaaaa",
+        "allowedActions": ["*"],
+        "enabled": true,
+    })
+    .to_string();
+    let (url, rx, handle) =
+        start_server(vec![("200 OK", sa_list.to_string()), ("200 OK", binding)]);
+
+    let output = isolated_command(tmp.path(), &url)
+        .env("TACHYON_API_KEY", "test-api-key")
+        .args([
+            "auth",
+            "workload-identity",
+            "ensure",
+            "--app-id",
+            APP,
+            "--environment",
+            "production",
+            "--service-account",
+            "gha.deploy",
+            "--json",
+        ])
+        .output()
+        .unwrap();
+    assert_success(&output);
+    handle.join().unwrap();
+
+    let _lookup = rx.recv().unwrap();
+    let put = rx.recv().unwrap();
+    assert!(put.head.starts_with("PUT /v1/auth/workload-identities "));
+    let body: serde_json::Value = serde_json::from_str(&put.body).unwrap();
+    assert_eq!(body["allowedActions"], serde_json::json!(["*"]));
+}
