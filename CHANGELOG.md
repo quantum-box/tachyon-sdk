@@ -102,8 +102,9 @@
 - `tachyon data` calls Tachyon Data directly. Against the production Tachyon
   API (the `--api-url` default) it now sends `https://data-api.txcloud.app/v1/...`
   instead of `https://api.n1.tachy.one/data/v1/...`; any other `--api-url` keeps
-  that API's `/data` forward. `--data-api-url` / `TACHYON_DATA_API_URL` names
-  the Data URL explicitly (ADR-0176).
+  that API's `/data` forward. `--data-api-url` / `TACHYON_DATA_API_URL`, or the
+  profile setting `tachyon config set data.api_url <url>`, names the Data URL
+  explicitly (ADR-0176).
 - `tachyon org service-accounts delete` requires `--yes` to delete an account and its API keys. Without it, the command displays the resolved target. Update deletion scripts to pass `--yes`.
 - Service account creation validates the name and sends the creation request only once.
 - CLI 0.6.90: `tachyon auth login` no longer hands the authorization code to

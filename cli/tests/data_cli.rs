@@ -114,6 +114,7 @@ fn run(home: &Path, api_url: &str, args: &[&str]) -> Output {
         .env("TACHYON_API_URL", api_url)
         .env_remove("TACHYON_CONFIG")
         .env_remove("TACHYON_PROFILE")
+        .env_remove("TACHYON_DATA_API_URL")
         .env_remove("TACHYON_TENANT_ID");
     cmd.args(["--tenant-id", TENANT_ID])
         .args(args)
@@ -157,6 +158,29 @@ fn an_explicit_data_url_is_called_without_the_data_prefix() {
     let requests = rx.recv().unwrap();
     requests[0].assert_start_line("GET /v1/datasets");
     assert_eq!(requests[0].header("x-operator-id"), Some(TENANT_ID));
+}
+
+/// The profile's `data.api_url` names Data when no flag or env does.
+#[test]
+fn a_profile_data_url_is_used_without_the_data_prefix() {
+    let home = TempDir::new().unwrap();
+    let (url, rx) = start_server(vec![Reply(200, DATASET_PAGE)]);
+
+    let set = run(
+        home.path(),
+        "http://127.0.0.1:9",
+        &["config", "set", "data.api_url", &url],
+    );
+    assert_success(&set);
+    let output = run(
+        home.path(),
+        "http://127.0.0.1:9",
+        &["data", "dataset", "list"],
+    );
+    assert_success(&output);
+
+    let requests = rx.recv().unwrap();
+    requests[0].assert_start_line("GET /v1/datasets");
 }
 
 #[test]

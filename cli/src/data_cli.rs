@@ -11,7 +11,9 @@
 //! The commands talk to Tachyon Data directly (ADR-0176): against the
 //! production Tachyon API they call `https://data-api.txcloud.app/v1/...`,
 //! and against any other `--api-url` they keep that API's `/data` forward.
-//! `--data-api-url` / `TACHYON_DATA_API_URL` names Data explicitly. They
+//! `--data-api-url` / `TACHYON_DATA_API_URL`, or the profile's
+//! `data.api_url` (`tachyon config set data.api_url <url>`), names Data
+//! explicitly. They
 //! reuse the profile credentials `tachyon auth login` already stores.
 //! Nothing here prints, logs, or writes a token.
 //!
@@ -60,8 +62,9 @@ const DEFAULT_POLL_INTERVAL_SECS: u64 = 2;
 const DEFAULT_WAIT_TIMEOUT_SECS: u64 = 300;
 #[derive(Debug, Clone, Args)]
 pub struct DataArgs {
-    /// Tachyon Data base URL, before `/v1` (default: https://data-api.txcloud.app
-    /// for the production Tachyon API, otherwise `<api-url>/data`)
+    /// Tachyon Data base URL, before `/v1` (default: the profile's
+    /// `data.api_url`, else https://data-api.txcloud.app for the production
+    /// Tachyon API, otherwise `<api-url>/data`)
     #[arg(long, env = "TACHYON_DATA_API_URL", global = true)]
     pub data_api_url: Option<String>,
 
@@ -850,8 +853,20 @@ impl<'a> DataApi<'a> {
 
 // ------------------------------------------------------------------ commands
 
-pub async fn run(args: &DataArgs, config: &Configuration, tenant_id: &str) -> Result<()> {
-    let base = data_base_url(&config.base_path, args.data_api_url.as_deref());
+/// `stored_data_api_url` is the profile's `data.api_url`; the flag and
+/// `TACHYON_DATA_API_URL` take precedence over it.
+pub async fn run(
+    args: &DataArgs,
+    config: &Configuration,
+    tenant_id: &str,
+    stored_data_api_url: Option<&str>,
+) -> Result<()> {
+    let explicit = args
+        .data_api_url
+        .as_deref()
+        .filter(|url| !url.trim().is_empty())
+        .or(stored_data_api_url);
+    let base = data_base_url(&config.base_path, explicit);
     let api = DataApi::new(config, base, tenant_id)?;
     match &args.command {
         DataCommand::Dataset(dataset) => match &dataset.command {
