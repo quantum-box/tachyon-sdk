@@ -14,7 +14,7 @@ fn config(api_url: &str, subject_token: SubjectTokenSource) -> WorkloadIdentityC
         app_id: "app_01test".into(),
         operator_id: "tn_01test".into(),
         environment: "production".into(),
-        action: "compute:CreateDeployment".into(),
+        action: Some("compute:CreateDeployment".into()),
         subject_token,
         ttl_seconds: Some(300),
     }
@@ -50,7 +50,7 @@ async fn exchange_posts_camel_case_body() {
         app_id: "app_01test".into(),
         operator_id: "tn_01test".into(),
         environment: "production".into(),
-        action: "compute:CreateDeployment".into(),
+        action: Some("compute:CreateDeployment".into()),
         subject_token: "oidc-jwt".into(),
         ttl_seconds: Some(300),
     };
@@ -201,4 +201,23 @@ fn tempdir() -> std::path::PathBuf {
     ));
     std::fs::create_dir_all(&dir).unwrap();
     dir
+}
+
+#[tokio::test]
+async fn exchange_omits_action_when_none() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path(TOKEN_EXCHANGE_PATH))
+        .respond_with(exchange_response("tachyon-jwt", 300))
+        .mount(&server)
+        .await;
+
+    let mut cfg = config(&server.uri(), SubjectTokenSource::Literal("oidc".into()));
+    cfg.action = None;
+    cfg.exchange(&reqwest::Client::new()).await.unwrap();
+
+    let requests = server.received_requests().await.unwrap();
+    let body: serde_json::Value = serde_json::from_slice(&requests[0].body).unwrap();
+    assert!(body.get("action").is_none(), "{body}");
+    assert_eq!(body["appId"], "app_01test");
 }

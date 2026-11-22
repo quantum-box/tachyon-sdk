@@ -16,7 +16,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 
 use anyhow::{anyhow, bail, Result};
 use tachyon_sdk::workload_identity::{
-    SubjectTokenSource, WorkloadIdentityConfig, WorkloadIdentityCredentials,
+    SubjectTokenSource, WorkloadIdentityConfig, WorkloadIdentityCredentials, WorkloadIdentityError,
 };
 
 use crate::resolve;
@@ -102,7 +102,7 @@ pub fn config_from_env(
         get(name).ok_or_else(|| anyhow!("{ENV_APP_ID} is set, so {name} must be set too"))
     };
     let environment = required(ENV_ENVIRONMENT)?;
-    let action = required(ENV_ACTION)?;
+    let action = get(ENV_ACTION).map(|action| action.trim().to_string());
     let ttl_seconds = get(ENV_TTL).map(|value| parse_ttl(&value)).transpose()?;
     let audience = get(ENV_AUDIENCE);
     let subject_token = subject_token_source(
@@ -116,7 +116,7 @@ pub fn config_from_env(
         app_id: app_id.trim().to_string(),
         operator_id: operator_id(tenant)?,
         environment: environment.trim().to_string(),
-        action: action.trim().to_string(),
+        action,
         subject_token,
         ttl_seconds,
     }))
@@ -175,6 +175,33 @@ pub fn manages(token: Option<&str>) -> bool {
         .is_some_and(|issued| issued.contains(token))
 }
 
+/// Describe a failed exchange. A server that predates optional actions
+/// (tachyon-api before v0.92.921) rejects a request without `action` as
+/// invalid, so that case gets a hint to pass one.
+pub fn exchange_error(err: WorkloadIdentityError, action_given: bool) -> anyhow::Error {
+    let old_server = !action_given
+        && matches!(
+            err,
+            WorkloadIdentityError::Status {
+                status: 400 | 422,
+                ..
+            }
+        );
+    if old_server {
+        anyhow!(
+            "workload identity token exchange failed: {err}\n\
+             hint: no action was sent, and Tachyon API servers before v0.92.921 require \
+             one. Set --action or {ENV_ACTION} to one of the binding's allowed actions."
+        )
+    } else {
+        anyhow!("workload identity token exchange failed: {err}")
+    }
+}
+
+fn action_given(credentials: &WorkloadIdentityCredentials) -> bool {
+    credentials.config().action.is_some()
+}
+
 /// Token for API calls in credential mode, or `None` when the mode is off.
 pub async fn current_token() -> Option<Result<String>> {
     let credentials = CREDENTIALS.get()?;
@@ -183,7 +210,7 @@ pub async fn current_token() -> Option<Result<String>> {
             .access_token()
             .await
             .inspect(|token| mask_once(token))
-            .map_err(|err| anyhow!("workload identity token exchange failed: {err}")),
+            .map_err(|err| exchange_error(err, action_given(credentials))),
     )
 }
 
@@ -198,7 +225,8 @@ pub async fn refresh_after_401() -> Option<String> {
             Some(token)
         }
         Err(err) => {
-            eprintln!("Warning: workload identity token exchange after 401 failed: {err}");
+            let err = exchange_error(err, action_given(credentials));
+            eprintln!("Warning: {err} (after 401)");
             None
         }
     }
@@ -227,11 +255,48 @@ mod tests {
     }
 
     #[test]
-    fn requires_environment_and_action() {
+    fn requires_environment() {
         let err = config_from_env("http://api", TENANT, lookup(&[(ENV_APP_ID, "app_1")]))
             .unwrap_err()
             .to_string();
         assert!(err.contains(ENV_ENVIRONMENT));
+    }
+
+    #[test]
+    fn action_is_optional() {
+        let config = config_from_env(
+            "http://api",
+            TENANT,
+            lookup(&[
+                (ENV_APP_ID, "app_1"),
+                (ENV_ENVIRONMENT, "production"),
+                (ENV_SUBJECT_TOKEN_ENV, "OIDC"),
+            ]),
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(config.action, None);
+    }
+
+    #[test]
+    fn old_server_hint_only_without_action_on_invalid_request() {
+        let status = |status| WorkloadIdentityError::Status {
+            call: "token exchange",
+            status,
+            body: String::new(),
+        };
+        assert!(exchange_error(status(422), false)
+            .to_string()
+            .contains("v0.92.921"));
+        assert!(exchange_error(status(400), false)
+            .to_string()
+            .contains(ENV_ACTION));
+        assert!(!exchange_error(status(422), true)
+            .to_string()
+            .contains("hint"));
+        assert!(!exchange_error(status(403), false)
+            .to_string()
+            .contains("hint"));
     }
 
     #[test]
@@ -252,6 +317,7 @@ mod tests {
         .unwrap();
         assert_eq!(config.operator_id, TENANT);
         assert_eq!(config.ttl_seconds, Some(600));
+        assert_eq!(config.action.as_deref(), Some("compute:CreateDeployment"));
         assert!(matches!(
             config.subject_token,
             SubjectTokenSource::GithubActions { ref audience, .. }

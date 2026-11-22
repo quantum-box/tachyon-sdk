@@ -9,7 +9,7 @@ use anyhow::{anyhow, Context, Result};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     ffi::{OsStr, OsString},
     path::{Path, PathBuf},
     process::Stdio,
@@ -792,6 +792,7 @@ async fn clone_repository(
         .arg(checkout_dir)
         .current_dir("/workspace")
         .envs(env);
+    remove_workload_identity_env(&mut clone, env);
     run_command("git clone", clone).await?;
 
     if let Some(commit) = requested_commit(&workload.source) {
@@ -804,6 +805,7 @@ async fn clone_repository(
             .arg(commit)
             .current_dir(checkout_dir)
             .envs(env);
+        remove_workload_identity_env(&mut fetch, env);
         if let Err(error) = run_command("git fetch", fetch).await {
             tracing::warn!(%error, "git fetch for requested commit failed; trying checkout anyway");
         }
@@ -814,6 +816,7 @@ async fn clone_repository(
             .arg(commit)
             .current_dir(checkout_dir)
             .envs(env);
+        remove_workload_identity_env(&mut checkout, env);
         run_command("git checkout", checkout).await?;
     }
 
@@ -1014,6 +1017,7 @@ async fn run_cloudflare_pages_deploy(
         .envs(env)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    remove_workload_identity_env(&mut command, env);
 
     run_command("wrangler pages deploy", command).await
 }
@@ -1062,6 +1066,7 @@ async fn run_cloudflare_workers_deploy(
         .envs(env)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    remove_workload_identity_env(&mut command, env);
 
     run_command("wrangler deploy", command).await
 }
@@ -1437,6 +1442,7 @@ async fn run_d1_migrations(
             .envs(env)
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
+        remove_workload_identity_env(&mut command, env);
 
         let command_result =
             match run_command_capture("wrangler d1 migrations apply", command).await {
@@ -2315,6 +2321,7 @@ async fn run_buildkit(
         .envs(env)
         .env("HOME", "/workspace")
         .env("DOCKER_CONFIG", BUILDKIT_DOCKER_CONFIG_DIR);
+    remove_workload_identity_env(&mut command, env);
     if let Some(cache_repo) = buildkit_cache_repository(workload) {
         command
             .arg("--import-cache")
@@ -2455,16 +2462,78 @@ const PLATFORM_CREDENTIAL_ENV: &[&str] = &[
     "TACHYON_BUILD_WORKLOAD_SPEC_JSON",
 ];
 
+/// Inputs a process can exchange for a Tachyon token through Workload
+/// Identity Federation (the CLI's credential mode and the GitHub Actions
+/// OIDC request pair). A repository command holding them could mint its own
+/// Tachyon token, so they are withheld like the platform credentials.
+const WORKLOAD_IDENTITY_ENV_PREFIX: &str = "TACHYON_WORKLOAD_IDENTITY_";
+const OIDC_REQUEST_ENV: &[&str] = &[
+    "ACTIONS_ID_TOKEN_REQUEST_URL",
+    "ACTIONS_ID_TOKEN_REQUEST_TOKEN",
+];
+
 fn is_platform_credential_env(name: &str) -> bool {
     PLATFORM_CREDENTIAL_ENV.contains(&name)
+        || name.starts_with(WORKLOAD_IDENTITY_ENV_PREFIX)
+        || OIDC_REQUEST_ENV.contains(&name)
+}
+
+/// Every variable a repository command must not see: the fixed credential
+/// names, the workload identity variables present in the workload env or
+/// the inherited env, and the variable that
+/// `TACHYON_WORKLOAD_IDENTITY_SUBJECT_TOKEN_ENV` names, which holds the
+/// OIDC token itself.
+fn withheld_env_names(
+    env: &BTreeMap<String, String>,
+    inherited: impl IntoIterator<Item = (String, String)>,
+) -> BTreeSet<String> {
+    let mut names: BTreeSet<String> = PLATFORM_CREDENTIAL_ENV
+        .iter()
+        .chain(OIDC_REQUEST_ENV)
+        .map(|name| name.to_string())
+        .collect();
+    let subject_env = crate::workload_identity::ENV_SUBJECT_TOKEN_ENV;
+    for (name, value) in env
+        .iter()
+        .map(|(name, value)| (name.clone(), value.clone()))
+        .chain(inherited)
+    {
+        if name == subject_env && !value.trim().is_empty() {
+            names.insert(value.trim().to_string());
+        }
+        if is_platform_credential_env(&name) {
+            names.insert(name);
+        }
+    }
+    names
+}
+
+/// The process env, skipping entries that are not valid UTF-8.
+fn inherited_env() -> impl Iterator<Item = (String, String)> {
+    std::env::vars_os()
+        .filter_map(|(name, value)| Some((name.into_string().ok()?, value.into_string().ok()?)))
 }
 
 /// The workload env without platform credentials, for repository commands.
 fn repository_command_env(env: &BTreeMap<String, String>) -> BTreeMap<String, String> {
+    let withheld = withheld_env_names(env, inherited_env());
     env.iter()
-        .filter(|(name, _)| !is_platform_credential_env(name))
+        .filter(|(name, _)| !withheld.contains(name.as_str()))
         .map(|(name, value)| (name.clone(), value.clone()))
         .collect()
+}
+
+/// Drop the workload identity inputs from a platform step's env. Platform
+/// steps keep the credentials they need, but some run repository code (a
+/// `wrangler.toml` build command), which has no use for a way to mint
+/// Tachyon tokens. Call after `.envs(env)` so a copy in the workload env is
+/// removed too.
+fn remove_workload_identity_env(command: &mut Command, env: &BTreeMap<String, String>) {
+    for name in withheld_env_names(env, inherited_env()) {
+        if !PLATFORM_CREDENTIAL_ENV.contains(&name.as_str()) {
+            command.env_remove(name);
+        }
+    }
 }
 
 /// Run a repository-supplied command. The child gets the workload env minus
@@ -2479,7 +2548,7 @@ async fn run_shell(
     tracing::info!(%label, %command, cwd = %cwd.display(), "running build command");
     let mut cmd = Command::new("bash");
     cmd.arg("-lc").arg(command).current_dir(cwd);
-    for name in PLATFORM_CREDENTIAL_ENV {
+    for name in withheld_env_names(env, inherited_env()) {
         cmd.env_remove(name);
     }
     cmd.envs(repository_command_env(env))
@@ -3889,6 +3958,91 @@ mod tests {
 
         std::env::remove_var("TACHYON_GAR_ACCESS_TOKEN");
         assert_eq!(result.unwrap().stdout, "cf= gar= docker= app=kept");
+    }
+
+    #[tokio::test]
+    async fn build_commands_never_see_workload_identity_inputs() {
+        // A repository command holding the workload identity inputs could
+        // exchange them for its own Tachyon token, so they are withheld
+        // whether they arrive through the pod env or the workload env.
+        std::env::set_var("TACHYON_WORKLOAD_IDENTITY_APP_ID", "app_wif_test");
+        std::env::set_var(
+            "TACHYON_WORKLOAD_IDENTITY_SUBJECT_TOKEN_ENV",
+            "BUILD_TEST_WIF_OIDC_TOKEN",
+        );
+        std::env::set_var("BUILD_TEST_WIF_OIDC_TOKEN", "dummy-oidc-token");
+        std::env::set_var("ACTIONS_ID_TOKEN_REQUEST_URL", "https://gh.test/oidc");
+        let env = BTreeMap::from([
+            (
+                "TACHYON_WORKLOAD_IDENTITY_ACTION".to_string(),
+                "compute:CreateDeployment".to_string(),
+            ),
+            (
+                "ACTIONS_ID_TOKEN_REQUEST_TOKEN".to_string(),
+                "dummy-request-token".to_string(),
+            ),
+            ("APP_SETTING".to_string(), "kept".to_string()),
+        ]);
+        let script = "printf 'app=%s subject_env=%s oidc=%s action=%s url=%s req=%s setting=%s' \
+             \"${TACHYON_WORKLOAD_IDENTITY_APP_ID:-}\" \
+             \"${TACHYON_WORKLOAD_IDENTITY_SUBJECT_TOKEN_ENV:-}\" \
+             \"${BUILD_TEST_WIF_OIDC_TOKEN:-}\" \
+             \"${TACHYON_WORKLOAD_IDENTITY_ACTION:-}\" \
+             \"${ACTIONS_ID_TOKEN_REQUEST_URL:-}\" \
+             \"${ACTIONS_ID_TOKEN_REQUEST_TOKEN:-}\" \"${APP_SETTING:-}\"";
+        let expected = "app= subject_env= oidc= action= url= req= setting=kept";
+        let cwd = std::env::temp_dir();
+
+        let repository = run_shell("build", script, &cwd, &env).await;
+
+        // Platform steps (wrangler, git, buildkit) drop the same inputs.
+        let mut platform = Command::new("bash");
+        platform.arg("-c").arg(script).envs(&env);
+        remove_workload_identity_env(&mut platform, &env);
+        let platform = platform.output().await;
+
+        for name in [
+            "TACHYON_WORKLOAD_IDENTITY_APP_ID",
+            "TACHYON_WORKLOAD_IDENTITY_SUBJECT_TOKEN_ENV",
+            "BUILD_TEST_WIF_OIDC_TOKEN",
+            "ACTIONS_ID_TOKEN_REQUEST_URL",
+        ] {
+            std::env::remove_var(name);
+        }
+        assert_eq!(repository.unwrap().stdout, expected);
+        let platform = platform.unwrap();
+        assert_eq!(String::from_utf8_lossy(&platform.stdout), expected);
+    }
+
+    #[test]
+    fn platform_steps_keep_their_credentials_without_workload_identity_inputs() {
+        let env = BTreeMap::from([
+            (
+                "CLOUDFLARE_API_TOKEN".to_string(),
+                "dummy-cf-token".to_string(),
+            ),
+            (
+                "TACHYON_WORKLOAD_IDENTITY_SUBJECT_TOKEN_ENV".to_string(),
+                "NAMED_OIDC".to_string(),
+            ),
+        ]);
+        let withheld = withheld_env_names(&env, Vec::new());
+        assert!(withheld.contains("CLOUDFLARE_API_TOKEN"));
+        assert!(withheld.contains("NAMED_OIDC"));
+        assert!(withheld.contains("TACHYON_WORKLOAD_IDENTITY_SUBJECT_TOKEN_ENV"));
+        assert!(withheld.contains("ACTIONS_ID_TOKEN_REQUEST_TOKEN"));
+
+        let mut command = Command::new("true");
+        command.envs(&env);
+        remove_workload_identity_env(&mut command, &env);
+        let removed: Vec<_> = command
+            .as_std()
+            .get_envs()
+            .filter(|(_, value)| value.is_none())
+            .map(|(name, _)| name.to_string_lossy().to_string())
+            .collect();
+        assert!(!removed.contains(&"CLOUDFLARE_API_TOKEN".to_string()));
+        assert!(removed.contains(&"NAMED_OIDC".to_string()));
     }
 
     #[test]
