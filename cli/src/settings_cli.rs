@@ -13,7 +13,7 @@ pub struct ConfigArgs {
 pub enum ConfigCommand {
     /// Set a value for the selected profile
     Set {
-        /// Setting key: pm.no_delegate or pm.default_team
+        /// Setting key: pm.no_delegate, pm.default_team, or data.api_url
         key: String,
         /// Setting value
         value: String,
@@ -25,7 +25,7 @@ pub enum ConfigCommand {
     },
     /// Unset a value for the selected profile
     Unset {
-        /// Setting key: pm.no_delegate or pm.default_team
+        /// Setting key: pm.no_delegate, pm.default_team, or data.api_url
         key: String,
     },
 }
@@ -34,6 +34,7 @@ pub enum ConfigCommand {
 enum SettingKey {
     PmNoDelegate,
     PmDefaultTeam,
+    DataApiUrl,
 }
 
 impl SettingKey {
@@ -41,8 +42,9 @@ impl SettingKey {
         match value {
             "pm.no_delegate" => Ok(Self::PmNoDelegate),
             "pm.default_team" => Ok(Self::PmDefaultTeam),
+            "data.api_url" => Ok(Self::DataApiUrl),
             _ => Err(anyhow!(
-                "unsupported setting '{value}'; expected pm.no_delegate or pm.default_team"
+                "unsupported setting '{value}'; expected pm.no_delegate, pm.default_team, or data.api_url"
             )),
         }
     }
@@ -51,6 +53,7 @@ impl SettingKey {
         match self {
             Self::PmNoDelegate => "pm.no_delegate",
             Self::PmDefaultTeam => "pm.default_team",
+            Self::DataApiUrl => "data.api_url",
         }
     }
 }
@@ -81,6 +84,9 @@ fn set(profile_name: &str, key: SettingKey, value: &str) -> Result<()> {
             }
             profile.pm.default_team = Some(value.to_string());
         }
+        SettingKey::DataApiUrl => {
+            profile.data.api_url = Some(parse_url(value)?);
+        }
     }
 
     settings::save(&settings)?;
@@ -102,6 +108,10 @@ fn get(profile_name: &str, key: Option<SettingKey>) -> Result<()> {
             Some(value) => println!("{value}"),
             None => return Err(not_set(profile_name, SettingKey::PmDefaultTeam)),
         },
+        Some(SettingKey::DataApiUrl) => match profile.data.api_url {
+            Some(value) => println!("{value}"),
+            None => return Err(not_set(profile_name, SettingKey::DataApiUrl)),
+        },
     }
     Ok(())
 }
@@ -112,6 +122,7 @@ fn unset(profile_name: &str, key: SettingKey) -> Result<()> {
     let removed = match key {
         SettingKey::PmNoDelegate => profile.pm.no_delegate.take().is_some(),
         SettingKey::PmDefaultTeam => profile.pm.default_team.take().is_some(),
+        SettingKey::DataApiUrl => profile.data.api_url.take().is_some(),
     };
 
     if removed {
@@ -133,6 +144,20 @@ fn parse_bool(value: &str) -> Result<bool> {
     }
 }
 
+/// An `http(s)://` base URL without its trailing slash.
+fn parse_url(value: &str) -> Result<String> {
+    let value = value.trim().trim_end_matches('/');
+    let rest = value
+        .strip_prefix("https://")
+        .or_else(|| value.strip_prefix("http://"));
+    match rest {
+        Some(host) if !host.is_empty() => Ok(value.to_string()),
+        _ => Err(anyhow!(
+            "data.api_url must be an http:// or https:// URL, e.g. https://data-api.txcloud.app"
+        )),
+    }
+}
+
 fn not_set(profile_name: &str, key: SettingKey) -> anyhow::Error {
     anyhow!("{} is not set for profile '{profile_name}'", key.name())
 }
@@ -151,7 +176,25 @@ mod tests {
             SettingKey::parse("pm.default_team").unwrap(),
             SettingKey::PmDefaultTeam
         );
+        assert_eq!(
+            SettingKey::parse("data.api_url").unwrap(),
+            SettingKey::DataApiUrl
+        );
         assert!(SettingKey::parse("pm.unknown").is_err());
+    }
+
+    #[test]
+    fn parses_data_api_urls() {
+        assert_eq!(
+            parse_url(" https://data-api.txcloud.app/ ").unwrap(),
+            "https://data-api.txcloud.app"
+        );
+        assert_eq!(
+            parse_url("http://localhost:50054/data").unwrap(),
+            "http://localhost:50054/data"
+        );
+        assert!(parse_url("data-api.txcloud.app").is_err());
+        assert!(parse_url("https://").is_err());
     }
 
     #[test]

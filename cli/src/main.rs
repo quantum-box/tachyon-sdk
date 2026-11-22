@@ -1180,7 +1180,8 @@ async fn run() -> Result<()> {
             let tenant_arg = tenant_arg(&cli, project_config.as_ref());
             let config = build_config(&cli, &active).await;
             let tenant_id = resolve::resolve_tenant_id(&config, tenant_arg, &active).await?;
-            data_cli::run(args, &config, &tenant_id).await
+            let stored_data_api_url = settings::stored_data_api_url(&active)?;
+            data_cli::run(args, &config, &tenant_id, stored_data_api_url.as_deref()).await
         }
         Commands::FeatureFlag(args) => {
             let project_config = config::loader::load(cli.config.as_deref())?;

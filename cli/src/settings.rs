@@ -23,13 +23,31 @@ pub struct Settings {
 pub struct ProfileSettings {
     #[serde(default, skip_serializing_if = "PmSettings::is_empty")]
     pub pm: PmSettings,
+    #[serde(default, skip_serializing_if = "DataSettings::is_empty")]
+    pub data: DataSettings,
     #[serde(flatten)]
     extra: BTreeMap<String, Value>,
 }
 
 impl ProfileSettings {
     fn is_empty(&self) -> bool {
-        self.pm.is_empty() && self.extra.is_empty()
+        self.pm.is_empty() && self.data.is_empty() && self.extra.is_empty()
+    }
+}
+
+/// `tachyon data` settings of a profile.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DataSettings {
+    /// Tachyon Data base URL, before `/v1` (ADR-0176).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub api_url: Option<String>,
+    #[serde(flatten)]
+    extra: BTreeMap<String, Value>,
+}
+
+impl DataSettings {
+    fn is_empty(&self) -> bool {
+        self.api_url.is_none() && self.extra.is_empty()
     }
 }
 
@@ -128,6 +146,12 @@ pub fn resolve_pm(profile_name: &str) -> Result<ResolvedPmSettings> {
         no_delegate: parse_bool_env(PM_NO_DELEGATE_ENV)?.or(stored.no_delegate),
         default_team: parse_non_empty_env(PM_DEFAULT_TEAM_ENV)?.or(stored.default_team),
     })
+}
+
+/// The Data base URL the profile stores, if any. `--data-api-url` and
+/// `TACHYON_DATA_API_URL` take precedence over it.
+pub fn stored_data_api_url(profile_name: &str) -> Result<Option<String>> {
+    Ok(profile(&load()?, profile_name)?.data.api_url)
 }
 
 fn parse_bool_env(name: &str) -> Result<Option<bool>> {
