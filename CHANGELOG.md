@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+## tachyon-cli-v0.6.103
+
+### Fixed
+
+- `tachyon feature-flag publish` uses the production host and platform IDs as
+  defaults only against the production API; any other `--api-url` must pass
+  `--host` and `--platform-id`. `--json` now prints
+  `{ "receipt": ..., "recovered": true|false }` so a receipt read after an
+  unconfirmed apply is marked.
+
 ## tachyon-cli-v0.6.102
 
 ### Added
