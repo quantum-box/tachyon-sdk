@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+## tachyon-cli-v0.6.102
+
+### Added
+
+- `tachyon feature-flag publish <KEY> --target <tn_...>... --until <RFC3339|7d>
+  --reason <text>` publishes a host boolean flag to a finite list of tenants
+  through `/v1/feature-flags/system-publications`: preview, confirmation,
+  single-use approval, apply and receipt. `--dry-run` sends only the preview,
+  `--yes` skips the prompt and `--disable` closes the publication without an
+  approval. An apply that times out or is not confirmed is never resent; the
+  receipt is read instead. The server still accepts only an interactive login
+  of a host administrator.
+
 ## tachyon-cli-v0.6.101
 
 ### Changed

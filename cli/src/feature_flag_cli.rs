@@ -28,6 +28,9 @@ pub enum FeatureFlagCommand {
     Enable { key: String },
     /// Set a flag OFF; server approval and ownership rules still apply
     Disable { key: String },
+    /// Publish a host boolean flag to named tenants (preview, approval,
+    /// apply, receipt). Needs an interactive login of a host administrator
+    Publish(crate::feature_flag_publish::PublishArgs),
 }
 
 const FIELDS: &str = "id key name enabled tenantId inheritedFrom baselineEnabled isOverride";
@@ -46,6 +49,9 @@ fn request(command: &FeatureFlagCommand) -> Value {
             "query": "mutation($key: String!, $enabled: Boolean!) { setFeatureFlagEnabled(key: $key, enabled: $enabled) { key managingScopeId ownerScopeId targetScopeId revision outcome } }",
             "variables": { "key": key, "enabled": matches!(command, FeatureFlagCommand::Enable { .. }) },
         }),
+        FeatureFlagCommand::Publish(_) => {
+            unreachable!("publish uses the system-publications REST API")
+        }
     }
 }
 
@@ -78,6 +84,9 @@ async fn execute(api: &ApiClient, command: &FeatureFlagCommand) -> Result<Value>
 }
 
 pub async fn run(args: &FeatureFlagArgs, config: &Configuration, tenant: &str) -> Result<()> {
+    if let FeatureFlagCommand::Publish(publish) = &args.command {
+        return crate::feature_flag_publish::run(publish, config, args.json).await;
+    }
     let result = execute(&ApiClient::new(config, tenant)?, &args.command).await?;
     if !args.json && matches!(args.command, FeatureFlagCommand::List { .. }) {
         #[derive(serde::Deserialize)]

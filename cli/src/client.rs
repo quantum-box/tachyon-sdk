@@ -185,9 +185,28 @@ impl ApiClient {
         tenant_id: &str,
         auth_diagnostics: Option<AuthDiagnostics>,
     ) -> Result<Self> {
+        Self::build(config, tenant_id, platform_id(), auth_diagnostics)
+    }
+
+    /// Build for an explicit operator and platform scope instead of the
+    /// process-wide `--platform-id`.
+    pub fn new_scoped(
+        config: &Configuration,
+        tenant_id: &str,
+        platform_id: Option<&str>,
+    ) -> Result<Self> {
+        Self::build(config, tenant_id, platform_id, None)
+    }
+
+    fn build(
+        config: &Configuration,
+        tenant_id: &str,
+        platform_id: Option<&str>,
+        auth_diagnostics: Option<AuthDiagnostics>,
+    ) -> Result<Self> {
         let headers = default_headers(
             tenant_id,
-            platform_id(),
+            platform_id,
             config.bearer_access_token.as_deref(),
         )?;
         let client = Client::builder().default_headers(headers).build()?;
