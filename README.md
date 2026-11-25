@@ -689,7 +689,8 @@ tachyon feature-flag publish <key> --target <tenant-id> --reason "<why>" --disab
 ```
 
 - The server accepts only an interactive login (`tachyon auth login`) of a human who administers the host tenant. API keys, service accounts, workload identity and Tachyon OAuth access tokens are refused.
-- Requests go to the host tenant (`--host`, default `tn_01jcjtqxah6mhyw4e5mahg02nd`) with `x-platform-id` set to the platform the login is verified against (`--platform-id`, default `tn_01hjjn348rn3t49zz6hvmfq67p`).
+- Requests go to the host tenant (`--host`) with `x-platform-id` set to the platform the login is verified against (`--platform-id`). Against the production API (`https://api.n1.tachy.one`) they default to `tn_01jcjtqxah6mhyw4e5mahg02nd` and `tn_01hjjn348rn3t49zz6hvmfq67p`; any other `--api-url` must pass both.
+- With `--json`, a committed publication prints `{ "receipt": ..., "recovered": true|false }`; `recovered` is true when apply did not answer and the receipt was read to confirm the commit.
 - `--until` takes RFC3339 or a duration from now (`30m`, `24h`, `7d`). It is resolved once, so preview, approval and apply carry the same window. Each key has its own server-side limit.
 - `--dry-run` sends only the preview. `--yes` skips the prompt; without it, a non-interactive run stops before the approval.
 - `--disable` closes the publication early and needs no approval.

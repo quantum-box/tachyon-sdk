@@ -47,7 +47,7 @@ use crate::client::{ApiClient, HttpError, RequestBody};
 /// Path prefix of the Data API under its base URL.
 const DATA_PREFIX: &str = "/v1";
 /// The production Tachyon API (`--api-url` default).
-const PRODUCTION_API_URL: &str = "https://api.n1.tachy.one";
+pub const PRODUCTION_API_URL: &str = "https://api.n1.tachy.one";
 /// Production Tachyon Data (ADR-0176).
 pub const PRODUCTION_DATA_API_URL: &str = "https://data-api.txcloud.app";
 /// Header that declares why data is being read or written.

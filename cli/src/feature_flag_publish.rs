@@ -9,10 +9,12 @@ use clap::Args;
 use serde_json::{json, Value};
 use std::io::{IsTerminal, Write};
 
-/// Production host tenant (`x-operator-id`).
+/// Production host tenant (`x-operator-id`), the `--host` default against
+/// the production API only.
 pub const HOST_TENANT_ID: &str = "tn_01jcjtqxah6mhyw4e5mahg02nd";
 /// Platform the Cognito session is verified against (`x-platform-id`). The
 /// host has no parent, so authentication needs a registered platform scope.
+/// The default against the production API only.
 pub const DEFAULT_PLATFORM_ID: &str = "tn_01hjjn348rn3t49zz6hvmfq67p";
 const BASE: &str = "/v1/feature-flags/system-publications";
 const MAX_TARGETS: usize = 50;
@@ -41,9 +43,10 @@ pub struct PublishArgs {
     /// Show the preview only; request no approval and change nothing
     #[arg(long, conflicts_with = "yes")]
     pub dry_run: bool,
-    /// Host tenant that owns the flag (x-operator-id)
-    #[arg(long, default_value = HOST_TENANT_ID)]
-    pub host: String,
+    /// Host tenant that owns the flag (x-operator-id). Defaults to the
+    /// production host against the production API; required elsewhere
+    #[arg(long)]
+    pub host: Option<String>,
 }
 
 /// Result of [`publish`].
@@ -56,6 +59,34 @@ pub enum Published {
     /// Committed; the apply response or the receipt read after an
     /// unconfirmed apply.
     Applied { receipt: Value, recovered: bool },
+}
+
+/// Picks the host and platform tenants. The production IDs are defaults only
+/// when `api_url` is the production API; any other API must name both, so a
+/// local or staging run never sends production IDs.
+pub fn scope<'a>(
+    api_url: &str,
+    host: Option<&'a str>,
+    platform: Option<&'a str>,
+) -> Result<(&'a str, &'a str)> {
+    let production = api_url.trim().trim_end_matches('/') == crate::data_cli::PRODUCTION_API_URL;
+    match (host, platform) {
+        (Some(host), Some(platform)) => Ok((host, platform)),
+        _ if production => Ok((
+            host.unwrap_or(HOST_TENANT_ID),
+            platform.unwrap_or(DEFAULT_PLATFORM_ID),
+        )),
+        _ => bail!(
+            "--api-url {api_url} is not the production API; pass --host and --platform-id \
+             (or TACHYON_PLATFORM_ID) for this environment"
+        ),
+    }
+}
+
+/// The `--json` output of a committed publication. `recovered` is true when
+/// apply did not answer and the receipt was read to confirm the commit.
+pub fn applied_json(receipt: &Value, recovered: bool) -> Value {
+    json!({ "receipt": receipt, "recovered": recovered })
 }
 
 /// Resolves `--until` once so every request carries the same window, which
@@ -240,8 +271,12 @@ pub async fn run(
     config: &tachyon_sdk::apis::configuration::Configuration,
     json: bool,
 ) -> Result<()> {
-    let platform = crate::client::platform_id().unwrap_or(DEFAULT_PLATFORM_ID);
-    let api = ApiClient::new_scoped(config, &args.host, Some(platform))?;
+    let (host, platform) = scope(
+        &config.base_path,
+        args.host.as_deref(),
+        crate::client::platform_id(),
+    )?;
+    let api = ApiClient::new_scoped(config, host, Some(platform))?;
     let body = proposal(args, Utc::now())?;
     let yes = args.yes;
     let outcome = publish(&api, &body, args.dry_run, APPLY_TIMEOUT, &mut |p| {
@@ -260,7 +295,10 @@ pub async fn run(
         Published::Declined => eprintln!("not applied"),
         Published::Applied { receipt, recovered } => {
             if json {
-                println!("{}", serde_json::to_string_pretty(&receipt)?);
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&applied_json(&receipt, recovered))?
+                );
             } else {
                 if recovered {
                     eprintln!("apply was not confirmed in time; the committed receipt was found");
@@ -370,7 +408,7 @@ mod tests {
             disable,
             yes: true,
             dry_run: false,
-            host: HOST_TENANT_ID.into(),
+            host: None,
         }
     }
 
@@ -499,6 +537,42 @@ mod tests {
         assert!(format!("{error:#}").contains("not resent"));
         assert_eq!(names(&calls), ["preview", "apply"]);
         handle.abort();
+    }
+
+    #[test]
+    fn production_ids_are_defaults_only_against_the_production_api() {
+        let prod = crate::data_cli::PRODUCTION_API_URL;
+        assert_eq!(
+            scope(prod, None, None).unwrap(),
+            (HOST_TENANT_ID, DEFAULT_PLATFORM_ID)
+        );
+        assert_eq!(
+            scope(&format!("{prod}/"), None, Some("tn_p")).unwrap(),
+            (HOST_TENANT_ID, "tn_p")
+        );
+        for api in ["http://localhost:50054", "https://api.staging.tachy.one"] {
+            for (host, platform) in [(None, None), (Some("tn_h"), None), (None, Some("tn_p"))] {
+                let error = scope(api, host, platform).unwrap_err().to_string();
+                assert!(error.contains("--host and --platform-id"), "{error}");
+            }
+            assert_eq!(
+                scope(api, Some("tn_h"), Some("tn_p")).unwrap(),
+                ("tn_h", "tn_p")
+            );
+        }
+    }
+
+    #[test]
+    fn json_output_marks_whether_the_receipt_was_recovered() {
+        let receipt = json!({"changeId": "fc_1", "approvalId": "ap_test"});
+        assert_eq!(
+            applied_json(&receipt, false),
+            json!({"receipt": receipt, "recovered": false})
+        );
+        assert_eq!(
+            applied_json(&receipt, true),
+            json!({"receipt": receipt, "recovered": true})
+        );
     }
 
     #[test]

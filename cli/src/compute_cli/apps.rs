@@ -1948,6 +1948,740 @@ fn opt_string_value(value: Option<&str>) -> Value {
     }
 }
 
+pub(crate) fn plan_env_vars(entry: &Value, environment: &str) -> Result<EnvPlan> {
+    let mut plan = EnvPlan::default();
+
+    if let Some(env_vars) = entry.get("envVars") {
+        let env_vars = env_vars
+            .as_array()
+            .ok_or_else(|| anyhow!("envVars must be an array"))?;
+        for env in env_vars {
+            let key = env
+                .get("name")
+                .and_then(Value::as_str)
+                .ok_or_else(|| anyhow!("env var entry is missing name"))?;
+            let target = env
+                .get("target")
+                .and_then(Value::as_str)
+                .map(ToString::to_string)
+                .map(Ok)
+                .unwrap_or_else(|| default_env_target(environment).map(ToString::to_string))?;
+            let env_type = env.get("type").and_then(Value::as_str).unwrap_or("plain");
+            let value = env.get("value").and_then(Value::as_str);
+            let value_from = env.get("valueFrom");
+            if env_type == "credential" || value_from.is_some() {
+                if value.is_some() {
+                    return Err(anyhow!("credential env var {key} must use valueFrom; literal values are not allowed"));
+                }
+                let value_from = value_from
+                    .ok_or_else(|| anyhow!("credential env var {key} is missing valueFrom"))?;
+                if extract_secret_ref(value_from)?.is_some() {
+                    plan.secret_refs.push(SecretEnvRef {
+                        key: key.to_string(),
+                        target,
+                    });
+                    continue;
+                }
+                if let Some(source) = server_managed_credential_source(value_from) {
+                    plan.server_managed_credentials
+                        .push(ServerManagedCredentialRef {
+                            key: key.to_string(),
+                            target,
+                            source,
+                        });
+                    continue;
+                }
+                if let Some((app_name, field)) = internal_service_ref(value_from)? {
+                    plan.internal_service_refs.push(InternalServiceRefPlan {
+                        key: key.to_string(),
+                        app_name,
+                        field,
+                    });
+                    continue;
+                }
+                return Err(anyhow!(
+                    "credential env var {key} supports valueFrom.secret, valueFrom.databaseRef, valueFrom.oauth2ClientRef, valueFrom.storageRef, or valueFrom.internalService"
+                ));
+            } else {
+                plan.plain.push(SetEnvVarEntry {
+                    key: key.to_string(),
+                    value: value
+                        .ok_or_else(|| anyhow!("plain env var {key} must define value"))?
+                        .to_string(),
+                    target: Some(target),
+                    branch: None,
+                    is_secret: Some(false),
+                });
+            }
+        }
+    }
+
+    if let Some(sentry) = plan_sentry_integration(entry)? {
+        plan.sentry_integrations.push(sentry);
+    }
+
+    Ok(plan)
+}
+
+fn plan_sentry_integration(entry: &Value) -> Result<Option<SentryIntegrationPlan>> {
+    let Some(project) = entry
+        .get("integrations")
+        .and_then(|integrations| integrations.get("sentry"))
+        .and_then(|sentry| sentry.get("project"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|project| !project.is_empty())
+    else {
+        return Ok(None);
+    };
+
+    let explicit_env_vars = entry
+        .get("envVars")
+        .map(|env_vars| {
+            env_vars
+                .as_array()
+                .ok_or_else(|| anyhow!("envVars must be an array"))
+        })
+        .transpose()?
+        .into_iter()
+        .flatten()
+        .filter_map(|env| env.get("name").and_then(Value::as_str))
+        .collect::<BTreeSet<_>>();
+
+    let env_vars = ["NEXT_PUBLIC_SENTRY_DSN", "SENTRY_DSN"]
+        .into_iter()
+        .filter(|name| !explicit_env_vars.contains(*name))
+        .map(ToString::to_string)
+        .collect::<Vec<_>>();
+
+    Ok(Some(SentryIntegrationPlan {
+        project: project.to_string(),
+        provider: sentry_provider_name(project),
+        env_vars,
+    }))
+}
+
+pub(super) fn sentry_provider_name(project: &str) -> String {
+    let normalized = project
+        .trim()
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() {
+                ch.to_ascii_lowercase()
+            } else {
+                '_'
+            }
+        })
+        .collect::<String>()
+        .trim_matches('_')
+        .to_string();
+    format!("sentry_{normalized}")
+}
+
+async fn validate_sentry_integration(api: &ApiClient) -> Result<()> {
+    let integrations: ListIntegrationsResponse = api.get("/v1/integrations").await?;
+    let Some(sentry) = integrations
+        .integrations
+        .iter()
+        .find(|integration| integration.provider.eq_ignore_ascii_case("sentry"))
+    else {
+        return Err(anyhow!(
+            "Sentry integration is not available for this tenant. Enable the Sentry integration before running tachyon compute apps apply."
+        ));
+    };
+    if !sentry.is_enabled {
+        return Err(anyhow!(
+            "Sentry integration is disabled for this tenant. Enable it before running tachyon compute apps apply."
+        ));
+    }
+    if sentry.requires_setup {
+        return Err(anyhow!(
+            "Sentry integration requires setup. Configure the Sentry integration provider secrets before running tachyon compute apps apply."
+        ));
+    }
+
+    let connections: ListConnectionsResponse = api.get("/v1/integrations/connections").await?;
+    let active_connection = connections.connections.iter().any(|connection| {
+        connection.provider.eq_ignore_ascii_case("sentry")
+            && connection.status.eq_ignore_ascii_case("active")
+    });
+    if !active_connection {
+        return Err(anyhow!(
+            "Sentry integration is enabled but has no active connection for this tenant. Run tachyon iac integrations get sentry and connect Sentry first."
+        ));
+    }
+
+    Ok(())
+}
+
+fn default_env_target(environment: &str) -> Result<&'static str> {
+    match environment.trim().to_ascii_lowercase().as_str() {
+        "production" | "prod" => Ok("production"),
+        "preview" => Ok("preview"),
+        "staging" | "stage" => Err(anyhow!(
+            "environment {environment} has no safe implicit env var target"
+        )),
+        _ => Ok("all"),
+    }
+}
+
+fn apply_target_for_environment(environment: &str) -> Option<&'static str> {
+    match environment.trim().to_ascii_lowercase().as_str() {
+        "production" | "prod" => Some("production"),
+        "preview" => Some("preview"),
+        _ => None,
+    }
+}
+
+fn apply_target_for_generated_env(environment: &str) -> Result<&'static str> {
+    apply_target_for_environment(environment).ok_or_else(|| {
+        anyhow!("environment {environment} has no safe target for generated Sentry env vars")
+    })
+}
+
+pub(crate) fn validate_generated_env_target(entry: &Value, environment: &str) -> Result<()> {
+    let generates_sentry_env =
+        plan_sentry_integration(entry)?.is_some_and(|plan| !plan.env_vars.is_empty());
+    if generates_sentry_env {
+        let _ = apply_target_for_generated_env(environment)?;
+    }
+    Ok(())
+}
+
+fn extract_secret_ref(value_from: &Value) -> Result<Option<String>> {
+    let Some(secret) = value_from.get("secret") else {
+        return Ok(None);
+    };
+    let (path, field) = if let Some(path) = secret.as_str() {
+        (path, None)
+    } else if let Some(path) = secret.get("path").and_then(Value::as_str) {
+        let field = match secret.get("field") {
+            None | Some(Value::Null) => None,
+            Some(field) => Some(
+                field
+                    .as_str()
+                    .ok_or_else(|| anyhow!("valueFrom.secret.field must be a string"))?
+                    .trim(),
+            ),
+        };
+        (path, field)
+    } else {
+        return Err(anyhow!(
+            "valueFrom.secret must be a key string or object with path"
+        ));
+    };
+
+    let reference = path.trim();
+    let parts = reference.split('/').collect::<Vec<_>>();
+    if parts.iter().any(|part| part.is_empty()) || parts[0].starts_with("tn_") {
+        return Err(anyhow!(
+            "valueFrom.secret path must not be empty, contain empty segments, or use tenant prefixes"
+        ));
+    }
+    if field.is_none() && parts.len() != 2 {
+        return Err(anyhow!(
+            "valueFrom.secret object field is required for paths other than '<vault>/<key>'"
+        ));
+    }
+    if let Some(field) = field {
+        if field.is_empty() || field.contains('#') {
+            return Err(anyhow!(
+                "valueFrom.secret.field must not be empty or contain '#'"
+            ));
+        }
+    }
+
+    Ok(Some(reference.to_string()))
+}
+
+fn server_managed_credential_source(value_from: &Value) -> Option<ServerManagedCredentialSource> {
+    if value_from.get("databaseRef").is_some() {
+        return Some(ServerManagedCredentialSource::Database);
+    }
+    if value_from.get("oauth2ClientRef").is_some() {
+        return Some(ServerManagedCredentialSource::OAuth2Client);
+    }
+    if value_from.get("storageRef").is_some() {
+        return Some(ServerManagedCredentialSource::Storage);
+    }
+    None
+}
+
+fn internal_service_ref(value_from: &Value) -> Result<Option<(String, Option<String>)>> {
+    let Some(reference) = value_from.get("internalService") else {
+        return Ok(None);
+    };
+    let app_name = reference
+        .get("appName")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| anyhow!("valueFrom.internalService.appName is required"))?;
+    let field = reference
+        .get("field")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string);
+    Ok(Some((app_name.to_string(), field)))
+}
+
+pub(super) fn cloud_app_manifest_for_iac(entry: &Value, tenant_id: &str) -> Result<Value> {
+    let name = entry
+        .get("name")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow!("app entry is missing name"))?;
+    let mut spec = entry.clone();
+    spec.as_object_mut()
+        .ok_or_else(|| anyhow!("CloudApps app entry must be an object"))?
+        .remove("name");
+    spec.as_object_mut()
+        .ok_or_else(|| anyhow!("CloudApps app entry must be an object"))?
+        .remove(DOCUMENT_TENANT_ID_KEY);
+    Ok(json!({
+        "apiVersion": "apps.tachy.one/v1alpha",
+        "kind": "CloudApp",
+        "metadata": {
+            "tenantId": tenant_id,
+            "name": name,
+        },
+        "spec": spec,
+    }))
+}
+
+/// Header carrying the change-control approval token to the server-side
+/// gate (ADR 0011 Layer 1). Sent as a header, not a GraphQL input field,
+/// so the token never lands in request-body logs.
+const CHANGE_CONTROL_TOKEN_HEADER: &str = "x-tachyon-change-control-token";
+
+async fn graphql_request_with_change_control(
+    api: &ApiClient,
+    body: Value,
+    change_control_token: Option<&str>,
+) -> Result<Value> {
+    let url = format!("{}/v1/graphql", api.base_url);
+    let mut request = api.authorize(api.client.post(url).json(&body)).await;
+    if let Some(token) = change_control_token
+        .map(str::trim)
+        .filter(|token| !token.is_empty())
+    {
+        request = request.header(CHANGE_CONTROL_TOKEN_HEADER, token);
+    }
+    let response = request.send().await?;
+    let status = response.status();
+    if !status.is_success() {
+        let body = response.text().await?;
+        return Err(anyhow!(
+            "graphql request failed: status={status}, body={body}"
+        ));
+    }
+    let payload: Value = response.json().await?;
+    if let Some(errors) = payload.get("errors") {
+        return Err(anyhow!("graphql error: {errors}"));
+    }
+    payload
+        .get("data")
+        .cloned()
+        .ok_or_else(|| anyhow!("missing data in graphql response"))
+}
+
+async fn save_compute_cloud_app_manifest(
+    api: &ApiClient,
+    manifest: &Value,
+    change_control_token: Option<&str>,
+) -> Result<()> {
+    let tenant_id = manifest
+        .get("metadata")
+        .and_then(|metadata| metadata.get("tenantId"))
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow!("CloudApp manifest is missing metadata.tenantId"))?;
+    let body = json!({
+        "query": r#"
+          mutation SaveManifest($input: SaveManifestInput!) {
+            saveManifest(input: $input) { kind }
+          }
+        "#,
+        "variables": {
+            "input": {
+                "tenantId": tenant_id,
+                "manifest": serde_json::to_string(manifest)?,
+            }
+        }
+    });
+    graphql_request_with_change_control(api, body, change_control_token).await?;
+    Ok(())
+}
+
+async fn apply_compute_cloud_app_manifest(
+    api: &ApiClient,
+    manifest: &Value,
+    release_checks_only: bool,
+    change_control_token: Option<&str>,
+) -> Result<()> {
+    if !release_checks_only {
+        save_compute_cloud_app_manifest(api, manifest, change_control_token).await?;
+    }
+    let name = manifest
+        .get("metadata")
+        .and_then(|metadata| metadata.get("name"))
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow!("CloudApp manifest is missing metadata.name"))?;
+    let mut apply_input = json!({
+        "kind": "CloudApp",
+        "name": name,
+        "dryRun": false,
+    });
+    if release_checks_only {
+        apply_input["releaseChecksOnly"] = Value::Bool(true);
+        apply_input["releaseChecksManifest"] = Value::String(serde_json::to_string(manifest)?);
+    }
+    let body = json!({
+        "query": r#"
+          mutation ApplyManifest($input: ApplyManifestInput!) {
+            applyManifest(input: $input) { success }
+          }
+        "#,
+        "variables": {
+            "input": apply_input
+        }
+    });
+    let data = graphql_request_with_change_control(api, body, change_control_token).await?;
+    ensure_apply_manifest_succeeded(&data)
+}
+
+fn ensure_apply_manifest_succeeded(data: &Value) -> Result<()> {
+    let success = data
+        .get("applyManifest")
+        .and_then(|result| result.get("success"))
+        .and_then(Value::as_bool);
+    if success != Some(true) {
+        return Err(anyhow!("CloudApp applyManifest did not report success"));
+    }
+    Ok(())
+}
+
+pub(crate) async fn run_apps_sync_secrets(
+    api: &ApiClient,
+    file: &Path,
+    selected_app: Option<&str>,
+    environment: &str,
+    dry_run: bool,
+) -> Result<()> {
+    if environment.trim().is_empty() {
+        return Err(anyhow!("--environment must not be empty"));
+    }
+
+    let manifest = load_cloud_apps_manifest(file)?;
+    let entry = select_single_app_entry(&manifest, selected_app)?;
+    let entry = resolve_app_entry_for_environment(&entry, environment)?;
+    let app_name = entry
+        .get("name")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow!("app entry is missing name"))?;
+    let request = build_sync_secrets_request(&entry, environment)?;
+
+    println!("Manifest:    {}", file.display());
+    println!("App:         {app_name}");
+    println!("Environment: {environment}");
+    println!("Mode:        {}", if dry_run { "dry-run" } else { "sync" });
+
+    if request.refs.is_empty() {
+        println!("Secret refs: <none>");
+        println!("No secret references found; nothing to sync.");
+        return Ok(());
+    }
+
+    println!(
+        "Secret refs: {}",
+        render_sync_secret_refs(&request.refs).join(", ")
+    );
+    if dry_run {
+        println!("No API request sent.");
+        return Ok(());
+    }
+
+    let live: ListAppsResponse = api.get("/v1/compute/apps").await?;
+    let app = live
+        .apps
+        .iter()
+        .find(|app| app.name == app_name)
+        .ok_or_else(|| {
+            anyhow!(
+                "Cloud App {app_name} was not found in the current tenant; run `tachyon compute apps apply` first"
+            )
+        })?;
+    // Server dependency: Cloud Apps API owns SSoT reads and platform writes for
+    // this endpoint. The CLI sends only manifest refs; it never resolves values.
+    let response: SyncSecretsResponse = api
+        .post(
+            &format!("/v1/compute/apps/{}/secrets/sync", app.id),
+            &request,
+        )
+        .await?;
+
+    println!("Synced {} secret reference(s).", response.synced);
+    if !response.skipped.is_empty() {
+        println!("Skipped: {}", response.skipped.join(", "));
+    }
+    Ok(())
+}
+
+pub(super) fn build_sync_secrets_request(
+    entry: &Value,
+    environment: &str,
+) -> Result<SyncSecretsRequest> {
+    let app_name = entry
+        .get("name")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow!("app entry is missing name"))?
+        .to_string();
+    let _ = plan_env_vars(entry, environment)?;
+    let refs = collect_sync_secret_refs(entry, environment)?;
+    Ok(SyncSecretsRequest {
+        app_name,
+        environment: environment.to_string(),
+        manifest_kind: "CloudApp".to_string(),
+        refs,
+    })
+}
+
+fn collect_sync_secret_refs(entry: &Value, environment: &str) -> Result<Vec<SyncSecretRef>> {
+    let Some(env_vars) = entry.get("envVars") else {
+        return Ok(Vec::new());
+    };
+    let env_vars = env_vars
+        .as_array()
+        .ok_or_else(|| anyhow!("envVars must be an array"))?;
+    let mut refs = Vec::new();
+    for env in env_vars {
+        let key = env
+            .get("name")
+            .and_then(Value::as_str)
+            .ok_or_else(|| anyhow!("env var entry is missing name"))?;
+        let target = env
+            .get("target")
+            .and_then(Value::as_str)
+            .map(ToString::to_string)
+            .map(Ok)
+            .unwrap_or_else(|| default_env_target(environment).map(ToString::to_string))?;
+        let Some(value_from) = env.get("valueFrom") else {
+            continue;
+        };
+        if let Some(source_ref) = value_from.get("secret") {
+            refs.push(SyncSecretRef {
+                key: key.to_string(),
+                target,
+                source: "secretRef".to_string(),
+                source_ref: source_ref.clone(),
+            });
+            continue;
+        }
+        for source in ["oauth2ClientRef", "databaseRef", "storageRef"] {
+            if let Some(source_ref) = value_from.get(source) {
+                refs.push(SyncSecretRef {
+                    key: key.to_string(),
+                    target,
+                    source: source.to_string(),
+                    source_ref: source_ref.clone(),
+                });
+                break;
+            }
+        }
+    }
+    refs.sort_by(|a, b| {
+        a.key
+            .cmp(&b.key)
+            .then_with(|| a.target.cmp(&b.target))
+            .then_with(|| a.source.cmp(&b.source))
+    });
+    Ok(refs)
+}
+
+pub(super) fn render_sync_secret_refs(refs: &[SyncSecretRef]) -> Vec<String> {
+    refs.iter()
+        .map(|reference| {
+            format!(
+                "{}({}; {})",
+                reference.key, reference.target, reference.source
+            )
+        })
+        .collect()
+}
+
+async fn apply_env_plan(
+    api: &ApiClient,
+    app_id: &str,
+    plan: &EnvPlan,
+    dry_run: bool,
+) -> Result<(Vec<String>, Vec<String>)> {
+    let changed = plan
+        .plain
+        .iter()
+        .map(|entry| {
+            format!(
+                "{}({})",
+                entry.key,
+                entry.target.as_deref().unwrap_or("all")
+            )
+        })
+        .collect::<Vec<_>>();
+    if !plan.plain.is_empty() && !dry_run && app_id != "<new app>" {
+        let req = SetEnvVarsRequest {
+            env_vars: plan.plain.clone(),
+        };
+        let _: ListEnvVarsResponse = api
+            .put(&format!("/v1/compute/apps/{app_id}/env"), &req)
+            .await?;
+    }
+
+    let missing = if !plan.secret_refs.is_empty() && !dry_run && app_id != "<new app>" {
+        find_missing_secret_refs(api, app_id, &plan.secret_refs).await?
+    } else {
+        plan.secret_refs
+            .iter()
+            .map(|secret| format!("{}({})", secret.key, secret.target))
+            .collect()
+    };
+    Ok((changed, missing))
+}
+
+async fn find_missing_secret_refs(
+    api: &ApiClient,
+    app_id: &str,
+    secret_refs: &[SecretEnvRef],
+) -> Result<Vec<String>> {
+    if secret_refs.is_empty() || app_id == "<new app>" {
+        return Ok(Vec::new());
+    }
+    let resp: ListEnvVarsResponse = api.get(&format!("/v1/compute/apps/{app_id}/env")).await?;
+    let current = resp
+        .env_vars
+        .into_iter()
+        .filter(|var| var.is_secret.unwrap_or(false))
+        .map(|var| (var.key, var.target.unwrap_or_else(|| "all".to_string())))
+        .collect::<BTreeSet<_>>();
+    Ok(missing_secret_refs(&current, secret_refs))
+}
+
+fn missing_secret_refs(
+    current: &BTreeSet<(String, String)>,
+    secret_refs: &[SecretEnvRef],
+) -> Vec<String> {
+    secret_refs
+        .iter()
+        .filter(|secret| !current.contains(&(secret.key.clone(), secret.target.clone())))
+        .map(|secret| format!("{}({})", secret.key, secret.target))
+        .collect()
+}
+
+pub(super) fn run_apps_feedback(tenant_id: &str, app_id: &str, args: &FeedbackArgs) -> Result<()> {
+    let payload = build_feedback_payload(tenant_id, app_id, args)?;
+    if args.json {
+        print_json(&payload)?;
+    } else {
+        println!("{}", render_feedback_markdown(&payload));
+    }
+    Ok(())
+}
+
+pub(super) fn build_feedback_payload(
+    tenant_id: &str,
+    app_id: &str,
+    args: &FeedbackArgs,
+) -> Result<FeedbackPayload> {
+    let metadata = parse_feedback_metadata(&args.metadata)?;
+    Ok(FeedbackPayload {
+        app_id: app_id.to_string(),
+        operator_id: tenant_id.to_string(),
+        kind: args.kind,
+        severity: args.severity,
+        message: args.message.clone(),
+        url: args.url.clone(),
+        build_id: args.build_id.clone(),
+        deployment_id: args.deployment_id.clone(),
+        contact: args.contact.clone(),
+        metadata,
+        created_at: Utc::now().to_rfc3339(),
+    })
+}
+
+pub(super) fn parse_feedback_metadata(entries: &[String]) -> Result<BTreeMap<String, String>> {
+    let mut metadata = BTreeMap::new();
+    for entry in entries {
+        let (key, value) = entry
+            .split_once('=')
+            .ok_or_else(|| anyhow!("metadata must be KEY=VALUE, got `{entry}`"))?;
+        let key = key.trim();
+        if key.is_empty() {
+            return Err(anyhow!("metadata key must not be empty"));
+        }
+        if is_secret_like_key(key) {
+            return Err(anyhow!(
+                "metadata key `{key}` looks secret-like; do not pass secret values to feedback"
+            ));
+        }
+        metadata.insert(key.to_string(), value.trim().to_string());
+    }
+    Ok(metadata)
+}
+
+fn is_secret_like_key(key: &str) -> bool {
+    let normalized = key.to_ascii_lowercase().replace(['-', '.'], "_");
+    [
+        "secret",
+        "token",
+        "password",
+        "passwd",
+        "api_key",
+        "apikey",
+        "private_key",
+        "credential",
+        "authorization",
+    ]
+    .iter()
+    .any(|needle| normalized.contains(needle))
+}
+
+pub(super) fn render_feedback_markdown(payload: &FeedbackPayload) -> String {
+    let mut lines = vec![
+        "# Cloud App Feedback".to_string(),
+        String::new(),
+        format!("- App ID: {}", payload.app_id),
+        format!("- Operator ID: {}", payload.operator_id),
+        format!("- Kind: {}", payload.kind),
+        format!("- Severity: {}", payload.severity),
+        format!("- Created At: {}", payload.created_at),
+    ];
+
+    if let Some(url) = &payload.url {
+        lines.push(format!("- URL: {url}"));
+    }
+    if let Some(build_id) = &payload.build_id {
+        lines.push(format!("- Build ID: {build_id}"));
+    }
+    if let Some(deployment_id) = &payload.deployment_id {
+        lines.push(format!("- Deployment ID: {deployment_id}"));
+    }
+    if let Some(contact) = &payload.contact {
+        lines.push(format!("- Contact: {contact}"));
+    }
+    if !payload.metadata.is_empty() {
+        lines.push("- Metadata:".to_string());
+        for (key, value) in &payload.metadata {
+            lines.push(format!("  - {key}: {value}"));
+        }
+    }
+
+    lines.extend([
+        String::new(),
+        "## Message".to_string(),
+        String::new(),
+        payload.message.clone(),
+    ]);
+
+    lines.join("\n")
+}
+
 #[cfg(test)]
 mod manifest_tests {
     use super::*;
@@ -3307,738 +4041,4 @@ spec:
 
         assert!(error.contains("multiple CloudApps documents contain app fieldadmin"));
     }
-}
-
-pub(crate) fn plan_env_vars(entry: &Value, environment: &str) -> Result<EnvPlan> {
-    let mut plan = EnvPlan::default();
-
-    if let Some(env_vars) = entry.get("envVars") {
-        let env_vars = env_vars
-            .as_array()
-            .ok_or_else(|| anyhow!("envVars must be an array"))?;
-        for env in env_vars {
-            let key = env
-                .get("name")
-                .and_then(Value::as_str)
-                .ok_or_else(|| anyhow!("env var entry is missing name"))?;
-            let target = env
-                .get("target")
-                .and_then(Value::as_str)
-                .map(ToString::to_string)
-                .map(Ok)
-                .unwrap_or_else(|| default_env_target(environment).map(ToString::to_string))?;
-            let env_type = env.get("type").and_then(Value::as_str).unwrap_or("plain");
-            let value = env.get("value").and_then(Value::as_str);
-            let value_from = env.get("valueFrom");
-            if env_type == "credential" || value_from.is_some() {
-                if value.is_some() {
-                    return Err(anyhow!("credential env var {key} must use valueFrom; literal values are not allowed"));
-                }
-                let value_from = value_from
-                    .ok_or_else(|| anyhow!("credential env var {key} is missing valueFrom"))?;
-                if extract_secret_ref(value_from)?.is_some() {
-                    plan.secret_refs.push(SecretEnvRef {
-                        key: key.to_string(),
-                        target,
-                    });
-                    continue;
-                }
-                if let Some(source) = server_managed_credential_source(value_from) {
-                    plan.server_managed_credentials
-                        .push(ServerManagedCredentialRef {
-                            key: key.to_string(),
-                            target,
-                            source,
-                        });
-                    continue;
-                }
-                if let Some((app_name, field)) = internal_service_ref(value_from)? {
-                    plan.internal_service_refs.push(InternalServiceRefPlan {
-                        key: key.to_string(),
-                        app_name,
-                        field,
-                    });
-                    continue;
-                }
-                return Err(anyhow!(
-                    "credential env var {key} supports valueFrom.secret, valueFrom.databaseRef, valueFrom.oauth2ClientRef, valueFrom.storageRef, or valueFrom.internalService"
-                ));
-            } else {
-                plan.plain.push(SetEnvVarEntry {
-                    key: key.to_string(),
-                    value: value
-                        .ok_or_else(|| anyhow!("plain env var {key} must define value"))?
-                        .to_string(),
-                    target: Some(target),
-                    branch: None,
-                    is_secret: Some(false),
-                });
-            }
-        }
-    }
-
-    if let Some(sentry) = plan_sentry_integration(entry)? {
-        plan.sentry_integrations.push(sentry);
-    }
-
-    Ok(plan)
-}
-
-fn plan_sentry_integration(entry: &Value) -> Result<Option<SentryIntegrationPlan>> {
-    let Some(project) = entry
-        .get("integrations")
-        .and_then(|integrations| integrations.get("sentry"))
-        .and_then(|sentry| sentry.get("project"))
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|project| !project.is_empty())
-    else {
-        return Ok(None);
-    };
-
-    let explicit_env_vars = entry
-        .get("envVars")
-        .map(|env_vars| {
-            env_vars
-                .as_array()
-                .ok_or_else(|| anyhow!("envVars must be an array"))
-        })
-        .transpose()?
-        .into_iter()
-        .flatten()
-        .filter_map(|env| env.get("name").and_then(Value::as_str))
-        .collect::<BTreeSet<_>>();
-
-    let env_vars = ["NEXT_PUBLIC_SENTRY_DSN", "SENTRY_DSN"]
-        .into_iter()
-        .filter(|name| !explicit_env_vars.contains(*name))
-        .map(ToString::to_string)
-        .collect::<Vec<_>>();
-
-    Ok(Some(SentryIntegrationPlan {
-        project: project.to_string(),
-        provider: sentry_provider_name(project),
-        env_vars,
-    }))
-}
-
-pub(super) fn sentry_provider_name(project: &str) -> String {
-    let normalized = project
-        .trim()
-        .chars()
-        .map(|ch| {
-            if ch.is_ascii_alphanumeric() {
-                ch.to_ascii_lowercase()
-            } else {
-                '_'
-            }
-        })
-        .collect::<String>()
-        .trim_matches('_')
-        .to_string();
-    format!("sentry_{normalized}")
-}
-
-async fn validate_sentry_integration(api: &ApiClient) -> Result<()> {
-    let integrations: ListIntegrationsResponse = api.get("/v1/integrations").await?;
-    let Some(sentry) = integrations
-        .integrations
-        .iter()
-        .find(|integration| integration.provider.eq_ignore_ascii_case("sentry"))
-    else {
-        return Err(anyhow!(
-            "Sentry integration is not available for this tenant. Enable the Sentry integration before running tachyon compute apps apply."
-        ));
-    };
-    if !sentry.is_enabled {
-        return Err(anyhow!(
-            "Sentry integration is disabled for this tenant. Enable it before running tachyon compute apps apply."
-        ));
-    }
-    if sentry.requires_setup {
-        return Err(anyhow!(
-            "Sentry integration requires setup. Configure the Sentry integration provider secrets before running tachyon compute apps apply."
-        ));
-    }
-
-    let connections: ListConnectionsResponse = api.get("/v1/integrations/connections").await?;
-    let active_connection = connections.connections.iter().any(|connection| {
-        connection.provider.eq_ignore_ascii_case("sentry")
-            && connection.status.eq_ignore_ascii_case("active")
-    });
-    if !active_connection {
-        return Err(anyhow!(
-            "Sentry integration is enabled but has no active connection for this tenant. Run tachyon iac integrations get sentry and connect Sentry first."
-        ));
-    }
-
-    Ok(())
-}
-
-fn default_env_target(environment: &str) -> Result<&'static str> {
-    match environment.trim().to_ascii_lowercase().as_str() {
-        "production" | "prod" => Ok("production"),
-        "preview" => Ok("preview"),
-        "staging" | "stage" => Err(anyhow!(
-            "environment {environment} has no safe implicit env var target"
-        )),
-        _ => Ok("all"),
-    }
-}
-
-fn apply_target_for_environment(environment: &str) -> Option<&'static str> {
-    match environment.trim().to_ascii_lowercase().as_str() {
-        "production" | "prod" => Some("production"),
-        "preview" => Some("preview"),
-        _ => None,
-    }
-}
-
-fn apply_target_for_generated_env(environment: &str) -> Result<&'static str> {
-    apply_target_for_environment(environment).ok_or_else(|| {
-        anyhow!("environment {environment} has no safe target for generated Sentry env vars")
-    })
-}
-
-pub(crate) fn validate_generated_env_target(entry: &Value, environment: &str) -> Result<()> {
-    let generates_sentry_env =
-        plan_sentry_integration(entry)?.is_some_and(|plan| !plan.env_vars.is_empty());
-    if generates_sentry_env {
-        let _ = apply_target_for_generated_env(environment)?;
-    }
-    Ok(())
-}
-
-fn extract_secret_ref(value_from: &Value) -> Result<Option<String>> {
-    let Some(secret) = value_from.get("secret") else {
-        return Ok(None);
-    };
-    let (path, field) = if let Some(path) = secret.as_str() {
-        (path, None)
-    } else if let Some(path) = secret.get("path").and_then(Value::as_str) {
-        let field = match secret.get("field") {
-            None | Some(Value::Null) => None,
-            Some(field) => Some(
-                field
-                    .as_str()
-                    .ok_or_else(|| anyhow!("valueFrom.secret.field must be a string"))?
-                    .trim(),
-            ),
-        };
-        (path, field)
-    } else {
-        return Err(anyhow!(
-            "valueFrom.secret must be a key string or object with path"
-        ));
-    };
-
-    let reference = path.trim();
-    let parts = reference.split('/').collect::<Vec<_>>();
-    if parts.iter().any(|part| part.is_empty()) || parts[0].starts_with("tn_") {
-        return Err(anyhow!(
-            "valueFrom.secret path must not be empty, contain empty segments, or use tenant prefixes"
-        ));
-    }
-    if field.is_none() && parts.len() != 2 {
-        return Err(anyhow!(
-            "valueFrom.secret object field is required for paths other than '<vault>/<key>'"
-        ));
-    }
-    if let Some(field) = field {
-        if field.is_empty() || field.contains('#') {
-            return Err(anyhow!(
-                "valueFrom.secret.field must not be empty or contain '#'"
-            ));
-        }
-    }
-
-    Ok(Some(reference.to_string()))
-}
-
-fn server_managed_credential_source(value_from: &Value) -> Option<ServerManagedCredentialSource> {
-    if value_from.get("databaseRef").is_some() {
-        return Some(ServerManagedCredentialSource::Database);
-    }
-    if value_from.get("oauth2ClientRef").is_some() {
-        return Some(ServerManagedCredentialSource::OAuth2Client);
-    }
-    if value_from.get("storageRef").is_some() {
-        return Some(ServerManagedCredentialSource::Storage);
-    }
-    None
-}
-
-fn internal_service_ref(value_from: &Value) -> Result<Option<(String, Option<String>)>> {
-    let Some(reference) = value_from.get("internalService") else {
-        return Ok(None);
-    };
-    let app_name = reference
-        .get("appName")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .ok_or_else(|| anyhow!("valueFrom.internalService.appName is required"))?;
-    let field = reference
-        .get("field")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToString::to_string);
-    Ok(Some((app_name.to_string(), field)))
-}
-
-pub(super) fn cloud_app_manifest_for_iac(entry: &Value, tenant_id: &str) -> Result<Value> {
-    let name = entry
-        .get("name")
-        .and_then(Value::as_str)
-        .ok_or_else(|| anyhow!("app entry is missing name"))?;
-    let mut spec = entry.clone();
-    spec.as_object_mut()
-        .ok_or_else(|| anyhow!("CloudApps app entry must be an object"))?
-        .remove("name");
-    spec.as_object_mut()
-        .ok_or_else(|| anyhow!("CloudApps app entry must be an object"))?
-        .remove(DOCUMENT_TENANT_ID_KEY);
-    Ok(json!({
-        "apiVersion": "apps.tachy.one/v1alpha",
-        "kind": "CloudApp",
-        "metadata": {
-            "tenantId": tenant_id,
-            "name": name,
-        },
-        "spec": spec,
-    }))
-}
-
-/// Header carrying the change-control approval token to the server-side
-/// gate (ADR 0011 Layer 1). Sent as a header, not a GraphQL input field,
-/// so the token never lands in request-body logs.
-const CHANGE_CONTROL_TOKEN_HEADER: &str = "x-tachyon-change-control-token";
-
-async fn graphql_request_with_change_control(
-    api: &ApiClient,
-    body: Value,
-    change_control_token: Option<&str>,
-) -> Result<Value> {
-    let url = format!("{}/v1/graphql", api.base_url);
-    let mut request = api.authorize(api.client.post(url).json(&body)).await;
-    if let Some(token) = change_control_token
-        .map(str::trim)
-        .filter(|token| !token.is_empty())
-    {
-        request = request.header(CHANGE_CONTROL_TOKEN_HEADER, token);
-    }
-    let response = request.send().await?;
-    let status = response.status();
-    if !status.is_success() {
-        let body = response.text().await?;
-        return Err(anyhow!(
-            "graphql request failed: status={status}, body={body}"
-        ));
-    }
-    let payload: Value = response.json().await?;
-    if let Some(errors) = payload.get("errors") {
-        return Err(anyhow!("graphql error: {errors}"));
-    }
-    payload
-        .get("data")
-        .cloned()
-        .ok_or_else(|| anyhow!("missing data in graphql response"))
-}
-
-async fn save_compute_cloud_app_manifest(
-    api: &ApiClient,
-    manifest: &Value,
-    change_control_token: Option<&str>,
-) -> Result<()> {
-    let tenant_id = manifest
-        .get("metadata")
-        .and_then(|metadata| metadata.get("tenantId"))
-        .and_then(Value::as_str)
-        .ok_or_else(|| anyhow!("CloudApp manifest is missing metadata.tenantId"))?;
-    let body = json!({
-        "query": r#"
-          mutation SaveManifest($input: SaveManifestInput!) {
-            saveManifest(input: $input) { kind }
-          }
-        "#,
-        "variables": {
-            "input": {
-                "tenantId": tenant_id,
-                "manifest": serde_json::to_string(manifest)?,
-            }
-        }
-    });
-    graphql_request_with_change_control(api, body, change_control_token).await?;
-    Ok(())
-}
-
-async fn apply_compute_cloud_app_manifest(
-    api: &ApiClient,
-    manifest: &Value,
-    release_checks_only: bool,
-    change_control_token: Option<&str>,
-) -> Result<()> {
-    if !release_checks_only {
-        save_compute_cloud_app_manifest(api, manifest, change_control_token).await?;
-    }
-    let name = manifest
-        .get("metadata")
-        .and_then(|metadata| metadata.get("name"))
-        .and_then(Value::as_str)
-        .ok_or_else(|| anyhow!("CloudApp manifest is missing metadata.name"))?;
-    let mut apply_input = json!({
-        "kind": "CloudApp",
-        "name": name,
-        "dryRun": false,
-    });
-    if release_checks_only {
-        apply_input["releaseChecksOnly"] = Value::Bool(true);
-        apply_input["releaseChecksManifest"] = Value::String(serde_json::to_string(manifest)?);
-    }
-    let body = json!({
-        "query": r#"
-          mutation ApplyManifest($input: ApplyManifestInput!) {
-            applyManifest(input: $input) { success }
-          }
-        "#,
-        "variables": {
-            "input": apply_input
-        }
-    });
-    let data = graphql_request_with_change_control(api, body, change_control_token).await?;
-    ensure_apply_manifest_succeeded(&data)
-}
-
-fn ensure_apply_manifest_succeeded(data: &Value) -> Result<()> {
-    let success = data
-        .get("applyManifest")
-        .and_then(|result| result.get("success"))
-        .and_then(Value::as_bool);
-    if success != Some(true) {
-        return Err(anyhow!("CloudApp applyManifest did not report success"));
-    }
-    Ok(())
-}
-
-pub(crate) async fn run_apps_sync_secrets(
-    api: &ApiClient,
-    file: &Path,
-    selected_app: Option<&str>,
-    environment: &str,
-    dry_run: bool,
-) -> Result<()> {
-    if environment.trim().is_empty() {
-        return Err(anyhow!("--environment must not be empty"));
-    }
-
-    let manifest = load_cloud_apps_manifest(file)?;
-    let entry = select_single_app_entry(&manifest, selected_app)?;
-    let entry = resolve_app_entry_for_environment(&entry, environment)?;
-    let app_name = entry
-        .get("name")
-        .and_then(Value::as_str)
-        .ok_or_else(|| anyhow!("app entry is missing name"))?;
-    let request = build_sync_secrets_request(&entry, environment)?;
-
-    println!("Manifest:    {}", file.display());
-    println!("App:         {app_name}");
-    println!("Environment: {environment}");
-    println!("Mode:        {}", if dry_run { "dry-run" } else { "sync" });
-
-    if request.refs.is_empty() {
-        println!("Secret refs: <none>");
-        println!("No secret references found; nothing to sync.");
-        return Ok(());
-    }
-
-    println!(
-        "Secret refs: {}",
-        render_sync_secret_refs(&request.refs).join(", ")
-    );
-    if dry_run {
-        println!("No API request sent.");
-        return Ok(());
-    }
-
-    let live: ListAppsResponse = api.get("/v1/compute/apps").await?;
-    let app = live
-        .apps
-        .iter()
-        .find(|app| app.name == app_name)
-        .ok_or_else(|| {
-            anyhow!(
-                "Cloud App {app_name} was not found in the current tenant; run `tachyon compute apps apply` first"
-            )
-        })?;
-    // Server dependency: Cloud Apps API owns SSoT reads and platform writes for
-    // this endpoint. The CLI sends only manifest refs; it never resolves values.
-    let response: SyncSecretsResponse = api
-        .post(
-            &format!("/v1/compute/apps/{}/secrets/sync", app.id),
-            &request,
-        )
-        .await?;
-
-    println!("Synced {} secret reference(s).", response.synced);
-    if !response.skipped.is_empty() {
-        println!("Skipped: {}", response.skipped.join(", "));
-    }
-    Ok(())
-}
-
-pub(super) fn build_sync_secrets_request(
-    entry: &Value,
-    environment: &str,
-) -> Result<SyncSecretsRequest> {
-    let app_name = entry
-        .get("name")
-        .and_then(Value::as_str)
-        .ok_or_else(|| anyhow!("app entry is missing name"))?
-        .to_string();
-    let _ = plan_env_vars(entry, environment)?;
-    let refs = collect_sync_secret_refs(entry, environment)?;
-    Ok(SyncSecretsRequest {
-        app_name,
-        environment: environment.to_string(),
-        manifest_kind: "CloudApp".to_string(),
-        refs,
-    })
-}
-
-fn collect_sync_secret_refs(entry: &Value, environment: &str) -> Result<Vec<SyncSecretRef>> {
-    let Some(env_vars) = entry.get("envVars") else {
-        return Ok(Vec::new());
-    };
-    let env_vars = env_vars
-        .as_array()
-        .ok_or_else(|| anyhow!("envVars must be an array"))?;
-    let mut refs = Vec::new();
-    for env in env_vars {
-        let key = env
-            .get("name")
-            .and_then(Value::as_str)
-            .ok_or_else(|| anyhow!("env var entry is missing name"))?;
-        let target = env
-            .get("target")
-            .and_then(Value::as_str)
-            .map(ToString::to_string)
-            .map(Ok)
-            .unwrap_or_else(|| default_env_target(environment).map(ToString::to_string))?;
-        let Some(value_from) = env.get("valueFrom") else {
-            continue;
-        };
-        if let Some(source_ref) = value_from.get("secret") {
-            refs.push(SyncSecretRef {
-                key: key.to_string(),
-                target,
-                source: "secretRef".to_string(),
-                source_ref: source_ref.clone(),
-            });
-            continue;
-        }
-        for source in ["oauth2ClientRef", "databaseRef", "storageRef"] {
-            if let Some(source_ref) = value_from.get(source) {
-                refs.push(SyncSecretRef {
-                    key: key.to_string(),
-                    target,
-                    source: source.to_string(),
-                    source_ref: source_ref.clone(),
-                });
-                break;
-            }
-        }
-    }
-    refs.sort_by(|a, b| {
-        a.key
-            .cmp(&b.key)
-            .then_with(|| a.target.cmp(&b.target))
-            .then_with(|| a.source.cmp(&b.source))
-    });
-    Ok(refs)
-}
-
-pub(super) fn render_sync_secret_refs(refs: &[SyncSecretRef]) -> Vec<String> {
-    refs.iter()
-        .map(|reference| {
-            format!(
-                "{}({}; {})",
-                reference.key, reference.target, reference.source
-            )
-        })
-        .collect()
-}
-
-async fn apply_env_plan(
-    api: &ApiClient,
-    app_id: &str,
-    plan: &EnvPlan,
-    dry_run: bool,
-) -> Result<(Vec<String>, Vec<String>)> {
-    let changed = plan
-        .plain
-        .iter()
-        .map(|entry| {
-            format!(
-                "{}({})",
-                entry.key,
-                entry.target.as_deref().unwrap_or("all")
-            )
-        })
-        .collect::<Vec<_>>();
-    if !plan.plain.is_empty() && !dry_run && app_id != "<new app>" {
-        let req = SetEnvVarsRequest {
-            env_vars: plan.plain.clone(),
-        };
-        let _: ListEnvVarsResponse = api
-            .put(&format!("/v1/compute/apps/{app_id}/env"), &req)
-            .await?;
-    }
-
-    let missing = if !plan.secret_refs.is_empty() && !dry_run && app_id != "<new app>" {
-        find_missing_secret_refs(api, app_id, &plan.secret_refs).await?
-    } else {
-        plan.secret_refs
-            .iter()
-            .map(|secret| format!("{}({})", secret.key, secret.target))
-            .collect()
-    };
-    Ok((changed, missing))
-}
-
-async fn find_missing_secret_refs(
-    api: &ApiClient,
-    app_id: &str,
-    secret_refs: &[SecretEnvRef],
-) -> Result<Vec<String>> {
-    if secret_refs.is_empty() || app_id == "<new app>" {
-        return Ok(Vec::new());
-    }
-    let resp: ListEnvVarsResponse = api.get(&format!("/v1/compute/apps/{app_id}/env")).await?;
-    let current = resp
-        .env_vars
-        .into_iter()
-        .filter(|var| var.is_secret.unwrap_or(false))
-        .map(|var| (var.key, var.target.unwrap_or_else(|| "all".to_string())))
-        .collect::<BTreeSet<_>>();
-    Ok(missing_secret_refs(&current, secret_refs))
-}
-
-fn missing_secret_refs(
-    current: &BTreeSet<(String, String)>,
-    secret_refs: &[SecretEnvRef],
-) -> Vec<String> {
-    secret_refs
-        .iter()
-        .filter(|secret| !current.contains(&(secret.key.clone(), secret.target.clone())))
-        .map(|secret| format!("{}({})", secret.key, secret.target))
-        .collect()
-}
-
-pub(super) fn run_apps_feedback(tenant_id: &str, app_id: &str, args: &FeedbackArgs) -> Result<()> {
-    let payload = build_feedback_payload(tenant_id, app_id, args)?;
-    if args.json {
-        print_json(&payload)?;
-    } else {
-        println!("{}", render_feedback_markdown(&payload));
-    }
-    Ok(())
-}
-
-pub(super) fn build_feedback_payload(
-    tenant_id: &str,
-    app_id: &str,
-    args: &FeedbackArgs,
-) -> Result<FeedbackPayload> {
-    let metadata = parse_feedback_metadata(&args.metadata)?;
-    Ok(FeedbackPayload {
-        app_id: app_id.to_string(),
-        operator_id: tenant_id.to_string(),
-        kind: args.kind,
-        severity: args.severity,
-        message: args.message.clone(),
-        url: args.url.clone(),
-        build_id: args.build_id.clone(),
-        deployment_id: args.deployment_id.clone(),
-        contact: args.contact.clone(),
-        metadata,
-        created_at: Utc::now().to_rfc3339(),
-    })
-}
-
-pub(super) fn parse_feedback_metadata(entries: &[String]) -> Result<BTreeMap<String, String>> {
-    let mut metadata = BTreeMap::new();
-    for entry in entries {
-        let (key, value) = entry
-            .split_once('=')
-            .ok_or_else(|| anyhow!("metadata must be KEY=VALUE, got `{entry}`"))?;
-        let key = key.trim();
-        if key.is_empty() {
-            return Err(anyhow!("metadata key must not be empty"));
-        }
-        if is_secret_like_key(key) {
-            return Err(anyhow!(
-                "metadata key `{key}` looks secret-like; do not pass secret values to feedback"
-            ));
-        }
-        metadata.insert(key.to_string(), value.trim().to_string());
-    }
-    Ok(metadata)
-}
-
-fn is_secret_like_key(key: &str) -> bool {
-    let normalized = key.to_ascii_lowercase().replace(['-', '.'], "_");
-    [
-        "secret",
-        "token",
-        "password",
-        "passwd",
-        "api_key",
-        "apikey",
-        "private_key",
-        "credential",
-        "authorization",
-    ]
-    .iter()
-    .any(|needle| normalized.contains(needle))
-}
-
-pub(super) fn render_feedback_markdown(payload: &FeedbackPayload) -> String {
-    let mut lines = vec![
-        "# Cloud App Feedback".to_string(),
-        String::new(),
-        format!("- App ID: {}", payload.app_id),
-        format!("- Operator ID: {}", payload.operator_id),
-        format!("- Kind: {}", payload.kind),
-        format!("- Severity: {}", payload.severity),
-        format!("- Created At: {}", payload.created_at),
-    ];
-
-    if let Some(url) = &payload.url {
-        lines.push(format!("- URL: {url}"));
-    }
-    if let Some(build_id) = &payload.build_id {
-        lines.push(format!("- Build ID: {build_id}"));
-    }
-    if let Some(deployment_id) = &payload.deployment_id {
-        lines.push(format!("- Deployment ID: {deployment_id}"));
-    }
-    if let Some(contact) = &payload.contact {
-        lines.push(format!("- Contact: {contact}"));
-    }
-    if !payload.metadata.is_empty() {
-        lines.push("- Metadata:".to_string());
-        for (key, value) in &payload.metadata {
-            lines.push(format!("  - {key}: {value}"));
-        }
-    }
-
-    lines.extend([
-        String::new(),
-        "## Message".to_string(),
-        String::new(),
-        payload.message.clone(),
-    ]);
-
-    lines.join("\n")
 }

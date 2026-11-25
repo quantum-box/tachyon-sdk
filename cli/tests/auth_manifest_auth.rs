@@ -44,10 +44,9 @@ fn has_header(req: &str, name: &str, value: &str) -> bool {
 fn config_root(home: &Path) -> PathBuf {
     #[cfg(target_os = "macos")]
     {
-        return home
-            .join("Library")
+        home.join("Library")
             .join("Application Support")
-            .join("tachyon");
+            .join("tachyon")
     }
     #[cfg(not(target_os = "macos"))]
     {
