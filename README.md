@@ -677,3 +677,20 @@ tachyon feature-flag disable <key> --tenant-id <tenant-id> --json
 ```
 
 Enable and disable send a desired boolean state rather than toggling the current value, so retries do not invert it. The server resolves the key in the selected scope and enforces inherited-definition and publication-approval rules. These commands do not bypass host publication approvals or mutate the ancestor's row directly. GraphQL errors return a nonzero exit status.
+
+### Publishing a host flag to named tenants
+
+`feature-flag publish` opens a host boolean flag for an explicit list of tenants through `/v1/feature-flags/system-publications`. It sends the preview, shows the before and after state, asks for confirmation, then requests a single-use approval (valid for 15 minutes), applies it and prints the receipt.
+
+```sh
+tachyon feature-flag publish <key> --target <tenant-id> [--target <tenant-id> ...] \
+  --until 7d --reason "<why>" [--dry-run | --yes]
+tachyon feature-flag publish <key> --target <tenant-id> --reason "<why>" --disable
+```
+
+- The server accepts only an interactive login (`tachyon auth login`) of a human who administers the host tenant. API keys, service accounts, workload identity and Tachyon OAuth access tokens are refused.
+- Requests go to the host tenant (`--host`, default `tn_01jcjtqxah6mhyw4e5mahg02nd`) with `x-platform-id` set to the platform the login is verified against (`--platform-id`, default `tn_01hjjn348rn3t49zz6hvmfq67p`).
+- `--until` takes RFC3339 or a duration from now (`30m`, `24h`, `7d`). It is resolved once, so preview, approval and apply carry the same window. Each key has its own server-side limit.
+- `--dry-run` sends only the preview. `--yes` skips the prompt; without it, a non-interactive run stops before the approval.
+- `--disable` closes the publication early and needs no approval.
+- If apply times out or fails without a definite refusal, the CLI does not resend it. It reads `GET /receipts/<approvalId>` instead and reports whether the publication was committed.

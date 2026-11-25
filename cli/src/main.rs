@@ -10,6 +10,7 @@ mod config;
 mod data_cli;
 mod erp_replay_cli;
 mod feature_flag_cli;
+mod feature_flag_publish;
 mod iac_cli;
 mod image_cli;
 mod install_cli;
